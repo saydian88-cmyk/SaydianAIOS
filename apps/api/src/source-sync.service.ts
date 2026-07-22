@@ -118,6 +118,7 @@ export class SourceSyncService {
   ) {}
 
   private async updateIntegration(kind: IntegrationKind, data: { state: IntegrationState; message: string; capabilities: string[] }) {
+    const capabilityStatus = Object.fromEntries(data.capabilities.map((capability) => [capability, data.state]));
     await this.prisma.integration.upsert({
       where: { kind },
       create: {
@@ -126,6 +127,7 @@ export class SourceSyncService {
         state: data.state,
         message: data.message,
         capabilities: data.capabilities,
+        capabilityStatus,
         lastCheckedAt: new Date(),
         lastSuccessAt: data.state === "HEALTHY" ? new Date() : undefined,
       },
@@ -133,6 +135,7 @@ export class SourceSyncService {
         state: data.state,
         message: data.message,
         capabilities: data.capabilities,
+        capabilityStatus,
         lastCheckedAt: new Date(),
         lastSuccessAt: data.state === "HEALTHY" ? new Date() : undefined,
       },
@@ -150,6 +153,7 @@ export class SourceSyncService {
     let ossSynced = 0;
     const errors: string[] = [];
     const ossConfigured = this.oss.isConfigured();
+    const actorEmployee = await this.prisma.employee.findFirst({ where: { name: actor, status: "ACTIVE" } });
 
     for (const root of roots) {
       try {
@@ -277,6 +281,26 @@ export class SourceSyncService {
                 ...storageData,
               },
             });
+            const latestVersion = await this.prisma.assetVersion.findFirst({
+              where: { assetId: asset.id },
+              orderBy: { version: "desc" },
+            });
+            if (!latestVersion || latestVersion.sha256 !== asset.sha256 || latestVersion.objectVersionId !== asset.objectVersionId) {
+              await this.prisma.assetVersion.create({
+                data: {
+                  assetId: asset.id,
+                  version: (latestVersion?.version ?? 0) + 1,
+                  sha256: asset.sha256,
+                  sourcePath: asset.sourcePath,
+                  objectKey: asset.objectKey,
+                  objectVersionId: asset.objectVersionId,
+                  etag: asset.etag,
+                  storageUrl: asset.storageUrl,
+                  createdByEmployeeId: actorEmployee?.id,
+                  createdBy: actor,
+                },
+              });
+            }
             await this.prisma.auditLog.create({
               data: {
                 actor,

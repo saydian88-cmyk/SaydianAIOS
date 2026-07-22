@@ -1,5 +1,8 @@
 export const platformKinds = [
   "DOUYIN",
+  "TIKTOK",
+  "AMAZON",
+  "SHOPIFY",
   "WECHAT_CHANNELS",
   "XIAOHONGSHU",
   "WECHAT_OFFICIAL",
@@ -27,6 +30,10 @@ export type PlatformCapability =
   | "reply"
   | "live"
   | "shop"
+  | "orders"
+  | "shipments"
+  | "afterSales"
+  | "import"
   | "search"
   | "assets";
 
@@ -41,8 +48,43 @@ export interface PlatformHealth {
   kind: PlatformKind;
   state: IntegrationState;
   capabilities: PlatformCapability[];
+  capabilityStates: Partial<Record<PlatformCapability, IntegrationState>>;
   checkedAt?: string;
   message: string;
+}
+
+export type OperationSnapshotType =
+  | "PRODUCT"
+  | "INVENTORY"
+  | "ORDER"
+  | "SHIPMENT"
+  | "AFTER_SALE"
+  | "REFUND"
+  | "CUSTOMER_SERVICE"
+  | "WORK_ORDER";
+
+export interface OperationSnapshotInput {
+  type: OperationSnapshotType;
+  sourceId: string;
+  sourceVersion?: string;
+  status: string;
+  occurredAt: string;
+  dueAt?: string;
+  amount?: number;
+  currency?: string;
+  sourceUrl?: string;
+  unavailableFields: string[];
+  payload: Record<string, unknown>;
+}
+
+export interface SnapshotImportInput {
+  integration: PlatformKind;
+  accountId?: string;
+  storeId?: string;
+  sourceName: string;
+  format: "JSON" | "CSV" | "API";
+  records: OperationSnapshotInput[];
+  unavailableFields?: string[];
 }
 
 export interface PublishInput {
@@ -116,6 +158,10 @@ export interface PlatformAdapter {
   replyComment(commentId: string, text: string, idempotencyKey: string): Promise<PublishReceipt>;
   fetchLiveSessions(): Promise<LiveSnapshot[]>;
   fetchShopQueue(): Promise<ShopQueueItem[]>;
+  fetchOrders(): Promise<OperationSnapshotInput[]>;
+  fetchShipments(): Promise<OperationSnapshotInput[]>;
+  fetchAfterSales(): Promise<OperationSnapshotInput[]>;
+  importSnapshot(input: SnapshotImportInput): Promise<{ accepted: number; rejected: number; message: string }>;
 }
 
 export interface DashboardSummary {
@@ -124,5 +170,6 @@ export interface DashboardSummary {
   assets: { total: number; ready: number; pending: number; blocked: number };
   content: { draft: number; pendingApproval: number; approved: number; published: number };
   operations: { overdue: number; alerts: number; pendingReplies: number; activeLives: number };
+  ledger: { employees: number; accounts: number; stores: number; unassignedSnapshots: number };
   latestReports: Array<{ id: string; kind: string; title: string; createdAt: string }>;
 }

@@ -7,4 +7,4 @@ apps/api/prisma/migrations/*/migration_lock.toml
 data/derived/
 data/runtime/
 scripts/node_modules/
-
+artifacts/

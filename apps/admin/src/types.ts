@@ -4,6 +4,7 @@ export type Dashboard = {
   assets: { total: number; ready: number; pending: number; blocked: number };
   content: { draft: number; pendingApproval: number; approved: number; published: number };
   operations: { overdue: number; alerts: number; pendingReplies: number; activeLives: number };
+  ledger: { employees: number; accounts: number; stores: number; unassignedSnapshots: number };
   latestReports: Array<{ id: string; kind: string; title: string; summary: string; createdAt: string }>;
   latestJobs: Array<Record<string, unknown>>;
 };
@@ -14,6 +15,8 @@ export type Integration = {
   displayName: string;
   state: string;
   capabilities: string[];
+  capabilityStatus: Record<string, string>;
+  region: string;
   message: string;
   lastCheckedAt?: string;
 };
@@ -32,7 +35,7 @@ export type ContentPlan = {
   planDate: string;
   createdBy: string;
   approvedBy?: string;
-  variants: Array<{ id: string; platform: string; title: string; body: string; mediaPath?: string; metadata: Record<string, unknown>; status: string }>;
+  variants: Array<{ id: string; platform: string; title: string; body: string; mediaPath?: string; targetAccountId?: string; metadata: Record<string, unknown>; status: string }>;
 };
 
 export type Asset = {

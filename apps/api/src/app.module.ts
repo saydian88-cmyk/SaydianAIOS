@@ -6,6 +6,7 @@ import { AutomationService } from "./automation.service";
 import { ContentGuardService } from "./content-guard.service";
 import { ContentService } from "./content.service";
 import { HealthController, OpsController } from "./controllers";
+import { LedgerService } from "./ledger.service";
 import { MonitoringService } from "./monitoring.service";
 import { OssStorageService } from "./oss-storage.service";
 import { OperationsService } from "./operations.service";
@@ -19,7 +20,7 @@ import { SourceSyncService } from "./source-sync.service";
   controllers: [AppController, HealthController, OpsController],
   providers: [
     PrismaService, AuthService, PlatformRegistry, ContentGuardService, OssStorageService, SourceSyncService,
-    ContentService, MonitoringService, ReportService, OperationsService, AutomationService,
+    ContentService, MonitoringService, ReportService, OperationsService, LedgerService, AutomationService,
   ],
 })
 export class AppModule {}

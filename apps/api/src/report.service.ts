@@ -29,7 +29,7 @@ export class ReportService {
   async generateDaily(now = new Date()) {
     const from = startOfShanghaiDay(now);
     const to = new Date(from.getTime() + 24 * 60 * 60 * 1000);
-    const [assetTotal, assetOssSynced, assetOssPending, assetChanges, contentPlans, publishJobs, metricUpdates, approvals, completedTasks, alerts, overdue, replies, lives, integrations] = await Promise.all([
+    const [assetTotal, assetOssSynced, assetOssPending, assetChanges, contentPlans, publishJobs, metricUpdates, approvals, completedTasks, alerts, overdue, replies, lives, integrations, businessSnapshots, importBatches, attributionTouches, sourceHealth] = await Promise.all([
       this.prisma.asset.count(),
       this.prisma.asset.count({ where: { storageProvider: "ALIYUN_OSS", storageSyncedAt: { not: null } } }),
       this.prisma.asset.count({ where: { OR: [{ storageProvider: { not: "ALIYUN_OSS" } }, { storageSyncedAt: null }] } }),
@@ -48,6 +48,8 @@ export class ReportService {
           contentPlan: { select: { kind: true, topic: true, createdBy: true, approvedBy: true } },
           variant: { select: { platform: true, title: true } },
           integration: { select: { displayName: true, kind: true } },
+          platformAccount: { select: { accountName: true, externalAccountId: true } },
+          operatorEmployee: { select: { name: true } },
           metrics: { orderBy: { capturedAt: "desc" }, take: 1 },
         },
         orderBy: { publishedAt: "asc" },
@@ -80,6 +82,26 @@ export class ReportService {
       this.prisma.replyJob.count({ where: { status: "PENDING" } }),
       this.prisma.liveSession.count({ where: { status: "LIVE" } }),
       this.prisma.integration.groupBy({ by: ["state"], _count: { _all: true } }),
+      this.prisma.businessSnapshot.findMany({
+        where: { capturedAt: { gte: from, lt: to } },
+        include: { integration: true, platformAccount: true, store: true, ownerEmployee: true },
+        orderBy: { capturedAt: "asc" },
+      }),
+      this.prisma.importBatch.findMany({
+        where: { createdAt: { gte: from, lt: to } },
+        include: { integration: true, platformAccount: true },
+        orderBy: { createdAt: "asc" },
+      }),
+      this.prisma.attributionTouch.findMany({
+        where: { occurredAt: { gte: from, lt: to } },
+        include: { integration: true, platformAccount: true, employee: true },
+        orderBy: { occurredAt: "asc" },
+      }),
+      this.prisma.dataSourceHealth.findMany({
+        where: { checkedAt: { gte: from, lt: to } },
+        include: { integration: true, platformAccount: true },
+        orderBy: { checkedAt: "asc" },
+      }),
     ]);
     const materialRows = assetChanges.map((item) => {
       const after = item.after && typeof item.after === "object" && !Array.isArray(item.after) ? item.after as Record<string, unknown> : {};
@@ -104,8 +126,8 @@ export class ReportService {
         content: job.contentPlan.topic,
         kind: job.contentPlan.kind,
         platform: job.variant.platform,
-        account: job.integration.displayName,
-        employee: job.operator,
+        account: job.platformAccount?.accountName ?? job.integration.displayName,
+        employee: job.operatorEmployee?.name ?? job.operator,
         createdBy: job.contentPlan.createdBy,
         approvedBy: job.contentPlan.approvedBy ?? "未审核",
         publishedAt: job.publishedAt?.toISOString() ?? "未获取",
@@ -145,23 +167,87 @@ export class ReportService {
       occurredAt: item.capturedAt.toISOString(),
       unavailableFields: item.unavailableFields,
     }));
+    const businessRows = businessSnapshots.map((item) => ({
+      platform: item.integration.displayName,
+      account: item.platformAccount?.accountName ?? "未绑定账号",
+      store: item.store?.name ?? "未绑定店铺",
+      type: item.type,
+      sourceId: item.sourceId,
+      status: item.status,
+      amount: item.amount?.toString() ?? "未获取",
+      currency: item.currency ?? "未获取",
+      employee: item.ownerEmployee?.name ?? "待分配",
+      occurredAt: item.occurredAt.toISOString(),
+      unavailableFields: item.unavailableFields.length ? item.unavailableFields : [],
+    }));
+    const importRows = importBatches.map((item) => ({
+      platform: item.integration.displayName,
+      account: item.platformAccount?.accountName ?? "未绑定账号",
+      source: item.sourceName,
+      format: item.format,
+      employee: item.importedBy,
+      received: item.recordsReceived,
+      imported: item.recordsImported,
+      rejected: item.recordsRejected,
+      status: item.status,
+      occurredAt: item.createdAt.toISOString(),
+      unavailableFields: item.unavailableFields,
+    }));
+    const attributionRows = attributionTouches.map((item) => ({
+      attributionCode: item.attributionCode,
+      eventType: item.eventType,
+      platform: item.integration?.displayName ?? "未获取",
+      account: item.platformAccount?.accountName ?? "未获取",
+      source: item.source,
+      campaign: item.campaign ?? "未获取",
+      employee: item.employee?.name ?? "未绑定",
+      consultations: item.consultations,
+      orders: item.orders,
+      revenue: item.revenue?.toString() ?? "未获取",
+      currency: item.currency ?? "未获取",
+      occurredAt: item.occurredAt.toISOString(),
+    }));
+    const sourceRows = sourceHealth.map((item) => ({
+      platform: item.integration.displayName,
+      account: item.platformAccount?.accountName ?? "连接级",
+      state: item.state,
+      message: item.message,
+      latencyMs: item.latencyMs ?? "未获取",
+      unavailableFields: item.unavailableFields,
+      occurredAt: item.checkedAt.toISOString(),
+    }));
+    employeeRows.push(
+      ...importRows.map((item) => ({ employee: item.employee, action: "导入经营快照", object: `${item.platform} ${item.source}`, occurredAt: item.occurredAt, result: `成功${item.imported}条，拒绝${item.rejected}条` })),
+      ...attributionRows.filter((item) => item.employee !== "未绑定").map((item) => ({ employee: item.employee, action: "记录归因", object: item.attributionCode, occurredAt: item.occurredAt, result: `${item.eventType}｜订单${item.orders}` })),
+    );
     const collectedViews = publishJobs.flatMap((job) => job.metrics.slice(0, 1)).filter((item) => item.views !== null).reduce((sum, item) => sum + (item.views ?? 0), 0);
     const metricPending = publishRows.filter((item) => item.views === "未获取").length;
+    const sourceProblems = sourceRows.filter((item) => ["DEGRADED", "ERROR", "UNCONFIGURED"].includes(item.state)).length;
+    const importRejected = importBatches.reduce((sum, item) => sum + item.recordsRejected, 0);
+    const attributedConsultations = attributionTouches.reduce((sum, item) => sum + item.consultations, 0);
+    const attributedOrders = attributionTouches.reduce((sum, item) => sum + item.orders, 0);
+    const attributedRevenue = attributionTouches.reduce((sum, item) => sum + Number(item.revenue ?? 0), 0);
     const content = contentPlans.length;
     const published = publishJobs.length;
-    const metrics = { assetTotal, assetOssSynced, assetOssPending, materialChanges: materialRows.length, content, published, collectedViews, metricSnapshots: performanceRows.length, metricPending, alerts, overdue, replies, lives, integrations };
+    const metrics = { assetTotal, assetOssSynced, assetOssPending, materialChanges: materialRows.length, content, published, collectedViews, metricSnapshots: performanceRows.length, metricPending, businessSnapshots: businessRows.length, importBatches: importRows.length, importRejected, attributedConsultations, attributedOrders, attributedRevenue, sourceProblems, alerts, overdue, replies, lives, integrations };
     const actions: Array<Record<string, unknown>> = [];
     if (overdue) actions.push({ priority: "高", action: `处理${overdue}项超时店铺任务` });
     if (replies) actions.push({ priority: "中", action: `审核${replies}条评论建议回复` });
     if (!content) actions.push({ priority: "高", action: "补生成今日视频和软文候选" });
     if (metricPending) actions.push({ priority: "中", action: `补采${metricPending}条已发布内容的效果数据` });
     if (assetOssPending) actions.push({ priority: "高", action: `完成${assetOssPending}项素材的 OSS 同步` });
-    const summary = `素材总计${assetTotal}项，已存入OSS ${assetOssSynced}项，待同步${assetOssPending}项，今日新增/更新/同步${materialRows.length}项；内容候选${content}条；发布${published}条；回收效果快照${performanceRows.length}份，今日发布已采集播放${collectedViews}次，${metricPending}条效果待获取；开放提醒${alerts}项。`;
+    if (sourceProblems) actions.push({ priority: "高", action: `核查${sourceProblems}项未配置或异常数据源` });
+    if (importRejected) actions.push({ priority: "中", action: `复核经营数据导入失败的${importRejected}条记录` });
+    const summary = `素材总计${assetTotal}项，已存入OSS ${assetOssSynced}项，待同步${assetOssPending}项，今日新增/更新/同步${materialRows.length}项；内容候选${content}条，发布${published}条；回收效果快照${performanceRows.length}份，已采集播放${collectedViews}次，${metricPending}条效果待获取；经营快照${businessRows.length}条，归因订单${attributedOrders}单，开放提醒${alerts}项。`;
     const sections = [
       { title: "今日素材台账", columns: ["change", "material", "source", "model", "mediaType", "qualityScore", "storageProvider", "objectKey", "storageSyncedAt", "storageError", "employee", "recordedAt"], rows: materialRows },
       { title: "今日发布与效果", columns: ["content", "kind", "platform", "account", "employee", "publishedAt", "views", "completionRate", "likes", "comments", "shares", "saves", "consultations", "orders"], rows: publishRows },
       { title: "今日效果回收", columns: ["content", "platform", "account", "views", "completionRate", "likes", "comments", "shares", "saves", "consultations", "orders", "employee", "occurredAt"], rows: performanceRows },
       { title: "员工操作记录", columns: ["employee", "action", "object", "occurredAt", "result"], rows: employeeRows },
+      { title: "店铺与经营快照", columns: ["platform", "account", "store", "type", "sourceId", "status", "amount", "currency", "employee", "occurredAt", "unavailableFields"], rows: businessRows },
+      { title: "人工/API数据导入", columns: ["platform", "account", "source", "format", "employee", "received", "imported", "rejected", "status", "occurredAt", "unavailableFields"], rows: importRows },
+      { title: "内容咨询成交归因", columns: ["attributionCode", "eventType", "platform", "account", "source", "campaign", "employee", "consultations", "orders", "revenue", "currency", "occurredAt"], rows: attributionRows },
+      { title: "数据源能力与健康", columns: ["platform", "account", "state", "message", "latencyMs", "unavailableFields", "occurredAt"], rows: sourceRows },
       { title: "经营巡查", text: `超时事项${overdue}项，待审核回复${replies}条` },
       { title: "直播与提醒", text: `直播中${lives}场，开放提醒${alerts}项` },
     ];

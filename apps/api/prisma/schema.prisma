@@ -9,6 +9,9 @@ datasource db {
 
 enum IntegrationKind {
   DOUYIN
+  TIKTOK
+  AMAZON
+  SHOPIFY
   WECHAT_CHANNELS
   XIAOHONGSHU
   WECHAT_OFFICIAL
@@ -92,12 +95,40 @@ enum ReportKind {
   TREND
 }
 
+enum ActorType {
+  HUMAN
+  AI
+  SYSTEM
+  PLATFORM
+}
+
+enum BusinessSnapshotType {
+  PRODUCT
+  INVENTORY
+  ORDER
+  SHIPMENT
+  AFTER_SALE
+  REFUND
+  CUSTOMER_SERVICE
+  WORK_ORDER
+}
+
+enum ImportStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  PARTIAL
+  FAILED
+}
+
 model Integration {
   id             String           @id @default(cuid())
   kind           IntegrationKind  @unique
   displayName    String
   state          IntegrationState @default(UNCONFIGURED)
   capabilities   String[]
+  capabilityStatus Json            @default("{}")
+  region         String            @default("CN")
   publicConfig   Json             @default("{}")
   secretRef      String?
   lastCheckedAt  DateTime?
@@ -111,6 +142,129 @@ model Integration {
   comments    CommentRecord[]
   liveRooms   LiveSession[]
   shopItems   ShopWorkItem[]
+  accounts    PlatformAccount[]
+  importBatches ImportBatch[]
+  businessSnapshots BusinessSnapshot[]
+  healthHistory DataSourceHealth[]
+  attributions AttributionTouch[]
+}
+
+model Department {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  employees Employee[]
+}
+
+model Employee {
+  id             String   @id @default(cuid())
+  employeeNo     String?  @unique
+  name           String
+  departmentId   String?
+  role           String   @default("运营")
+  wecomUserId    String?  @unique
+  mobileMasked   String?
+  status         String   @default("ACTIVE")
+  isSuperAdmin   Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  department      Department?       @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  ownedAccounts   PlatformAccount[]
+  ownedStores     Store[]
+  assignedContent ContentPlan[]
+  publishJobs     PublishJob[]
+  assetVersions   AssetVersion[]
+  importBatches   ImportBatch[]
+  businessItems   BusinessSnapshot[]
+  attributions    AttributionTouch[]
+
+  @@index([departmentId, status])
+  @@index([name])
+}
+
+model Product {
+  id          String       @id @default(cuid())
+  name        String
+  modelCode   String       @unique
+  category    String
+  evidenceIds String[]
+  status      RecordStatus @default(PENDING)
+  metadata    Json         @default("{}")
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  skus ProductSku[]
+
+  @@index([category, status])
+}
+
+model ProductSku {
+  id               String   @id @default(cuid())
+  productId        String
+  skuCode          String   @unique
+  name             String
+  attributes       Json     @default("{}")
+  externalMappings Json     @default("{}")
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId, active])
+}
+
+model PlatformAccount {
+  id                String           @id @default(cuid())
+  integrationId     String
+  accountName       String
+  externalAccountId String
+  region            String           @default("CN")
+  state             IntegrationState @default(UNCONFIGURED)
+  capabilityStatus  Json             @default("{}")
+  ownerEmployeeId   String?
+  message           String           @default("未配置")
+  lastCheckedAt     DateTime?
+  lastSuccessAt     DateTime?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  integration      Integration       @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  ownerEmployee    Employee?         @relation(fields: [ownerEmployeeId], references: [id], onDelete: SetNull)
+  stores           Store[]
+  publishJobs      PublishJob[]
+  importBatches    ImportBatch[]
+  businessSnapshots BusinessSnapshot[]
+  healthHistory    DataSourceHealth[]
+  attributions     AttributionTouch[]
+  contentVariants ContentVariant[]
+
+  @@unique([integrationId, externalAccountId])
+  @@index([region, state])
+}
+
+model Store {
+  id              String           @id @default(cuid())
+  platformAccountId String
+  name            String
+  externalStoreId String
+  region          String           @default("CN")
+  state           IntegrationState @default(UNCONFIGURED)
+  ownerEmployeeId String?
+  metadata        Json             @default("{}")
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  platformAccount PlatformAccount @relation(fields: [platformAccountId], references: [id], onDelete: Cascade)
+  ownerEmployee   Employee?       @relation(fields: [ownerEmployeeId], references: [id], onDelete: SetNull)
+  businessSnapshots BusinessSnapshot[]
+
+  @@unique([platformAccountId, externalStoreId])
+  @@index([region, state])
 }
 
 model Asset {
@@ -152,10 +306,32 @@ model Asset {
   updatedAt       DateTime     @updatedAt
 
   contentAssets ContentAsset[]
+  versions      AssetVersion[]
 
   @@index([sha256])
   @@index([model, status])
   @@index([storageProvider, storageSyncedAt])
+}
+
+model AssetVersion {
+  id                  String   @id @default(cuid())
+  assetId             String
+  version             Int
+  sha256              String
+  sourcePath          String
+  objectKey           String?
+  objectVersionId     String?
+  etag                String?
+  storageUrl          String?
+  createdByEmployeeId String?
+  createdBy           String
+  createdAt           DateTime @default(now())
+
+  asset             Asset     @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  createdByEmployee Employee? @relation(fields: [createdByEmployeeId], references: [id], onDelete: SetNull)
+
+  @@unique([assetId, version])
+  @@index([sha256])
 }
 
 model EvidenceClaim {
@@ -245,6 +421,11 @@ model ContentPlan {
   approvedAt      DateTime?
   createdBy       String        @default("系统内容引擎")
   assignedTo     String?
+  assignedEmployeeId String?
+  actorType      ActorType     @default(AI)
+  aiProvider     String?
+  aiModel        String?
+  promptVersion  String?
   rejectedReason  String?
   scheduledAt     DateTime?
   publishedAt     DateTime?
@@ -255,6 +436,8 @@ model ContentPlan {
   publishJobs PublishJob[]
   approvals   Approval[]
   contentAssets ContentAsset[]
+  assignedEmployee Employee? @relation(fields: [assignedEmployeeId], references: [id], onDelete: SetNull)
+  attributions AttributionTouch[]
 
   @@index([planDate, kind])
   @@index([status])
@@ -269,15 +452,18 @@ model ContentVariant {
   mediaType     String?
   mediaPath     String?
   coverPath     String?
+  targetAccountId String?
   metadata      Json            @default("{}")
   status        ContentStatus   @default(DRAFT)
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @updatedAt
 
   contentPlan ContentPlan    @relation(fields: [contentPlanId], references: [id], onDelete: Cascade)
+  targetAccount PlatformAccount? @relation(fields: [targetAccountId], references: [id], onDelete: SetNull)
   publishJobs PublishJob[]
 
   @@unique([contentPlanId, platform])
+  @@index([targetAccountId])
 }
 
 model ContentAsset {
@@ -317,6 +503,9 @@ model PublishJob {
   receipt        Json             @default("{}")
   lastError      String?
   operator       String           @default("系统发布")
+  operatorType   ActorType        @default(SYSTEM)
+  operatorEmployeeId String?
+  platformAccountId String?
   publishedAt    DateTime?
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
@@ -325,6 +514,9 @@ model PublishJob {
   variant     ContentVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
   integration Integration    @relation(fields: [integrationId], references: [id], onDelete: Restrict)
   metrics     MetricSnapshot[]
+  operatorEmployee Employee?       @relation(fields: [operatorEmployeeId], references: [id], onDelete: SetNull)
+  platformAccount PlatformAccount? @relation(fields: [platformAccountId], references: [id], onDelete: SetNull)
+  attributions AttributionTouch[]
 
   @@index([status, nextAttemptAt])
 }
@@ -438,6 +630,114 @@ model ShopWorkItem {
 
   @@unique([integrationId, remoteId, type])
   @@index([overdue, status])
+}
+
+model ImportBatch {
+  id                 String       @id @default(cuid())
+  integrationId      String
+  platformAccountId  String?
+  kind               String
+  format             String
+  sourceName         String
+  status             ImportStatus @default(PENDING)
+  importedBy         String
+  importedByEmployeeId String?
+  recordsReceived    Int          @default(0)
+  recordsImported    Int          @default(0)
+  recordsRejected    Int          @default(0)
+  unavailableFields  String[]
+  errors             Json         @default("[]")
+  metadata           Json         @default("{}")
+  completedAt        DateTime?
+  createdAt          DateTime     @default(now())
+
+  integration      Integration      @relation(fields: [integrationId], references: [id], onDelete: Restrict)
+  platformAccount  PlatformAccount? @relation(fields: [platformAccountId], references: [id], onDelete: SetNull)
+  importedByEmployee Employee?       @relation(fields: [importedByEmployeeId], references: [id], onDelete: SetNull)
+  snapshots        BusinessSnapshot[]
+
+  @@index([status, createdAt])
+  @@index([integrationId, kind])
+}
+
+model BusinessSnapshot {
+  id                  String               @id @default(cuid())
+  integrationId       String
+  platformAccountId   String?
+  storeId             String?
+  importBatchId       String?
+  type                 BusinessSnapshotType
+  sourceId             String
+  sourceVersion        String               @default("current")
+  status               String
+  occurredAt           DateTime
+  capturedAt           DateTime             @default(now())
+  dueAt                DateTime?
+  ownerEmployeeId      String?
+  amount               Decimal?             @db.Decimal(18, 2)
+  currency             String?
+  sourceUrl            String?
+  unavailableFields    String[]
+  payload              Json                 @default("{}")
+
+  integration      Integration      @relation(fields: [integrationId], references: [id], onDelete: Restrict)
+  platformAccount  PlatformAccount? @relation(fields: [platformAccountId], references: [id], onDelete: SetNull)
+  store            Store?           @relation(fields: [storeId], references: [id], onDelete: SetNull)
+  importBatch      ImportBatch?     @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
+  ownerEmployee    Employee?        @relation(fields: [ownerEmployeeId], references: [id], onDelete: SetNull)
+
+  @@unique([integrationId, type, sourceId, sourceVersion])
+  @@index([type, occurredAt])
+  @@index([status, dueAt])
+}
+
+model AttributionTouch {
+  id                String   @id @default(cuid())
+  attributionCode   String
+  eventType         String
+  contentPlanId     String?
+  publishJobId      String?
+  integrationId     String?
+  platformAccountId String?
+  employeeId        String?
+  externalEventId   String?  @unique
+  source            String
+  medium            String?
+  campaign          String?
+  consultations     Int      @default(0)
+  orders            Int      @default(0)
+  revenue            Decimal? @db.Decimal(18, 2)
+  currency           String?
+  occurredAt         DateTime
+  metadata           Json     @default("{}")
+  createdAt          DateTime @default(now())
+
+  contentPlan     ContentPlan?     @relation(fields: [contentPlanId], references: [id], onDelete: SetNull)
+  publishJob      PublishJob?      @relation(fields: [publishJobId], references: [id], onDelete: SetNull)
+  integration     Integration?     @relation(fields: [integrationId], references: [id], onDelete: SetNull)
+  platformAccount PlatformAccount? @relation(fields: [platformAccountId], references: [id], onDelete: SetNull)
+  employee        Employee?        @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+
+  @@index([attributionCode, occurredAt])
+  @@index([contentPlanId, eventType])
+}
+
+model DataSourceHealth {
+  id                String           @id @default(cuid())
+  integrationId     String
+  platformAccountId String?
+  state             IntegrationState
+  capabilities      Json             @default("{}")
+  message           String
+  latencyMs         Int?
+  unavailableFields String[]
+  checkedAt         DateTime         @default(now())
+
+  integration     Integration      @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  platformAccount PlatformAccount? @relation(fields: [platformAccountId], references: [id], onDelete: Cascade)
+
+  @@index([integrationId, checkedAt])
+  @@index([state, checkedAt])
 }
 
 model Competitor {

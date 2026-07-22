@@ -7,8 +7,12 @@ const integrations: Array<{
   kind: IntegrationKind;
   displayName: string;
   capabilities: string[];
+  region?: string;
 }> = [
   { kind: "DOUYIN", displayName: "抖音", capabilities: [] },
+  { kind: "TIKTOK", displayName: "TikTok", capabilities: [], region: "GLOBAL" },
+  { kind: "AMAZON", displayName: "Amazon", capabilities: [], region: "US" },
+  { kind: "SHOPIFY", displayName: "Shopify", capabilities: [], region: "US" },
   { kind: "WECHAT_CHANNELS", displayName: "视频号", capabilities: [] },
   { kind: "XIAOHONGSHU", displayName: "小红书", capabilities: [] },
   { kind: "WECHAT_OFFICIAL", displayName: "微信公众号", capabilities: [] },
@@ -36,7 +40,7 @@ async function main() {
         state: "UNCONFIGURED",
         message: "未配置",
       },
-      update: { displayName: integration.displayName },
+      update: { displayName: integration.displayName, region: integration.region ?? "CN" },
     });
   }
   await prisma.sopVersion.upsert({

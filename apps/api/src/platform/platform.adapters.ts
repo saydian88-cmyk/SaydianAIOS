@@ -3,6 +3,7 @@ import type {
   CommentInput,
   LiveSnapshot,
   MetricPoint,
+  OperationSnapshotInput,
   PlatformAdapter,
   PlatformCapability,
   PlatformHealth,
@@ -10,6 +11,7 @@ import type {
   PublishInput,
   PublishReceipt,
   ShopQueueItem,
+  SnapshotImportInput,
 } from "@saidian-ops/contracts";
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
@@ -32,6 +34,7 @@ abstract class EmptyAdapter implements PlatformAdapter {
       kind: this.kind,
       state: "UNCONFIGURED",
       capabilities: [],
+      capabilityStates: {},
       message: `${this.displayName}未配置`,
     };
   }
@@ -58,6 +61,22 @@ abstract class EmptyAdapter implements PlatformAdapter {
 
   async fetchShopQueue(): Promise<ShopQueueItem[]> {
     return [];
+  }
+
+  async fetchOrders(): Promise<OperationSnapshotInput[]> {
+    return [];
+  }
+
+  async fetchShipments(): Promise<OperationSnapshotInput[]> {
+    return [];
+  }
+
+  async fetchAfterSales(): Promise<OperationSnapshotInput[]> {
+    return [];
+  }
+
+  async importSnapshot(input: SnapshotImportInput): Promise<{ accepted: number; rejected: number; message: string }> {
+    return { accepted: 0, rejected: input.records.length, message: `${this.displayName}未配置` };
   }
 }
 
@@ -86,6 +105,7 @@ export class DouyinAdapter extends EmptyAdapter {
       kind: "DOUYIN",
       state: "CONFIGURED",
       capabilities: this.capabilities(),
+      capabilityStates: { publish: "CONFIGURED" },
       checkedAt: new Date().toISOString(),
       message: "发布凭据已配置，等待账号实发验证",
     };
@@ -200,6 +220,7 @@ export class MallAdapter extends EmptyAdapter {
         kind: "SAIDIAN_MALL",
         state: "HEALTHY",
         capabilities: this.capabilities(),
+        capabilityStates: { shop: "HEALTHY" },
         checkedAt: new Date().toISOString(),
         message: "商城后台只读连接正常",
       };
@@ -208,6 +229,7 @@ export class MallAdapter extends EmptyAdapter {
         kind: "SAIDIAN_MALL",
         state: "ERROR",
         capabilities: this.capabilities(),
+        capabilityStates: { shop: "ERROR" },
         checkedAt: new Date().toISOString(),
         message: error instanceof Error ? error.message : "商城连接失败",
       };
@@ -276,6 +298,7 @@ export class OssAdapter extends EmptyAdapter {
       kind: "ALIYUN_OSS",
       state: !this.storage.isConfigured() ? "UNCONFIGURED" : health.ok ? "HEALTHY" : "ERROR",
       capabilities: this.capabilities(),
+      capabilityStates: this.storage.isConfigured() ? { assets: health.ok ? "HEALTHY" : "ERROR" } : {},
       checkedAt: new Date().toISOString(),
       message: health.message,
     };
@@ -294,6 +317,9 @@ export class PlatformRegistry {
     ];
     for (const [kind, adapter] of configured) this.adapters.set(kind, adapter);
     const unconfigured: Array<[PlatformKind, string]> = [
+      ["TIKTOK", "TikTok"],
+      ["AMAZON", "Amazon"],
+      ["SHOPIFY", "Shopify"],
       ["WECHAT_CHANNELS", "视频号"],
       ["XIAOHONGSHU", "小红书"],
       ["WECHAT_OFFICIAL", "微信公众号"],

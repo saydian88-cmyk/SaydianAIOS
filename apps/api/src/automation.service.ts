@@ -91,6 +91,13 @@ export class AutomationService {
     await this.enqueue("SYNC_LIVE", now, `${bucket}:SYNC_LIVE`);
   }
 
+  @Cron("0 0 * * * *", { timeZone: "Asia/Shanghai" })
+  async scheduleMetricCheckpoints() {
+    const now = new Date();
+    const bucket = `${localDateKey(now)}:${now.getUTCHours()}`;
+    await this.enqueue("SYNC_METRICS", now, `${bucket}:SYNC_METRICS`);
+  }
+
   @Cron("0 30 23 * * *", { timeZone: "Asia/Shanghai" })
   async scheduleDailyReport() {
     await this.enqueue("DAILY_REPORT", new Date(), localDateKey());

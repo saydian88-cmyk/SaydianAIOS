@@ -88,6 +88,7 @@ nav { display: grid; gap: 7px; margin-top: 22px; }
 .content-card h3 { margin: 16px 0 9px; font-size: 20px; line-height: 1.4; }.hook { min-height: 45px; margin: 0 0 14px; color: #8a3b31; line-height: 1.6; }
 .content-card dl { display: grid; gap: 8px; margin: 0; padding: 12px; border-radius: 11px; background: #f7f4f0; }.content-card dl div { display: grid; grid-template-columns: 68px 1fr; gap: 8px; }.content-card dt { color: #9a9c9f; font-size: 11px; }.content-card dd { margin: 0; color: #55585d; font-size: 12px; }
 .content-card ol { margin: 14px 0; padding-left: 19px; color: #66696e; font-size: 12px; line-height: 1.8; }.platform-tags, .capability-tags, .action-chips { display: flex; flex-wrap: wrap; gap: 6px; }.platform-tags span, .capability-tags span, .action-chips span { padding: 5px 8px; border-radius: 8px; color: #6d7074; background: #f0ede8; font-size: 10px; }.platform-tags { margin-top: auto; }.card-actions { display: flex; justify-content: flex-end; margin-top: 15px; }
+.variant-account-list { display: grid; gap: 8px; margin-top: 12px; }.variant-account-list > div { display: grid; grid-template-columns: 92px 1fr; align-items: center; gap: 8px; }.variant-account-list small { color: #777; }
 
 .el-segmented { margin-bottom: 16px; }.table-panel { overflow: hidden; }.table-panel small { margin-left: 7px; color: #777; }.el-table { --el-table-header-bg-color: #f5f2ed; --el-table-row-hover-bg-color: #fff6f3; }
 .card-list, .alert-list, .report-cards, .integration-grid, .sop-list { display: grid; gap: 13px; margin-top: 16px; }

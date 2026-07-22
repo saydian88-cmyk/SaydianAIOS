@@ -136,6 +136,10 @@ export class ContentService {
             evidenceIds: guard.evidenceIds,
             riskReasons: guard.reasons,
             createdBy: actor,
+            actorType: "AI",
+            aiProvider: "RULE_TEMPLATE",
+            aiModel: "content-sop-v1",
+            promptVersion: "1.0",
             status: index === 0 && guard.allowed ? "PENDING_APPROVAL" : "DRAFT",
             variants: {
               create: this.variants(kind, topic, body),
@@ -263,6 +267,16 @@ export class ContentService {
     });
   }
 
+  async assignVariantAccount(variantId: string, platformAccountId: string, actor: string) {
+    const variant = await this.prisma.contentVariant.findUnique({ where: { id: variantId } });
+    if (!variant) throw new NotFoundException("内容平台版本不存在");
+    const account = await this.prisma.platformAccount.findUnique({ where: { id: platformAccountId }, include: { integration: true } });
+    if (!account || account.integration.kind !== variant.platform) throw new BadRequestException("所选账号与内容平台不匹配");
+    const updated = await this.prisma.contentVariant.update({ where: { id: variantId }, data: { targetAccountId: account.id } });
+    await this.prisma.auditLog.create({ data: { actor, action: "CONTENT_ACCOUNT_ASSIGN", entityType: "ContentVariant", entityId: variantId, after: { platformAccountId: account.id, accountName: account.accountName } } });
+    return updated;
+  }
+
   async queueApproved(now = new Date()): Promise<{ queued: number; skipped: Array<{ platform: string; reason: string }> }> {
     const plans = await this.prisma.contentPlan.findMany({
       where: { status: "APPROVED" },
@@ -286,6 +300,17 @@ export class ContentService {
           skipped.push({ platform: variant.platform, reason: "集成记录不存在" });
           continue;
         }
+        const [accounts, responsibleEmployee] = await Promise.all([
+          this.prisma.platformAccount.findMany({ where: { integrationId: integration.id }, orderBy: { createdAt: "asc" } }),
+          plan.approvedBy ? this.prisma.employee.findFirst({ where: { name: plan.approvedBy, status: "ACTIVE" } }) : null,
+        ]);
+        const platformAccount = variant.targetAccountId
+          ? accounts.find((account) => account.id === variant.targetAccountId)
+          : accounts.length === 1 ? accounts[0] : undefined;
+        if (!platformAccount) {
+          skipped.push({ platform: variant.platform, reason: accounts.length ? "存在多个账号，请指定发布账号" : "发布账号未建立责任台账" });
+          continue;
+        }
         const key = makeIdempotencyKey("publish", plan.id, variant.platform, localDateKey(plan.planDate));
         await this.prisma.publishJob.upsert({
           where: { idempotencyKey: key },
@@ -294,7 +319,10 @@ export class ContentService {
             contentPlanId: plan.id,
             variantId: variant.id,
             integrationId: integration.id,
-            operator: plan.approvedBy || "系统发布",
+            platformAccountId: platformAccount?.id,
+            operator: "系统发布",
+            operatorType: "SYSTEM",
+            operatorEmployeeId: responsibleEmployee?.id,
             scheduledAt: plan.scheduledAt ?? now,
           },
           update: {},
@@ -335,7 +363,7 @@ export class ContentService {
       if (receipt.success) {
         succeeded += 1;
         const publishedAt = new Date();
-        const metricHours = [1, 3, 6, 24, 72];
+        const metricHours = [1, 3, 6, 24, 72, 168, 720];
         await this.prisma.$transaction([
           this.prisma.publishJob.update({ where: { id: job.id }, data: { status: "SUCCEEDED", remoteId: receipt.remoteId, remoteUrl: receipt.remoteUrl, receipt: receipt as unknown as Prisma.InputJsonValue, publishedAt } }),
           this.prisma.contentVariant.update({ where: { id: job.variantId }, data: { status: "PUBLISHED" } }),

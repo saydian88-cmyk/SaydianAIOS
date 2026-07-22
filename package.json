@@ -13,6 +13,7 @@
     "db:migrate": "pnpm --filter @saidian-ops/api prisma:migrate",
     "db:push": "pnpm --filter @saidian-ops/api prisma:push",
     "db:seed": "pnpm --filter @saidian-ops/api prisma:seed",
-    "verify:oss": "pnpm --filter @saidian-ops/api exec tsx ../../scripts/verify-oss.ts"
+    "verify:oss": "pnpm --filter @saidian-ops/api exec tsx ../../scripts/verify-oss.ts",
+    "sync:assets-agent": "pnpm --filter @saidian-ops/api exec tsx scripts/local-asset-agent.ts"
   }
 }

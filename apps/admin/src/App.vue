@@ -5,15 +5,17 @@ import {
   Bell, Connection, DataAnalysis, DocumentChecked, Files, House, Monitor, Promotion,
   Refresh, Search, Setting, Shop, VideoCamera,
 } from "@element-plus/icons-vue";
-import { api, getActor, getToken, post, setActor, setToken } from "./api";
+import { api, getActor, getToken, patch, post, setActor, setToken } from "./api";
 import type { Asset, ContentPlan, Dashboard, Integration } from "./types";
 
 type AnyRow = Record<string, any>;
+type Ledger = { departments: AnyRow[]; employees: AnyRow[]; products: AnyRow[]; accounts: AnyRow[]; stores: AnyRow[]; imports: AnyRow[]; snapshots: AnyRow[]; attributions: AnyRow[]; sourceHealth: AnyRow[] };
 
 const navItems = [
   { key: "dashboard", label: "今日总览", icon: House },
   { key: "content", label: "内容审核", icon: DocumentChecked },
   { key: "assets", label: "素材与证据", icon: Files },
+  { key: "ledger", label: "经营责任台账", icon: Monitor },
   { key: "operations", label: "店铺与竞品", icon: Shop },
   { key: "engagement", label: "评论与直播", icon: VideoCamera },
   { key: "reports", label: "报告与任务", icon: DataAnalysis },
@@ -38,11 +40,13 @@ const tasks = ref<AnyRow[]>([]);
 const reports = ref<AnyRow[]>([]);
 const jobs = ref<AnyRow[]>([]);
 const sops = ref<AnyRow[]>([]);
+const ledger = ref<Ledger>({ departments: [], employees: [], products: [], accounts: [], stores: [], imports: [], snapshots: [], attributions: [], sourceHealth: [] });
 const tokenInput = ref(getToken());
 const actorInput = ref(getActor());
 const opsSubTab = ref("shop");
 const assetSubTab = ref("assets");
 const reportSubTab = ref("reports");
+const ledgerSubTab = ref("employees");
 
 const todayLabel = new Intl.DateTimeFormat("zh-CN", { dateStyle: "full" }).format(new Date());
 const pageTitle = computed(() => navItems.find((item) => item.key === active.value)?.label || "运营中台");
@@ -61,6 +65,7 @@ function statusLabel(value: string) {
     DRAFT: "候选", PENDING_APPROVAL: "待审核", APPROVED: "已审核", REJECTED: "已退回", SCHEDULED: "待发布",
     PUBLISHED: "已发布", FAILED: "失败", PENDING: "待处理", READY: "可用", BLOCKED: "禁用", ARCHIVED: "归档",
     RUNNING: "执行中", RETRY: "重试中", SUCCEEDED: "已完成", LIVE: "直播中", OPEN: "待处理", RESOLVED: "已解决",
+    PARTIAL: "部分成功", ACTIVE: "在职",
   };
   return labels[value] || value || "未获取";
 }
@@ -74,7 +79,7 @@ function statusType(value: string) {
 
 function platformName(value: string) {
   const names: Record<string, string> = {
-    DOUYIN: "抖音", WECHAT_CHANNELS: "视频号", XIAOHONGSHU: "小红书", WECHAT_OFFICIAL: "公众号",
+    DOUYIN: "抖音", TIKTOK: "TikTok", AMAZON: "Amazon", SHOPIFY: "Shopify", WECHAT_CHANNELS: "视频号", XIAOHONGSHU: "小红书", WECHAT_OFFICIAL: "公众号",
     WECOM: "企业微信", TMALL: "天猫", JD: "京东", PINDUODUO: "拼多多", SAIDIAN_MALL: "自有商城",
     JUSHUITAN: "聚水潭", FEIGUA: "飞瓜", WEB_SEARCH: "全网搜索", LOCAL_ASSET: "本地素材库",
     WECOM_DRIVE: "企微网盘", HELP_CENTER: "客服帮助网站", EVIDENCE_WORKBOOK: "证据底表", ALIYUN_OSS: "阿里云 OSS",
@@ -88,12 +93,17 @@ function reportColumnLabel(value: string) {
     employee: "员工/执行者", recordedAt: "记录时间", storageProvider: "统一存储", objectKey: "OSS对象", storageSyncedAt: "同步时间", storageError: "存储异常", content: "内容", kind: "形式", platform: "平台", account: "账号",
     publishedAt: "发布时间", views: "播放量", completionRate: "完播率", likes: "点赞", comments: "评论", shares: "分享",
     saves: "收藏", consultations: "咨询", orders: "订单", action: "动作", object: "对象", occurredAt: "操作时间", result: "结果",
+    store: "店铺", type: "事项类型", sourceId: "外部编号", status: "状态", amount: "金额", currency: "币种", unavailableFields: "未获取字段",
+    format: "格式", received: "收到", imported: "成功", rejected: "拒绝", attributionCode: "归因码", eventType: "归因事件",
+    campaign: "活动", revenue: "成交金额", state: "连接状态", message: "检查结果", latencyMs: "耗时(ms)",
   };
   return labels[value] || value;
 }
 
 function reportCell(column: string, value: unknown) {
   if (["recordedAt", "publishedAt", "occurredAt", "storageSyncedAt"].includes(column) && typeof value === "string" && value !== "未同步") return time(value);
+  if (column === "unavailableFields" && Array.isArray(value)) return value.length ? value.join("、") : "无";
+  if (column === "state" && typeof value === "string") return statusLabel(value);
   if (column === "platform" && typeof value === "string") return platformName(value);
   if (column === "kind") return value === "VIDEO" ? "视频" : value === "ARTICLE" ? "软文" : value;
   if (column === "completionRate" && typeof value === "number") return `${Math.round(value * 10000) / 100}%`;
@@ -123,13 +133,14 @@ async function loadDashboard() {
 
 async function loadActive() {
   if (active.value === "dashboard") return loadDashboard();
-  if (active.value === "content") content.value = await api<ContentPlan[]>("/api/v1/content");
+  if (active.value === "content") [content.value, ledger.value] = await Promise.all([api<ContentPlan[]>("/api/v1/content"), api<Ledger>("/api/v1/ledger")]);
   if (active.value === "assets") {
     [assets.value, evidence.value] = await Promise.all([
       api<Asset[]>("/api/v1/assets?take=200"),
       api<{ claims: AnyRow[]; mappings: AnyRow[]; phraseRules: AnyRow[] }>("/api/v1/evidence"),
     ]);
   }
+  if (active.value === "ledger") ledger.value = await api("/api/v1/ledger");
   if (active.value === "operations") {
     [shopItems.value, competitors.value, trends.value, alerts.value] = await Promise.all([
       api<AnyRow[]>("/api/v1/shop"), api<AnyRow[]>("/api/v1/competitors"), api<AnyRow[]>("/api/v1/trends"), api<AnyRow[]>("/api/v1/alerts"),
@@ -183,6 +194,15 @@ async function reject(item: ContentPlan) {
   }, "内容已退回");
 }
 
+async function assignVariantAccount(variantId: string, value: unknown) {
+  const platformAccountId = String(value || "");
+  if (!platformAccountId) return;
+  await withLoading(async () => {
+    await patch(`/api/v1/content/variants/${variantId}/target-account`, { platformAccountId });
+    content.value = await api("/api/v1/content");
+  }, "发布账号已指定");
+}
+
 async function resolveAlert(id: string) {
   await withLoading(async () => {
     await post(`/api/v1/alerts/${id}/resolve`);
@@ -213,6 +233,82 @@ function saveActor() {
   setActor(actorInput.value);
   actorInput.value = getActor();
   ElMessage.success("当前员工已记录");
+}
+
+async function promptValue(title: string, placeholder: string, value = "") {
+  const result = await ElMessageBox.prompt(placeholder, title, { inputValue: value, confirmButtonText: "确认", cancelButtonText: "取消" });
+  return String(result.value || "").trim();
+}
+
+async function createEmployee() {
+  const name = await promptValue("新增员工", "员工姓名");
+  const role = await promptValue("新增员工", "岗位/角色", "运营");
+  await withLoading(async () => {
+    await post("/api/v1/ledger/employees", { name, role });
+    ledger.value = await api("/api/v1/ledger");
+  }, "员工已加入责任台账");
+}
+
+async function createAccount() {
+  const integrationKind = (await promptValue("新增平台账号", "平台代码，例如 DOUYIN、TIKTOK、AMAZON、SHOPIFY")).toUpperCase();
+  const accountName = await promptValue("新增平台账号", "账号名称");
+  const externalAccountId = await promptValue("新增平台账号", "平台账号编号；未知时填写内部唯一编号");
+  const region = await promptValue("新增平台账号", "区域：CN、US或GLOBAL", ["TIKTOK", "AMAZON", "SHOPIFY"].includes(integrationKind) ? "US" : "CN");
+  await withLoading(async () => {
+    await post("/api/v1/ledger/accounts", { integrationKind, accountName, externalAccountId, region });
+    ledger.value = await api("/api/v1/ledger");
+  }, "平台账号已记录，能力默认未配置");
+}
+
+async function createProduct() {
+  const name = await promptValue("新增产品", "产品名称");
+  const modelCode = await promptValue("新增产品", "型号代码，例如 W9S");
+  const category = await promptValue("新增产品", "产品分类", "智能健康穿戴");
+  await withLoading(async () => {
+    await post("/api/v1/ledger/products", { name, modelCode, category, evidenceIds: [] });
+    ledger.value = await api("/api/v1/ledger");
+  }, "产品主数据已保存");
+}
+
+async function createStore() {
+  const accountOptions = ledger.value.accounts.map((item) => `${item.accountName}=${item.id}`).join("；");
+  const platformAccountId = await promptValue("新增店铺", `平台账号ID：${accountOptions || "请先新增平台账号"}`);
+  const name = await promptValue("新增店铺", "店铺名称");
+  const externalStoreId = await promptValue("新增店铺", "平台店铺编号；未知时填写内部唯一编号");
+  await withLoading(async () => {
+    await post("/api/v1/ledger/stores", { platformAccountId, name, externalStoreId });
+    ledger.value = await api("/api/v1/ledger");
+  }, "店铺已加入责任台账");
+}
+
+async function createAttribution() {
+  const attributionCode = await promptValue("记录归因", "归因码，例如 DY-W9S-20260722-01");
+  const eventType = (await promptValue("记录归因", "事件类型：CONSULTATION、ORDER、PAYMENT", "ORDER")).toUpperCase();
+  const orders = eventType === "ORDER" || eventType === "PAYMENT" ? 1 : 0;
+  const consultations = eventType === "CONSULTATION" ? 1 : 0;
+  await withLoading(async () => {
+    await post("/api/v1/ledger/attributions", { attributionCode, eventType, source: "运营后台人工记录", orders, consultations, occurredAt: new Date().toISOString() });
+    ledger.value = await api("/api/v1/ledger");
+    ledgerSubTab.value = "attributions";
+  }, "归因事件已记录");
+}
+
+async function importCsv() {
+  const integrationKind = (await promptValue("导入经营快照", "平台代码，例如 AMAZON、SHOPIFY、DOUYIN")).toUpperCase();
+  const snapshotType = (await promptValue("导入经营快照", "数据类型：ORDER、SHIPMENT、AFTER_SALE、REFUND、INVENTORY", "ORDER")).toUpperCase();
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = ".csv,text/csv";
+  input.onchange = async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    await withLoading(async () => {
+      await post("/api/v1/ledger/import-snapshots", { integrationKind, snapshotType, format: "CSV", sourceName: file.name, csv: await file.text() });
+      ledger.value = await api("/api/v1/ledger");
+      ledgerSubTab.value = "imports";
+    }, "经营数据已导入");
+  };
+  input.click();
 }
 
 onMounted(() => withLoading(loadDashboard));
@@ -274,7 +370,7 @@ onMounted(() => withLoading(loadDashboard));
         <div class="metric-grid">
           <article class="metric-card red"><span>今日内容</span><strong>{{ (dashboard?.content.pendingApproval ?? 0) + (dashboard?.content.approved ?? 0) }}</strong><small>待审核 {{ dashboard?.content.pendingApproval ?? 0 }} · 已发布 {{ dashboard?.content.published ?? 0 }}</small></article>
           <article class="metric-card orange"><span>素材资产</span><strong>{{ dashboard?.assets.total ?? 0 }}</strong><small>可用 {{ dashboard?.assets.ready ?? 0 }} · 待整理 {{ dashboard?.assets.pending ?? 0 }}</small></article>
-          <article class="metric-card blue"><span>经营待办</span><strong>{{ (dashboard?.operations.overdue ?? 0) + (dashboard?.operations.pendingReplies ?? 0) }}</strong><small>超时 {{ dashboard?.operations.overdue ?? 0 }} · 回复 {{ dashboard?.operations.pendingReplies ?? 0 }}</small></article>
+          <article class="metric-card blue"><span>经营责任台账</span><strong>{{ dashboard?.ledger.accounts ?? 0 }}</strong><small>员工 {{ dashboard?.ledger.employees ?? 0 }} · 店铺 {{ dashboard?.ledger.stores ?? 0 }} · 待分配 {{ dashboard?.ledger.unassignedSnapshots ?? 0 }}</small></article>
           <article class="metric-card green"><span>已接入能力</span><strong>{{ dashboard?.integrations.healthy ?? 0 }}</strong><small>未配置 {{ dashboard?.integrations.unconfigured ?? 0 }} · 异常 {{ dashboard?.integrations.error ?? 0 }}</small></article>
         </div>
 
@@ -308,6 +404,7 @@ onMounted(() => withLoading(loadDashboard));
             <ol><li v-for="line in item.outline" :key="line">{{ line }}</li></ol>
             <el-alert v-if="item.riskReasons.length" :title="item.riskReasons.join('；')" type="warning" :closable="false" show-icon />
             <div class="platform-tags"><span v-for="variant in item.variants" :key="variant.id">{{ platformName(variant.platform) }}</span></div>
+            <div class="variant-account-list"><div v-for="variant in item.variants" :key="`${variant.id}-account`"><small>{{ platformName(variant.platform) }}发布账号</small><el-select :model-value="variant.targetAccountId" placeholder="未指定，不会进入发布队列" clearable @change="assignVariantAccount(variant.id, $event)"><el-option v-for="account in ledger.accounts.filter(account => account.integration?.kind === variant.platform)" :key="account.id" :label="`${account.accountName}（${account.region}）`" :value="account.id" /></el-select></div></div>
             <div class="card-actions" v-if="item.status === 'PENDING_APPROVAL'"><el-button @click="reject(item)">退回修改</el-button><el-button type="primary" @click="approve(item)">审核通过</el-button></div>
           </article>
         </div>
@@ -323,6 +420,31 @@ onMounted(() => withLoading(loadDashboard));
         <div class="table-panel" v-else-if="assetSubTab === 'evidence'"><el-table :data="evidence.claims" stripe height="560"><el-table-column prop="id" label="编号" width="80" /><el-table-column prop="name" label="证据" min-width="220" /><el-table-column prop="coveredObject" label="适用范围" min-width="260" show-overflow-tooltip /><el-table-column prop="publicWording" label="允许表述" min-width="300" show-overflow-tooltip /><el-table-column label="状态" width="100"><template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template></el-table-column></el-table></div>
         <div class="table-panel" v-else-if="assetSubTab === 'mappings'"><el-table :data="evidence.mappings" stripe height="560"><el-table-column prop="commercialName" label="商品名称" width="180" /><el-table-column prop="nameplateModel" label="包装/铭牌" min-width="220" /><el-table-column prop="registeredModel" label="注册型号" min-width="220" /><el-table-column prop="requiredAction" label="发布前动作" min-width="320" show-overflow-tooltip /><el-table-column label="状态" width="100"><template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template></el-table-column></el-table></div>
         <div class="table-panel" v-else><el-table :data="evidence.phraseRules" stripe height="560"><el-table-column prop="category" label="类别" width="140" /><el-table-column prop="blockedText" label="拦截表述" min-width="280" /><el-table-column prop="replacement" label="建议替代" min-width="320" /><el-table-column prop="condition" label="使用条件" min-width="260" /></el-table></div>
+      </section>
+
+      <section v-else-if="active === 'ledger'" class="page">
+        <div class="section-heading">
+          <div><span class="eyebrow">ACCOUNTABILITY LEDGER</span><h2>经营主数据与责任台账</h2><p>员工、产品、账号、店铺、经营快照和归因记录使用同一条审计链路。</p></div>
+          <div class="hero-actions"><el-button @click="createEmployee">新增员工</el-button><el-button @click="createProduct">新增产品</el-button><el-button @click="createAccount">新增账号</el-button><el-button @click="createStore">新增店铺</el-button><el-button type="primary" @click="importCsv">导入CSV</el-button></div>
+        </div>
+        <el-segmented v-model="ledgerSubTab" :options="[
+          { label: `员工 ${ledger.employees.length}`, value: 'employees' },
+          { label: `产品 ${ledger.products.length}`, value: 'products' },
+          { label: `账号 ${ledger.accounts.length}`, value: 'accounts' },
+          { label: `店铺 ${ledger.stores.length}`, value: 'stores' },
+          { label: `经营快照 ${ledger.snapshots.length}`, value: 'snapshots' },
+          { label: `导入批次 ${ledger.imports.length}`, value: 'imports' },
+          { label: `归因 ${ledger.attributions.length}`, value: 'attributions' },
+          { label: `数据源 ${ledger.sourceHealth.length}`, value: 'sources' },
+        ]" />
+        <div class="table-panel" v-if="ledgerSubTab === 'employees'"><el-table :data="ledger.employees" stripe height="560"><el-table-column prop="name" label="员工" width="140" /><el-table-column prop="employeeNo" label="员工编号" width="130"><template #default="scope">{{ scope.row.employeeNo || '未配置' }}</template></el-table-column><el-table-column label="部门" width="150"><template #default="scope">{{ scope.row.department?.name || '未分配' }}</template></el-table-column><el-table-column prop="role" label="岗位/角色" min-width="180" /><el-table-column prop="wecomUserId" label="企微身份" min-width="180"><template #default="scope">{{ scope.row.wecomUserId || '未配置' }}</template></el-table-column><el-table-column label="权限" width="120"><template #default="scope">{{ scope.row.isSuperAdmin ? '超级管理员' : '普通员工' }}</template></el-table-column><el-table-column label="状态" width="100"><template #default="scope"><el-tag :type="scope.row.status === 'ACTIVE' ? 'success' : 'info'">{{ scope.row.status }}</el-tag></template></el-table-column></el-table></div>
+        <div class="table-panel" v-else-if="ledgerSubTab === 'products'"><el-table :data="ledger.products" stripe height="560"><el-table-column prop="modelCode" label="型号" width="130" /><el-table-column prop="name" label="产品" min-width="220" /><el-table-column prop="category" label="分类" min-width="180" /><el-table-column label="SKU" min-width="240"><template #default="scope">{{ scope.row.skus?.length ? scope.row.skus.map((i: AnyRow) => i.skuCode).join('、') : '未配置' }}</template></el-table-column><el-table-column label="证据" width="100"><template #default="scope">{{ scope.row.evidenceIds?.length || 0 }}项</template></el-table-column><el-table-column label="状态" width="100"><template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template></el-table-column></el-table></div>
+        <div class="table-panel" v-else-if="ledgerSubTab === 'accounts'"><el-table :data="ledger.accounts" stripe height="560"><el-table-column label="平台" width="120"><template #default="scope">{{ scope.row.integration?.displayName || '未获取' }}</template></el-table-column><el-table-column prop="accountName" label="账号" min-width="180" /><el-table-column prop="externalAccountId" label="平台账号编号" min-width="180" /><el-table-column prop="region" label="区域" width="90" /><el-table-column label="负责人" width="130"><template #default="scope">{{ scope.row.ownerEmployee?.name || '待分配' }}</template></el-table-column><el-table-column label="能力状态" min-width="260"><template #default="scope"><span v-if="Object.keys(scope.row.capabilityStatus || {}).length">{{ Object.entries(scope.row.capabilityStatus).map(([k,v]) => `${k}:${statusLabel(String(v))}`).join('；') }}</span><span v-else>未配置</span></template></el-table-column><el-table-column label="状态" width="110"><template #default="scope"><el-tag :type="statusType(scope.row.state)">{{ statusLabel(scope.row.state) }}</el-tag></template></el-table-column></el-table></div>
+        <div class="table-panel" v-else-if="ledgerSubTab === 'stores'"><el-table :data="ledger.stores" stripe height="560"><el-table-column label="平台" width="120"><template #default="scope">{{ scope.row.platformAccount?.integration?.displayName || '未获取' }}</template></el-table-column><el-table-column label="账号" width="160"><template #default="scope">{{ scope.row.platformAccount?.accountName || '未获取' }}</template></el-table-column><el-table-column prop="name" label="店铺" min-width="200" /><el-table-column prop="externalStoreId" label="平台店铺编号" min-width="180" /><el-table-column prop="region" label="区域" width="90" /><el-table-column label="负责人" width="130"><template #default="scope">{{ scope.row.ownerEmployee?.name || '待分配' }}</template></el-table-column><el-table-column label="状态" width="110"><template #default="scope"><el-tag :type="statusType(scope.row.state)">{{ statusLabel(scope.row.state) }}</el-tag></template></el-table-column></el-table></div>
+        <div class="table-panel" v-else-if="ledgerSubTab === 'snapshots'"><el-table :data="ledger.snapshots" stripe height="560"><el-table-column label="平台" width="120"><template #default="scope">{{ scope.row.integration?.displayName || '未获取' }}</template></el-table-column><el-table-column label="账号/店铺" min-width="180"><template #default="scope">{{ scope.row.platformAccount?.accountName || '未绑定账号' }} / {{ scope.row.store?.name || '未绑定店铺' }}</template></el-table-column><el-table-column prop="type" label="类型" width="130" /><el-table-column prop="sourceId" label="外部编号" min-width="170" /><el-table-column prop="status" label="状态" width="120" /><el-table-column prop="amount" label="金额" width="120"><template #default="scope">{{ scope.row.amount ?? '未获取' }} {{ scope.row.currency || '' }}</template></el-table-column><el-table-column label="负责人" width="130"><template #default="scope">{{ scope.row.ownerEmployee?.name || '待分配' }}</template></el-table-column><el-table-column label="发生时间" width="160"><template #default="scope">{{ time(scope.row.occurredAt) }}</template></el-table-column><el-table-column label="未获取字段" min-width="200"><template #default="scope">{{ scope.row.unavailableFields?.length ? scope.row.unavailableFields.join('、') : '无' }}</template></el-table-column></el-table></div>
+        <div class="table-panel" v-else-if="ledgerSubTab === 'imports'"><el-table :data="ledger.imports" stripe height="560"><el-table-column label="平台" width="120"><template #default="scope">{{ scope.row.integration?.displayName || '未获取' }}</template></el-table-column><el-table-column prop="sourceName" label="数据文件/来源" min-width="220" /><el-table-column prop="format" label="格式" width="90" /><el-table-column prop="importedBy" label="导入员工" width="130" /><el-table-column prop="recordsReceived" label="收到" width="80" /><el-table-column prop="recordsImported" label="成功" width="80" /><el-table-column prop="recordsRejected" label="拒绝" width="80" /><el-table-column label="状态" width="110"><template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template></el-table-column><el-table-column label="导入时间" width="160"><template #default="scope">{{ time(scope.row.createdAt) }}</template></el-table-column></el-table></div>
+        <div class="table-panel" v-else-if="ledgerSubTab === 'attributions'"><div class="table-toolbar"><el-button type="primary" @click="createAttribution">记录归因事件</el-button></div><el-table :data="ledger.attributions" stripe height="520"><el-table-column prop="attributionCode" label="归因码" min-width="200" /><el-table-column prop="eventType" label="事件" width="130" /><el-table-column label="平台/账号" min-width="180"><template #default="scope">{{ scope.row.integration?.displayName || '未获取' }} / {{ scope.row.platformAccount?.accountName || '未获取' }}</template></el-table-column><el-table-column prop="source" label="来源" min-width="180" /><el-table-column prop="consultations" label="咨询" width="80" /><el-table-column prop="orders" label="订单" width="80" /><el-table-column prop="revenue" label="成交金额" width="120"><template #default="scope">{{ scope.row.revenue ?? '未获取' }}</template></el-table-column><el-table-column label="员工" width="120"><template #default="scope">{{ scope.row.employee?.name || '未绑定' }}</template></el-table-column><el-table-column label="时间" width="160"><template #default="scope">{{ time(scope.row.occurredAt) }}</template></el-table-column></el-table></div>
+        <div class="table-panel" v-else><el-table :data="ledger.sourceHealth" stripe height="560"><el-table-column label="数据源" width="150"><template #default="scope">{{ scope.row.integration?.displayName || '未获取' }}</template></el-table-column><el-table-column label="账号" width="160"><template #default="scope">{{ scope.row.platformAccount?.accountName || '连接级' }}</template></el-table-column><el-table-column label="状态" width="110"><template #default="scope"><el-tag :type="statusType(scope.row.state)">{{ statusLabel(scope.row.state) }}</el-tag></template></el-table-column><el-table-column prop="message" label="检查结果" min-width="300" /><el-table-column prop="latencyMs" label="耗时(ms)" width="100"><template #default="scope">{{ scope.row.latencyMs ?? '未获取' }}</template></el-table-column><el-table-column label="未获取原因" min-width="220"><template #default="scope">{{ scope.row.unavailableFields?.length ? scope.row.unavailableFields.join('、') : '无' }}</template></el-table-column><el-table-column label="检查时间" width="160"><template #default="scope">{{ time(scope.row.checkedAt) }}</template></el-table-column></el-table></div>
       </section>
 
       <section v-else-if="active === 'operations'" class="page">

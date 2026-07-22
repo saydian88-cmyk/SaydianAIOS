@@ -28,7 +28,9 @@ export class MonitoringService {
   async checkIntegrations() {
     const results = [];
     for (const [kind, adapter] of this.platforms.all()) {
+      const startedAt = Date.now();
       const health = await adapter.healthCheck();
+      const checkedAt = new Date();
       const integration = await this.prisma.integration.upsert({
         where: { kind: kind as IntegrationKind },
         create: {
@@ -36,16 +38,29 @@ export class MonitoringService {
           displayName: this.displayName(kind),
           state: health.state,
           capabilities: health.capabilities,
+          capabilityStatus: health.capabilityStates,
           message: health.message,
-          lastCheckedAt: new Date(),
-          lastSuccessAt: health.state === "HEALTHY" ? new Date() : undefined,
+          lastCheckedAt: checkedAt,
+          lastSuccessAt: health.state === "HEALTHY" ? checkedAt : undefined,
         },
         update: {
           state: health.state,
           capabilities: health.capabilities,
+          capabilityStatus: health.capabilityStates,
           message: health.message,
-          lastCheckedAt: new Date(),
-          lastSuccessAt: health.state === "HEALTHY" ? new Date() : undefined,
+          lastCheckedAt: checkedAt,
+          lastSuccessAt: health.state === "HEALTHY" ? checkedAt : undefined,
+        },
+      });
+      await this.prisma.dataSourceHealth.create({
+        data: {
+          integrationId: integration.id,
+          state: health.state,
+          capabilities: health.capabilityStates,
+          message: health.message,
+          latencyMs: Date.now() - startedAt,
+          unavailableFields: health.state === "UNCONFIGURED" ? ["账号、令牌或接口权限未配置"] : [],
+          checkedAt,
         },
       });
       results.push(integration);
@@ -56,6 +71,7 @@ export class MonitoringService {
   private displayName(kind: string): string {
     const names: Record<string, string> = {
       DOUYIN: "抖音", WECHAT_CHANNELS: "视频号", XIAOHONGSHU: "小红书", WECHAT_OFFICIAL: "微信公众号",
+      TIKTOK: "TikTok", AMAZON: "Amazon", SHOPIFY: "Shopify",
       WECOM: "企业微信", TMALL: "天猫", JD: "京东", PINDUODUO: "拼多多", SAIDIAN_MALL: "赛电自有商城",
       JUSHUITAN: "聚水潭", FEIGUA: "飞瓜", WEB_SEARCH: "全网搜索", LOCAL_ASSET: "本地素材库",
       WECOM_DRIVE: "企微网盘", HELP_CENTER: "客服帮助网站", EVIDENCE_WORKBOOK: "宣传证据底表",
@@ -196,7 +212,16 @@ export class MonitoringService {
       if (!adapter.capabilities().includes("metrics")) continue;
       const integration = await this.prisma.integration.findUnique({ where: { kind: kind as IntegrationKind } });
       if (!integration) continue;
-      const jobs = await this.prisma.publishJob.findMany({ where: { integrationId: integration.id, status: "SUCCEEDED", remoteId: { not: null } }, take: 100 });
+      const jobs = await this.prisma.publishJob.findMany({
+        where: {
+          integrationId: integration.id,
+          status: "SUCCEEDED",
+          remoteId: { not: null },
+          publishedAt: { gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
+        },
+        orderBy: { publishedAt: "desc" },
+        take: 500,
+      });
       const points = await adapter.fetchMetrics(jobs.flatMap((job) => job.remoteId ? [job.remoteId] : []));
       for (const point of points) {
         const publishJob = jobs.find((job) => job.remoteId === point.remoteId);
@@ -225,4 +250,3 @@ export class MonitoringService {
     if (!existing) await this.prisma.alert.create({ data: input });
   }
 }
-

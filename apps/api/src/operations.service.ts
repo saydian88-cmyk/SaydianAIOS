@@ -7,7 +7,7 @@ export class OperationsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async dashboard() {
-    const [integrationGroups, assetGroups, contentGroups, overdue, alerts, pendingReplies, activeLives, reports, jobs] = await Promise.all([
+    const [integrationGroups, assetGroups, contentGroups, overdue, alerts, pendingReplies, activeLives, reports, jobs, employees, accounts, stores, unassignedSnapshots] = await Promise.all([
       this.prisma.integration.groupBy({ by: ["state"], _count: { _all: true } }),
       this.prisma.asset.groupBy({ by: ["status"], _count: { _all: true } }),
       this.prisma.contentPlan.groupBy({ by: ["status"], _count: { _all: true } }),
@@ -17,6 +17,10 @@ export class OperationsService {
       this.prisma.liveSession.count({ where: { status: "LIVE" } }),
       this.prisma.report.findMany({ orderBy: { createdAt: "desc" }, take: 6 }),
       this.prisma.automationJob.findMany({ orderBy: { createdAt: "desc" }, take: 8 }),
+      this.prisma.employee.count({ where: { status: "ACTIVE" } }),
+      this.prisma.platformAccount.count(),
+      this.prisma.store.count(),
+      this.prisma.businessSnapshot.count({ where: { ownerEmployeeId: null } }),
     ]);
     const integrationMap = Object.fromEntries(integrationGroups.map((item) => [item.state, item._count._all]));
     const assetMap = Object.fromEntries(assetGroups.map((item) => [item.status, item._count._all]));
@@ -42,6 +46,7 @@ export class OperationsService {
         published: contentMap.PUBLISHED ?? 0,
       },
       operations: { overdue, alerts, pendingReplies, activeLives },
+      ledger: { employees, accounts, stores, unassignedSnapshots },
       latestReports: reports.map((report) => ({ id: report.id, kind: report.kind, title: report.title, summary: report.summary, createdAt: report.createdAt })),
       latestJobs: jobs,
     };

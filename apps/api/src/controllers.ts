@@ -3,6 +3,7 @@ import { PrismaService } from "./prisma.service";
 import { AuthService } from "./auth.service";
 import { AutomationService, jobKinds, type AutomationKind } from "./automation.service";
 import { ContentService } from "./content.service";
+import { LedgerService } from "./ledger.service";
 import { MonitoringService } from "./monitoring.service";
 import { OperationsService } from "./operations.service";
 
@@ -29,6 +30,7 @@ export class OpsController {
     private readonly automation: AutomationService,
     private readonly contentService: ContentService,
     private readonly monitoring: MonitoringService,
+    private readonly ledger: LedgerService,
   ) {}
 
   private actor(authorization?: string, requestedActor?: string) {
@@ -45,6 +47,33 @@ export class OpsController {
   }
   @Get("integrations") integrations(@Headers("authorization") authorization?: string) {
     this.actor(authorization); return this.operations.integrations();
+  }
+  @Get("ledger") ledgerOverview(@Headers("authorization") authorization?: string) {
+    this.actor(authorization); return this.ledger.overview();
+  }
+  @Post("ledger/departments") createDepartment(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Body() body: Record<string, unknown>) {
+    return this.ledger.createDepartment(body, this.actor(authorization, requestedActor));
+  }
+  @Post("ledger/employees") createEmployee(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Body() body: Record<string, unknown>) {
+    return this.ledger.createEmployee(body, this.actor(authorization, requestedActor));
+  }
+  @Post("ledger/products") createProduct(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Body() body: Record<string, unknown>) {
+    return this.ledger.createProduct(body, this.actor(authorization, requestedActor));
+  }
+  @Post("ledger/accounts") createAccount(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Body() body: Record<string, unknown>) {
+    return this.ledger.createAccount(body, this.actor(authorization, requestedActor));
+  }
+  @Post("ledger/stores") createStore(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Body() body: Record<string, unknown>) {
+    return this.ledger.createStore(body, this.actor(authorization, requestedActor));
+  }
+  @Post("ledger/import-snapshots") importSnapshots(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Body() body: Record<string, unknown>) {
+    return this.ledger.importSnapshots(body, this.actor(authorization, requestedActor));
+  }
+  @Post("ledger/attributions") createAttribution(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Body() body: Record<string, unknown>) {
+    return this.ledger.createAttribution(body, this.actor(authorization, requestedActor));
+  }
+  @Post("ledger/import-assets") importAssetManifest(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Body() body: Record<string, unknown>) {
+    return this.ledger.importAssetManifest(body, this.actor(authorization, requestedActor));
   }
   @Post("integrations/check") async checkIntegrations(@Headers("authorization") authorization?: string, @Headers("x-ops-actor") requestedActor?: string) {
     this.actor(authorization, requestedActor); return this.monitoring.checkIntegrations();
@@ -66,6 +95,11 @@ export class OpsController {
   }
   @Post("content/:id/reject") rejectContent(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("id") id: string, @Body() body: Record<string, unknown>) {
     return this.contentService.reject(id, this.actor(authorization, requestedActor), String(body.reason ?? ""));
+  }
+  @Patch("content/variants/:id/target-account") assignVariantAccount(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("id") id: string, @Body() body: Record<string, unknown>) {
+    const accountId = String(body.platformAccountId ?? "").trim();
+    if (!accountId) throw new BadRequestException("请选择发布账号");
+    return this.contentService.assignVariantAccount(id, accountId, this.actor(authorization, requestedActor));
   }
   @Post("content/queue-publish") queuePublish(@Headers("authorization") authorization?: string) {
     this.actor(authorization); return this.contentService.queueApproved();
