@@ -6,7 +6,8 @@ import {
   Refresh, Search, Setting, Shop, VideoCamera,
 } from "@element-plus/icons-vue";
 import { api, getActor, getToken, patch, post, setActor, setToken } from "./api";
-import type { Asset, ContentPlan, Dashboard, Integration } from "./types";
+import BrandDataCenter from "./components/BrandDataCenter.vue";
+import type { ContentPlan, Dashboard, Integration } from "./types";
 
 type AnyRow = Record<string, any>;
 type Ledger = { departments: AnyRow[]; employees: AnyRow[]; products: AnyRow[]; accounts: AnyRow[]; stores: AnyRow[]; imports: AnyRow[]; snapshots: AnyRow[]; attributions: AnyRow[]; sourceHealth: AnyRow[] };
@@ -14,7 +15,7 @@ type Ledger = { departments: AnyRow[]; employees: AnyRow[]; products: AnyRow[]; 
 const navItems = [
   { key: "dashboard", label: "今日总览", icon: House },
   { key: "content", label: "内容审核", icon: DocumentChecked },
-  { key: "assets", label: "素材与证据", icon: Files },
+  { key: "assets", label: "品牌数据中心", icon: Files },
   { key: "ledger", label: "经营责任台账", icon: Monitor },
   { key: "operations", label: "店铺与竞品", icon: Shop },
   { key: "engagement", label: "评论与直播", icon: VideoCamera },
@@ -28,8 +29,7 @@ const error = ref("");
 const dashboard = ref<Dashboard>();
 const integrations = ref<Integration[]>([]);
 const content = ref<ContentPlan[]>([]);
-const assets = ref<Asset[]>([]);
-const evidence = ref<{ claims: AnyRow[]; mappings: AnyRow[]; phraseRules: AnyRow[] }>({ claims: [], mappings: [], phraseRules: [] });
+const brandDataCenter = ref<{ reload: () => Promise<void> }>();
 const comments = ref<AnyRow[]>([]);
 const live = ref<AnyRow[]>([]);
 const shopItems = ref<AnyRow[]>([]);
@@ -44,7 +44,6 @@ const ledger = ref<Ledger>({ departments: [], employees: [], products: [], accou
 const tokenInput = ref(getToken());
 const actorInput = ref(getActor());
 const opsSubTab = ref("shop");
-const assetSubTab = ref("assets");
 const reportSubTab = ref("reports");
 const ledgerSubTab = ref("employees");
 
@@ -134,12 +133,7 @@ async function loadDashboard() {
 async function loadActive() {
   if (active.value === "dashboard") return loadDashboard();
   if (active.value === "content") [content.value, ledger.value] = await Promise.all([api<ContentPlan[]>("/api/v1/content"), api<Ledger>("/api/v1/ledger")]);
-  if (active.value === "assets") {
-    [assets.value, evidence.value] = await Promise.all([
-      api<Asset[]>("/api/v1/assets?take=200"),
-      api<{ claims: AnyRow[]; mappings: AnyRow[]; phraseRules: AnyRow[] }>("/api/v1/evidence"),
-    ]);
-  }
+  if (active.value === "assets") await brandDataCenter.value?.reload();
   if (active.value === "ledger") ledger.value = await api("/api/v1/ledger");
   if (active.value === "operations") {
     [shopItems.value, competitors.value, trends.value, alerts.value] = await Promise.all([
@@ -412,14 +406,7 @@ onMounted(() => withLoading(loadDashboard));
       </section>
 
       <section v-else-if="active === 'assets'" class="page">
-        <div class="section-heading"><div><span class="eyebrow">BRAND LIBRARY</span><h2>素材与证据主数据</h2><p>本地与企微源文件只读扫描，原始和派生素材统一存入私有阿里云 OSS。</p></div><el-button :icon="Refresh" @click="runJob('SYNC_ASSETS')">扫描并同步OSS</el-button></div>
-        <el-segmented v-model="assetSubTab" :options="[{ label: `素材 ${assets.length}`, value: 'assets' }, { label: `证据 ${evidence.claims.length}`, value: 'evidence' }, { label: `型号 ${evidence.mappings.length}`, value: 'mappings' }, { label: `表述规则 ${evidence.phraseRules.length}`, value: 'rules' }]" />
-        <div class="table-panel" v-if="assetSubTab === 'assets'">
-          <el-table :data="assets" stripe height="560"><el-table-column prop="fileName" label="素材" min-width="240" show-overflow-tooltip /><el-table-column prop="mediaType" label="类型" width="90" /><el-table-column prop="model" label="型号" width="110"><template #default="scope">{{ scope.row.model || '待识别' }}</template></el-table-column><el-table-column prop="scene" label="场景" min-width="150" show-overflow-tooltip /><el-table-column label="规格" width="140"><template #default="scope">{{ scope.row.width && scope.row.height ? `${scope.row.width}×${scope.row.height}` : '未获取' }}</template></el-table-column><el-table-column prop="discoveredBy" label="增加/扫描人" width="130" /><el-table-column label="OSS存储" min-width="230" show-overflow-tooltip><template #default="scope"><span v-if="scope.row.objectKey">已同步 · {{ scope.row.objectKey }}</span><span v-else>{{ scope.row.storageError || '待同步' }}</span></template></el-table-column><el-table-column label="质量" width="120"><template #default="scope"><el-progress :percentage="scope.row.qualityScore" :stroke-width="8" :show-text="false" /><small>{{ scope.row.qualityScore }}</small></template></el-table-column><el-table-column label="状态" width="100"><template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template></el-table-column></el-table>
-        </div>
-        <div class="table-panel" v-else-if="assetSubTab === 'evidence'"><el-table :data="evidence.claims" stripe height="560"><el-table-column prop="id" label="编号" width="80" /><el-table-column prop="name" label="证据" min-width="220" /><el-table-column prop="coveredObject" label="适用范围" min-width="260" show-overflow-tooltip /><el-table-column prop="publicWording" label="允许表述" min-width="300" show-overflow-tooltip /><el-table-column label="状态" width="100"><template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template></el-table-column></el-table></div>
-        <div class="table-panel" v-else-if="assetSubTab === 'mappings'"><el-table :data="evidence.mappings" stripe height="560"><el-table-column prop="commercialName" label="商品名称" width="180" /><el-table-column prop="nameplateModel" label="包装/铭牌" min-width="220" /><el-table-column prop="registeredModel" label="注册型号" min-width="220" /><el-table-column prop="requiredAction" label="发布前动作" min-width="320" show-overflow-tooltip /><el-table-column label="状态" width="100"><template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template></el-table-column></el-table></div>
-        <div class="table-panel" v-else><el-table :data="evidence.phraseRules" stripe height="560"><el-table-column prop="category" label="类别" width="140" /><el-table-column prop="blockedText" label="拦截表述" min-width="280" /><el-table-column prop="replacement" label="建议替代" min-width="320" /><el-table-column prop="condition" label="使用条件" min-width="260" /></el-table></div>
+        <BrandDataCenter ref="brandDataCenter" />
       </section>
 
       <section v-else-if="active === 'ledger'" class="page">

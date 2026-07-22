@@ -19,12 +19,13 @@ export function setActor(value: string) {
 }
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const isFormData = init.body instanceof FormData;
   const response = await fetch(`${apiBase}${path}`, {
     ...init,
     headers: {
       authorization: `Bearer ${getToken()}`,
       "x-ops-actor": encodeURIComponent(getActor()),
-      ...(init.body ? { "content-type": "application/json" } : {}),
+      ...(init.body && !isFormData ? { "content-type": "application/json" } : {}),
       ...(init.headers || {}),
     },
   });
@@ -39,4 +40,8 @@ export function post<T>(path: string, body?: unknown) {
 
 export function patch<T>(path: string, body: unknown) {
   return api<T>(path, { method: "PATCH", body: JSON.stringify(body) });
+}
+
+export function upload<T>(path: string, body: FormData) {
+  return api<T>(path, { method: "POST", body });
 }

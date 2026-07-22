@@ -117,6 +117,52 @@ export class OssStorageService {
     };
   }
 
+  async uploadBuffer(input: {
+    buffer: Buffer;
+    originalName: string;
+    sha256: string;
+    extension: string;
+    actor: string;
+    sourceType: string;
+    category?: "original" | "derived";
+  }): Promise<OssUploadResult> {
+    const objectKey = this.objectKeyForFile(input.sha256, input.extension, input.category ?? "original");
+    const client = this.client();
+    try {
+      const existing = await client.head(objectKey);
+      const existingHeaders = existing.res.headers as Record<string, string | undefined>;
+      return {
+        objectKey,
+        objectVersionId: existingHeaders["x-oss-version-id"],
+        etag: existingHeaders.etag?.replace(/^\"|\"$/g, ""),
+        storageUrl: `oss://${opsConfig.oss.bucket}/${objectKey}`,
+        uploadedAt: new Date(),
+      };
+    } catch (error) {
+      const uploadStatus = typeof error === "object" && error ? Number((error as { status?: unknown }).status ?? 0) : 0;
+      const code = typeof error === "object" && error ? String((error as { code?: unknown }).code ?? "") : "";
+      if (uploadStatus !== 404 && code !== "NoSuchKey" && code !== "NoSuchObject") throw error;
+    }
+    const result = await client.put(objectKey, input.buffer, {
+      headers: {
+        "x-oss-forbid-overwrite": "true",
+        "x-oss-server-side-encryption": "AES256",
+        "x-oss-meta-sha256": input.sha256,
+        "x-oss-meta-originalname": headerValue(input.originalName),
+        "x-oss-meta-uploadedby": headerValue(input.actor),
+        "x-oss-meta-sourcetype": headerValue(input.sourceType),
+      },
+    });
+    const headers = result.res.headers as Record<string, string | undefined>;
+    return {
+      objectKey,
+      objectVersionId: headers["x-oss-version-id"],
+      etag: headers.etag?.replace(/^\"|\"$/g, ""),
+      storageUrl: `oss://${opsConfig.oss.bucket}/${objectKey}`,
+      uploadedAt: new Date(),
+    };
+  }
+
   signedDownloadUrl(objectKey: string, expiresSeconds = 1_800): string {
     return this.client().signatureUrl(objectKey, { expires: expiresSeconds, method: "GET" });
   }
