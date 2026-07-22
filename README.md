@@ -49,6 +49,26 @@ OSS_ACCESS_KEY_SECRET=
 
 系统按 SHA-256 对象键去重，原始素材存入 `brand-assets/original/`，系统派生素材存入 `brand-assets/derived/`。日报逐项展示 OSS 对象键、同步员工、同步时间和异常。
 
+## 品牌知识库与素材库 V2.0
+
+品牌数据中心现采用“逻辑素材 + 文件版本 + 产品关系 + 受控标签 + AI任务”的结构：
+
+- Web/手机浏览器每批最多 20 个文件，单文件上限 200MB；批量接口使用磁盘暂存，完成后清理。
+- 精确重复复用主素材并保留 `UploadEvent`，不重复计算员工新增；近似重复只生成候选关系。
+- 处理、审核、可用和权限状态分开保存。只有 `APPROVED + ACTIVE + COMMERCIAL/EDIT_ONLY` 的素材进入后续调用池。
+- Sharp/FFprobe/FFmpeg 负责技术参数、预览、关键帧和切段；阿里云百炼未配置时明确显示“未配置”。
+- 视频片段确认后才生成高质量模块文件，并保存原片、时间范围、分析版本和创建员工。
+- 每日台账区分员工上传、正式新增、重复上传、AI派生、审核通过和实际调用。
+
+现有数据库增量升级：
+
+```powershell
+pnpm --filter @saidian-ops/api run prisma:push
+pnpm --filter @saidian-ops/api run prisma:backfill:v2
+```
+
+百炼为可选能力，配置项见 `.env.example`。未配置不会阻塞素材入库、技术检测、审核和台账。
+
 每次素材内容或 OSS 版本发生变化时，系统同时新增 `AssetVersion` 记录。源目录始终只读，历史版本不会被台账覆盖。
 
 中台部署到腾讯云后，本地素材目录无需共享给云服务器。本地电脑配置 `OPS_CENTER_URL` 和 `OPS_CENTER_TOKEN` 后执行：

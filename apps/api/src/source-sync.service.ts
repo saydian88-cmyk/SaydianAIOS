@@ -1,12 +1,13 @@
 import { Injectable } from "@nestjs/common";
-import { IntegrationKind, IntegrationState, Prisma, RecordStatus } from "@prisma/client";
-import { createHash } from "node:crypto";
+import { AssetKind, IntegrationKind, IntegrationState, Prisma, RecordStatus } from "@prisma/client";
+import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir, readdir, readFile, stat } from "node:fs/promises";
 import { extname, relative, resolve, sep } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import sharp from "sharp";
+import { AssetAiService } from "./asset-ai.service";
 import { opsConfig } from "./config";
 import { OssStorageService } from "./oss-storage.service";
 import { PrismaService } from "./prisma.service";
@@ -42,6 +43,11 @@ function mediaType(extension: string): string {
   if (videoExtensions.has(extension)) return "VIDEO";
   if ([".mp3", ".wav", ".m4a", ".aac"].includes(extension)) return "AUDIO";
   return "DOCUMENT";
+}
+
+function publicAssetNo(kind: string): string {
+  const day = new Date().toISOString().slice(0, 10).replaceAll("-", "");
+  return `SD-${kind}-${day}-${randomUUID().slice(0, 6).toUpperCase()}`;
 }
 
 async function fileHash(path: string): Promise<string> {
@@ -115,6 +121,7 @@ export class SourceSyncService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly oss: OssStorageService,
+    private readonly assetAi: AssetAiService,
   ) {}
 
   private async updateIntegration(kind: IntegrationKind, data: { state: IntegrationState; message: string; capabilities: string[] }) {
@@ -154,6 +161,8 @@ export class SourceSyncService {
     const errors: string[] = [];
     const ossConfigured = this.oss.isConfigured();
     const actorEmployee = await this.prisma.employee.findFirst({ where: { name: actor, status: "ACTIVE" } });
+    const scanBatch = await this.prisma.uploadBatch.create({ data: { batchNo: `UP-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${randomUUID().slice(0, 8).toUpperCase()}`, status: "PROCESSING", sourceType: "LOCAL_SCAN", uploadedByEmployeeId: actorEmployee?.id, uploadedBy: actor, productIds: [] } });
+    let duplicateCount = 0;
 
     for (const root of roots) {
       try {
@@ -188,6 +197,16 @@ export class SourceSyncService {
             }
             const extension = extname(path).toLowerCase();
             const type = mediaType(extension);
+            if (!existing) {
+              const exactDuplicate = await this.prisma.asset.findFirst({ where: { sha256: hash }, orderBy: { createdAt: "asc" } });
+              if (exactDuplicate) {
+                await this.prisma.uploadEvent.create({ data: { uploadBatchId: scanBatch.id, assetId: exactDuplicate.id, uploadedByEmployeeId: actorEmployee?.id, originalFileName: path.split(sep).pop() || path, sha256: hash, sizeBytes: before.size, result: "EXACT_DUPLICATE" } });
+                await this.prisma.auditLog.create({ data: { actor, action: "ASSET_EXACT_DUPLICATE", entityType: "Asset", entityId: exactDuplicate.id, after: { sourcePath: path, sha256: hash, uploadBatchId: scanBatch.id } } });
+                duplicateCount += 1;
+                unchanged += 1;
+                continue;
+              }
+            }
             const metadata: { width?: number; height?: number; durationSeconds?: number } = await mediaMetadata(path, extension).catch(() => ({}));
             const relativePath = relative(root, path);
             const firstSegment = relativePath.split(sep)[0];
@@ -250,6 +269,18 @@ export class SourceSyncService {
                 fileName: path.split(sep).pop() || path,
                 extension,
                 mediaType: type,
+                kind: type as AssetKind,
+                assetNo: publicAssetNo(type),
+                displayName: path.split(sep).pop() || path,
+                level: sourceType === "DERIVED_OUTPUT" ? "FINISHED" : "ORIGINAL",
+                productScope: detectModel(path) ? "UNKNOWN" : "COMMON",
+                processingStatus: storageData.objectKey ? "STORED" : "RECEIVED",
+                reviewStatus: "PENDING",
+                availabilityStatus: "INACTIVE",
+                rightsStatus: "AUTH_REQUIRED",
+                originalFileName: path.split(sep).pop() || path,
+                isOriginal: sourceType !== "DERIVED_OUTPUT",
+                createdByEmployeeId: actorEmployee?.id,
                 sha256: hash,
                 sizeBytes: before.size,
                 modifiedAt: before.mtime,
@@ -298,6 +329,12 @@ export class SourceSyncService {
                   storageUrl: asset.storageUrl,
                   createdByEmployeeId: actorEmployee?.id,
                   createdBy: actor,
+                  originalFileName: asset.fileName,
+                  extension: asset.extension,
+                  sizeBytes: asset.sizeBytes,
+                  width: asset.width,
+                  height: asset.height,
+                  durationSeconds: asset.durationSeconds,
                 },
               });
             }
@@ -324,7 +361,11 @@ export class SourceSyncService {
               },
             });
             if (existing) updated += 1;
-            else created += 1;
+            else {
+              created += 1;
+              await this.prisma.uploadEvent.create({ data: { uploadBatchId: scanBatch.id, assetId: asset.id, uploadedByEmployeeId: actorEmployee?.id, originalFileName: asset.fileName, sha256: asset.sha256, sizeBytes: asset.sizeBytes, result: "CREATED" } });
+              await this.assetAi.enqueue(asset.id, type as AssetKind, 1);
+            }
           } catch (error) {
             errors.push(`${path}：${error instanceof Error ? error.message : "扫描失败"}`);
           }
@@ -333,6 +374,8 @@ export class SourceSyncService {
         errors.push(`${root}：${error instanceof Error ? error.message : "目录读取失败"}`);
       }
     }
+
+    await this.prisma.uploadBatch.update({ where: { id: scanBatch.id }, data: { status: errors.length ? "PARTIAL" : "COMPLETED", receivedCount: scanned, createdCount: created, duplicateCount, failedCount: errors.length, completedAt: new Date() } });
 
     await this.updateIntegration("LOCAL_ASSET", {
       state: errors.length ? "DEGRADED" : "HEALTHY",

@@ -32,12 +32,20 @@ export const opsConfig = {
   },
   wecomWebhookUrl: process.env.WECOM_WEBHOOK_URL || "",
   oss: {
-    region: process.env.OSS_REGION || "oss-cn-hangzhou",
-    bucket: process.env.OSS_BUCKET || "saidian-brand-assets-prod",
-    endpoint: process.env.OSS_ENDPOINT || "oss-cn-hangzhou.aliyuncs.com",
+    region: process.env.OSS_REGION || "oss-cn-shenzhen",
+    bucket: process.env.OSS_BUCKET || "saidian-brand-assets-prod-sz",
+    endpoint: process.env.OSS_ENDPOINT || "oss-cn-shenzhen.aliyuncs.com",
     accessKeyId: process.env.OSS_ACCESS_KEY_ID || "",
     accessKeySecret: process.env.OSS_ACCESS_KEY_SECRET || "",
     prefix: (process.env.OSS_PREFIX || "brand-assets").replace(/^\/+|\/+$/g, ""),
+  },
+  bailian: {
+    apiKey: process.env.BAILIAN_API_KEY || "",
+    baseUrl: (process.env.BAILIAN_BASE_URL || "https://dashscope.aliyuncs.com/compatible-mode/v1").replace(/\/$/u, ""),
+    visionModel: process.env.BAILIAN_VISION_MODEL || "qwen-vl-max",
+    textModel: process.env.BAILIAN_TEXT_MODEL || "qwen-plus",
+    transcriptionUrl: process.env.BAILIAN_TRANSCRIPTION_URL || "",
+    transcriptionModel: process.env.BAILIAN_TRANSCRIPTION_MODEL || "",
   },
   douyin: {
     clientKey: process.env.DOUYIN_CLIENT_KEY || "",

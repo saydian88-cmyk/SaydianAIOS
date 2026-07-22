@@ -46,7 +46,24 @@ export class OssStorageService {
 
   objectKeyForFile(sha256: string, extension: string, category: "original" | "derived"): string {
     const normalizedExtension = extension.toLowerCase().replace(/[^a-z0-9.]/g, "");
-    return `${opsConfig.oss.prefix}/${category}/${sha256.slice(0, 2)}/${sha256}${normalizedExtension}`;
+    if (category === "original") return `${opsConfig.oss.prefix}/original/${sha256.slice(0, 2)}/${sha256}${normalizedExtension}`;
+    return `${opsConfig.oss.prefix}/derived/legacy/${sha256.slice(0, 2)}/${sha256}${normalizedExtension}`;
+  }
+
+  derivedObjectKey(assetId: string, derivedType: string, version: number, sha256: string, extension: string): string {
+    const safeType = derivedType.toLowerCase().replace(/[^a-z0-9_-]/g, "-");
+    const safeExtension = extension.toLowerCase().replace(/[^a-z0-9.]/g, "");
+    return `${opsConfig.oss.prefix}/derived/${assetId}/${safeType}/${version}/${sha256}${safeExtension}`;
+  }
+
+  previewObjectKey(assetId: string, version: number, fileName: string): string {
+    const safeName = fileName.toLowerCase().replace(/[^a-z0-9._-]/g, "-");
+    return `${opsConfig.oss.prefix}/preview/${assetId}/${version}/${safeName}`;
+  }
+
+  analysisObjectKey(assetId: string, analysisVersion: number, fileName: string): string {
+    const safeName = fileName.toLowerCase().replace(/[^a-z0-9._-]/g, "-");
+    return `${opsConfig.oss.prefix}/analysis/${assetId}/${analysisVersion}/${safeName}`;
   }
 
   async healthCheck(): Promise<{ ok: boolean; message: string }> {
@@ -159,6 +176,34 @@ export class OssStorageService {
       objectVersionId: headers["x-oss-version-id"],
       etag: headers.etag?.replace(/^\"|\"$/g, ""),
       storageUrl: `oss://${opsConfig.oss.bucket}/${objectKey}`,
+      uploadedAt: new Date(),
+    };
+  }
+
+  async uploadGeneratedBuffer(input: {
+    objectKey: string;
+    buffer: Buffer;
+    actor: string;
+    sourceType: string;
+    sha256: string;
+    originalName: string;
+  }): Promise<OssUploadResult> {
+    const client = this.client();
+    const result = await client.put(input.objectKey, input.buffer, {
+      headers: {
+        "x-oss-server-side-encryption": "AES256",
+        "x-oss-meta-sha256": input.sha256,
+        "x-oss-meta-originalname": headerValue(input.originalName),
+        "x-oss-meta-uploadedby": headerValue(input.actor),
+        "x-oss-meta-sourcetype": headerValue(input.sourceType),
+      },
+    });
+    const headers = result.res.headers as Record<string, string | undefined>;
+    return {
+      objectKey: input.objectKey,
+      objectVersionId: headers["x-oss-version-id"],
+      etag: headers.etag?.replace(/^"|"$/g, ""),
+      storageUrl: `oss://${opsConfig.oss.bucket}/${input.objectKey}`,
       uploadedAt: new Date(),
     };
   }

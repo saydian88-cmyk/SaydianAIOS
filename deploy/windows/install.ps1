@@ -68,9 +68,9 @@ MALL_BASE_URL=https://stest.saydian.cn/api/saidian-mall/v1
 MALL_ADMIN_USERNAME=$MallAdminUsername
 MALL_ADMIN_PASSWORD=$MallAdminPassword
 WECOM_WEBHOOK_URL=$WecomWebhookUrl
-OSS_REGION=oss-cn-hangzhou
-OSS_BUCKET=saidian-brand-assets-prod
-OSS_ENDPOINT=oss-cn-hangzhou.aliyuncs.com
+OSS_REGION=oss-cn-shenzhen
+OSS_BUCKET=saidian-brand-assets-prod-sz
+OSS_ENDPOINT=oss-cn-shenzhen.aliyuncs.com
 OSS_ACCESS_KEY_ID=$OssAccessKeyId
 OSS_ACCESS_KEY_SECRET=$OssAccessKeySecret
 OSS_PREFIX=brand-assets
@@ -79,10 +79,44 @@ DOUYIN_CLIENT_SECRET=
 DOUYIN_OPEN_ID=
 DOUYIN_ACCESS_TOKEN=
 VIDEO_RENDER_COMMAND=
+BAILIAN_API_KEY=
+BAILIAN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+BAILIAN_VISION_MODEL=qwen-vl-max
+BAILIAN_TEXT_MODEL=qwen-plus
+BAILIAN_TRANSCRIPTION_URL=
+BAILIAN_TRANSCRIPTION_MODEL=
 "@
   [IO.File]::WriteAllText($envPath, $envText, [Text.UTF8Encoding]::new($false))
   [IO.File]::WriteAllText((Join-Path $root 'INITIAL-ACCESS.txt'), "URL=https://stest.saydian.cn/saidian-ops/`r`nTOKEN=$adminToken`r`n", [Text.UTF8Encoding]::new($false))
 }
+
+$envLines = [Collections.Generic.List[string]](Get-Content -LiteralPath $envPath)
+function Set-EnvValue([string]$name, [string]$value) {
+  $prefix = "$name="
+  for ($index = 0; $index -lt $envLines.Count; $index += 1) {
+    if ($envLines[$index].StartsWith($prefix, [StringComparison]::Ordinal)) {
+      $envLines[$index] = "$prefix$value"
+      return
+    }
+  }
+  $envLines.Add("$prefix$value")
+}
+Set-EnvValue 'OSS_REGION' 'oss-cn-shenzhen'
+Set-EnvValue 'OSS_BUCKET' 'saidian-brand-assets-prod-sz'
+Set-EnvValue 'OSS_ENDPOINT' 'oss-cn-shenzhen.aliyuncs.com'
+foreach ($optionalEnv in @(
+  @{ Name = 'BAILIAN_API_KEY'; Value = '' },
+  @{ Name = 'BAILIAN_BASE_URL'; Value = 'https://dashscope.aliyuncs.com/compatible-mode/v1' },
+  @{ Name = 'BAILIAN_VISION_MODEL'; Value = 'qwen-vl-max' },
+  @{ Name = 'BAILIAN_TEXT_MODEL'; Value = 'qwen-plus' },
+  @{ Name = 'BAILIAN_TRANSCRIPTION_URL'; Value = '' },
+  @{ Name = 'BAILIAN_TRANSCRIPTION_MODEL'; Value = '' }
+)) {
+  if (-not ($envLines | Where-Object { $_.StartsWith("$($optionalEnv.Name)=", [StringComparison]::Ordinal) })) {
+    $envLines.Add("$($optionalEnv.Name)=$($optionalEnv.Value)")
+  }
+}
+[IO.File]::WriteAllLines($envPath, $envLines, [Text.UTF8Encoding]::new($false))
 
 Get-Content -LiteralPath $envPath | ForEach-Object {
   if ($_ -match '^([^#=]+)=(.*)$') { [Environment]::SetEnvironmentVariable($matches[1], $matches[2], 'Process') }
@@ -93,6 +127,8 @@ Set-Location (Join-Path $root 'api')
 if ($LASTEXITCODE -ne 0) { throw 'Database schema push failed' }
 & $node (Join-Path $root 'api\node_modules\tsx\dist\cli.mjs') (Join-Path $root 'api\prisma\seed.ts')
 if ($LASTEXITCODE -ne 0) { throw 'Database seed failed' }
+& $node (Join-Path $root 'api\node_modules\tsx\dist\cli.mjs') (Join-Path $root 'api\prisma\backfill-asset-v2.ts')
+if ($LASTEXITCODE -ne 0) { throw 'Asset V2 backfill failed' }
 
 cmd.exe /c "schtasks /End /TN $taskName >NUL 2>&1" | Out-Null
 $taskAction = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$root\start-api.ps1`""

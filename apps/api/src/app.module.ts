@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { ScheduleModule } from "@nestjs/schedule";
 import { AppController } from "./root.controller";
+import { AssetAiService } from "./asset-ai.service";
 import { AuthService } from "./auth.service";
 import { AutomationService } from "./automation.service";
 import { BrandDataController } from "./brand-data.controller";
@@ -22,7 +23,7 @@ import { SourceSyncService } from "./source-sync.service";
   controllers: [AppController, HealthController, OpsController, BrandDataController],
   providers: [
     PrismaService, AuthService, PlatformRegistry, ContentGuardService, OssStorageService, SourceSyncService,
-    ContentService, MonitoringService, ReportService, OperationsService, LedgerService, AutomationService, BrandDataService,
+    ContentService, MonitoringService, ReportService, OperationsService, LedgerService, AutomationService, AssetAiService, BrandDataService,
   ],
 })
 export class AppModule {}

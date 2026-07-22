@@ -1,224 +1,128 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
-import { ElMessage, ElMessageBox, type UploadFile } from "element-plus";
-import { Collection, Download, Plus, Refresh, Search, UploadFilled } from "@element-plus/icons-vue";
+import { ElMessage, ElMessageBox, type UploadUserFile } from "element-plus";
+import { Collection, Download, Plus, Refresh, Search, UploadFilled, View } from "@element-plus/icons-vue";
 import { api, patch, post, upload } from "../api";
 
 type Row = Record<string, any>;
 type Overview = {
   knowledge: { total: number; ready: number; pending: number };
-  assets: { total: number; ready: number; pending: number; ossStored: number };
+  assets: { total: number; ready: number; pending: number; aiFailed: number; today: number; highQuality: number; ossStored: number; gapCount: number };
   oss: { ok: boolean; message: string };
+  ai: { state: string; message: string };
 };
 
 const activeTab = ref("knowledge");
 const knowledgeView = ref("entries");
+const assetView = ref("list");
 const loading = ref(false);
 const overview = ref<Overview>();
 const knowledge = ref<Row[]>([]);
 const assets = ref<Row[]>([]);
-const controls = ref<{ claims: Row[]; mappings: Row[]; phraseRules: Row[] }>({ claims: [], mappings: [], phraseRules: [] });
+const jobs = ref<Row[]>([]);
+const gaps = ref<Row[]>([]);
+const dailyReport = ref<Row>();
+const controls = ref<{ claims: Row[]; mappings: Row[]; phraseRules: Row[]; brandProfiles: Row[]; products: Row[]; faqs: Row[]; employees: Row[] }>({ claims: [], mappings: [], phraseRules: [], brandProfiles: [], products: [], faqs: [], employees: [] });
 const knowledgeDialog = ref(false);
-const assetDialog = ref(false);
+const uploadDialog = ref(false);
+const metadataDialog = ref(false);
+const detailDrawer = ref(false);
 const editingKnowledgeId = ref("");
 const editingAssetId = ref("");
-const selectedFile = ref<File>();
+const assetDetail = ref<Row>();
+const batchFiles = ref<UploadUserFile[]>([]);
+const nextCursor = ref<string | null>(null);
+const assetTotal = ref(0);
+const selectedVideoId = ref("");
+const segments = ref<Row[]>([]);
 
 const knowledgeFilter = reactive({ query: "", type: "", status: "", model: "" });
-const assetFilter = reactive({ query: "", category: "", status: "", model: "" });
-const knowledgeForm = reactive({ type: "FAQ", title: "", category: "", model: "", summary: "", reply: "", body: "", source: "运营后台录入", sourceRefs: "", keywords: "", scenarios: "", audience: "customer" });
-const assetForm = reactive({ name: "", category: "", model: "", scene: "", creator: "", participants: "", language: "中文", targetPlatforms: "", hook: "", sellingPoints: "", scenarios: "", audienceTags: "", copyrightStatus: "待确认", aiTags: "", restriction: "", evidenceIds: "" });
+const assetFilter = reactive({ query: "", kind: "", level: "", model: "", moduleType: "", employeeId: "", reviewStatus: "", availabilityStatus: "", rightsStatus: "", minimumScore: "" });
+const knowledgeForm = reactive({ type: "FAQ", title: "", category: "", model: "", summary: "", reply: "", body: "", source: "运营后台录入", sourceRefs: "", sourceLevel: "B", validUntil: "", evidenceIds: "", keywords: "", scenarios: "", audience: "customer" });
+const batchForm = reactive({ sourceType: "WEB_UPLOAD", productScope: "UNKNOWN", productIds: [] as string[], assetKind: "", contentDescription: "", originalStatus: true, rightsStatus: "AUTH_REQUIRED", acquiredAt: "", employeeId: "" });
+const metadataForm = reactive({ displayName: "", level: "ORIGINAL", productScope: "UNKNOWN", productIds: [] as string[], rightsStatus: "AUTH_REQUIRED", contentDescription: "", acquiredAt: "", restriction: "", evidenceIds: "" });
 
 const knowledgeTypes = [
-  { label: "产品卖点", value: "PRODUCT" }, { label: "产品参数", value: "PARAMETER" },
-  { label: "标准话术", value: "WORDING" }, { label: "常见问答", value: "FAQ" },
-  { label: "禁用词", value: "FORBIDDEN" }, { label: "售后规则", value: "AFTER_SALE" },
-  { label: "使用教程", value: "TUTORIAL" },
+  { label: "品牌信息", value: "BRAND" }, { label: "产品卖点", value: "PRODUCT" }, { label: "产品参数", value: "PARAMETER" },
+  { label: "知识条目", value: "KNOWLEDGE" }, { label: "标准话术", value: "WORDING" }, { label: "常见问答", value: "FAQ" },
+  { label: "禁用词", value: "FORBIDDEN" }, { label: "售后规则", value: "AFTER_SALE" }, { label: "使用教程", value: "TUTORIAL" },
 ];
-const assetCategories = ["视频原片", "视频成片", "直播切片", "产品图", "场景图", "详情页", "脚本", "软文", "封面", "配音", "音乐", "字幕", "用户案例", "产品资料"];
-const categoryOptions = computed(() => Array.from(new Set([...assetCategories, ...assets.value.map((item) => item.category).filter(Boolean)])));
+const kindOptions = ["IMAGE", "VIDEO", "AUDIO", "DOCUMENT"];
+const levelOptions = ["ORIGINAL", "MODULE", "FINISHED", "REFERENCE", "AI_GENERATED"];
+const moduleOptions = ["HOOK", "PAIN", "SCENE", "FEATURE", "BENEFIT", "PROOF", "DEMO", "COMPARE", "UGC", "STORY", "TRANSITION", "TRAFFIC", "OFFER", "CTA", "ENDING"];
+const rightsOptions = ["COMMERCIAL", "INTERNAL", "EDIT_ONLY", "AUTH_REQUIRED", "EXPIRED", "PROHIBITED"];
+const videoAssets = computed(() => assets.value.filter((item) => item.kind === "VIDEO"));
 
-function typeLabel(value: string) {
-  return knowledgeTypes.find((item) => item.value === value)?.label || value;
-}
-
-function statusLabel(value: string) {
-  return ({ DRAFT: "草稿", PENDING: "待审核", READY: "可用", BLOCKED: "禁用", ARCHIVED: "归档" } as Record<string, string>)[value] || value;
-}
-
-function statusType(value: string) {
-  if (value === "READY") return "success";
-  if (value === "BLOCKED") return "danger";
-  if (value === "PENDING") return "warning";
-  return "info";
-}
-
-function dateTime(value?: string) {
-  if (!value) return "未记录";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "未记录" : new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(date);
-}
-
-function list(value: unknown) {
-  return Array.isArray(value) && value.length ? value.join("、") : "—";
-}
-
-function fileSize(value: unknown) {
-  const size = Number(value || 0);
-  if (size >= 1024 ** 3) return `${(size / 1024 ** 3).toFixed(2)} GB`;
-  if (size >= 1024 ** 2) return `${(size / 1024 ** 2).toFixed(1)} MB`;
-  if (size >= 1024) return `${(size / 1024).toFixed(1)} KB`;
-  return `${size} B`;
-}
+function typeLabel(value: string) { return knowledgeTypes.find((item) => item.value === value)?.label || value; }
+function dateTime(value?: string) { if (!value) return "未记录"; const date = new Date(value); return Number.isNaN(date.getTime()) ? "未记录" : new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(date); }
+function list(value: unknown) { return Array.isArray(value) && value.length ? value.join("、") : "—"; }
+function fileSize(value: unknown) { const size = Number(value || 0); if (size >= 1024 ** 3) return `${(size / 1024 ** 3).toFixed(2)} GB`; if (size >= 1024 ** 2) return `${(size / 1024 ** 2).toFixed(1)} MB`; if (size >= 1024) return `${(size / 1024).toFixed(1)} KB`; return `${size} B`; }
+function statusType(value: string) { if (["READY", "APPROVED", "ACTIVE", "SUCCEEDED", "AVAILABLE", "CONFIGURED", "HEALTHY", "COMMERCIAL"].includes(value)) return "success"; if (["FAILED", "REJECTED", "SUSPENDED", "PROHIBITED", "ERROR"].includes(value)) return "danger"; if (["PENDING", "RETURNED", "RETRY", "UNCONFIGURED", "AUTH_REQUIRED", "ANALYZING"].includes(value)) return "warning"; return "info"; }
+function statusLabel(value: string) { return ({ DRAFT: "草稿", PENDING: "待审核", READY: "可用", BLOCKED: "禁用", ARCHIVED: "归档", APPROVED: "已通过", RETURNED: "已退回", REJECTED: "已拒绝", ACTIVE: "可调用", INACTIVE: "未启用", SUSPENDED: "暂停", RECEIVED: "已接收", HASHED: "已计算哈希", STORED: "已存OSS", ANALYZING: "AI处理中", READY_FOR_REVIEW: "待人工审核", FAILED: "失败", SUCCEEDED: "已完成", RETRY: "待重试", UNCONFIGURED: "未配置", COMMERCIAL: "可商用", INTERNAL: "仅内部", EDIT_ONLY: "修改后可用", AUTH_REQUIRED: "待授权", EXPIRED: "已过期", PROHIBITED: "禁止使用" } as Record<string, string>)[value] || value; }
+function queryString(values: Record<string, string>) { const params = new URLSearchParams(); Object.entries(values).forEach(([key, value]) => { if (String(value).trim()) params.set(key, String(value).trim()); }); return params.toString(); }
 
 async function run(task: () => Promise<void>, success?: string) {
   loading.value = true;
-  try {
-    await task();
-    if (success) ElMessage.success(success);
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : "操作失败");
-  } finally {
-    loading.value = false;
-  }
+  try { await task(); if (success) ElMessage.success(success); }
+  catch (error) { ElMessage.error(error instanceof Error ? error.message : "操作失败"); }
+  finally { loading.value = false; }
 }
 
-function queryString(values: Record<string, string>) {
-  const params = new URLSearchParams();
-  Object.entries(values).forEach(([key, value]) => { if (value.trim()) params.set(key, value.trim()); });
-  return params.toString();
+async function loadKnowledge() { knowledge.value = await api<Row[]>(`/api/v1/brand-data/knowledge?${queryString(knowledgeFilter)}`); }
+async function loadAssets(reset = true) {
+  const params = new URLSearchParams(queryString(assetFilter)); params.set("pageSize", "50");
+  if (!reset && nextCursor.value) params.set("cursor", nextCursor.value);
+  const result = await api<{ items: Row[]; total: number; nextCursor: string | null }>(`/api/v1/brand-data/assets?${params.toString()}`);
+  assets.value = reset ? result.items : [...assets.value, ...result.items]; assetTotal.value = result.total; nextCursor.value = result.nextCursor;
 }
-
-async function loadKnowledge() {
-  knowledge.value = await api<Row[]>(`/api/v1/brand-data/knowledge?${queryString(knowledgeFilter)}`);
-}
-
-async function loadAssets() {
-  assets.value = await api<Row[]>(`/api/v1/brand-data/assets?${queryString(assetFilter)}`);
-}
-
+async function loadJobs() { jobs.value = await api<Row[]>("/api/v1/brand-data/analysis-jobs"); }
+async function loadGaps(refresh = false) { gaps.value = await api<Row[]>(`/api/v1/brand-data/asset-gaps${refresh ? "?refresh=1" : ""}`); }
+async function loadReport() { dailyReport.value = await api<Row>("/api/v1/brand-data/reports/daily"); }
+async function refreshOverview() { overview.value = await api<Overview>("/api/v1/brand-data/overview"); }
 async function reload() {
   await run(async () => {
-    [overview.value, knowledge.value, assets.value, controls.value] = await Promise.all([
-      api<Overview>("/api/v1/brand-data/overview"),
-      api<Row[]>("/api/v1/brand-data/knowledge"),
-      api<Row[]>("/api/v1/brand-data/assets"),
-      api<{ claims: Row[]; mappings: Row[]; phraseRules: Row[] }>("/api/v1/brand-data/knowledge-controls"),
-    ]);
+    const [summary, knowledgeRows, controlsRows] = await Promise.all([api<Overview>("/api/v1/brand-data/overview"), api<Row[]>("/api/v1/brand-data/knowledge"), api<typeof controls.value>("/api/v1/brand-data/knowledge-controls")]);
+    overview.value = summary; knowledge.value = knowledgeRows; controls.value = controlsRows;
+    await Promise.all([loadAssets(), loadJobs(), loadGaps(), loadReport()]);
   });
 }
 
-function clearObject(target: Record<string, string>, values: Record<string, string>) {
-  Object.keys(target).forEach((key) => { target[key] = values[key] ?? ""; });
-}
-
+function clearObject(target: Record<string, any>, values: Record<string, any>) { Object.keys(target).forEach((key) => { target[key] = values[key] ?? (Array.isArray(target[key]) ? [] : ""); }); }
 function openKnowledge(row?: Row) {
   editingKnowledgeId.value = row?.id || "";
-  clearObject(knowledgeForm, {
-    type: row?.type || "FAQ", title: row?.title || "", category: row?.category || "", model: row?.model || "",
-    summary: row?.summary || "", reply: row?.reply || "", body: row?.body || "", source: row?.source || "运营后台录入",
-    sourceRefs: row?.sourceRefs || "", keywords: list(row?.metadata?.keywords) === "—" ? "" : list(row?.metadata?.keywords),
-    scenarios: list(row?.metadata?.scenarios) === "—" ? "" : list(row?.metadata?.scenarios), audience: row?.audience || "customer",
-  });
+  clearObject(knowledgeForm, { type: row?.type || "FAQ", title: row?.title || "", category: row?.category || "", model: row?.model || "", summary: row?.summary || "", reply: row?.reply || "", body: row?.body || "", source: row?.source || "运营后台录入", sourceRefs: row?.sourceRefs || "", sourceLevel: row?.sourceLevel || "B", validUntil: row?.validUntil?.slice(0, 10) || "", evidenceIds: list(row?.evidenceIds) === "—" ? "" : list(row?.evidenceIds), keywords: list(row?.metadata?.keywords) === "—" ? "" : list(row?.metadata?.keywords), scenarios: list(row?.metadata?.scenarios) === "—" ? "" : list(row?.metadata?.scenarios), audience: row?.audience || "customer" });
   knowledgeDialog.value = true;
 }
+async function saveKnowledge() { if (!knowledgeForm.title.trim()) return ElMessage.warning("请填写知识标题"); await run(async () => { if (editingKnowledgeId.value) await patch(`/api/v1/brand-data/knowledge/${editingKnowledgeId.value}`, knowledgeForm); else await post("/api/v1/brand-data/knowledge", knowledgeForm); knowledgeDialog.value = false; await Promise.all([loadKnowledge(), refreshOverview()]); }, editingKnowledgeId.value ? "知识已更新，需重新审核" : "知识已加入待审核库"); }
+async function reviewKnowledge(row: Row, approved: boolean) { let note = ""; if (!approved) { const result = await ElMessageBox.prompt("填写退回原因", "知识审核", { confirmButtonText: "确认", cancelButtonText: "取消" }); note = String(result.value || ""); } await run(async () => { await post(`/api/v1/brand-data/knowledge/${row.id}/review`, { approved, note }); await Promise.all([loadKnowledge(), refreshOverview()]); }, approved ? "知识已审核" : "知识已禁用"); }
 
-async function saveKnowledge() {
-  if (!knowledgeForm.title.trim()) return ElMessage.warning("请填写知识标题");
+function openBatchUpload() { batchFiles.value = []; clearObject(batchForm, { sourceType: "WEB_UPLOAD", productScope: "UNKNOWN", productIds: [], assetKind: "", contentDescription: "", originalStatus: true, rightsStatus: "AUTH_REQUIRED", acquiredAt: "", employeeId: "" }); uploadDialog.value = true; }
+async function submitBatch() {
+  const files = batchFiles.value.map((item) => item.raw).filter(Boolean) as File[];
+  if (!files.length) return ElMessage.warning("请选择素材文件");
+  if (files.length > 20) return ElMessage.warning("每批最多20个文件");
   await run(async () => {
-    if (editingKnowledgeId.value) await patch(`/api/v1/brand-data/knowledge/${editingKnowledgeId.value}`, knowledgeForm);
-    else await post("/api/v1/brand-data/knowledge", knowledgeForm);
-    knowledgeDialog.value = false;
-    await Promise.all([loadKnowledge(), refreshOverview()]);
-  }, editingKnowledgeId.value ? "知识已更新并生成新版本" : "知识已加入待审核库");
+    const batch = await post<Row>("/api/v1/brand-data/upload-batches", batchForm);
+    const form = new FormData(); files.forEach((file) => form.append("files", file));
+    const result = await upload<Row>(`/api/v1/brand-data/upload-batches/${batch.id}/files`, form);
+    uploadDialog.value = false;
+    const duplicates = Number(result.duplicateCount || 0); const failed = Number(result.failedCount || 0);
+    if (duplicates || failed) ElMessage.warning(`批次完成：新增${result.createdCount || 0}，重复${duplicates}，失败${failed}`);
+    await Promise.all([loadAssets(), loadJobs(), refreshOverview(), loadReport()]);
+  }, "素材批次已进入处理流水线");
 }
 
-async function reviewKnowledge(row: Row, approved: boolean) {
-  let note = "";
-  if (!approved) {
-    const result = await ElMessageBox.prompt("填写禁用或退回原因", "知识审核", { confirmButtonText: "确认", cancelButtonText: "取消" });
-    note = String(result.value || "");
-  }
-  await run(async () => {
-    await post(`/api/v1/brand-data/knowledge/${row.id}/review`, { approved, note });
-    await Promise.all([loadKnowledge(), refreshOverview()]);
-  }, approved ? "知识已审核通过" : "知识已标记禁用");
-}
+async function openDetail(row: Row) { await run(async () => { assetDetail.value = await api<Row>(`/api/v1/brand-data/assets/${row.id}`); detailDrawer.value = true; }); }
+function openMetadata(row: Row) { editingAssetId.value = row.id; clearObject(metadataForm, { displayName: row.displayName || row.fileName, level: row.level || "ORIGINAL", productScope: row.productScope || "UNKNOWN", productIds: (row.products || []).map((item: Row) => item.id), rightsStatus: row.rightsStatus || "AUTH_REQUIRED", contentDescription: row.contentDescription || "", acquiredAt: row.acquiredAt?.slice(0, 10) || "", restriction: row.restriction || "", evidenceIds: list(row.evidenceIds) === "—" ? "" : list(row.evidenceIds) }); metadataDialog.value = true; }
+async function saveMetadata() { await run(async () => { await patch(`/api/v1/brand-data/assets/${editingAssetId.value}/metadata`, metadataForm); metadataDialog.value = false; await Promise.all([loadAssets(), refreshOverview()]); }, "素材元数据已更新"); }
+async function reviewAsset(row: Row, action: string) { let note = ""; if (action !== "APPROVE") { const result = await ElMessageBox.prompt("填写处理原因", "素材审核", { confirmButtonText: "确认", cancelButtonText: "取消" }); note = String(result.value || ""); } await run(async () => { await post(`/api/v1/brand-data/assets/${row.id}/review`, { action, note }); await Promise.all([loadAssets(), refreshOverview(), loadReport()]); }, "审核结果已保存"); }
+async function reanalyze(row: Row) { await run(async () => { await post(`/api/v1/brand-data/assets/${row.id}/reanalyze`); await Promise.all([loadAssets(), loadJobs()]); }, "已生成新分析版本"); }
+async function downloadAsset(row: Row) { await run(async () => { const result = await api<{ url: string }>(`/api/v1/brand-data/assets/${row.id}/download-url`); window.open(result.url, "_blank", "noopener,noreferrer"); }); }
+async function syncAssets() { await run(async () => { await post("/api/v1/jobs/run/SYNC_ASSETS"); await reload(); }, "只读扫描与OSS同步任务已加入队列"); }
 
-function resetAssetForm() {
-  editingAssetId.value = "";
-  selectedFile.value = undefined;
-  clearObject(assetForm, { name: "", category: "", model: "", scene: "", creator: "", participants: "", language: "中文", targetPlatforms: "", hook: "", sellingPoints: "", scenarios: "", audienceTags: "", copyrightStatus: "待确认", aiTags: "", restriction: "", evidenceIds: "" });
-}
-
-function openAsset(row?: Row) {
-  resetAssetForm();
-  if (row) {
-    editingAssetId.value = row.id;
-    clearObject(assetForm, {
-      name: row.displayName || row.fileName, category: row.category || "", model: row.model || "", scene: row.scene || "",
-      creator: row.metadata?.creator || row.discoveredBy || "", participants: list(row.metadata?.participants) === "—" ? "" : list(row.metadata?.participants),
-      language: row.metadata?.language || "中文", targetPlatforms: list(row.metadata?.targetPlatforms) === "—" ? "" : list(row.metadata?.targetPlatforms),
-      hook: row.metadata?.hook || "", sellingPoints: list(row.metadata?.sellingPoints) === "—" ? "" : list(row.metadata?.sellingPoints),
-      scenarios: list(row.metadata?.scenarios) === "—" ? "" : list(row.metadata?.scenarios), audienceTags: list(row.metadata?.audienceTags) === "—" ? "" : list(row.metadata?.audienceTags),
-      copyrightStatus: row.metadata?.copyrightStatus || "待确认", aiTags: list(row.metadata?.aiTags) === "—" ? "" : list(row.metadata?.aiTags),
-      restriction: row.restriction || "", evidenceIds: list(row.evidenceIds) === "—" ? "" : list(row.evidenceIds),
-    });
-  }
-  assetDialog.value = true;
-}
-
-function selectFile(file: UploadFile) {
-  selectedFile.value = file.raw;
-  if (!assetForm.name && file.name) assetForm.name = file.name.replace(/\.[^.]+$/u, "");
-}
-
-async function saveAsset() {
-  if (!editingAssetId.value && !selectedFile.value) return ElMessage.warning("请选择素材文件");
-  await run(async () => {
-    if (editingAssetId.value) {
-      await patch(`/api/v1/brand-data/assets/${editingAssetId.value}`, assetForm);
-    } else {
-      const form = new FormData();
-      form.append("file", selectedFile.value!);
-      Object.entries(assetForm).forEach(([key, value]) => form.append(key, value));
-      const result = await upload<{ duplicate: boolean; asset: Row }>("/api/v1/brand-data/assets/upload", form);
-      if (result.duplicate) ElMessage.warning(`检测到重复素材，已保留原记录：${result.asset.displayName}`);
-    }
-    assetDialog.value = false;
-    await Promise.all([loadAssets(), refreshOverview()]);
-  }, editingAssetId.value ? "素材台账已更新" : "素材已上传到 OSS，等待审核");
-}
-
-async function reviewAsset(row: Row, approved: boolean) {
-  let note = "";
-  if (!approved) {
-    const result = await ElMessageBox.prompt("填写禁用或退回原因", "素材审核", { confirmButtonText: "确认", cancelButtonText: "取消" });
-    note = String(result.value || "");
-  }
-  await run(async () => {
-    await post(`/api/v1/brand-data/assets/${row.id}/review`, { approved, note });
-    await Promise.all([loadAssets(), refreshOverview()]);
-  }, approved ? "素材已审核为可用" : "素材已标记禁用");
-}
-
-async function downloadAsset(row: Row) {
-  await run(async () => {
-    const result = await api<{ url: string }>(`/api/v1/brand-data/assets/${row.id}/download-url`);
-    window.open(result.url, "_blank", "noopener,noreferrer");
-  });
-}
-
-async function refreshOverview() {
-  overview.value = await api<Overview>("/api/v1/brand-data/overview");
-}
-
-async function syncAssets() {
-  await run(async () => {
-    await post("/api/v1/jobs/run/SYNC_ASSETS");
-    await reload();
-  }, "素材扫描与 OSS 同步任务已加入队列");
-}
+async function loadSegments() { if (!selectedVideoId.value) { segments.value = []; return; } segments.value = await api<Row[]>(`/api/v1/brand-data/assets/${selectedVideoId.value}/segments`); }
+async function saveSegment(row: Row) { await run(async () => { await patch(`/api/v1/brand-data/assets/${selectedVideoId.value}/segments/${row.id}`, { startSeconds: row.startSeconds, endSeconds: row.endSeconds, transcript: row.transcript, moduleType: row.moduleType, status: "CONFIRMED" }); await loadSegments(); }, "切段与模块分类已锁定"); }
+async function materializeSegment(row: Row) { await run(async () => { await post(`/api/v1/brand-data/assets/${selectedVideoId.value}/segments/${row.id}/materialize`, { employeeId: batchForm.employeeId || undefined }); await Promise.all([loadSegments(), loadAssets(), loadReport()]); }, "高质量模块文件已生成"); }
 
 defineExpose({ reload });
 onMounted(reload);
@@ -227,22 +131,15 @@ onMounted(reload);
 <template>
   <section class="brand-data-page" v-loading="loading">
     <div class="brand-hero">
-      <div>
-        <span class="brand-eyebrow">BRAND DATA CENTER</span>
-        <h2>品牌数据中心</h2>
-        <p>统一沉淀审核后的品牌知识与素材资产，为后续内容生产提供唯一可信来源。</p>
-      </div>
-      <div class="hero-actions">
-        <el-tag :type="overview?.oss.ok ? 'success' : 'warning'" effect="plain">{{ overview?.oss.message || 'OSS状态读取中' }}</el-tag>
-        <el-button :icon="Refresh" @click="reload">刷新数据</el-button>
-      </div>
+      <div><span class="brand-eyebrow">BRAND DATA CENTER · V2.0</span><h2>品牌数据中心</h2><p>品牌知识、逻辑素材、OSS文件、AI处理、审核与使用效果统一追溯。</p></div>
+      <div class="hero-actions"><el-tag :type="overview?.oss.ok ? 'success' : 'warning'" effect="dark">{{ overview?.oss.message || 'OSS状态读取中' }}</el-tag><el-tag :type="statusType(overview?.ai.state || '')" effect="plain">AI：{{ statusLabel(overview?.ai.state || 'UNCONFIGURED') }}</el-tag><el-button :icon="Refresh" @click="reload">刷新</el-button></div>
     </div>
 
     <div class="brand-metrics">
-      <article><span>知识总量</span><strong>{{ overview?.knowledge.total ?? 0 }}</strong><small>可用 {{ overview?.knowledge.ready ?? 0 }} · 待审核 {{ overview?.knowledge.pending ?? 0 }}</small></article>
-      <article><span>素材总量</span><strong>{{ overview?.assets.total ?? 0 }}</strong><small>可用 {{ overview?.assets.ready ?? 0 }} · 待审核 {{ overview?.assets.pending ?? 0 }}</small></article>
-      <article><span>OSS 已存储</span><strong>{{ overview?.assets.ossStored ?? 0 }}</strong><small>原始文件不覆盖，按哈希去重</small></article>
-      <article><span>知识管控项</span><strong>{{ controls.claims.length + controls.mappings.length + controls.phraseRules.length }}</strong><small>证据、型号映射与表述规则</small></article>
+      <article><span>知识总量</span><strong>{{ overview?.knowledge.total ?? 0 }}</strong><small>AI可调用 {{ overview?.knowledge.ready ?? 0 }} · 待审核 {{ overview?.knowledge.pending ?? 0 }}</small></article>
+      <article><span>今日新增素材</span><strong>{{ overview?.assets.today ?? 0 }}</strong><small>总量 {{ overview?.assets.total ?? 0 }} · OSS {{ overview?.assets.ossStored ?? 0 }}</small></article>
+      <article><span>待人工处理</span><strong>{{ overview?.assets.pending ?? 0 }}</strong><small>AI失败 {{ overview?.assets.aiFailed ?? 0 }} · 缺口 {{ overview?.assets.gapCount ?? 0 }}</small></article>
+      <article><span>可调用素材</span><strong>{{ overview?.assets.ready ?? 0 }}</strong><small>80分以上已审核 {{ overview?.assets.highQuality ?? 0 }}</small></article>
     </div>
 
     <div class="main-tabs">
@@ -251,139 +148,74 @@ onMounted(reload);
     </div>
 
     <template v-if="activeTab === 'knowledge'">
-      <div class="workspace-heading">
-        <div><h3>品牌知识库</h3><p>产品卖点、参数、标准话术、FAQ、禁用词、售后规则和教程统一版本管理。</p></div>
-        <el-button type="primary" :icon="Plus" @click="openKnowledge()">新建知识</el-button>
-      </div>
+      <div class="workspace-heading"><div><h3>品牌知识库</h3><p>品牌版本、产品、知识、FAQ、证据、型号映射与表述规则使用同一审核口径。</p></div><el-button type="primary" :icon="Plus" @click="openKnowledge()">新建知识</el-button></div>
       <el-segmented v-model="knowledgeView" :options="[
-        { label: `知识条目 ${knowledge.length}`, value: 'entries' },
-        { label: `宣传证据 ${controls.claims.length}`, value: 'claims' },
-        { label: `型号映射 ${controls.mappings.length}`, value: 'mappings' },
-        { label: `表述规则 ${controls.phraseRules.length}`, value: 'rules' },
+        { label: `知识 ${knowledge.length}`, value: 'entries' }, { label: `品牌版本 ${controls.brandProfiles.length}`, value: 'brand' },
+        { label: `产品 ${controls.products.length}`, value: 'products' }, { label: `FAQ ${controls.faqs.length}`, value: 'faqs' },
+        { label: `证据 ${controls.claims.length}`, value: 'claims' }, { label: `型号映射 ${controls.mappings.length}`, value: 'mappings' }, { label: `表述规则 ${controls.phraseRules.length}`, value: 'rules' },
       ]" />
       <template v-if="knowledgeView === 'entries'">
-        <div class="filter-bar">
-          <el-input v-model="knowledgeFilter.query" clearable placeholder="搜索编号、标题、正文或回复" :prefix-icon="Search" @keyup.enter="run(loadKnowledge)" />
-          <el-select v-model="knowledgeFilter.type" clearable placeholder="知识类型"><el-option v-for="item in knowledgeTypes" :key="item.value" :label="item.label" :value="item.value" /></el-select>
-          <el-input v-model="knowledgeFilter.model" clearable placeholder="适用型号" @keyup.enter="run(loadKnowledge)" />
-          <el-select v-model="knowledgeFilter.status" clearable placeholder="审核状态"><el-option label="待审核" value="PENDING" /><el-option label="可用" value="READY" /><el-option label="禁用" value="BLOCKED" /><el-option label="归档" value="ARCHIVED" /></el-select>
-          <el-button type="primary" :icon="Search" @click="run(loadKnowledge)">查询</el-button>
-        </div>
-        <div class="data-panel">
-          <el-table :data="knowledge" stripe height="500">
-            <el-table-column prop="id" label="知识编号" width="170" show-overflow-tooltip />
-            <el-table-column label="类型" width="110"><template #default="scope">{{ typeLabel(scope.row.type) }}</template></el-table-column>
-            <el-table-column prop="title" label="知识标题" min-width="210" show-overflow-tooltip />
-            <el-table-column prop="model" label="适用型号" width="120"><template #default="scope">{{ scope.row.model || '通用' }}</template></el-table-column>
-            <el-table-column label="核心内容" min-width="300" show-overflow-tooltip><template #default="scope">{{ scope.row.reply || scope.row.summary || scope.row.body || '待完善' }}</template></el-table-column>
-            <el-table-column prop="source" label="来源" width="150" show-overflow-tooltip />
-            <el-table-column label="版本" width="80"><template #default="scope">V{{ scope.row.metadata?.version || 1 }}</template></el-table-column>
-            <el-table-column label="审核状态" width="100"><template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template></el-table-column>
-            <el-table-column label="更新时间" width="140"><template #default="scope">{{ dateTime(scope.row.updatedAt) }}</template></el-table-column>
-            <el-table-column label="操作" width="190" fixed="right"><template #default="scope"><el-button link type="primary" @click="openKnowledge(scope.row)">编辑</el-button><el-button v-if="scope.row.status !== 'READY'" link type="success" @click="reviewKnowledge(scope.row, true)">通过</el-button><el-button v-if="scope.row.status !== 'BLOCKED'" link type="danger" @click="reviewKnowledge(scope.row, false)">禁用</el-button></template></el-table-column>
-          </el-table>
-        </div>
+        <div class="filter-bar knowledge-filter"><el-input v-model="knowledgeFilter.query" clearable placeholder="搜索编号、标题、正文或回复" :prefix-icon="Search" @keyup.enter="run(loadKnowledge)" /><el-select v-model="knowledgeFilter.type" clearable placeholder="知识类型"><el-option v-for="item in knowledgeTypes" :key="item.value" :label="item.label" :value="item.value" /></el-select><el-select v-model="knowledgeFilter.model" clearable filterable placeholder="适用型号"><el-option v-for="item in controls.products" :key="item.id" :label="`${item.modelCode} · ${item.name}`" :value="item.modelCode" /></el-select><el-select v-model="knowledgeFilter.status" clearable placeholder="状态"><el-option label="待审核" value="PENDING" /><el-option label="可用" value="READY" /><el-option label="禁用" value="BLOCKED" /></el-select><el-button type="primary" :icon="Search" @click="run(loadKnowledge)">查询</el-button></div>
+        <div class="data-panel"><el-table :data="knowledge" stripe height="500"><el-table-column prop="id" label="知识编号" width="165" show-overflow-tooltip /><el-table-column label="类型" width="100"><template #default="scope">{{ typeLabel(scope.row.type) }}</template></el-table-column><el-table-column prop="title" label="标题" min-width="200" show-overflow-tooltip /><el-table-column prop="model" label="型号" width="110"><template #default="scope">{{ scope.row.model || '通用' }}</template></el-table-column><el-table-column label="内容" min-width="280" show-overflow-tooltip><template #default="scope">{{ scope.row.reply || scope.row.summary || scope.row.body || '待完善' }}</template></el-table-column><el-table-column label="来源" width="145"><template #default="scope">{{ scope.row.source }}<small class="cell-note">等级 {{ scope.row.sourceLevel || 'B' }}</small></template></el-table-column><el-table-column label="调用" width="90"><template #default="scope"><el-tag :type="scope.row.aiCallable ? 'success' : 'info'">{{ scope.row.aiCallable ? '可调用' : '未进入' }}</el-tag></template></el-table-column><el-table-column label="状态" width="90"><template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template></el-table-column><el-table-column label="操作" width="180" fixed="right"><template #default="scope"><el-button link type="primary" @click="openKnowledge(scope.row)">编辑</el-button><el-button v-if="scope.row.status !== 'READY'" link type="success" @click="reviewKnowledge(scope.row, true)">通过</el-button><el-button v-if="scope.row.status !== 'BLOCKED'" link type="danger" @click="reviewKnowledge(scope.row, false)">禁用</el-button></template></el-table-column></el-table></div>
       </template>
+      <div v-else-if="knowledgeView === 'brand'" class="data-panel"><el-table :data="controls.brandProfiles" stripe height="545"><el-table-column prop="version" label="版本" width="90" /><el-table-column prop="title" label="品牌版本" min-width="180" /><el-table-column prop="positioning" label="品牌定位" min-width="300" show-overflow-tooltip /><el-table-column prop="source" label="来源" min-width="180" /><el-table-column label="状态" width="100"><template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template></el-table-column><el-table-column label="生效时间" width="150"><template #default="scope">{{ dateTime(scope.row.effectiveAt) }}</template></el-table-column></el-table></div>
+      <div v-else-if="knowledgeView === 'products'" class="data-panel"><el-table :data="controls.products" stripe height="545"><el-table-column prop="modelCode" label="型号" width="140" /><el-table-column prop="name" label="产品名称" min-width="200" /><el-table-column prop="category" label="系列" width="150" /><el-table-column label="SKU" width="90"><template #default="scope">{{ scope.row.skus?.length || 0 }}</template></el-table-column><el-table-column label="证据" min-width="220"><template #default="scope">{{ list(scope.row.evidenceIds) }}</template></el-table-column><el-table-column label="状态" width="100"><template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template></el-table-column></el-table></div>
+      <div v-else-if="knowledgeView === 'faqs'" class="data-panel"><el-table :data="controls.faqs" stripe height="545"><el-table-column prop="faqNo" label="FAQ编号" width="165" show-overflow-tooltip /><el-table-column prop="standardQuestion" label="标准问题" min-width="220" /><el-table-column prop="shortAnswer" label="短回复" min-width="280" show-overflow-tooltip /><el-table-column label="不同问法" width="100"><template #default="scope">{{ scope.row.variants?.length || 0 }}</template></el-table-column><el-table-column prop="frequency" label="频次" width="80" /><el-table-column label="AI调用" width="100"><template #default="scope"><el-tag :type="scope.row.externallyUsable ? 'success' : 'info'">{{ scope.row.externallyUsable ? '可调用' : '未进入' }}</el-tag></template></el-table-column></el-table></div>
       <div v-else-if="knowledgeView === 'claims'" class="data-panel"><el-table :data="controls.claims" stripe height="545"><el-table-column prop="id" label="证据编号" width="110" /><el-table-column prop="name" label="证据名称" min-width="210" /><el-table-column prop="coveredObject" label="适用范围" min-width="230" show-overflow-tooltip /><el-table-column prop="publicWording" label="允许表述" min-width="320" show-overflow-tooltip /><el-table-column prop="internalRestriction" label="使用限制" min-width="250" show-overflow-tooltip /><el-table-column label="状态" width="100"><template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template></el-table-column></el-table></div>
-      <div v-else-if="knowledgeView === 'mappings'" class="data-panel"><el-table :data="controls.mappings" stripe height="545"><el-table-column prop="commercialName" label="商品名称" min-width="180" /><el-table-column prop="nameplateModel" label="包装/铭牌型号" min-width="190" /><el-table-column prop="registeredModel" label="注册型号" min-width="190" /><el-table-column prop="registrationNumber" label="注册编号" min-width="200" /><el-table-column prop="requiredAction" label="发布前动作" min-width="300" show-overflow-tooltip /><el-table-column label="状态" width="100"><template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template></el-table-column></el-table></div>
+      <div v-else-if="knowledgeView === 'mappings'" class="data-panel"><el-table :data="controls.mappings" stripe height="545"><el-table-column prop="commercialName" label="商品名称" min-width="180" /><el-table-column prop="nameplateModel" label="包装/铭牌型号" min-width="190" /><el-table-column prop="registeredModel" label="注册型号" min-width="190" /><el-table-column prop="registrationNumber" label="注册编号" min-width="200" /><el-table-column prop="requiredAction" label="发布前动作" min-width="300" show-overflow-tooltip /></el-table></div>
       <div v-else class="data-panel"><el-table :data="controls.phraseRules" stripe height="545"><el-table-column prop="category" label="规则类别" width="140" /><el-table-column prop="blockedText" label="拦截表述" min-width="260" /><el-table-column prop="replacement" label="建议替代表述" min-width="320" /><el-table-column prop="condition" label="使用条件" min-width="300" /></el-table></div>
     </template>
 
     <template v-else>
-      <div class="workspace-heading">
-        <div><h3>素材库</h3><p>网页上传、小程序同步和本地扫描形成统一素材编号；原文件进入私有 OSS，版本与审核全程留痕。</p></div>
-        <div><el-button :icon="Refresh" @click="syncAssets">扫描同步 OSS</el-button><el-button type="primary" :icon="Plus" @click="openAsset()">上传素材</el-button></div>
-      </div>
-      <div class="filter-bar asset-filter">
-        <el-input v-model="assetFilter.query" clearable placeholder="搜索素材编号、名称、型号或人员" :prefix-icon="Search" @keyup.enter="run(loadAssets)" />
-        <el-select v-model="assetFilter.category" clearable filterable placeholder="素材分类"><el-option v-for="item in categoryOptions" :key="item" :label="item" :value="item" /></el-select>
-        <el-input v-model="assetFilter.model" clearable placeholder="产品/型号" @keyup.enter="run(loadAssets)" />
-        <el-select v-model="assetFilter.status" clearable placeholder="审核状态"><el-option label="待审核" value="PENDING" /><el-option label="可用" value="READY" /><el-option label="禁用" value="BLOCKED" /><el-option label="归档" value="ARCHIVED" /></el-select>
-        <el-button type="primary" :icon="Search" @click="run(loadAssets)">查询</el-button>
-      </div>
-      <div class="data-panel">
-        <el-table :data="assets" stripe height="540">
-          <el-table-column prop="assetNo" label="素材编号" width="175" show-overflow-tooltip />
-          <el-table-column prop="displayName" label="素材名称" min-width="220" show-overflow-tooltip />
-          <el-table-column prop="category" label="分类" width="120" />
-          <el-table-column label="产品/型号" width="120"><template #default="scope">{{ scope.row.model || '待标注' }}</template></el-table-column>
-          <el-table-column label="来源/创建人" width="155"><template #default="scope">{{ scope.row.metadata?.creator || scope.row.discoveredBy }}<small class="cell-note">{{ scope.row.sourceType }}</small></template></el-table-column>
-          <el-table-column label="文件信息" width="145"><template #default="scope">{{ scope.row.mediaType }} · {{ fileSize(scope.row.sizeBytes) }}<small class="cell-note">{{ scope.row.width && scope.row.height ? `${scope.row.width}×${scope.row.height}` : `V${scope.row.latestVersion || 1}` }}</small></template></el-table-column>
-          <el-table-column label="平台/标签" min-width="190" show-overflow-tooltip><template #default="scope">{{ list(scope.row.metadata?.targetPlatforms) }}<small class="cell-note">{{ list(scope.row.metadata?.aiTags) }}</small></template></el-table-column>
-          <el-table-column label="版权" width="95"><template #default="scope">{{ scope.row.metadata?.copyrightStatus || '待确认' }}</template></el-table-column>
-          <el-table-column label="OSS" width="95"><template #default="scope"><el-tag :type="scope.row.objectKey ? 'success' : 'warning'" effect="plain">{{ scope.row.objectKey ? '已存储' : '待同步' }}</el-tag></template></el-table-column>
-          <el-table-column label="状态" width="95"><template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template></el-table-column>
-          <el-table-column label="操作" width="225" fixed="right"><template #default="scope"><el-button link type="primary" @click="openAsset(scope.row)">编辑</el-button><el-button v-if="scope.row.objectKey" link :icon="Download" @click="downloadAsset(scope.row)">下载</el-button><el-button v-if="scope.row.status !== 'READY'" link type="success" @click="reviewAsset(scope.row, true)">通过</el-button><el-button v-if="scope.row.status !== 'BLOCKED'" link type="danger" @click="reviewAsset(scope.row, false)">禁用</el-button></template></el-table-column>
-        </el-table>
-      </div>
+      <div class="workspace-heading"><div><h3>素材库 V2</h3><p>OSS只保存文件；业务分类、型号、标签、版本、切片、审核、调用与效果均由素材对象图谱管理。</p></div><div><el-button :icon="Refresh" @click="syncAssets">扫描同步</el-button><el-button type="primary" :icon="Plus" @click="openBatchUpload">批量上传</el-button></div></div>
+      <el-segmented v-model="assetView" :options="[{ label: `素材检索 ${assetTotal}`, value: 'list' }, { label: `审核工作台 ${overview?.assets.pending || 0}`, value: 'review' }, { label: '视频模块', value: 'video' }, { label: `AI任务 ${jobs.length}`, value: 'jobs' }, { label: `素材缺口 ${gaps.filter(item => item.gapCount > 0).length}`, value: 'gaps' }, { label: '每日台账', value: 'report' }]" />
+
+      <template v-if="assetView === 'list' || assetView === 'review'">
+        <div v-if="assetView === 'list'" class="filter-bar asset-filter"><el-input v-model="assetFilter.query" clearable placeholder="编号、名称、人员、内容" :prefix-icon="Search" @keyup.enter="run(() => loadAssets())" /><el-select v-model="assetFilter.kind" clearable placeholder="类型"><el-option v-for="item in kindOptions" :key="item" :label="item" :value="item" /></el-select><el-select v-model="assetFilter.level" clearable placeholder="层级"><el-option v-for="item in levelOptions" :key="item" :label="item" :value="item" /></el-select><el-select v-model="assetFilter.model" clearable filterable placeholder="型号"><el-option v-for="item in controls.products" :key="item.id" :label="item.modelCode" :value="item.modelCode" /></el-select><el-select v-model="assetFilter.moduleType" clearable placeholder="视频模块"><el-option v-for="item in moduleOptions" :key="item" :label="item" :value="item" /></el-select><el-select v-model="assetFilter.employeeId" clearable filterable placeholder="员工"><el-option v-for="item in controls.employees" :key="item.id" :label="item.name" :value="item.id" /></el-select><el-select v-model="assetFilter.reviewStatus" clearable placeholder="审核"><el-option label="待审核" value="PENDING" /><el-option label="已通过" value="APPROVED" /><el-option label="已退回" value="RETURNED" /><el-option label="已拒绝" value="REJECTED" /></el-select><el-select v-model="assetFilter.rightsStatus" clearable placeholder="权限"><el-option v-for="item in rightsOptions" :key="item" :label="statusLabel(item)" :value="item" /></el-select><el-button type="primary" :icon="Search" @click="run(() => loadAssets())">查询</el-button></div>
+        <div class="data-panel"><el-table :data="assetView === 'review' ? assets.filter(item => item.reviewStatus === 'PENDING') : assets" stripe height="540"><el-table-column prop="assetNo" label="素材编号" width="190" show-overflow-tooltip /><el-table-column prop="displayName" label="素材名称" min-width="220" show-overflow-tooltip /><el-table-column label="对象" width="125"><template #default="scope">{{ scope.row.kind }} · {{ scope.row.level }}<small class="cell-note">{{ fileSize(scope.row.sizeBytes) }}</small></template></el-table-column><el-table-column label="型号" width="130"><template #default="scope">{{ scope.row.products?.length ? scope.row.products.map((item: Row) => item.modelCode).join('、') : (scope.row.model || '待确认') }}</template></el-table-column><el-table-column label="上传/来源" width="155"><template #default="scope">{{ scope.row.createdByEmployee?.name || scope.row.actor }}<small class="cell-note">{{ scope.row.source }}</small></template></el-table-column><el-table-column label="处理状态" width="125"><template #default="scope"><el-tag :type="statusType(scope.row.processingStatus)" effect="plain">{{ statusLabel(scope.row.processingStatus) }}</el-tag><small v-if="scope.row.failureReason" class="cell-note danger">{{ scope.row.failureReason }}</small></template></el-table-column><el-table-column label="审核/调用" width="120"><template #default="scope"><el-tag :type="statusType(scope.row.reviewStatus)">{{ statusLabel(scope.row.reviewStatus) }}</el-tag><small class="cell-note">{{ statusLabel(scope.row.availabilityStatus) }}</small></template></el-table-column><el-table-column label="权限" width="105"><template #default="scope">{{ statusLabel(scope.row.rightsStatus) }}</template></el-table-column><el-table-column label="质量" width="75"><template #default="scope">{{ scope.row.qualityScore }}</template></el-table-column><el-table-column label="操作" width="300" fixed="right"><template #default="scope"><el-button link :icon="View" @click="openDetail(scope.row)">详情</el-button><el-button link type="primary" @click="openMetadata(scope.row)">编辑</el-button><el-button v-if="scope.row.objectKey" link :icon="Download" @click="downloadAsset(scope.row)">下载</el-button><el-button v-if="scope.row.reviewStatus === 'PENDING'" link type="success" @click="reviewAsset(scope.row, 'APPROVE')">通过</el-button><el-dropdown v-if="scope.row.reviewStatus === 'PENDING'" trigger="click" @command="(action: string) => reviewAsset(scope.row, action)"><el-button link type="warning">其他处理</el-button><template #dropdown><el-dropdown-menu><el-dropdown-item command="RETURN">退回修改</el-dropdown-item><el-dropdown-item command="INTERNAL_ONLY">仅内部</el-dropdown-item><el-dropdown-item command="REJECT" divided>拒绝</el-dropdown-item></el-dropdown-menu></template></el-dropdown><el-button link @click="reanalyze(scope.row)">重分析</el-button></template></el-table-column></el-table></div>
+        <div v-if="nextCursor && assetView === 'list'" class="load-more"><el-button @click="run(() => loadAssets(false))">加载更多</el-button></div>
+      </template>
+
+      <template v-else-if="assetView === 'video'">
+        <div class="video-toolbar"><el-select v-model="selectedVideoId" filterable placeholder="选择视频原片" @change="run(loadSegments)"><el-option v-for="item in videoAssets" :key="item.id" :label="`${item.assetNo} · ${item.displayName}`" :value="item.id" /></el-select><span>系统先生成切段建议和预览；确认片段后再生成高质量模块文件。</span></div>
+        <div class="data-panel"><el-table :data="segments" stripe height="545"><el-table-column label="时间范围" width="210"><template #default="scope"><div class="time-range"><el-input-number v-model="scope.row.startSeconds" :min="0" :precision="2" controls-position="right" /><span>—</span><el-input-number v-model="scope.row.endSeconds" :min="0" :precision="2" controls-position="right" /></div></template></el-table-column><el-table-column label="模块" width="150"><template #default="scope"><el-select v-model="scope.row.moduleType" clearable><el-option v-for="item in moduleOptions" :key="item" :label="item" :value="item" /></el-select></template></el-table-column><el-table-column label="转写/说明" min-width="340"><template #default="scope"><el-input v-model="scope.row.transcript" /></template></el-table-column><el-table-column prop="analysisVersion" label="分析版本" width="95" /><el-table-column label="状态" width="110"><template #default="scope">{{ scope.row.status }}</template></el-table-column><el-table-column label="操作" width="180"><template #default="scope"><el-button link type="primary" @click="saveSegment(scope.row)">保存</el-button><el-button link type="success" :disabled="Boolean(scope.row.materializedAssetId)" @click="materializeSegment(scope.row)">{{ scope.row.materializedAssetId ? '已生成' : '生成模块' }}</el-button></template></el-table-column></el-table></div>
+      </template>
+
+      <template v-else-if="assetView === 'jobs'">
+        <div class="capability-note"><strong>AI能力：</strong>{{ overview?.ai.message }}<el-button link type="primary" @click="run(loadJobs)">刷新队列</el-button></div>
+        <div class="data-panel"><el-table :data="jobs" stripe height="545"><el-table-column label="素材" min-width="210"><template #default="scope">{{ scope.row.asset?.assetNo }}<small class="cell-note">{{ scope.row.asset?.displayName || scope.row.asset?.fileName }}</small></template></el-table-column><el-table-column prop="type" label="任务" width="190" /><el-table-column prop="provider" label="执行方" width="150" /><el-table-column prop="model" label="模型" width="150"><template #default="scope">{{ scope.row.model || '本地工具' }}</template></el-table-column><el-table-column label="状态" width="120"><template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template></el-table-column><el-table-column prop="attempts" label="尝试" width="75" /><el-table-column prop="failureReason" label="失败/未配置原因" min-width="260" show-overflow-tooltip /><el-table-column label="更新时间" width="145"><template #default="scope">{{ dateTime(scope.row.updatedAt) }}</template></el-table-column></el-table></div>
+      </template>
+
+      <template v-else-if="assetView === 'gaps'">
+        <div class="workspace-heading compact"><div><h3>素材缺口</h3><p>V2基础覆盖线按型号计算；缺口不会被“未获取”当作零表现数据。</p></div><el-button :icon="Refresh" @click="run(() => loadGaps(true), '缺口已重新计算')">重新计算</el-button></div>
+        <div class="data-panel"><el-table :data="gaps" stripe height="545"><el-table-column prop="productModel" label="型号" width="130" /><el-table-column prop="assetKind" label="素材类型" width="110" /><el-table-column prop="category" label="覆盖项" min-width="180" /><el-table-column prop="requiredCount" label="基线" width="80" /><el-table-column prop="activeCount" label="可调用" width="90" /><el-table-column prop="gapCount" label="缺口" width="80" /><el-table-column label="级别" width="90"><template #default="scope"><el-tag :type="scope.row.gapCount ? 'danger' : 'success'">{{ scope.row.severity }}</el-tag></template></el-table-column><el-table-column prop="recommendation" label="补拍建议" min-width="300" /></el-table></div>
+      </template>
+
+      <template v-else>
+        <div class="report-summary" v-if="dailyReport"><article><span>员工上传</span><strong>{{ dailyReport.summary.uploaded }}</strong></article><article><span>正式新增</span><strong>{{ dailyReport.summary.created }}</strong></article><article><span>重复上传</span><strong>{{ dailyReport.summary.duplicates }}</strong></article><article><span>审核通过</span><strong>{{ dailyReport.summary.approved }}</strong></article><article><span>AI派生模块</span><strong>{{ dailyReport.summary.aiDerivedModules }}</strong></article><article><span>实际调用</span><strong>{{ dailyReport.summary.actualUsages }}</strong></article></div>
+        <div class="two-panels" v-if="dailyReport"><div class="data-panel"><h4>员工增量</h4><el-table :data="dailyReport.employees" stripe height="420"><el-table-column prop="employee" label="员工" min-width="130" /><el-table-column prop="uploaded" label="上传" width="75" /><el-table-column prop="created" label="新增" width="75" /><el-table-column prop="duplicates" label="重复" width="75" /><el-table-column prop="failed" label="失败" width="75" /></el-table></div><div class="data-panel"><h4>当日素材记录</h4><el-table :data="dailyReport.uploads" stripe height="420"><el-table-column prop="asset.assetNo" label="素材编号" width="180" /><el-table-column prop="originalFileName" label="文件" min-width="180" show-overflow-tooltip /><el-table-column prop="batch.uploadedBy" label="员工/主体" width="140" /><el-table-column label="结果" width="120"><template #default="scope"><el-tag :type="scope.row.result === 'CREATED' ? 'success' : scope.row.result === 'FAILED' ? 'danger' : 'warning'">{{ scope.row.result }}</el-tag></template></el-table-column><el-table-column label="时间" width="135"><template #default="scope">{{ dateTime(scope.row.occurredAt) }}</template></el-table-column></el-table></div></div>
+      </template>
     </template>
 
-    <el-dialog v-model="knowledgeDialog" :title="editingKnowledgeId ? '编辑品牌知识' : '新建品牌知识'" width="760px" destroy-on-close>
-      <el-form label-position="top" class="form-grid">
-        <el-form-item label="知识类型" required><el-select v-model="knowledgeForm.type"><el-option v-for="item in knowledgeTypes" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item>
-        <el-form-item label="知识标题" required><el-input v-model="knowledgeForm.title" maxlength="100" /></el-form-item>
-        <el-form-item label="知识分类"><el-input v-model="knowledgeForm.category" placeholder="如：购买咨询、产品使用" /></el-form-item>
-        <el-form-item label="适用型号"><el-input v-model="knowledgeForm.model" placeholder="通用可不填" /></el-form-item>
-        <el-form-item label="摘要" class="full"><el-input v-model="knowledgeForm.summary" type="textarea" :rows="2" /></el-form-item>
-        <el-form-item label="标准回复/允许话术" class="full"><el-input v-model="knowledgeForm.reply" type="textarea" :rows="3" /></el-form-item>
-        <el-form-item label="完整正文" class="full"><el-input v-model="knowledgeForm.body" type="textarea" :rows="4" /></el-form-item>
-        <el-form-item label="关键词"><el-input v-model="knowledgeForm.keywords" placeholder="逗号分隔" /></el-form-item>
-        <el-form-item label="适用场景"><el-input v-model="knowledgeForm.scenarios" placeholder="逗号分隔" /></el-form-item>
-        <el-form-item label="资料来源"><el-input v-model="knowledgeForm.source" /></el-form-item>
-        <el-form-item label="来源链接/文件"><el-input v-model="knowledgeForm.sourceRefs" /></el-form-item>
-      </el-form>
-      <template #footer><el-button @click="knowledgeDialog = false">取消</el-button><el-button type="primary" @click="saveKnowledge">保存为待审核</el-button></template>
-    </el-dialog>
+    <el-dialog v-model="knowledgeDialog" :title="editingKnowledgeId ? '编辑品牌知识' : '新建品牌知识'" width="780px" destroy-on-close><el-form label-position="top" class="form-grid"><el-form-item label="知识类型" required><el-select v-model="knowledgeForm.type"><el-option v-for="item in knowledgeTypes" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item><el-form-item label="知识标题" required><el-input v-model="knowledgeForm.title" maxlength="100" /></el-form-item><el-form-item label="知识分类"><el-input v-model="knowledgeForm.category" /></el-form-item><el-form-item label="适用型号"><el-select v-model="knowledgeForm.model" clearable filterable><el-option v-for="item in controls.products" :key="item.id" :label="`${item.modelCode} · ${item.name}`" :value="item.modelCode" /></el-select></el-form-item><el-form-item label="摘要" class="full"><el-input v-model="knowledgeForm.summary" type="textarea" :rows="2" /></el-form-item><el-form-item label="标准回复/允许话术" class="full"><el-input v-model="knowledgeForm.reply" type="textarea" :rows="3" /></el-form-item><el-form-item label="完整正文" class="full"><el-input v-model="knowledgeForm.body" type="textarea" :rows="4" /></el-form-item><el-form-item label="来源等级"><el-select v-model="knowledgeForm.sourceLevel"><el-option v-for="item in ['A','B','C','D','E']" :key="item" :label="item" :value="item" /></el-select></el-form-item><el-form-item label="有效期"><el-date-picker v-model="knowledgeForm.validUntil" type="date" value-format="YYYY-MM-DD" /></el-form-item><el-form-item label="关联证据编号"><el-input v-model="knowledgeForm.evidenceIds" placeholder="逗号分隔" /></el-form-item><el-form-item label="关键词"><el-input v-model="knowledgeForm.keywords" placeholder="逗号分隔" /></el-form-item><el-form-item label="适用场景"><el-input v-model="knowledgeForm.scenarios" placeholder="逗号分隔" /></el-form-item><el-form-item label="资料来源"><el-input v-model="knowledgeForm.source" /></el-form-item><el-form-item label="来源链接/文件" class="full"><el-input v-model="knowledgeForm.sourceRefs" /></el-form-item></el-form><template #footer><el-button @click="knowledgeDialog = false">取消</el-button><el-button type="primary" @click="saveKnowledge">保存为待审核</el-button></template></el-dialog>
 
-    <el-dialog v-model="assetDialog" :title="editingAssetId ? '编辑素材台账' : '上传素材到 OSS'" width="820px" destroy-on-close>
-      <el-upload v-if="!editingAssetId" drag :auto-upload="false" :limit="1" :on-change="selectFile" :on-remove="() => selectedFile = undefined" class="asset-upload">
-        <el-icon class="el-icon--upload"><UploadFilled /></el-icon><div class="el-upload__text">拖入文件，或<em>点击选择</em></div><template #tip><div class="el-upload__tip">单文件不超过 200MB；大体积素材请使用本地扫描同步。</div></template>
-      </el-upload>
-      <el-form label-position="top" class="form-grid asset-form">
-        <el-form-item label="素材名称"><el-input v-model="assetForm.name" /></el-form-item>
-        <el-form-item label="素材分类"><el-select v-model="assetForm.category" filterable allow-create><el-option v-for="item in assetCategories" :key="item" :label="item" :value="item" /></el-select></el-form-item>
-        <el-form-item label="产品/型号"><el-input v-model="assetForm.model" placeholder="如 W9S" /></el-form-item>
-        <el-form-item label="使用场景"><el-input v-model="assetForm.scene" placeholder="如 父母健康管理" /></el-form-item>
-        <el-form-item label="创建人"><el-input v-model="assetForm.creator" placeholder="未填则记录当前员工" /></el-form-item>
-        <el-form-item label="出镜/参与人员"><el-input v-model="assetForm.participants" placeholder="逗号分隔" /></el-form-item>
-        <el-form-item label="目标平台"><el-input v-model="assetForm.targetPlatforms" placeholder="抖音、视频号、小红书" /></el-form-item>
-        <el-form-item label="版权状态"><el-select v-model="assetForm.copyrightStatus"><el-option label="待确认" value="待确认" /><el-option label="自有可用" value="自有可用" /><el-option label="已授权" value="已授权" /><el-option label="限制使用" value="限制使用" /></el-select></el-form-item>
-        <el-form-item label="前三秒 Hook" class="full"><el-input v-model="assetForm.hook" /></el-form-item>
-        <el-form-item label="内容卖点" class="full"><el-input v-model="assetForm.sellingPoints" placeholder="逗号分隔" /></el-form-item>
-        <el-form-item label="受众标签"><el-input v-model="assetForm.audienceTags" placeholder="逗号分隔" /></el-form-item>
-        <el-form-item label="AI标签"><el-input v-model="assetForm.aiTags" placeholder="逗号分隔" /></el-form-item>
-        <el-form-item label="关联证据编号"><el-input v-model="assetForm.evidenceIds" placeholder="逗号分隔" /></el-form-item>
-        <el-form-item label="使用限制"><el-input v-model="assetForm.restriction" /></el-form-item>
-      </el-form>
-      <template #footer><el-button @click="assetDialog = false">取消</el-button><el-button type="primary" @click="saveAsset">{{ editingAssetId ? '保存台账' : '上传并建档' }}</el-button></template>
-    </el-dialog>
+    <el-dialog v-model="uploadDialog" title="批量上传素材到深圳 OSS" width="860px" destroy-on-close><el-upload v-model:file-list="batchFiles" drag multiple :auto-upload="false" :limit="20" class="asset-upload"><el-icon class="el-icon--upload"><UploadFilled /></el-icon><div class="el-upload__text">拖入文件，或<em>点击选择</em></div><template #tip><div class="el-upload__tip">每批最多20个，单文件不超过200MB；大体积原片继续使用本地只读扫描。</div></template></el-upload><el-form label-position="top" class="form-grid"><el-form-item label="员工归属"><el-select v-model="batchForm.employeeId" clearable filterable placeholder="选择员工"><el-option v-for="item in controls.employees" :key="item.id" :label="`${item.name}${item.department?.name ? ` · ${item.department.name}` : ''}`" :value="item.id" /></el-select></el-form-item><el-form-item label="来源"><el-select v-model="batchForm.sourceType"><el-option label="网页上传" value="WEB_UPLOAD" /><el-option label="员工拍摄" value="EMPLOYEE_CAPTURE" /><el-option label="供应商" value="SUPPLIER" /><el-option label="UGC授权" value="UGC" /></el-select></el-form-item><el-form-item label="产品范围"><el-select v-model="batchForm.productScope"><el-option v-for="item in ['MODEL','SERIES','BRAND','COMMON','UNKNOWN']" :key="item" :label="item" :value="item" /></el-select></el-form-item><el-form-item label="产品型号"><el-select v-model="batchForm.productIds" multiple filterable placeholder="必须从产品库选择"><el-option v-for="item in controls.products" :key="item.id" :label="`${item.modelCode} · ${item.name}`" :value="item.id" /></el-select></el-form-item><el-form-item label="素材类型"><el-select v-model="batchForm.assetKind" clearable placeholder="留空自动识别"><el-option v-for="item in kindOptions" :key="item" :label="item" :value="item" /></el-select></el-form-item><el-form-item label="使用权限"><el-select v-model="batchForm.rightsStatus"><el-option v-for="item in rightsOptions" :key="item" :label="statusLabel(item)" :value="item" /></el-select></el-form-item><el-form-item label="获得/拍摄日期"><el-date-picker v-model="batchForm.acquiredAt" type="date" value-format="YYYY-MM-DD" /></el-form-item><el-form-item label="原创状态"><el-switch v-model="batchForm.originalStatus" active-text="公司原创" inactive-text="非原创/待确认" /></el-form-item><el-form-item label="内容说明" class="full"><el-input v-model="batchForm.contentDescription" type="textarea" :rows="2" /></el-form-item></el-form><template #footer><el-button @click="uploadDialog = false">取消</el-button><el-button type="primary" @click="submitBatch">上传并进入处理流水线</el-button></template></el-dialog>
+
+    <el-dialog v-model="metadataDialog" title="编辑素材元数据" width="760px" destroy-on-close><el-form label-position="top" class="form-grid"><el-form-item label="素材名称"><el-input v-model="metadataForm.displayName" /></el-form-item><el-form-item label="素材层级"><el-select v-model="metadataForm.level"><el-option v-for="item in levelOptions" :key="item" :label="item" :value="item" /></el-select></el-form-item><el-form-item label="产品范围"><el-select v-model="metadataForm.productScope"><el-option v-for="item in ['MODEL','SERIES','BRAND','COMMON','UNKNOWN']" :key="item" :label="item" :value="item" /></el-select></el-form-item><el-form-item label="关联产品"><el-select v-model="metadataForm.productIds" multiple filterable><el-option v-for="item in controls.products" :key="item.id" :label="`${item.modelCode} · ${item.name}`" :value="item.id" /></el-select></el-form-item><el-form-item label="使用权限"><el-select v-model="metadataForm.rightsStatus"><el-option v-for="item in rightsOptions" :key="item" :label="statusLabel(item)" :value="item" /></el-select></el-form-item><el-form-item label="获得日期"><el-date-picker v-model="metadataForm.acquiredAt" type="date" value-format="YYYY-MM-DD" /></el-form-item><el-form-item label="内容说明" class="full"><el-input v-model="metadataForm.contentDescription" type="textarea" :rows="3" /></el-form-item><el-form-item label="关联证据"><el-input v-model="metadataForm.evidenceIds" placeholder="逗号分隔" /></el-form-item><el-form-item label="使用限制"><el-input v-model="metadataForm.restriction" /></el-form-item></el-form><template #footer><el-button @click="metadataDialog = false">取消</el-button><el-button type="primary" @click="saveMetadata">保存</el-button></template></el-dialog>
+
+    <el-drawer v-model="detailDrawer" title="素材对象详情" size="62%" destroy-on-close><template v-if="assetDetail"><div class="detail-head"><div><span>{{ assetDetail.assetNo }}</span><h3>{{ assetDetail.displayName }}</h3></div><div><el-tag :type="statusType(assetDetail.processingStatus)">{{ statusLabel(assetDetail.processingStatus) }}</el-tag><el-tag :type="statusType(assetDetail.reviewStatus)">{{ statusLabel(assetDetail.reviewStatus) }}</el-tag><el-tag :type="statusType(assetDetail.availabilityStatus)">{{ statusLabel(assetDetail.availabilityStatus) }}</el-tag></div></div><el-descriptions :column="3" border><el-descriptions-item label="原始文件名">{{ assetDetail.originalFileName || assetDetail.fileName }}</el-descriptions-item><el-descriptions-item label="类型/层级">{{ assetDetail.kind }} / {{ assetDetail.level }}</el-descriptions-item><el-descriptions-item label="权限">{{ statusLabel(assetDetail.rightsStatus) }}</el-descriptions-item><el-descriptions-item label="OSS对象" :span="2">{{ assetDetail.objectKey || '未存储' }}</el-descriptions-item><el-descriptions-item label="SHA256">{{ assetDetail.sha256?.slice(0, 18) }}…</el-descriptions-item><el-descriptions-item label="上传员工">{{ assetDetail.createdByEmployee?.name || assetDetail.actor }}</el-descriptions-item><el-descriptions-item label="型号">{{ assetDetail.products?.map((item: Row) => item.modelCode).join('、') || '待确认' }}</el-descriptions-item><el-descriptions-item label="质量评分">{{ assetDetail.qualityScore }}</el-descriptions-item></el-descriptions><div class="detail-grid"><section><h4>受控标签</h4><div class="tag-cloud"><el-tag v-for="item in assetDetail.tags" :key="`${item.namespace}-${item.code}`" :type="item.locked ? 'success' : 'info'">{{ item.namespace }}：{{ item.label }}</el-tag><span v-if="!assetDetail.tags?.length">暂无标签</span></div></section><section><h4>版本</h4><el-table :data="assetDetail.versions" size="small"><el-table-column prop="version" label="版本" width="65" /><el-table-column prop="originalFileName" label="原文件名" min-width="150" /><el-table-column prop="objectKey" label="OSS对象" min-width="210" show-overflow-tooltip /></el-table></section><section><h4>AI任务</h4><el-table :data="assetDetail.analysisJobs" size="small"><el-table-column prop="type" label="任务" min-width="150" /><el-table-column label="状态" width="105"><template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template></el-table-column><el-table-column prop="failureReason" label="原因" min-width="180" show-overflow-tooltip /></el-table></section><section><h4>审核记录</h4><el-table :data="assetDetail.reviewDecisions" size="small"><el-table-column prop="action" label="动作" width="110" /><el-table-column prop="reviewer" label="审核人" width="120" /><el-table-column prop="note" label="说明" min-width="180" /><el-table-column label="时间" width="135"><template #default="scope">{{ dateTime(scope.row.createdAt) }}</template></el-table-column></el-table></section><section><h4>使用与效果</h4><el-table :data="assetDetail.usages" size="small"><el-table-column prop="businessObjectType" label="业务对象" width="120" /><el-table-column prop="businessObjectId" label="对象编号" min-width="150" /><el-table-column prop="usedBy" label="使用人/AI" width="120" /><el-table-column label="最新播放" width="90"><template #default="scope">{{ scope.row.metrics?.[0]?.views ?? '未获取' }}</template></el-table-column><el-table-column label="订单" width="80"><template #default="scope">{{ scope.row.metrics?.[0]?.orders ?? '未获取' }}</template></el-table-column></el-table></section></div></template></el-drawer>
   </section>
 </template>
 
 <style scoped>
 .brand-data-page { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
 .brand-hero { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 24px 28px; color: #fff; border-radius: 20px; background: linear-gradient(120deg, #15213a 0%, #1b365d 58%, #a2202b 160%); box-shadow: 0 14px 38px rgba(24, 40, 72, .16); }
-.brand-hero h2 { margin: 5px 0 7px; font-size: 28px; }
-.brand-hero p { margin: 0; color: rgba(255,255,255,.72); }
-.brand-eyebrow { font-size: 11px; font-weight: 800; letter-spacing: .16em; color: #f2b8be; }
-.hero-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.brand-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
-.brand-metrics article { padding: 18px 20px; border: 1px solid #e9edf4; border-radius: 16px; background: #fff; box-shadow: 0 7px 20px rgba(28, 44, 72, .05); }
-.brand-metrics span, .brand-metrics small { display: block; color: #7a8496; }
-.brand-metrics strong { display: block; margin: 5px 0 2px; font-size: 27px; color: #162239; }
-.main-tabs { display: flex; width: fit-content; padding: 5px; border-radius: 14px; background: #e9edf4; }
-.main-tabs button { display: flex; align-items: center; gap: 8px; min-width: 170px; padding: 11px 17px; color: #637086; border: 0; border-radius: 10px; background: transparent; cursor: pointer; }
-.main-tabs button.active { color: #a2202b; background: #fff; box-shadow: 0 4px 12px rgba(32, 45, 69, .1); }
-.main-tabs b { margin-left: auto; padding: 2px 7px; font-size: 12px; border-radius: 999px; background: #f1f3f7; }
-.workspace-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; }
-.workspace-heading h3 { margin: 0 0 4px; font-size: 21px; color: #17243b; }
-.workspace-heading p { margin: 0; color: #7d8798; }
-.filter-bar { display: grid; grid-template-columns: minmax(260px, 1.5fr) 160px 150px 150px auto; gap: 10px; padding: 14px; border: 1px solid #e7ebf2; border-radius: 14px; background: #fff; }
-.data-panel { overflow: hidden; border: 1px solid #e7ebf2; border-radius: 15px; background: #fff; }
-.cell-note { display: block; margin-top: 2px; color: #9099a8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.form-grid { display: grid; grid-template-columns: 1fr 1fr; column-gap: 18px; }
-.form-grid .full { grid-column: 1 / -1; }
-.asset-upload { margin-bottom: 18px; }
-@media (max-width: 1200px) { .brand-metrics { grid-template-columns: repeat(2, 1fr); } .filter-bar { grid-template-columns: 1fr 1fr 1fr; } }
-@media (max-width: 760px) { .brand-hero, .workspace-heading { align-items: flex-start; flex-direction: column; } .brand-metrics { grid-template-columns: 1fr; } .main-tabs { width: 100%; } .main-tabs button { min-width: 0; flex: 1; } .filter-bar, .form-grid { grid-template-columns: 1fr; } .form-grid .full { grid-column: auto; } }
+.brand-hero h2 { margin: 5px 0 7px; font-size: 28px; }.brand-hero p { margin: 0; color: rgba(255,255,255,.72); }.brand-eyebrow { font-size: 11px; font-weight: 800; letter-spacing: .16em; color: #f2b8be; }.hero-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.brand-metrics, .report-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }.brand-metrics article, .report-summary article { padding: 18px 20px; border: 1px solid #e9edf4; border-radius: 16px; background: #fff; box-shadow: 0 7px 20px rgba(28, 44, 72, .05); }.brand-metrics span, .brand-metrics small, .report-summary span { display: block; color: #7a8496; }.brand-metrics strong, .report-summary strong { display: block; margin: 5px 0 2px; font-size: 27px; color: #162239; }.report-summary { grid-template-columns: repeat(6, 1fr); }
+.main-tabs { display: flex; width: fit-content; padding: 5px; border-radius: 14px; background: #e9edf4; }.main-tabs button { display: flex; align-items: center; gap: 8px; min-width: 170px; padding: 11px 17px; color: #637086; border: 0; border-radius: 10px; background: transparent; cursor: pointer; }.main-tabs button.active { color: #a2202b; background: #fff; box-shadow: 0 4px 12px rgba(32, 45, 69, .1); }.main-tabs b { margin-left: auto; padding: 2px 7px; font-size: 12px; border-radius: 999px; background: #f1f3f7; }
+.workspace-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; }.workspace-heading.compact { padding-top: 4px; }.workspace-heading h3 { margin: 0 0 4px; font-size: 21px; color: #17243b; }.workspace-heading p { margin: 0; color: #7d8798; }
+.filter-bar { display: grid; gap: 10px; padding: 14px; border: 1px solid #e7ebf2; border-radius: 14px; background: #fff; }.knowledge-filter { grid-template-columns: minmax(260px, 1.5fr) 150px 160px 130px auto; }.asset-filter { grid-template-columns: minmax(220px, 1.5fr) repeat(7, minmax(110px, .7fr)) auto; }.data-panel { overflow: hidden; border: 1px solid #e7ebf2; border-radius: 15px; background: #fff; }.data-panel h4 { margin: 0; padding: 15px 17px; color: #1b2941; border-bottom: 1px solid #edf0f5; }.cell-note { display: block; margin-top: 2px; color: #9099a8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.cell-note.danger { color: #c53943; }.form-grid { display: grid; grid-template-columns: 1fr 1fr; column-gap: 18px; }.form-grid .full { grid-column: 1 / -1; }.asset-upload { margin-bottom: 18px; }.load-more { display: flex; justify-content: center; }.video-toolbar, .capability-note { display: flex; align-items: center; gap: 16px; padding: 14px 16px; color: #6f798b; border: 1px solid #e7ebf2; border-radius: 14px; background: #fff; }.video-toolbar .el-select { width: 460px; }.time-range { display: flex; align-items: center; gap: 5px; }.time-range .el-input-number { width: 88px; }.two-panels { display: grid; grid-template-columns: .8fr 1.2fr; gap: 14px; }.detail-head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 18px; }.detail-head span { color: #8b95a5; }.detail-head h3 { margin: 4px 0 0; font-size: 23px; color: #17243b; }.detail-head > div:last-child { display: flex; gap: 7px; }.detail-grid { display: grid; gap: 16px; margin-top: 18px; }.detail-grid section { border: 1px solid #e8ecf2; border-radius: 12px; overflow: hidden; }.detail-grid h4 { margin: 0; padding: 12px 15px; background: #f7f9fc; }.tag-cloud { display: flex; flex-wrap: wrap; gap: 8px; padding: 15px; }
+@media (max-width: 1400px) { .asset-filter { grid-template-columns: repeat(5, minmax(130px, 1fr)); }.report-summary { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 1100px) { .brand-metrics { grid-template-columns: repeat(2, 1fr); }.knowledge-filter { grid-template-columns: repeat(3, 1fr); }.two-panels { grid-template-columns: 1fr; } }
+@media (max-width: 760px) { .brand-hero, .workspace-heading { align-items: flex-start; flex-direction: column; }.brand-metrics, .report-summary { grid-template-columns: 1fr 1fr; }.main-tabs { width: 100%; }.main-tabs button { min-width: 0; flex: 1; }.filter-bar, .form-grid { grid-template-columns: 1fr; }.form-grid .full { grid-column: auto; }.video-toolbar { align-items: flex-start; flex-direction: column; }.video-toolbar .el-select { width: 100%; } }
 </style>

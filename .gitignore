@@ -6,5 +6,6 @@ coverage/
 apps/api/prisma/migrations/*/migration_lock.toml
 data/derived/
 data/runtime/
+data/docx-v2-render*/
 scripts/node_modules/
 artifacts/
