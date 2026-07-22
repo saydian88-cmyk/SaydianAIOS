@@ -1,0 +1,72 @@
+[
+  {
+    "commercialName": "赛电W9",
+    "pageFacts": "圆形表盘；官网/说明书资料待逐项复核",
+    "nameplateModel": "检验报告送检样品明确为W9；包装铭牌仍待归档",
+    "registeredModel": "医疗注册型号待映射",
+    "registrationNumber": "第三方检验报告GBT1040243192不是医疗器械注册证",
+    "productionRelation": "报告委托单位/制造商为深圳赛电；医疗生产授权另行核验",
+    "status": "证据锚点，有条件发布",
+    "requiredAction": "公开报告原件/真伪路径；补W9—包装—注册型号对照"
+  },
+  {
+    "commercialName": "赛电W9S",
+    "pageFacts": "官网标注大屏、语音、亲友关爱、SOS、NFC等，发布前复核",
+    "nameplateModel": "列入GBT1040243192附加型号；包装铭牌待归档",
+    "registeredModel": "医疗注册型号待映射",
+    "registrationNumber": "不得因列入检验报告而宣称已获医疗器械注册",
+    "productionRelation": "现有GJ-SH-13、D6/D8资料不得自动套用",
+    "status": "新款转化，有条件发布",
+    "requiredAction": "补W9S—包装—注册型号—生产授权对照"
+  },
+  {
+    "commercialName": "赛电W8/W8S/W8PRO/W8U",
+    "pageFacts": "以对应商品页和说明书为准",
+    "nameplateModel": "列入GBT1040243192附加型号；包装铭牌待归档",
+    "registeredModel": "医疗注册型号待映射",
+    "registrationNumber": "检验报告不等于注册证",
+    "productionRelation": "逐款核验",
+    "status": "仅发布已核实事实",
+    "requiredAction": "逐款补齐商品名、铭牌、注册和授权"
+  },
+  {
+    "commercialName": "赛电W8 Ultra-R",
+    "pageFacts": "官网展示外观、屏幕、通话、NFC等日常功能，发布前复核",
+    "nameplateModel": "现有报告写W8U，不能自行认定等同W8 Ultra-R",
+    "registeredModel": "现有资料未找到直接映射",
+    "registrationNumber": "不得套用其他型号注册证",
+    "productionRelation": "GJ-SH-13、D6/D8资料不得自动扩展",
+    "status": "场景转化；暂缓注册证宣传",
+    "requiredAction": "补商品名—W8U关系证明、铭牌、说明书、注册和授权"
+  },
+  {
+    "commercialName": "GJ-SH-13",
+    "pageFacts": "注册/生产型号，不直接等同商品名",
+    "nameplateModel": "GJ-SH-13",
+    "registeredModel": "GJ-SH-13",
+    "registrationNumber": "湘械注准20242070063",
+    "productionRelation": "品牌委托生产授权至2027-04-08",
+    "status": "证据可用",
+    "requiredAction": "对外使用前确认对应商业型号和具体订单"
+  },
+  {
+    "commercialName": "D6",
+    "pageFacts": "商品页面待补",
+    "nameplateModel": "委托生产协议明确D6",
+    "registeredModel": "D6",
+    "registrationNumber": "湘械注准20262070316",
+    "productionRelation": "深圳赛电委托湖南灯塔生产D6",
+    "status": "专业证据储备",
+    "requiredAction": "补说明书、商品映射、品牌使用授权和广告批准文号"
+  },
+  {
+    "commercialName": "D8",
+    "pageFacts": "商品页面待补",
+    "nameplateModel": "委托生产协议明确D8",
+    "registeredModel": "D8",
+    "registrationNumber": "湘械注准20262070316",
+    "productionRelation": "深圳赛电委托湖南灯塔生产D8",
+    "status": "专业证据储备",
+    "requiredAction": "补说明书、商品映射、品牌使用授权和广告批准文号"
+  }
+]

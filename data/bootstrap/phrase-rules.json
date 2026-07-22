@@ -1,0 +1,194 @@
+[
+  {
+    "category": "效果保证",
+    "blockedText": "精准",
+    "replacement": "按说明书完成测量；用于日常记录/注册用途",
+    "condition": "数据类内容须说明来源、方法、样本、范围和期限"
+  },
+  {
+    "category": "效果保证",
+    "blockedText": "最准",
+    "replacement": "按说明书完成测量；用于日常记录/注册用途",
+    "condition": "数据类内容须说明来源、方法、样本、范围和期限"
+  },
+  {
+    "category": "效果保证",
+    "blockedText": "100%准确",
+    "replacement": "按说明书完成测量；用于日常记录/注册用途",
+    "condition": "数据类内容须说明来源、方法、样本、范围和期限"
+  },
+  {
+    "category": "效果保证",
+    "blockedText": "误差为零",
+    "replacement": "按说明书完成测量；用于日常记录/注册用途",
+    "condition": "数据类内容须说明来源、方法、样本、范围和期限"
+  },
+  {
+    "category": "医疗边界",
+    "blockedText": "替代医院",
+    "replacement": "不能替代专业诊断；异常时及时咨询医务人员",
+    "condition": "所有渠道统一"
+  },
+  {
+    "category": "医疗边界",
+    "blockedText": "替代医生",
+    "replacement": "不能替代专业诊断；异常时及时咨询医务人员",
+    "condition": "所有渠道统一"
+  },
+  {
+    "category": "医疗边界",
+    "blockedText": "预防疾病",
+    "replacement": "不能替代专业诊断；异常时及时咨询医务人员",
+    "condition": "所有渠道统一"
+  },
+  {
+    "category": "医疗边界",
+    "blockedText": "治疗高血压",
+    "replacement": "不能替代专业诊断；异常时及时咨询医务人员",
+    "condition": "所有渠道统一"
+  },
+  {
+    "category": "认证扩展",
+    "blockedText": "全功能医疗认证",
+    "replacement": "该注册证覆盖证书载明的产品、型号和适用范围",
+    "condition": "必须逐款映射"
+  },
+  {
+    "category": "认证扩展",
+    "blockedText": "全系列二类证",
+    "replacement": "该注册证覆盖证书载明的产品、型号和适用范围",
+    "condition": "必须逐款映射"
+  },
+  {
+    "category": "权威背书",
+    "blockedText": "央视推荐",
+    "replacement": "2025年6月曾在CCTV-17投放品牌形象广告",
+    "condition": "如确有必要且法务通过"
+  },
+  {
+    "category": "权威背书",
+    "blockedText": "央视认证",
+    "replacement": "2025年6月曾在CCTV-17投放品牌形象广告",
+    "condition": "如确有必要且法务通过"
+  },
+  {
+    "category": "权威背书",
+    "blockedText": "国家级背书",
+    "replacement": "2025年6月曾在CCTV-17投放品牌形象广告",
+    "condition": "如确有必要且法务通过"
+  },
+  {
+    "category": "代言推荐",
+    "blockedText": "冠军推荐",
+    "replacement": "不使用",
+    "condition": "医疗器械广告禁止代言人推荐证明"
+  },
+  {
+    "category": "代言推荐",
+    "blockedText": "形象大使力荐",
+    "replacement": "不使用",
+    "condition": "医疗器械广告禁止代言人推荐证明"
+  },
+  {
+    "category": "用户证明",
+    "blockedText": "我用了就改善",
+    "replacement": "记录设置、佩戴、充电、售后等过程",
+    "condition": "不呈现效果结论"
+  },
+  {
+    "category": "用户证明",
+    "blockedText": "医生说很准",
+    "replacement": "记录设置、佩戴、充电、售后等过程",
+    "condition": "不呈现效果结论"
+  },
+  {
+    "category": "促销焦虑",
+    "blockedText": "家庭必备",
+    "replacement": "根据父母习惯选择；购买前核验",
+    "condition": "避免恐惧与诱导"
+  },
+  {
+    "category": "促销焦虑",
+    "blockedText": "不买就危险",
+    "replacement": "根据父母习惯选择；购买前核验",
+    "condition": "避免恐惧与诱导"
+  },
+  {
+    "category": "促销焦虑",
+    "blockedText": "马上抢",
+    "replacement": "根据父母习惯选择；购买前核验",
+    "condition": "避免恐惧与诱导"
+  },
+  {
+    "category": "售后保证",
+    "blockedText": "所有店都两年质保",
+    "replacement": "以购买当日订单页面和品牌当期政策为准",
+    "condition": "不同平台分别核验"
+  },
+  {
+    "category": "售后保证",
+    "blockedText": "无条件退",
+    "replacement": "以购买当日订单页面和品牌当期政策为准",
+    "condition": "不同平台分别核验"
+  },
+  {
+    "category": "检验范围",
+    "blockedText": "全系列通过检测",
+    "replacement": "报告所列送检样品/附加型号的所检项目符合检验依据要求",
+    "condition": "同时写明报告编号、样品、型号、检验项目边界和日期"
+  },
+  {
+    "category": "检验范围",
+    "blockedText": "全部项目合格",
+    "replacement": "报告所列送检样品/附加型号的所检项目符合检验依据要求",
+    "condition": "同时写明报告编号、样品、型号、检验项目边界和日期"
+  },
+  {
+    "category": "检验范围",
+    "blockedText": "医疗级检测认证",
+    "replacement": "报告所列送检样品/附加型号的所检项目符合检验依据要求",
+    "condition": "同时写明报告编号、样品、型号、检验项目边界和日期"
+  },
+  {
+    "category": "心电边界",
+    "blockedText": "可自动诊断心脏问题",
+    "replacement": "采集成人腕部单导心电数据，不包含自动分析、诊断功能",
+    "condition": "仅用于已完成湘械注准20262070316型号映射的产品"
+  },
+  {
+    "category": "心电边界",
+    "blockedText": "心电医疗诊断",
+    "replacement": "采集成人腕部单导心电数据，不包含自动分析、诊断功能",
+    "condition": "仅用于已完成湘械注准20262070316型号映射的产品"
+  },
+  {
+    "category": "传播语气",
+    "blockedText": "真假",
+    "replacement": "家庭安心、看得见的品质、长辈友好、持续服务",
+    "condition": "怀疑词仅用于内部搜索监测，不进入对外标题和开场"
+  },
+  {
+    "category": "传播语气",
+    "blockedText": "靠谱吗",
+    "replacement": "家庭安心、看得见的品质、长辈友好、持续服务",
+    "condition": "怀疑词仅用于内部搜索监测，不进入对外标题和开场"
+  },
+  {
+    "category": "传播语气",
+    "blockedText": "有证吗",
+    "replacement": "家庭安心、看得见的品质、长辈友好、持续服务",
+    "condition": "怀疑词仅用于内部搜索监测，不进入对外标题和开场"
+  },
+  {
+    "category": "传播语气",
+    "blockedText": "是否套证",
+    "replacement": "家庭安心、看得见的品质、长辈友好、持续服务",
+    "condition": "怀疑词仅用于内部搜索监测，不进入对外标题和开场"
+  },
+  {
+    "category": "传播语气",
+    "blockedText": "为什么不能",
+    "replacement": "家庭安心、看得见的品质、长辈友好、持续服务",
+    "condition": "怀疑词仅用于内部搜索监测，不进入对外标题和开场"
+  }
+]

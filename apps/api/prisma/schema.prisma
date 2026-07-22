@@ -1,0 +1,597 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum IntegrationKind {
+  DOUYIN
+  WECHAT_CHANNELS
+  XIAOHONGSHU
+  WECHAT_OFFICIAL
+  WECOM
+  TMALL
+  JD
+  PINDUODUO
+  SAIDIAN_MALL
+  JUSHUITAN
+  FEIGUA
+  WEB_SEARCH
+  LOCAL_ASSET
+  WECOM_DRIVE
+  HELP_CENTER
+  EVIDENCE_WORKBOOK
+  ALIYUN_OSS
+}
+
+enum IntegrationState {
+  UNCONFIGURED
+  CONFIGURED
+  HEALTHY
+  DEGRADED
+  ERROR
+}
+
+enum RecordStatus {
+  DRAFT
+  PENDING
+  READY
+  BLOCKED
+  ARCHIVED
+}
+
+enum ContentStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  SCHEDULED
+  PUBLISHED
+  FAILED
+}
+
+enum ContentKind {
+  VIDEO
+  ARTICLE
+  SHORT_POST
+  WECHAT_MOMENT
+}
+
+enum JobStatus {
+  PENDING
+  RUNNING
+  RETRY
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+enum AlertLevel {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+enum WorkItemType {
+  CUSTOMER_SERVICE
+  SHIPMENT
+  AFTER_SALE
+  REFUND
+  WORK_ORDER
+}
+
+enum ReportKind {
+  DAILY
+  WEEKLY
+  COMPETITOR
+  LIVE_REVIEW
+  SHOP
+  TREND
+}
+
+model Integration {
+  id             String           @id @default(cuid())
+  kind           IntegrationKind  @unique
+  displayName    String
+  state          IntegrationState @default(UNCONFIGURED)
+  capabilities   String[]
+  publicConfig   Json             @default("{}")
+  secretRef      String?
+  lastCheckedAt  DateTime?
+  lastSuccessAt  DateTime?
+  message        String           @default("未配置")
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  publishJobs PublishJob[]
+  metrics     MetricSnapshot[]
+  comments    CommentRecord[]
+  liveRooms   LiveSession[]
+  shopItems   ShopWorkItem[]
+}
+
+model Asset {
+  id              String       @id @default(cuid())
+  sourceKey       String       @unique
+  sourceType      String
+  sourcePath      String
+  fileName        String
+  extension       String
+  mediaType       String
+  sha256          String
+  sizeBytes       BigInt
+  modifiedAt      DateTime
+  width           Int?
+  height          Int?
+  durationSeconds Float?
+  aspectRatio     String?
+  model           String?
+  scene           String?
+  evidenceIds     String[]
+  restriction     String?
+  status          RecordStatus @default(PENDING)
+  qualityScore    Int          @default(0)
+  useCount        Int          @default(0)
+  lastUsedAt      DateTime?
+  performance     Json         @default("{}")
+  sourceSnapshot  Json         @default("{}")
+  storageProvider String       @default("LOCAL_SOURCE")
+  objectKey       String?
+  objectVersionId String?
+  etag            String?
+  storageUrl      String?
+  storageSyncedAt DateTime?
+  storageError    String?
+  discoveredBy   String       @default("系统素材扫描")
+  reviewedBy     String?
+  reviewedAt     DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  contentAssets ContentAsset[]
+
+  @@index([sha256])
+  @@index([model, status])
+  @@index([storageProvider, storageSyncedAt])
+}
+
+model EvidenceClaim {
+  id                  String       @id
+  name                String
+  evidenceType        String
+  source              String
+  entityIdentifier    String?
+  coveredObject       String?
+  validFrom           DateTime?
+  validUntil          DateTime?
+  confirmedFact       String?
+  publicWording       String?
+  internalRestriction String?
+  status              RecordStatus @default(PENDING)
+  raw                  Json         @default("{}")
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+}
+
+model ProductMapping {
+  id                 String       @id @default(cuid())
+  commercialName     String       @unique
+  pageFacts          String?
+  nameplateModel     String?
+  registeredModel    String?
+  registrationNumber String?
+  productionRelation String?
+  status             RecordStatus @default(PENDING)
+  requiredAction     String?
+  raw                Json         @default("{}")
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+}
+
+model PhraseRule {
+  id          String   @id @default(cuid())
+  category    String
+  blockedText String
+  replacement String?
+  condition   String?
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([category, blockedText])
+}
+
+model KnowledgeEntry {
+  id          String       @id
+  type        String
+  title       String
+  category    String?
+  model       String?
+  summary     String?
+  reply       String?
+  body        String?
+  source      String
+  sourceRefs  String?
+  status      RecordStatus @default(PENDING)
+  audience    String       @default("customer")
+  updatedAtSource DateTime?
+  raw         Json         @default("{}")
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([type, status, audience])
+}
+
+model ContentPlan {
+  id              String        @id @default(cuid())
+  planDate        DateTime
+  kind            ContentKind
+  topic           String
+  productModel    String?
+  audience        String
+  objective       String
+  score           Int           @default(0)
+  scoreBreakdown  Json          @default("{}")
+  hook            String
+  outline         Json          @default("[]")
+  sourceSignals   Json          @default("[]")
+  evidenceIds     String[]
+  status          ContentStatus @default(DRAFT)
+  riskReasons     String[]
+  approvedBy      String?
+  approvedAt      DateTime?
+  createdBy       String        @default("系统内容引擎")
+  assignedTo     String?
+  rejectedReason  String?
+  scheduledAt     DateTime?
+  publishedAt     DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  variants    ContentVariant[]
+  publishJobs PublishJob[]
+  approvals   Approval[]
+  contentAssets ContentAsset[]
+
+  @@index([planDate, kind])
+  @@index([status])
+}
+
+model ContentVariant {
+  id            String          @id @default(cuid())
+  contentPlanId String
+  platform      IntegrationKind
+  title         String
+  body          String
+  mediaType     String?
+  mediaPath     String?
+  coverPath     String?
+  metadata      Json            @default("{}")
+  status        ContentStatus   @default(DRAFT)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  contentPlan ContentPlan    @relation(fields: [contentPlanId], references: [id], onDelete: Cascade)
+  publishJobs PublishJob[]
+
+  @@unique([contentPlanId, platform])
+}
+
+model ContentAsset {
+  contentPlanId String
+  assetId       String
+  role          String
+
+  contentPlan ContentPlan @relation(fields: [contentPlanId], references: [id], onDelete: Cascade)
+  asset       Asset       @relation(fields: [assetId], references: [id], onDelete: Restrict)
+
+  @@id([contentPlanId, assetId, role])
+}
+
+model Approval {
+  id            String   @id @default(cuid())
+  contentPlanId String
+  action        String
+  actor         String
+  note          String?
+  createdAt     DateTime @default(now())
+
+  contentPlan ContentPlan @relation(fields: [contentPlanId], references: [id], onDelete: Cascade)
+}
+
+model PublishJob {
+  id             String           @id @default(cuid())
+  idempotencyKey String           @unique
+  contentPlanId  String
+  variantId      String
+  integrationId  String
+  status         JobStatus        @default(PENDING)
+  scheduledAt    DateTime
+  attempts       Int              @default(0)
+  nextAttemptAt  DateTime?
+  remoteId       String?
+  remoteUrl      String?
+  receipt        Json             @default("{}")
+  lastError      String?
+  operator       String           @default("系统发布")
+  publishedAt    DateTime?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  contentPlan ContentPlan   @relation(fields: [contentPlanId], references: [id], onDelete: Cascade)
+  variant     ContentVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  integration Integration    @relation(fields: [integrationId], references: [id], onDelete: Restrict)
+  metrics     MetricSnapshot[]
+
+  @@index([status, nextAttemptAt])
+}
+
+model MetricSnapshot {
+  id                String   @id @default(cuid())
+  integrationId     String
+  publishJobId      String?
+  remoteId          String
+  capturedAt        DateTime
+  views             Int?
+  completionRate    Float?
+  likes             Int?
+  comments          Int?
+  shares            Int?
+  saves             Int?
+  consultations     Int?
+  orders            Int?
+  unavailableFields String[]
+  raw               Json     @default("{}")
+  capturedBy        String   @default("系统数据巡查")
+
+  integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  publishJob  PublishJob? @relation(fields: [publishJobId], references: [id], onDelete: SetNull)
+
+  @@unique([integrationId, remoteId, capturedAt])
+  @@index([remoteId, capturedAt])
+}
+
+model CommentRecord {
+  id              String           @id @default(cuid())
+  integrationId   String
+  remoteContentId String
+  remoteCommentId String
+  authorName      String?
+  text            String
+  category        String?
+  confidence      Float?
+  knowledgeRef    String?
+  suggestedReply  String?
+  riskReasons     String[]
+  requiresHuman   Boolean          @default(true)
+  status          String           @default("PENDING")
+  createdAtRemote DateTime
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  replyJobs   ReplyJob[]
+
+  @@unique([integrationId, remoteCommentId])
+  @@index([status, requiresHuman])
+}
+
+model ReplyJob {
+  id              String    @id @default(cuid())
+  commentId       String
+  idempotencyKey  String    @unique
+  replyText       String
+  confidence      Float
+  knowledgeRef    String?
+  status          JobStatus @default(PENDING)
+  approvedBy      String?
+  approvedAt      DateTime?
+  attempts        Int       @default(0)
+  platformReceipt Json      @default("{}")
+  lastError       String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  comment CommentRecord @relation(fields: [commentId], references: [id], onDelete: Cascade)
+}
+
+model LiveSession {
+  id               String    @id @default(cuid())
+  integrationId    String
+  remoteRoomId     String
+  title            String?
+  status           String
+  startedAt        DateTime?
+  endedAt          DateTime?
+  lastCapturedAt   DateTime?
+  latestSnapshot   Json      @default("{}")
+  issueSummary     String[]
+  reportId         String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@unique([integrationId, remoteRoomId])
+}
+
+model ShopWorkItem {
+  id             String       @id @default(cuid())
+  integrationId  String
+  remoteId       String
+  type           WorkItemType
+  status         String
+  summary        String
+  owner          String?
+  createdAtRemote DateTime
+  dueAt          DateTime?
+  completedAt    DateTime?
+  overdue        Boolean      @default(false)
+  sourceSnapshot Json         @default("{}")
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@unique([integrationId, remoteId, type])
+  @@index([overdue, status])
+}
+
+model Competitor {
+  id           String          @id @default(cuid())
+  platform     IntegrationKind
+  name         String
+  accountId    String?
+  shopId       String?
+  liveRoomId   String?
+  watchUrl     String?
+  active       Boolean         @default(true)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  snapshots CompetitorSnapshot[]
+
+  @@unique([platform, name])
+}
+
+model CompetitorSnapshot {
+  id                String   @id @default(cuid())
+  competitorId      String
+  capturedAt        DateTime
+  products          Json     @default("[]")
+  promotions        Json     @default("[]")
+  contentFrequency  Int?
+  liveFrequency     Int?
+  visibleSales      Float?
+  unavailableFields String[]
+  changes           Json     @default("[]")
+  raw               Json     @default("{}")
+
+  competitor Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+
+  @@unique([competitorId, capturedAt])
+}
+
+model TrendSignal {
+  id          String   @id @default(cuid())
+  keyword     String
+  source      String
+  category    String
+  capturedAt  DateTime
+  volume      Float?
+  changeRate  Float?
+  sentiment   String?
+  opportunity String?
+  action      String?
+  raw         Json     @default("{}")
+
+  @@index([keyword, capturedAt])
+}
+
+model Alert {
+  id           String     @id @default(cuid())
+  level        AlertLevel
+  category     String
+  title        String
+  message      String
+  sourceType   String
+  sourceId     String?
+  status       String     @default("OPEN")
+  owner        String?
+  dueAt        DateTime?
+  acknowledgedAt DateTime?
+  resolvedAt   DateTime?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@index([status, level])
+}
+
+model OpsTask {
+  id          String   @id @default(cuid())
+  title       String
+  category    String
+  priority    String
+  status      String   @default("OPEN")
+  owner       String?
+  sourceType  String?
+  sourceId    String?
+  dueAt       DateTime?
+  completedAt DateTime?
+  result      String?
+  completedBy String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([status, dueAt])
+}
+
+model Report {
+  id        String     @id @default(cuid())
+  kind      ReportKind
+  title     String
+  periodFrom DateTime
+  periodTo   DateTime
+  summary   String
+  sections  Json       @default("[]")
+  metrics   Json       @default("{}")
+  actions   Json       @default("[]")
+  sentAt    DateTime?
+  sendReceipt Json     @default("{}")
+  createdAt DateTime   @default(now())
+}
+
+model AutomationJob {
+  id             String    @id @default(cuid())
+  kind           String
+  idempotencyKey String    @unique
+  payload        Json      @default("{}")
+  status         JobStatus @default(PENDING)
+  scheduledAt    DateTime
+  nextAttemptAt  DateTime?
+  attempts       Int       @default(0)
+  maxAttempts    Int       @default(4)
+  lockedAt       DateTime?
+  lockedBy       String?
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  result         Json      @default("{}")
+  lastError      String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([status, scheduledAt, nextAttemptAt])
+}
+
+model SopVersion {
+  id          String   @id @default(cuid())
+  kind        String
+  version     Int
+  status      String   @default("DRAFT")
+  rules       Json
+  changeNote  String
+  proposedBy  String
+  approvedBy  String?
+  approvedAt  DateTime?
+  effectiveAt DateTime?
+  createdAt   DateTime @default(now())
+
+  @@unique([kind, version])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actor      String
+  action     String
+  entityType String
+  entityId   String?
+  before     Json     @default("{}")
+  after      Json     @default("{}")
+  ip         String?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId, createdAt])
+}

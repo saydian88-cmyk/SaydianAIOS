@@ -1,0 +1,18 @@
+{
+  "name": "saidian-ops-center",
+  "version": "1.0.0",
+  "private": true,
+  "packageManager": "pnpm@11.9.0",
+  "scripts": {
+    "dev:api": "pnpm --filter @saidian-ops/api start:dev",
+    "dev:admin": "pnpm --filter @saidian-ops/admin dev",
+    "build": "pnpm -r --if-present build",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "pnpm -r --if-present test",
+    "db:generate": "pnpm --filter @saidian-ops/api prisma:generate",
+    "db:migrate": "pnpm --filter @saidian-ops/api prisma:migrate",
+    "db:push": "pnpm --filter @saidian-ops/api prisma:push",
+    "db:seed": "pnpm --filter @saidian-ops/api prisma:seed",
+    "verify:oss": "pnpm --filter @saidian-ops/api exec tsx ../../scripts/verify-oss.ts"
+  }
+}
