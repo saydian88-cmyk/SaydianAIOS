@@ -23,7 +23,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     ...init,
     headers: {
       authorization: `Bearer ${getToken()}`,
-      "x-ops-actor": getActor(),
+      "x-ops-actor": encodeURIComponent(getActor()),
       ...(init.body ? { "content-type": "application/json" } : {}),
       ...(init.headers || {}),
     },

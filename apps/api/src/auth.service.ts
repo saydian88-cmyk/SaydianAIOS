@@ -8,6 +8,11 @@ export class AuthService {
     if (!token || token !== opsConfig.adminToken) {
       throw new UnauthorizedException("运营中台登录已失效");
     }
-    return requestedActor?.trim() || opsConfig.defaultActor;
+    if (!requestedActor?.trim()) return opsConfig.defaultActor;
+    try {
+      return decodeURIComponent(requestedActor).trim() || opsConfig.defaultActor;
+    } catch {
+      return requestedActor.trim();
+    }
   }
 }
