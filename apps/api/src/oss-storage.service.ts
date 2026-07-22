@@ -52,7 +52,7 @@ export class OssStorageService {
   async healthCheck(): Promise<{ ok: boolean; message: string }> {
     if (!this.isConfigured()) return { ok: false, message: this.configurationMessage() };
     try {
-      await this.client().getBucketInfo(opsConfig.oss.bucket);
+      await this.client().list({ prefix: `${opsConfig.oss.prefix}/`, "max-keys": 1 }, {});
       return { ok: true, message: `Bucket ${opsConfig.oss.bucket} 连接正常` };
     } catch (error) {
       return { ok: false, message: error instanceof Error ? error.message : "OSS 连接失败" };

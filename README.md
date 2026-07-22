@@ -38,9 +38,9 @@ pnpm dev:admin
 
 ## 阿里云 OSS
 
-已配置 Bucket：`saidian-brand-assets-prod`，地域 `oss-cn-hangzhou`。Bucket 为私有，已启用阻止公共访问、版本控制、AES256 服务端加密，并设置历史版本保留 180 天。
+已配置 Bucket：`saidian-brand-assets-prod-sz`，地域 `oss-cn-shenzhen`。Bucket 为私有，已启用阻止公共访问和版本控制。
 
-已创建专用 RAM 用户 `saidian-ops-oss`，并绑定自定义策略 `SaidianOpsOssBucketAccess`。该策略仅允许查询目标 Bucket、列举对象，以及读写 `brand-assets/`；没有删除权限。凭据已写入本机且被 Git 忽略的 `.env`：
+已使用专用 RAM 用户 `saidian-ops-oss`，并通过 Bucket 授权策略开放目标 Bucket 的读写能力。凭据已写入本机且被 Git 忽略的 `.env`：
 
 ```powershell
 OSS_ACCESS_KEY_ID=
