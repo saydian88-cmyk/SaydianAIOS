@@ -81,7 +81,7 @@ jobs:
           printf '%s\n' "${{ secrets.TENCENT_SSH_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_HOST }}" >> ~/.ssh/known_hosts
-      - name: Prepare release images
+      - name: Upload deployment files
         shell: bash
         run: |
           mkdir -p release-images
@@ -93,10 +93,6 @@ jobs:
             | gzip -1 > release-images/saydian-ops-images.tar.gz
           split -b 20m release-images/saydian-ops-images.tar.gz release-images/saydian-ops-images.part-
           rm release-images/saydian-ops-images.tar.gz
-          ls release-images/saydian-ops-images.part-* >/dev/null
-      - name: Upload deployment files
-        shell: bash
-        run: |
           scp -P "${{ secrets.TENCENT_PORT || '22' }}" deploy/docker-compose.prod.yml deploy/gateway-nginx.conf deploy/deploy-ops.sh \
             "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}:/tmp/"
           find release-images -maxdepth 1 -name 'saidian-ops-images.part-*' -print0 \
