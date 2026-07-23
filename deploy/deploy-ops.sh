@@ -15,7 +15,7 @@ mkdir -p "$base/backups" "$base/env" "$base/releases"
 previous_api="$(grep '^OPS_API_IMAGE=' "$images" 2>/dev/null | cut -d= -f2- || true)"
 previous_admin="$(grep '^OPS_ADMIN_IMAGE=' "$images" 2>/dev/null | cut -d= -f2- || true)"
 
-if docker compose --env-file "$production_env" --env-file "$images" -f "$compose" ps --status running postgres >/dev/null 2>&1; then
+if docker compose --env-file "$production_env" --env-file "$images" -f "$compose" ps --status running -q postgres 2>/dev/null | grep -q .; then
   stamp="$(date +%Y%m%d-%H%M%S)"
   docker compose --env-file "$production_env" --env-file "$images" -f "$compose" exec -T postgres sh -c \
     'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' \
