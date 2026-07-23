@@ -6,6 +6,8 @@ import { extname, resolve } from "node:path";
 import { diskStorage } from "multer";
 import { AuthService } from "./auth.service";
 import { BrandDataService } from "./brand-data.service";
+import { CloudMediaService } from "./cloud-media.service";
+import { ViralCollectorService } from "./viral-collector.service";
 
 const uploadInbox = resolve(process.cwd(), "data", "upload-inbox");
 mkdirSync(uploadInbox, { recursive: true });
@@ -22,6 +24,8 @@ export class BrandDataController {
   constructor(
     private readonly auth: AuthService,
     private readonly brandData: BrandDataService,
+    private readonly cloudMedia: CloudMediaService,
+    private readonly viralCollector: ViralCollectorService,
   ) {}
 
   private actor(authorization?: string, requestedActor?: string) {
@@ -129,6 +133,74 @@ export class BrandDataController {
   aiCapabilities(@Headers("authorization") authorization?: string) {
     this.actor(authorization);
     return this.brandData.aiCapabilities();
+  }
+
+  @Get("cloud/jobs")
+  cloudJobs(@Headers("authorization") authorization: string | undefined, @Query() query: Record<string, string | undefined>) {
+    this.actor(authorization);
+    return this.cloudMedia.listJobs({
+      assetId: query.assetId,
+      externalVideoId: query.externalVideoId,
+      status: query.status as never,
+      take: Number(query.take || 50),
+    });
+  }
+
+  @Post("cloud/jobs/:id/retry")
+  retryCloudJob(@Headers("authorization") authorization: string | undefined, @Param("id") id: string) {
+    this.actor(authorization);
+    return this.cloudMedia.retryJob(id);
+  }
+
+  @Post("cloud/callbacks/:token")
+  cloudCallback(@Param("token") token: string, @Body() body: Record<string, unknown>) {
+    return this.cloudMedia.handleCallback(token, body);
+  }
+
+  @Post("external-videos")
+  registerExternalVideo(@Headers("authorization") authorization: string | undefined, @Body() body: Record<string, unknown>) {
+    this.actor(authorization);
+    return this.cloudMedia.registerExternalVideo(body as never);
+  }
+
+  @Get("external-videos")
+  externalVideos(@Headers("authorization") authorization: string | undefined, @Query() query: Record<string, string | undefined>) {
+    this.actor(authorization);
+    return this.cloudMedia.listExternalVideos({
+      platform: query.platform as never,
+      status: query.status,
+      take: Number(query.take || 50),
+    });
+  }
+
+  @Post("external-videos/:id/analyze")
+  analyzeExternalVideo(@Headers("authorization") authorization: string | undefined, @Param("id") id: string) {
+    this.actor(authorization);
+    return this.cloudMedia.enqueueExternalVideo(id);
+  }
+
+  @Get("remake-tasks")
+  remakeTasks(@Headers("authorization") authorization: string | undefined, @Query() query: Record<string, string | undefined>) {
+    this.actor(authorization);
+    return this.cloudMedia.listRemakeTasks({ status: query.status, take: Number(query.take || 50) });
+  }
+
+  @Patch("remake-tasks/:id")
+  updateRemakeTask(@Headers("authorization") authorization: string | undefined, @Param("id") id: string, @Body() body: Record<string, unknown>) {
+    this.actor(authorization);
+    return this.cloudMedia.updateRemakeTask(id, body as never);
+  }
+
+  @Get("viral-collector/capabilities")
+  viralCollectorCapabilities(@Headers("authorization") authorization?: string) {
+    this.actor(authorization);
+    return this.viralCollector.capabilities();
+  }
+
+  @Post("viral-collector/run")
+  runViralCollector(@Headers("authorization") authorization: string | undefined, @Body() body: Record<string, unknown>) {
+    this.actor(authorization);
+    return this.viralCollector.collect(body.platform as never);
   }
 
   @Post("assets/upload")

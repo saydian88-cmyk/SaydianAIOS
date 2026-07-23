@@ -365,7 +365,9 @@ export class BrandDataService {
         uploadEvents: { include: { batch: true, employee: true }, orderBy: { occurredAt: "desc" } },
         analysisJobs: { orderBy: { createdAt: "desc" } }, reviewDecisions: { include: { employee: true }, orderBy: { createdAt: "desc" } },
         usages: { include: { metrics: { orderBy: { capturedAt: "desc" }, take: 10 } }, orderBy: { createdAt: "desc" } },
-        metricSnapshots: { orderBy: { capturedAt: "desc" }, take: 30 }, segments: { orderBy: { startSeconds: "asc" } }, createdByEmployee: true,
+        metricSnapshots: { orderBy: { capturedAt: "desc" }, take: 30 }, segments: { orderBy: { startSeconds: "asc" } },
+        cloudMediaJobs: { include: { outputs: true }, orderBy: { createdAt: "desc" } },
+        scoreSnapshots: { orderBy: { createdAt: "desc" }, take: 20 }, createdByEmployee: true,
       },
     });
     if (!row) throw new NotFoundException("素材不存在");

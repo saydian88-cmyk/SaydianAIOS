@@ -23,6 +23,10 @@ const jobs = ref<Row[]>([]);
 const gaps = ref<Row[]>([]);
 const dailyReport = ref<Row>();
 const growthLoop = ref<Row>();
+const externalVideos = ref<Row[]>([]);
+const remakeTasks = ref<Row[]>([]);
+const cloudJobs = ref<Row[]>([]);
+const viralCapabilities = ref<Row[]>([]);
 const controls = ref<{ claims: Row[]; mappings: Row[]; phraseRules: Row[]; brandProfiles: Row[]; products: Row[]; faqs: Row[]; employees: Row[] }>({ claims: [], mappings: [], phraseRules: [], brandProfiles: [], products: [], faqs: [], employees: [] });
 const knowledgeDialog = ref(false);
 const uploadDialog = ref(false);
@@ -61,7 +65,7 @@ function dateTime(value?: string) { if (!value) return "未记录"; const date =
 function list(value: unknown) { return Array.isArray(value) && value.length ? value.join("、") : "—"; }
 function fileSize(value: unknown) { const size = Number(value || 0); if (size >= 1024 ** 3) return `${(size / 1024 ** 3).toFixed(2)} GB`; if (size >= 1024 ** 2) return `${(size / 1024 ** 2).toFixed(1)} MB`; if (size >= 1024) return `${(size / 1024).toFixed(1)} KB`; return `${size} B`; }
 function statusType(value: string) { if (["READY", "APPROVED", "ACTIVE", "SUCCEEDED", "AVAILABLE", "CONFIGURED", "HEALTHY", "COMMERCIAL"].includes(value)) return "success"; if (["FAILED", "REJECTED", "SUSPENDED", "PROHIBITED", "ERROR"].includes(value)) return "danger"; if (["PENDING", "RETURNED", "RETRY", "UNCONFIGURED", "AUTH_REQUIRED", "ANALYZING"].includes(value)) return "warning"; return "info"; }
-function statusLabel(value: string) { return ({ DRAFT: "草稿", PENDING: "待审核", READY: "可用", BLOCKED: "禁用", ARCHIVED: "归档", APPROVED: "已通过", RETURNED: "已退回", REJECTED: "已拒绝", ACTIVE: "可调用", INACTIVE: "未启用", SUSPENDED: "暂停", RECEIVED: "已接收", HASHED: "已计算哈希", STORED: "已存OSS", ANALYZING: "AI处理中", READY_FOR_REVIEW: "待人工审核", FAILED: "失败", SUCCEEDED: "已完成", RETRY: "待重试", UNCONFIGURED: "未配置", COMMERCIAL: "可商用", INTERNAL: "仅内部", EDIT_ONLY: "修改后可用", AUTH_REQUIRED: "待授权", EXPIRED: "已过期", PROHIBITED: "禁止使用" } as Record<string, string>)[value] || value; }
+function statusLabel(value: string) { return ({ DRAFT: "草稿", PENDING: "待审核", READY: "可用", BLOCKED: "禁用", ARCHIVED: "归档", APPROVED: "已通过", RETURNED: "已退回", REJECTED: "已拒绝", ACTIVE: "可调用", INACTIVE: "未启用", SUSPENDED: "暂停", RECEIVED: "已接收", HASHED: "已计算哈希", STORED: "已存OSS", ANALYZING: "AI处理中", READY_FOR_REVIEW: "待人工审核", DISCOVERED: "已发现", QUEUED: "待处理", PROCESSING: "处理中", CONFIGURED: "已配置", AVAILABLE: "可用", FAILED: "失败", SUCCEEDED: "已完成", RETRY: "待重试", UNCONFIGURED: "未配置", COMMERCIAL: "可商用", INTERNAL: "仅内部", EDIT_ONLY: "修改后可用", AUTH_REQUIRED: "待授权", EXPIRED: "已过期", PROHIBITED: "禁止使用" } as Record<string, string>)[value] || value; }
 function kindLabel(value: string) { return ({ IMAGE: "图片", VIDEO: "视频", AUDIO: "音频", DOCUMENT: "文档" } as Record<string, string>)[value] || value; }
 function queryString(values: Record<string, string>) { const params = new URLSearchParams(); Object.entries(values).forEach(([key, value]) => { if (String(value).trim()) params.set(key, String(value).trim()); }); return params.toString(); }
 
@@ -83,13 +87,26 @@ async function loadJobs() { jobs.value = await api<Row[]>("/api/v1/brand-data/an
 async function loadGaps(refresh = false) { gaps.value = await api<Row[]>(`/api/v1/brand-data/asset-gaps${refresh ? "?refresh=1" : ""}`); }
 async function loadReport() { dailyReport.value = await api<Row>("/api/v1/brand-data/reports/daily"); }
 async function loadGrowthLoop() { growthLoop.value = await api<Row>("/api/v1/brand-data/growth-loop"); }
+async function loadViralWorkspace() {
+  const [videos, tasks, queue, capabilities] = await Promise.all([
+    api<Row[]>("/api/v1/brand-data/external-videos?take=100"),
+    api<Row[]>("/api/v1/brand-data/remake-tasks?take=100"),
+    api<Row[]>("/api/v1/brand-data/cloud/jobs?take=100"),
+    api<Row[]>("/api/v1/brand-data/viral-collector/capabilities"),
+  ]);
+  externalVideos.value = videos; remakeTasks.value = tasks; cloudJobs.value = queue; viralCapabilities.value = capabilities;
+}
+async function runViralCollector() { await run(async () => { await post("/api/v1/brand-data/viral-collector/run", {}); await loadViralWorkspace(); }, "四平台采集任务已串行执行"); }
+async function confirmRemake(row: Row) { await run(async () => { await patch(`/api/v1/brand-data/remake-tasks/${row.id}`, { status: "CONFIRMED" }); await loadViralWorkspace(); }, "仿拍任务已确认"); }
+async function retryCloudJob(row: Row) { await run(async () => { await post(`/api/v1/brand-data/cloud/jobs/${row.id}/retry`, {}); await loadViralWorkspace(); }, "云任务已重新入队"); }
+function openExternal(url: string) { window.open(url, "_blank", "noopener,noreferrer"); }
 async function refreshGrowthLoop() { await run(async () => { growthLoop.value = await post<Row>("/api/v1/brand-data/growth-loop/refresh"); await Promise.all([loadAssets(), loadGaps(), loadReport(), refreshOverview()]); }, "评分、缺口和下一轮任务已更新"); }
 async function refreshOverview() { overview.value = await api<Overview>("/api/v1/brand-data/overview"); }
 async function reload() {
   await run(async () => {
     const [summary, knowledgeRows, controlsRows] = await Promise.all([api<Overview>("/api/v1/brand-data/overview"), api<Row[]>("/api/v1/brand-data/knowledge"), api<typeof controls.value>("/api/v1/brand-data/knowledge-controls")]);
     overview.value = summary; knowledge.value = knowledgeRows; controls.value = controlsRows;
-    await Promise.all([loadAssets(), loadJobs(), loadGaps(), loadReport(), loadGrowthLoop()]);
+    await Promise.all([loadAssets(), loadJobs(), loadGaps(), loadReport(), loadGrowthLoop(), loadViralWorkspace()]);
   });
 }
 
@@ -183,6 +200,7 @@ onMounted(reload);
     <div class="main-tabs">
       <button :class="{ active: activeTab === 'knowledge' }" @click="activeTab = 'knowledge'"><el-icon><Collection /></el-icon><span>品牌知识库</span><b>{{ overview?.knowledge.total ?? 0 }}</b></button>
       <button :class="{ active: activeTab === 'assets' }" @click="activeTab = 'assets'"><el-icon><UploadFilled /></el-icon><span>素材库</span><b>{{ overview?.assets.total ?? 0 }}</b></button>
+      <button :class="{ active: activeTab === 'viral' }" @click="activeTab = 'viral'"><el-icon><View /></el-icon><span>爆款研究</span><b>{{ remakeTasks.length }}</b></button>
     </div>
 
     <template v-if="activeTab === 'knowledge'">
@@ -204,7 +222,7 @@ onMounted(reload);
       <div v-else class="data-panel"><el-table :data="controls.phraseRules" stripe height="545"><el-table-column prop="category" label="规则类别" width="140" /><el-table-column prop="blockedText" label="拦截表述" min-width="260" /><el-table-column prop="replacement" label="建议替代表述" min-width="320" /><el-table-column prop="condition" label="使用条件" min-width="300" /></el-table></div>
     </template>
 
-    <template v-else>
+    <template v-else-if="activeTab === 'assets'">
       <div class="workspace-heading"><div><h3>素材库</h3><p>按类型、型号和状态快速查找；上传时由AI辅助填写。</p></div><div><el-button :icon="Refresh" @click="syncAssets">扫描同步</el-button><el-button type="primary" :icon="Plus" @click="openBatchUpload">上传素材</el-button></div></div>
       <el-segmented v-model="assetView" :options="[{ label: `素材 ${assetTotal}`, value: 'list' }, { label: `待审核 ${overview?.assets.pending || 0}`, value: 'review' }, { label: '视频切片', value: 'video' }, { label: `AI处理 ${jobs.length}`, value: 'jobs' }, { label: `缺口 ${gaps.filter(item => item.gapCount > 0).length}`, value: 'gaps' }, { label: '日报', value: 'report' }, { label: '增长闭环', value: 'loop' }]" />
 
@@ -264,6 +282,55 @@ onMounted(reload);
       </template>
     </template>
 
+    <template v-else>
+      <div class="workspace-heading">
+        <div><h3>四平台爆款研究</h3><p>抖音、TikTok、小红书、视频号每日串行采集；高分视频自动生成待确认仿拍任务。</p></div>
+        <el-button type="primary" :icon="Refresh" @click="runViralCollector">立即采集</el-button>
+      </div>
+      <div class="collector-capabilities">
+        <article v-for="item in viralCapabilities" :key="item.platform">
+          <strong>{{ item.platform }}</strong>
+          <el-tag :type="statusType(item.state)">{{ statusLabel(item.state) }}</el-tag>
+          <span>{{ item.message }}</span>
+        </article>
+      </div>
+      <div class="two-panels viral-panels">
+        <div class="data-panel">
+          <h4>外部优质视频</h4>
+          <el-table :data="externalVideos" stripe height="480">
+            <el-table-column label="来源视频" min-width="220"><template #default="scope"><strong>{{ scope.row.title || scope.row.externalContentId }}</strong><small class="cell-note">{{ scope.row.platform }} · {{ scope.row.accountName || '未记录账号' }}</small></template></el-table-column>
+            <el-table-column label="最新数据" width="125"><template #default="scope">播放 {{ scope.row.metrics?.[0]?.views ?? '未获取' }}<small class="cell-note">赞 {{ scope.row.metrics?.[0]?.likes ?? '未获取' }}</small></template></el-table-column>
+            <el-table-column label="AI评级" width="100"><template #default="scope"><strong>{{ scope.row.scoreSnapshots?.[0]?.score ?? '待分析' }}</strong><small class="cell-note">{{ scope.row.scoreSnapshots?.[0]?.grade || '' }}</small></template></el-table-column>
+            <el-table-column label="状态" width="105"><template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template></el-table-column>
+            <el-table-column label="操作" width="90"><template #default="scope"><el-button link type="primary" @click="openExternal(scope.row.sourceUrl)">查看</el-button></template></el-table-column>
+          </el-table>
+        </div>
+        <div class="data-panel">
+          <h4>仿拍任务</h4>
+          <el-table :data="remakeTasks" stripe height="480">
+            <el-table-column label="任务" min-width="230"><template #default="scope"><strong>{{ scope.row.title }}</strong><small class="cell-note">{{ scope.row.reason }}</small></template></el-table-column>
+            <el-table-column prop="score" label="评分" width="75" />
+            <el-table-column label="负责人" width="105"><template #default="scope">{{ scope.row.ownerEmployee?.name || '待分配' }}</template></el-table-column>
+            <el-table-column label="状态" width="125"><template #default="scope"><el-tag :type="scope.row.status === 'PENDING_CONFIRMATION' ? 'warning' : 'success'">{{ scope.row.status }}</el-tag></template></el-table-column>
+            <el-table-column label="操作" width="90"><template #default="scope"><el-button v-if="scope.row.status === 'PENDING_CONFIRMATION'" link type="success" @click="confirmRemake(scope.row)">确认</el-button></template></el-table-column>
+          </el-table>
+        </div>
+      </div>
+      <div class="data-panel">
+        <h4>IMS / 百炼云任务</h4>
+        <el-table :data="cloudJobs" stripe height="330">
+          <el-table-column prop="type" label="任务" width="185" />
+          <el-table-column prop="provider" label="服务商" width="145" />
+          <el-table-column label="业务对象" min-width="190"><template #default="scope">{{ scope.row.assetId || scope.row.externalVideoId }}</template></el-table-column>
+          <el-table-column prop="externalJobId" label="云任务编号" min-width="185" show-overflow-tooltip />
+          <el-table-column label="状态" width="110"><template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template></el-table-column>
+          <el-table-column prop="failureReason" label="失败原因" min-width="240" show-overflow-tooltip />
+          <el-table-column prop="attempts" label="重试" width="75" />
+          <el-table-column label="操作" width="80"><template #default="scope"><el-button v-if="['FAILED','UNCONFIGURED'].includes(scope.row.status)" link type="primary" @click="retryCloudJob(scope.row)">重试</el-button></template></el-table-column>
+        </el-table>
+      </div>
+    </template>
+
     <el-dialog v-model="knowledgeDialog" :title="editingKnowledgeId ? '编辑品牌知识' : '新建品牌知识'" width="780px" destroy-on-close><el-form label-position="top" class="form-grid"><el-form-item label="知识类型" required><el-select v-model="knowledgeForm.type"><el-option v-for="item in knowledgeTypes" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item><el-form-item label="知识标题" required><el-input v-model="knowledgeForm.title" maxlength="100" /></el-form-item><el-form-item label="知识分类"><el-input v-model="knowledgeForm.category" /></el-form-item><el-form-item label="适用型号"><el-select v-model="knowledgeForm.model" clearable filterable><el-option v-for="item in controls.products" :key="item.id" :label="`${item.modelCode} · ${item.name}`" :value="item.modelCode" /></el-select></el-form-item><el-form-item label="摘要" class="full"><el-input v-model="knowledgeForm.summary" type="textarea" :rows="2" /></el-form-item><el-form-item label="标准回复/允许话术" class="full"><el-input v-model="knowledgeForm.reply" type="textarea" :rows="3" /></el-form-item><el-form-item label="完整正文" class="full"><el-input v-model="knowledgeForm.body" type="textarea" :rows="4" /></el-form-item><el-form-item label="来源等级"><el-select v-model="knowledgeForm.sourceLevel"><el-option v-for="item in ['A','B','C','D','E']" :key="item" :label="item" :value="item" /></el-select></el-form-item><el-form-item label="有效期"><el-date-picker v-model="knowledgeForm.validUntil" type="date" value-format="YYYY-MM-DD" /></el-form-item><el-form-item label="关联证据编号"><el-input v-model="knowledgeForm.evidenceIds" placeholder="逗号分隔" /></el-form-item><el-form-item label="关键词"><el-input v-model="knowledgeForm.keywords" placeholder="逗号分隔" /></el-form-item><el-form-item label="适用场景"><el-input v-model="knowledgeForm.scenarios" placeholder="逗号分隔" /></el-form-item><el-form-item label="资料来源"><el-input v-model="knowledgeForm.source" /></el-form-item><el-form-item label="来源链接/文件" class="full"><el-input v-model="knowledgeForm.sourceRefs" /></el-form-item></el-form><template #footer><el-button @click="knowledgeDialog = false">取消</el-button><el-button type="primary" @click="saveKnowledge">保存为待审核</el-button></template></el-dialog>
 
     <el-dialog v-model="uploadDialog" title="上传素材" width="760px" destroy-on-close>
@@ -299,6 +366,7 @@ onMounted(reload);
 .workspace-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; }.workspace-heading.compact { padding-top: 4px; }.workspace-heading h3 { margin: 0 0 4px; font-size: 21px; color: #17243b; }.workspace-heading p { margin: 0; color: #7d8798; }
 .filter-bar { display: grid; gap: 10px; padding: 14px; border: 1px solid #e7ebf2; border-radius: 14px; background: #fff; }.knowledge-filter { grid-template-columns: minmax(260px, 1.5fr) 150px 160px 130px auto; }.asset-filter { grid-template-columns: minmax(240px, 1.5fr) 140px 190px 140px auto; }.advanced-filter { grid-column: 1 / -1; }.advanced-filter-grid { display: grid; grid-template-columns: repeat(4, minmax(130px, 1fr)); gap: 10px; padding-top: 5px; }.asset-index { display: flex; gap: 8px; overflow-x: auto; padding: 2px; }.asset-index button { min-width: 105px; padding: 11px 15px; color: #5f6b7d; border: 1px solid #e2e7ef; border-radius: 11px; background: #fff; cursor: pointer; }.asset-index button.active { color: #a2202b; border-color: #e1a9ae; background: #fff7f7; }.asset-index b { margin-left: 5px; }.data-panel { overflow: hidden; border: 1px solid #e7ebf2; border-radius: 15px; background: #fff; }.data-panel h4 { margin: 0; padding: 15px 17px; color: #1b2941; border-bottom: 1px solid #edf0f5; }.cell-note { display: block; margin-top: 2px; color: #9099a8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.cell-note.danger { color: #c53943; }.form-grid { display: grid; grid-template-columns: 1fr 1fr; column-gap: 18px; }.form-grid .full { grid-column: 1 / -1; }.asset-upload { margin-bottom: 14px; }.ai-assist { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 15px; padding: 13px 15px; border: 1px solid #dce7f5; border-radius: 12px; background: #f5f9ff; }.ai-assist strong, .ai-assist span { display: block; }.ai-assist span { margin-top: 3px; color: #778398; font-size: 12px; }.upload-advanced { margin-top: 2px; }.load-more { display: flex; justify-content: center; }.video-toolbar, .capability-note { display: flex; align-items: center; gap: 16px; padding: 14px 16px; color: #6f798b; border: 1px solid #e7ebf2; border-radius: 14px; background: #fff; }.video-toolbar .el-select { width: 460px; }.time-range { display: flex; align-items: center; gap: 5px; }.time-range .el-input-number { width: 88px; }.two-panels { display: grid; grid-template-columns: .8fr 1.2fr; gap: 14px; }.detail-head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 18px; }.detail-head span { color: #8b95a5; }.detail-head h3 { margin: 4px 0 0; font-size: 23px; color: #17243b; }.detail-head > div:last-child { display: flex; gap: 7px; }.detail-grid { display: grid; gap: 16px; margin-top: 18px; }.detail-grid section { border: 1px solid #e8ecf2; border-radius: 12px; overflow: hidden; }.detail-grid h4 { margin: 0; padding: 12px 15px; background: #f7f9fc; }.tag-cloud { display: flex; flex-wrap: wrap; gap: 8px; padding: 15px; }
 .growth-loop { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }.growth-stage { position: relative; display: flex; align-items: center; gap: 12px; min-height: 82px; padding: 14px; border: 1px solid #e6eaf1; border-radius: 14px; background: #fff; }.growth-stage:not(:last-child)::after { position: absolute; right: -10px; z-index: 2; content: "→"; color: #9aa4b3; }.stage-index { display: grid; place-items: center; flex: 0 0 34px; width: 34px; height: 34px; color: #fff; font-size: 12px; font-weight: 800; border-radius: 50%; background: #7d8798; }.growth-stage strong, .growth-stage span { display: block; }.growth-stage strong { color: #17243b; line-height: 1.35; }.growth-stage span { margin-top: 5px; color: #818b9b; font-size: 12px; }.growth-stage.state-active .stage-index, .growth-stage.state-ready .stage-index { background: #2f8f64; }.growth-stage.state-running .stage-index, .growth-stage.state-tracking .stage-index { background: #3978c5; }.growth-stage.state-action_required { border-color: #f0b8bd; background: #fff8f8; }.growth-stage.state-action_required .stage-index { background: #c53943; }
+.collector-capabilities { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }.collector-capabilities article { display: grid; grid-template-columns: 1fr auto; gap: 6px 10px; padding: 14px 16px; border: 1px solid #e7ebf2; border-radius: 13px; background: #fff; }.collector-capabilities span { grid-column: 1 / -1; color: #818b9b; font-size: 12px; }.viral-panels { grid-template-columns: 1.2fr 1fr; }
 @media (max-width: 1400px) { .asset-filter { grid-template-columns: minmax(220px, 1fr) repeat(3, minmax(130px, .65fr)) auto; }.report-summary { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 1400px) { .growth-loop { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 @media (max-width: 1100px) { .brand-metrics { grid-template-columns: repeat(2, 1fr); }.knowledge-filter { grid-template-columns: repeat(3, 1fr); }.two-panels { grid-template-columns: 1fr; }.growth-loop { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

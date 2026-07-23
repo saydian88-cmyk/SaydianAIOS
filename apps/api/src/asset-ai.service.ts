@@ -11,6 +11,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
 import sharp from "sharp";
+import { CloudMediaService } from "./cloud-media.service";
 import { opsConfig } from "./config";
 import { OssStorageService } from "./oss-storage.service";
 import { PrismaService } from "./prisma.service";
@@ -45,6 +46,7 @@ export class AssetAiService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly oss: OssStorageService,
+    private readonly cloudMedia: CloudMediaService,
   ) {}
 
   capabilities() {
@@ -61,8 +63,11 @@ export class AssetAiService {
         imageUnderstanding: { state: bailianConfigured ? "CONFIGURED" : "UNCONFIGURED", model: opsConfig.bailian.visionModel },
         ocr: { state: bailianConfigured ? "CONFIGURED" : "UNCONFIGURED", model: opsConfig.bailian.visionModel },
         transcription: { state: transcriptionConfigured ? "CONFIGURED" : "UNCONFIGURED", model: opsConfig.bailian.transcriptionModel || "未配置" },
-        sceneSegmentation: { state: "AVAILABLE", provider: "FFmpeg" },
+        sceneSegmentation: opsConfig.ims.mode === "cloud"
+          ? this.cloudMedia.capabilities().ims.segmentation
+          : { state: "AVAILABLE", provider: "FFmpeg" },
       },
+      cloudMedia: this.cloudMedia.capabilities(),
       checkedAt: new Date().toISOString(),
     };
   }
@@ -205,6 +210,9 @@ export class AssetAiService {
   }
 
   async enqueue(assetId: string, kind: AssetKind, analysisVersion: number) {
+    if (kind === "VIDEO" && opsConfig.ims.mode === "cloud") {
+      return this.cloudMedia.enqueueAssetVideo(assetId, analysisVersion);
+    }
     const types = [...localJobs, ...(kind === "IMAGE" ? imageAiJobs : []), ...(kind === "VIDEO" ? videoJobs : [])];
     const capabilities = this.capabilities();
     for (const type of types) {

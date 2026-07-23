@@ -232,6 +232,58 @@ enum AssetJobStatus {
   UNCONFIGURED
 }
 
+enum CloudMediaProvider {
+  ALIYUN_IMS
+  ALIYUN_BAILIAN
+}
+
+enum CloudMediaJobType {
+  MEDIA_INFO
+  PROXY_VIDEO
+  SCREENSHOTS
+  SEGMENTATION
+  TRANSCRIPTION
+  VIDEO_UNDERSTANDING
+  SEGMENT_ANALYSIS
+  MODULE_CLASSIFICATION
+  ASSET_SCORING
+  REMAKE_BRIEF
+}
+
+enum CloudMediaJobStatus {
+  PENDING
+  SUBMITTED
+  PROCESSING
+  RETRY
+  SUCCEEDED
+  FAILED
+  UNCONFIGURED
+}
+
+enum AssetScoreKind {
+  OWNED_ASSET
+  EXTERNAL_REFERENCE
+}
+
+enum ExternalVideoStatus {
+  DISCOVERED
+  QUEUED
+  ANALYZING
+  READY
+  FAILED
+  ARCHIVED
+}
+
+enum RemakeTaskStatus {
+  PENDING_CONFIRMATION
+  CONFIRMED
+  ASSIGNED
+  IN_PROGRESS
+  COMPLETED
+  REJECTED
+  CANCELLED
+}
+
 enum UploadBatchStatus {
   DRAFT
   UPLOADING
@@ -319,6 +371,7 @@ model Employee {
   assetReviews    AssetReviewDecision[]
   assetUsages     AssetUsage[]
   assets          Asset[]
+  remakeTasks     RemakeTask[]
 
   @@index([departmentId, status])
   @@index([name])
@@ -335,9 +388,10 @@ model Product {
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 
-  skus       ProductSku[]
-  assets     AssetProduct[]
-  faqEntries FaqEntry[]
+  skus        ProductSku[]
+  assets      AssetProduct[]
+  faqEntries  FaqEntry[]
+  remakeTasks RemakeTask[]
 
   @@index([category, status])
 }
@@ -476,6 +530,8 @@ model Asset {
   usages            AssetUsage[]
   metricSnapshots   AssetMetricSnapshot[]
   segments          AssetSegment[]
+  cloudMediaJobs    CloudMediaJob[]
+  scoreSnapshots    AssetScoreSnapshot[]
 
   @@index([sha256])
   @@index([model, status])
@@ -826,6 +882,161 @@ model AssetGapSnapshot {
 
   @@unique([snapshotDate, productModel, assetKind, category])
   @@index([snapshotDate, severity])
+}
+
+model CloudMediaJob {
+  id              String              @id @default(cuid())
+  assetId         String?
+  externalVideoId String?
+  provider        CloudMediaProvider
+  type            CloudMediaJobType
+  status          CloudMediaJobStatus @default(PENDING)
+  idempotencyKey  String              @unique
+  externalJobId   String?
+  model           String?
+  modelVersion    String?
+  inputObjectKey  String?
+  requestPayload  Json                @default("{}")
+  resultPayload   Json                @default("{}")
+  usage           Json                @default("{}")
+  attempts        Int                 @default(0)
+  maxAttempts     Int                 @default(4)
+  nextAttemptAt   DateTime?
+  submittedAt     DateTime?
+  startedAt       DateTime?
+  completedAt     DateTime?
+  failureReason   String?
+  callbackToken   String              @unique
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  asset         Asset?             @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  externalVideo ExternalVideo?     @relation(fields: [externalVideoId], references: [id], onDelete: Cascade)
+  outputs       CloudMediaOutput[]
+
+  @@index([status, nextAttemptAt, createdAt])
+  @@index([assetId, type])
+  @@index([externalVideoId, type])
+  @@index([provider, externalJobId])
+}
+
+model CloudMediaOutput {
+  id          String   @id @default(cuid())
+  jobId       String
+  outputType  String
+  objectKey   String?
+  url         String?
+  startSecond Float?
+  endSecond   Float?
+  metadata    Json     @default("{}")
+  createdAt   DateTime @default(now())
+
+  job CloudMediaJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId, outputType])
+  @@index([objectKey])
+}
+
+model AssetScoreSnapshot {
+  id              String         @id @default(cuid())
+  assetId         String?
+  externalVideoId String?
+  kind            AssetScoreKind
+  score           Int
+  grade           String
+  confidence      Float?
+  dimensions      Json           @default("{}")
+  explanation     String?
+  scoringVersion  String
+  model           String?
+  createdAt       DateTime       @default(now())
+
+  asset         Asset?         @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  externalVideo ExternalVideo? @relation(fields: [externalVideoId], references: [id], onDelete: Cascade)
+
+  @@index([assetId, createdAt])
+  @@index([externalVideoId, createdAt])
+  @@index([kind, score, createdAt])
+}
+
+model ExternalVideo {
+  id                 String                  @id @default(cuid())
+  platform           IntegrationKind
+  externalContentId  String
+  sourceUrl          String
+  accountName        String?
+  title              String?
+  description        String?
+  publishedAt        DateTime?
+  discoveredAt       DateTime                @default(now())
+  status             ExternalVideoStatus     @default(DISCOVERED)
+  rightsStatus       AssetRightsStatus       @default(INTERNAL)
+  level              AssetLevel              @default(REFERENCE)
+  availabilityStatus AssetAvailabilityStatus @default(INACTIVE)
+  sourceObjectKey    String?
+  previewObjectKey   String?
+  transcript         String?
+  moduleSummary      Json                    @default("[]")
+  analysis           Json                    @default("{}")
+  failureReason      String?
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
+
+  metrics        ExternalMetricSnapshot[]
+  cloudMediaJobs CloudMediaJob[]
+  scoreSnapshots AssetScoreSnapshot[]
+  remakeTasks    RemakeTask[]
+
+  @@unique([platform, externalContentId])
+  @@index([platform, status, discoveredAt])
+  @@index([publishedAt])
+}
+
+model ExternalMetricSnapshot {
+  id                String   @id @default(cuid())
+  externalVideoId   String
+  capturedAt        DateTime
+  views             Int?
+  likes             Int?
+  comments          Int?
+  shares            Int?
+  saves             Int?
+  followers         Int?
+  unavailableFields String[] @default([])
+  raw               Json     @default("{}")
+
+  externalVideo ExternalVideo @relation(fields: [externalVideoId], references: [id], onDelete: Cascade)
+
+  @@unique([externalVideoId, capturedAt])
+  @@index([capturedAt])
+}
+
+model RemakeTask {
+  id                String           @id @default(cuid())
+  taskNo            String           @unique
+  externalVideoId   String
+  sourceStartSecond Float?
+  sourceEndSecond   Float?
+  productId         String?
+  ownerEmployeeId   String?
+  status            RemakeTaskStatus @default(PENDING_CONFIRMATION)
+  title             String
+  reason            String
+  brief             Json             @default("{}")
+  score             Int
+  dueAt             DateTime?
+  confirmedAt       DateTime?
+  completedAt       DateTime?
+  createdBy         String           @default("AI爆款分析")
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  externalVideo ExternalVideo @relation(fields: [externalVideoId], references: [id], onDelete: Cascade)
+  product       Product?      @relation(fields: [productId], references: [id], onDelete: SetNull)
+  ownerEmployee Employee?     @relation(fields: [ownerEmployeeId], references: [id], onDelete: SetNull)
+
+  @@index([status, score, createdAt])
+  @@index([ownerEmployeeId, status])
 }
 
 model EvidenceClaim {

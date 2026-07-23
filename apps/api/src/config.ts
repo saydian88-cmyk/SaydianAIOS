@@ -46,8 +46,35 @@ export const opsConfig = {
     baseUrl: (process.env.BAILIAN_BASE_URL || "https://dashscope.aliyuncs.com/compatible-mode/v1").replace(/\/$/u, ""),
     visionModel: process.env.BAILIAN_VISION_MODEL || "qwen-vl-max",
     textModel: process.env.BAILIAN_TEXT_MODEL || "qwen-plus",
-    transcriptionUrl: process.env.BAILIAN_TRANSCRIPTION_URL || "",
-    transcriptionModel: process.env.BAILIAN_TRANSCRIPTION_MODEL || "",
+    transcriptionUrl:
+      process.env.BAILIAN_TRANSCRIPTION_URL ||
+      "https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription",
+    transcriptionModel: process.env.BAILIAN_TRANSCRIPTION_MODEL || "paraformer-v2",
+    taskUrl:
+      process.env.BAILIAN_TASK_URL ||
+      "https://dashscope.aliyuncs.com/api/v1/tasks",
+  },
+  ims: {
+    regionId: process.env.ALIYUN_IMS_REGION_ID || "cn-shenzhen",
+    accessKeyId: process.env.ALIYUN_IMS_ACCESS_KEY_ID || process.env.OSS_ACCESS_KEY_ID || "",
+    accessKeySecret:
+      process.env.ALIYUN_IMS_ACCESS_KEY_SECRET || process.env.OSS_ACCESS_KEY_SECRET || "",
+    endpoint: process.env.ALIYUN_IMS_ENDPOINT || "ice.cn-shenzhen.aliyuncs.com",
+    pipelineId: process.env.ALIYUN_IMS_PIPELINE_ID || "",
+    proxyTemplateId: process.env.ALIYUN_IMS_PROXY_TEMPLATE_ID || "",
+    snapshotTemplateId: process.env.ALIYUN_IMS_SNAPSHOT_TEMPLATE_ID || "",
+    callbackBaseUrl:
+      process.env.ALIYUN_IMS_CALLBACK_BASE_URL ||
+      `${process.env.OPS_PUBLIC_BASE_URL || "http://127.0.0.1:3210"}/api/brand-data/cloud/callbacks`,
+    mode: (process.env.MEDIA_PROCESSING_MODE || "cloud").toLowerCase(),
+  },
+  viralCollector: {
+    douyinUrl: process.env.VIRAL_COLLECTOR_DOUYIN_URL || "",
+    tiktokUrl: process.env.VIRAL_COLLECTOR_TIKTOK_URL || "",
+    xiaohongshuUrl: process.env.VIRAL_COLLECTOR_XIAOHONGSHU_URL || "",
+    wechatChannelsUrl: process.env.VIRAL_COLLECTOR_WECHAT_CHANNELS_URL || "",
+    token: process.env.VIRAL_COLLECTOR_TOKEN || "",
+    maxPerPlatform: Number(process.env.VIRAL_COLLECTOR_MAX_PER_PLATFORM || 20),
   },
   douyin: {
     clientKey: process.env.DOUYIN_CLIENT_KEY || "",

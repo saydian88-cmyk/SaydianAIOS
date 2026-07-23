@@ -1,0 +1,94 @@
+name: saidian
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    env_file:
+      - /opt/saydian/env/production.env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-saidian_ops}
+      POSTGRES_USER: ${POSTGRES_USER:-saidian_ops}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-saidian_ops} -d ${POSTGRES_DB:-saidian_ops}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    mem_limit: 768m
+    cpus: 0.75
+
+  ops-api:
+    image: ${OPS_API_IMAGE}
+    restart: unless-stopped
+    env_file:
+      - /opt/saydian/env/production.env
+    environment:
+      PORT: 3210
+      OPS_HOST: 0.0.0.0
+      DATABASE_URL: postgresql://${POSTGRES_USER:-saidian_ops}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-saidian_ops}?schema=public
+      MEDIA_PROCESSING_MODE: cloud
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ops-data:/app/apps/api/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3210/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+    mem_limit: 768m
+    cpus: 0.8
+
+  ops-admin:
+    image: ${OPS_ADMIN_IMAGE}
+    restart: unless-stopped
+    mem_limit: 96m
+    cpus: 0.2
+
+  gateway:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      ops-api:
+        condition: service_healthy
+      ops-admin:
+        condition: service_started
+    ports:
+      - "80:80"
+    volumes:
+      - /opt/saydian/config/gateway-nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    mem_limit: 96m
+    cpus: 0.2
+
+  backup:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    env_file:
+      - /opt/saydian/env/production.env
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    command:
+      - /bin/sh
+      - -c
+      - |
+        while true; do
+          stamp=$$(date +%Y%m%d-%H%M%S)
+          pg_dump -h postgres -U $${POSTGRES_USER:-saidian_ops} -d $${POSTGRES_DB:-saidian_ops} -Fc -f /backups/saidian-ops-$${stamp}.dump
+          find /backups -type f -mtime +14 -delete
+          sleep 86400
+        done
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - /opt/saydian/backups:/backups
+    mem_limit: 128m
+    cpus: 0.2
+
+volumes:
+  postgres-data:
+  ops-data:
