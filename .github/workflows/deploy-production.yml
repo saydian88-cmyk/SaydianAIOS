@@ -69,6 +69,11 @@ jobs:
     environment: production
     steps:
       - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Configure SSH
         shell: bash
         run: |
@@ -76,13 +81,22 @@ jobs:
           printf '%s\n' "${{ secrets.TENCENT_SSH_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_HOST }}" >> ~/.ssh/known_hosts
+      - name: Prepare release images
+        shell: bash
+        run: |
+          docker pull "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-api:${{ github.sha }}"
+          docker pull "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-admin:${{ github.sha }}"
+          docker save \
+            "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-api:${{ github.sha }}" \
+            "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-admin:${{ github.sha }}" \
+            | gzip -1 > /tmp/saydian-ops-images.tar.gz
       - name: Upload deployment files
         shell: bash
         run: |
-          scp -P "${{ secrets.TENCENT_PORT || '22' }}" deploy/docker-compose.prod.yml deploy/gateway-nginx.conf deploy/deploy-ops.sh \
+          scp -P "${{ secrets.TENCENT_PORT || '22' }}" deploy/docker-compose.prod.yml deploy/gateway-nginx.conf deploy/deploy-ops.sh /tmp/saydian-ops-images.tar.gz \
             "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}:/tmp/"
           ssh -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}" \
-            "sudo install -m 644 /tmp/docker-compose.prod.yml /opt/saydian/config/docker-compose.prod.yml && sudo install -m 644 /tmp/gateway-nginx.conf /opt/saydian/config/gateway-nginx.conf && sudo install -m 755 /tmp/deploy-ops.sh /opt/saydian/bin/deploy-ops.sh"
+            "sudo install -m 644 /tmp/docker-compose.prod.yml /opt/saydian/config/docker-compose.prod.yml && sudo install -m 644 /tmp/gateway-nginx.conf /opt/saydian/config/gateway-nginx.conf && sudo install -m 755 /tmp/deploy-ops.sh /opt/saydian/bin/deploy-ops.sh && sudo docker load -i /tmp/saydian-ops-images.tar.gz && rm -f /tmp/saydian-ops-images.tar.gz"
       - name: Deploy and verify
         shell: bash
         run: |
