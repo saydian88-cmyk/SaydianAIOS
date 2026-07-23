@@ -52,6 +52,11 @@ export class OpsController {
     return this.auth.wecomAuthorizeUrl(String(redirectUri || ""));
   }
 
+  @Get("auth/wecom/qr-authorize-url")
+  wecomQrAuthorizeUrl(@Query("redirectUri") redirectUri: string) {
+    return this.auth.wecomQrAuthorizeUrl(String(redirectUri || ""));
+  }
+
   @Post("auth/wecom/login")
   wecomLogin(@Body() body: Record<string, unknown>) {
     return this.auth.loginWithWecomCode(String(body.code || ""));

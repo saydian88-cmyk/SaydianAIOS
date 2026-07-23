@@ -71,6 +71,19 @@ export class AuthService {
     return { url: String(result.url) };
   }
 
+  async wecomQrAuthorizeUrl(redirectUri: string) {
+    this.assertRedirectUri(redirectUri);
+    const response = await fetch(
+      `${opsConfig.mall.baseUrl}/wecom/qr-authorize-url?redirectUri=${encodeURIComponent(redirectUri)}`,
+      { signal: AbortSignal.timeout(15_000) },
+    );
+    const result = await response.json().catch(() => ({})) as Record<string, unknown>;
+    if (!response.ok || !result.url) {
+      throw new BadRequestException(String(result.message || "企业微信扫码登录入口暂不可用"));
+    }
+    return { url: String(result.url) };
+  }
+
   async loginWithWecomCode(code: string) {
     if (!code.trim()) throw new BadRequestException("企业微信授权码缺失");
     const loginResponse = await fetch(`${opsConfig.mall.baseUrl}/wecom/oauth`, {

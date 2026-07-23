@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
   Bell, Connection, DataAnalysis, DocumentChecked, Files, House, Monitor, Promotion,
@@ -31,6 +31,8 @@ const error = ref("");
 const authReady = ref(false);
 const authUser = ref<AuthUser>();
 const loginMessage = ref("");
+const qrLoginUrl = ref("");
+const qrLoading = ref(false);
 const dashboard = ref<Dashboard>();
 const integrations = ref<Integration[]>([]);
 const content = ref<ContentPlan[]>([]);
@@ -234,10 +236,26 @@ async function startWecomLogin() {
   }
 }
 
+async function loadWecomQr() {
+  qrLoading.value = true;
+  loginMessage.value = "";
+  try {
+    const redirectUri = `${window.location.origin}${window.location.pathname}?wecom_qr=1`;
+    const result = await api<{ url: string }>(`/api/v1/auth/wecom/qr-authorize-url?redirectUri=${encodeURIComponent(redirectUri)}`);
+    qrLoginUrl.value = result.url;
+  } catch (reason) {
+    qrLoginUrl.value = "";
+    loginMessage.value = reason instanceof Error ? reason.message : "企业微信扫码登录入口暂不可用";
+  } finally {
+    qrLoading.value = false;
+  }
+}
+
 function logout() {
   clearToken();
   authUser.value = undefined;
   actorInput.value = "";
+  void loadWecomQr();
 }
 
 function openMall(path: string) {
@@ -277,7 +295,12 @@ async function bootstrap() {
     loginMessage.value = reason instanceof Error ? reason.message : "登录失败";
   } finally {
     authReady.value = true;
+    if (!authUser.value && !getToken()) await loadWecomQr();
   }
+}
+
+function handleSharedLogin(event: StorageEvent) {
+  if (event.key === "saidian-ops-token" && event.newValue && !authUser.value) void bootstrap();
 }
 
 async function promptValue(title: string, placeholder: string, value = "") {
@@ -356,7 +379,11 @@ async function importCsv() {
   input.click();
 }
 
-onMounted(bootstrap);
+onMounted(() => {
+  window.addEventListener("storage", handleSharedLogin);
+  void bootstrap();
+});
+onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
 </script>
 
 <template>
@@ -366,10 +393,18 @@ onMounted(bootstrap);
   <div v-else-if="!authUser" class="login-shell">
     <div class="login-card">
       <div class="login-brand"><div class="brand-mark">S</div><div><span>SAYDIAN</span><small>统一运营系统</small></div></div>
-      <h1>企业员工登录</h1>
-      <p>企业微信员工直接进入，身份、部门和操作记录自动同步。</p>
+      <h1>企业微信扫码登录</h1>
+      <p>请使用手机企业微信扫一扫。扫码后自动同步员工身份、部门和操作记录。</p>
       <el-alert v-if="loginMessage" :title="loginMessage" type="error" :closable="false" show-icon />
-      <el-button type="primary" size="large" @click="startWecomLogin">企业微信登录</el-button>
+      <div class="wecom-qr-panel" v-loading="qrLoading">
+        <iframe v-if="qrLoginUrl" :src="qrLoginUrl" title="企业微信扫码登录二维码" />
+        <div v-else class="qr-placeholder">二维码暂未加载</div>
+      </div>
+      <div class="qr-actions">
+        <span>二维码失效？</span>
+        <el-button link type="primary" @click="loadWecomQr">刷新二维码</el-button>
+      </div>
+      <el-button class="wecom-direct-button" size="large" @click="startWecomLogin">已在企业微信内，直接登录</el-button>
     </div>
   </div>
   <div v-else class="shell">
