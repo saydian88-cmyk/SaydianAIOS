@@ -30,6 +30,8 @@ docker compose --env-file "$production_env" --env-file "$images" -f "$compose" r
   sh -c 'mkdir -p data/upload-inbox data/derived data/bootstrap && chown -R 1001:1001 data'
 docker compose --env-file "$production_env" --env-file "$images" -f "$compose" run --rm ops-api \
   node node_modules/prisma/build/index.js migrate deploy
+docker compose --env-file "$production_env" --env-file "$images" -f "$compose" run --rm ops-api \
+  node_modules/.bin/tsx prisma/seed.ts
 docker compose --env-file "$production_env" --env-file "$images" -f "$compose" up -d --remove-orphans
 
 healthy=0
