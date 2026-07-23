@@ -92,7 +92,7 @@ BAILIAN_TRANSCRIPTION_MODEL=
   [IO.File]::WriteAllText((Join-Path $root 'INITIAL-ACCESS.txt'), "URL=https://stest.saydian.cn/saidian-ops/`r`nTOKEN=$adminToken`r`n", [Text.UTF8Encoding]::new($false))
 }
 
-$envLines = [Collections.Generic.List[string]](Get-Content -LiteralPath $envPath)
+$envLines = [Collections.Generic.List[string]]([IO.File]::ReadAllLines($envPath, [Text.UTF8Encoding]::new($false)))
 function Set-EnvValue([string]$name, [string]$value) {
   $prefix = "$name="
   for ($index = 0; $index -lt $envLines.Count; $index += 1) {
@@ -106,6 +106,8 @@ function Set-EnvValue([string]$name, [string]$value) {
 Set-EnvValue 'OSS_REGION' 'oss-cn-shenzhen'
 Set-EnvValue 'OSS_BUCKET' 'saidian-brand-assets-prod-sz'
 Set-EnvValue 'OSS_ENDPOINT' 'oss-cn-shenzhen.aliyuncs.com'
+Set-EnvValue 'OPS_DEFAULT_ACTOR' '运营负责人'
+Set-EnvValue 'OPS_TIME_ZONE' 'Asia/Shanghai'
 $existingAdminToken = (($envLines | Where-Object { $_.StartsWith('OPS_ADMIN_TOKEN=', [StringComparison]::Ordinal) } | Select-Object -First 1) -replace '^OPS_ADMIN_TOKEN=', '')
 foreach ($optionalEnv in @(
   @{ Name = 'OPS_AUTH_SECRET'; Value = $existingAdminToken },
