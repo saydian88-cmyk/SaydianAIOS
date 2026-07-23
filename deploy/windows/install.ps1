@@ -125,7 +125,7 @@ foreach ($optionalEnv in @(
 }
 [IO.File]::WriteAllLines($envPath, $envLines, [Text.UTF8Encoding]::new($false))
 
-Get-Content -LiteralPath $envPath | ForEach-Object {
+[IO.File]::ReadAllLines($envPath, [Text.UTF8Encoding]::new($false)) | ForEach-Object {
   if ($_ -match '^([^#=]+)=(.*)$') { [Environment]::SetEnvironmentVariable($matches[1], $matches[2], 'Process') }
 }
 
@@ -138,6 +138,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Database seed failed' }
 if ($LASTEXITCODE -ne 0) { throw 'Asset V2 backfill failed' }
 
 cmd.exe /c "schtasks /End /TN $taskName >NUL 2>&1" | Out-Null
+Get-NetTCPConnection -LocalPort 3210 -State Listen -ErrorAction SilentlyContinue |
+  ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
 $taskAction = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$root\start-api.ps1`""
 cmd.exe /c "schtasks /Create /F /SC ONSTART /RL HIGHEST /RU SYSTEM /TN $taskName /TR `"$taskAction`"" | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'API task creation failed' }

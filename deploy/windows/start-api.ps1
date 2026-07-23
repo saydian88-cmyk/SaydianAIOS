@@ -4,7 +4,7 @@ $node = 'C:\saydian\runtime\node\node.exe'
 $envPath = Join-Path $root '.env'
 $logPath = Join-Path $root 'logs\api.log'
 
-Get-Content -LiteralPath $envPath | ForEach-Object {
+[IO.File]::ReadAllLines($envPath, [Text.UTF8Encoding]::new($false)) | ForEach-Object {
   if ($_ -match '^([^#=]+)=(.*)$') { [Environment]::SetEnvironmentVariable($matches[1], $matches[2], 'Process') }
 }
 
