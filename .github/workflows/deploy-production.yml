@@ -95,8 +95,19 @@ jobs:
           rm release-images/saydian-ops-images.tar.gz
           scp -P "${{ secrets.TENCENT_PORT || '22' }}" deploy/docker-compose.prod.yml deploy/gateway-nginx.conf deploy/deploy-ops.sh \
             "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}:/tmp/"
-          find release-images -maxdepth 1 -name 'saidian-ops-images.part-*' -print0 \
-            | xargs -0 -P 8 -I {} scp -P "${{ secrets.TENCENT_PORT || '22' }}" "{}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}:/tmp/"
+          parts=(release-images/saydian-ops-images.part-*)
+          test -e "${parts[0]}"
+          printf 'release_chunks=%s\n' "${#parts[@]}"
+          running=0
+          for part in "${parts[@]}"; do
+            scp -P "${{ secrets.TENCENT_PORT || '22' }}" "$part" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}:/tmp/" &
+            running=$((running + 1))
+            if (( running >= 6 )); then
+              wait -n
+              running=$((running - 1))
+            fi
+          done
+          wait
           ssh -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}" \
             "cat /tmp/saydian-ops-images.part-* > /tmp/saydian-ops-images.tar.gz && sudo install -m 644 /tmp/docker-compose.prod.yml /opt/saydian/config/docker-compose.prod.yml && sudo install -m 644 /tmp/gateway-nginx.conf /opt/saydian/config/gateway-nginx.conf && sudo install -m 755 /tmp/deploy-ops.sh /opt/saydian/bin/deploy-ops.sh && sudo docker load -i /tmp/saydian-ops-images.tar.gz && rm -f /tmp/saydian-ops-images.tar.gz /tmp/saydian-ops-images.part-*"
       - name: Deploy and verify
