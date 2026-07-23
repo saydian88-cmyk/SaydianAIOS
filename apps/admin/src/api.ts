@@ -3,11 +3,16 @@ const tokenKey = "saidian-ops-token";
 const actorKey = "saidian-ops-actor";
 
 export function getToken() {
-  return localStorage.getItem(tokenKey) || "saidian-ops-local";
+  return localStorage.getItem(tokenKey) || (import.meta.env.DEV ? "saidian-ops-local" : "");
 }
 
 export function setToken(value: string) {
   localStorage.setItem(tokenKey, value.trim());
+}
+
+export function clearToken() {
+  localStorage.removeItem(tokenKey);
+  localStorage.removeItem(actorKey);
 }
 
 export function getActor() {

@@ -55,9 +55,11 @@ NODE_ENV=production
 PORT=3210
 OPS_HOST=127.0.0.1
 OPS_ADMIN_TOKEN=$adminToken
+OPS_AUTH_SECRET=$adminToken
 OPS_DEFAULT_ACTOR=运营负责人
 OPS_TIME_ZONE=Asia/Shanghai
 OPS_PUBLIC_BASE_URL=https://stest.saydian.cn/api/saidian-ops
+OPS_WEB_BASE_URL=https://stest.saydian.cn/saidian-ops/
 DATABASE_URL=postgresql://saidian_ops:$dbPassword@127.0.0.1:5432/saidian_ops?schema=public
 ASSET_ROOTS=C:\saidian-ops\empty-source
 WECOM_DRIVE_SYNC_ROOT=
@@ -104,7 +106,10 @@ function Set-EnvValue([string]$name, [string]$value) {
 Set-EnvValue 'OSS_REGION' 'oss-cn-shenzhen'
 Set-EnvValue 'OSS_BUCKET' 'saidian-brand-assets-prod-sz'
 Set-EnvValue 'OSS_ENDPOINT' 'oss-cn-shenzhen.aliyuncs.com'
+$existingAdminToken = (($envLines | Where-Object { $_.StartsWith('OPS_ADMIN_TOKEN=', [StringComparison]::Ordinal) } | Select-Object -First 1) -replace '^OPS_ADMIN_TOKEN=', '')
 foreach ($optionalEnv in @(
+  @{ Name = 'OPS_AUTH_SECRET'; Value = $existingAdminToken },
+  @{ Name = 'OPS_WEB_BASE_URL'; Value = 'https://stest.saydian.cn/saidian-ops/' },
   @{ Name = 'BAILIAN_API_KEY'; Value = '' },
   @{ Name = 'BAILIAN_BASE_URL'; Value = 'https://dashscope.aliyuncs.com/compatible-mode/v1' },
   @{ Name = 'BAILIAN_VISION_MODEL'; Value = 'qwen-vl-max' },

@@ -42,6 +42,26 @@ export class OpsController {
     return { ok: true, actor: this.actor(authorization) };
   }
 
+  @Get("auth/me")
+  me(@Headers("authorization") authorization?: string) {
+    return this.auth.identity(authorization);
+  }
+
+  @Get("auth/wecom/authorize-url")
+  wecomAuthorizeUrl(@Query("redirectUri") redirectUri: string) {
+    return this.auth.wecomAuthorizeUrl(String(redirectUri || ""));
+  }
+
+  @Post("auth/wecom/login")
+  wecomLogin(@Body() body: Record<string, unknown>) {
+    return this.auth.loginWithWecomCode(String(body.code || ""));
+  }
+
+  @Post("auth/wecom/session")
+  wecomSession(@Body() body: Record<string, unknown>) {
+    return this.auth.loginWithMallSession(String(body.mallToken || ""));
+  }
+
   @Get("dashboard") dashboard(@Headers("authorization") authorization?: string) {
     this.actor(authorization); return this.operations.dashboard();
   }

@@ -5,15 +5,17 @@ import {
   Bell, Connection, DataAnalysis, DocumentChecked, Files, House, Monitor, Promotion,
   Refresh, Search, Setting, Shop, VideoCamera,
 } from "@element-plus/icons-vue";
-import { api, getActor, getToken, patch, post, setActor, setToken } from "./api";
+import { api, clearToken, getActor, getToken, patch, post, setActor, setToken } from "./api";
 import BrandDataCenter from "./components/BrandDataCenter.vue";
 import type { ContentPlan, Dashboard, Integration } from "./types";
 
 type AnyRow = Record<string, any>;
 type Ledger = { departments: AnyRow[]; employees: AnyRow[]; products: AnyRow[]; accounts: AnyRow[]; stores: AnyRow[]; imports: AnyRow[]; snapshots: AnyRow[]; attributions: AnyRow[]; sourceHealth: AnyRow[] };
+type AuthUser = { employeeId?: string; id?: string; name: string; wecomUserId?: string; departmentNames?: string[]; isSuperAdmin?: boolean; loginType: string };
 
 const navItems = [
   { key: "dashboard", label: "今日总览", icon: House },
+  { key: "mall", label: "赛电商城", icon: Shop },
   { key: "content", label: "内容审核", icon: DocumentChecked },
   { key: "assets", label: "品牌数据中心", icon: Files },
   { key: "ledger", label: "经营责任台账", icon: Monitor },
@@ -26,6 +28,9 @@ const navItems = [
 const active = ref("dashboard");
 const loading = ref(false);
 const error = ref("");
+const authReady = ref(false);
+const authUser = ref<AuthUser>();
+const loginMessage = ref("");
 const dashboard = ref<Dashboard>();
 const integrations = ref<Integration[]>([]);
 const content = ref<ContentPlan[]>([]);
@@ -41,7 +46,6 @@ const reports = ref<AnyRow[]>([]);
 const jobs = ref<AnyRow[]>([]);
 const sops = ref<AnyRow[]>([]);
 const ledger = ref<Ledger>({ departments: [], employees: [], products: [], accounts: [], stores: [], imports: [], snapshots: [], attributions: [], sourceHealth: [] });
-const tokenInput = ref(getToken());
 const actorInput = ref(getActor());
 const opsSubTab = ref("shop");
 const reportSubTab = ref("reports");
@@ -131,6 +135,7 @@ async function loadDashboard() {
 }
 
 async function loadActive() {
+  if (active.value === "mall") return;
   if (active.value === "dashboard") return loadDashboard();
   if (active.value === "content") [content.value, ledger.value] = await Promise.all([api<ContentPlan[]>("/api/v1/content"), api<Ledger>("/api/v1/ledger")]);
   if (active.value === "assets") await brandDataCenter.value?.reload();
@@ -218,15 +223,61 @@ async function runJob(kind: string) {
   }, "任务已加入队列");
 }
 
-async function saveToken() {
-  setToken(tokenInput.value);
-  await withLoading(loadDashboard, "访问凭据已保存");
+async function startWecomLogin() {
+  loginMessage.value = "";
+  try {
+    const redirectUri = `${window.location.origin}${window.location.pathname}`;
+    const result = await api<{ url: string }>(`/api/v1/auth/wecom/authorize-url?redirectUri=${encodeURIComponent(redirectUri)}`);
+    window.location.assign(result.url);
+  } catch (reason) {
+    loginMessage.value = reason instanceof Error ? reason.message : "企业微信登录入口暂不可用";
+  }
 }
 
-function saveActor() {
-  setActor(actorInput.value);
-  actorInput.value = getActor();
-  ElMessage.success("当前员工已记录");
+function logout() {
+  clearToken();
+  authUser.value = undefined;
+  actorInput.value = "";
+}
+
+function openMall(path: string) {
+  window.location.assign(path);
+}
+
+async function bootstrap() {
+  try {
+    const parameters = new URLSearchParams(window.location.search);
+    const code = parameters.get("code");
+    if (code) {
+      const result = await post<{ token: string; user: AuthUser }>("/api/v1/auth/wecom/login", { code });
+      setToken(result.token);
+      setActor(result.user.name);
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+    if (!getToken()) {
+      const mallEmployeeToken = localStorage.getItem("employee-token");
+      if (mallEmployeeToken) {
+        try {
+          const result = await post<{ token: string; user: AuthUser }>("/api/v1/auth/wecom/session", { mallToken: mallEmployeeToken });
+          setToken(result.token);
+          setActor(result.user.name);
+        } catch {
+          localStorage.removeItem("employee-token");
+        }
+      }
+    }
+    if (!getToken()) return;
+    authUser.value = await api<AuthUser>("/api/v1/auth/me");
+    actorInput.value = authUser.value.name;
+    setActor(authUser.value.name);
+    await loadDashboard();
+  } catch (reason) {
+    clearToken();
+    authUser.value = undefined;
+    loginMessage.value = reason instanceof Error ? reason.message : "登录失败";
+  } finally {
+    authReady.value = true;
+  }
 }
 
 async function promptValue(title: string, placeholder: string, value = "") {
@@ -305,15 +356,27 @@ async function importCsv() {
   input.click();
 }
 
-onMounted(() => withLoading(loadDashboard));
+onMounted(bootstrap);
 </script>
 
 <template>
-  <div class="shell">
+  <div v-if="!authReady" class="login-shell">
+    <div class="login-card login-loading"><div class="brand-mark">S</div><strong>正在进入赛电统一运营系统</strong></div>
+  </div>
+  <div v-else-if="!authUser" class="login-shell">
+    <div class="login-card">
+      <div class="login-brand"><div class="brand-mark">S</div><div><span>SAYDIAN</span><small>统一运营系统</small></div></div>
+      <h1>企业员工登录</h1>
+      <p>企业微信员工直接进入，身份、部门和操作记录自动同步。</p>
+      <el-alert v-if="loginMessage" :title="loginMessage" type="error" :closable="false" show-icon />
+      <el-button type="primary" size="large" @click="startWecomLogin">企业微信登录</el-button>
+    </div>
+  </div>
+  <div v-else class="shell">
     <aside class="sidebar">
       <div class="brand">
         <div class="brand-mark">S</div>
-        <div><span>SAYDIAN</span><small>全渠道运营中台</small></div>
+        <div><span>SAYDIAN</span><small>统一运营系统</small></div>
       </div>
       <nav>
         <button v-for="item in navItems" :key="item.key" :class="['nav-item', { active: active === item.key }]" @click="switchPage(item.key)">
@@ -335,10 +398,13 @@ onMounted(() => withLoading(loadDashboard));
       <header class="topbar">
         <div><small>{{ todayLabel }}</small><h1>{{ pageTitle }}</h1></div>
         <div class="top-actions">
-          <el-input v-model="actorInput" class="actor-input" size="small" maxlength="30" placeholder="当前员工" @change="saveActor" />
+          <span class="employee-identity"><small>企业微信员工</small><strong>{{ actorInput }}</strong></span>
           <span class="connection-state"><i :class="error ? 'bad' : 'good'"></i>{{ error ? '连接异常' : '数据已连接' }}</span>
           <el-button :icon="Refresh" circle @click="withLoading(loadActive)" aria-label="刷新当前页面" />
-          <div class="avatar">{{ actorInput.slice(0, 2) }}</div>
+          <el-dropdown>
+            <div class="avatar">{{ actorInput.slice(0, 2) }}</div>
+            <template #dropdown><el-dropdown-menu><el-dropdown-item @click="logout">退出登录</el-dropdown-item></el-dropdown-menu></template>
+          </el-dropdown>
         </div>
       </header>
 
@@ -384,6 +450,15 @@ onMounted(() => withLoading(loadDashboard));
             </div>
             <el-empty v-else description="尚未生成运营报告" :image-size="70" />
           </section>
+        </div>
+      </section>
+
+      <section v-else-if="active === 'mall'" class="page">
+        <div class="section-heading"><div><span class="eyebrow">SAIDIAN MALL</span><h2>赛电商城</h2><p>商城作为统一运营系统的业务模块，沿用同一域名和企业微信员工身份。</p></div></div>
+        <div class="module-grid">
+          <article @click="openMall('/saidian-mall/')"><div class="module-icon">商</div><div><h3>商城前台</h3><p>商品浏览、会员与订单入口</p><small>/saidian-mall/</small></div><el-button type="primary" plain>进入</el-button></article>
+          <article @click="openMall('/saidian-mall-admin/')"><div class="module-icon">管</div><div><h3>商城管理</h3><p>商品、订单与商城运营管理</p><small>/saidian-mall-admin/</small></div><el-button type="primary" plain>进入</el-button></article>
+          <article @click="openMall('/saidian-mall/#/pages/employee/index')"><div class="module-icon">员</div><div><h3>员工中心</h3><p>企业微信员工业务入口</p><small>员工身份由商城统一维护</small></div><el-button type="primary" plain>进入</el-button></article>
         </div>
       </section>
 
@@ -463,7 +538,7 @@ onMounted(() => withLoading(loadDashboard));
       <section v-else class="page">
         <div class="section-heading"><div><span class="eyebrow">INTEGRATION STATUS</span><h2>平台连接与能力状态</h2><p>每个账号分别显示能力；未验证的接口不会显示为已打通。</p></div><el-button :icon="Refresh" @click="checkIntegrations">检查全部连接</el-button></div>
         <div class="integration-grid"><article v-for="item in integrations" :key="item.id"><div class="integration-icon">{{ item.displayName.slice(0, 1) }}</div><div class="integration-copy"><div><h3>{{ item.displayName }}</h3><el-tag :type="statusType(item.state)">{{ statusLabel(item.state) }}</el-tag></div><p>{{ item.message }}</p><div class="capability-tags"><span v-for="capability in item.capabilities" :key="capability">{{ capability }}</span><span v-if="!item.capabilities.length">暂无已验证能力</span></div><small>检查时间：{{ time(item.lastCheckedAt) }}</small></div></article></div>
-        <section class="token-panel"><div><el-icon><Setting /></el-icon><div><strong>运营中台访问凭据</strong><p>本地开发默认使用本地凭据；部署时请改为环境变量中的长随机值。</p></div></div><el-input v-model="tokenInput" type="password" show-password placeholder="输入访问凭据" /><el-button type="primary" @click="saveToken">保存并验证</el-button></section>
+        <section class="token-panel"><div><el-icon><Setting /></el-icon><div><strong>统一企业微信身份</strong><p>当前员工：{{ actorInput }}。登录、部门和员工资料由赛电商城企业微信机制统一提供。</p></div></div><el-tag type="success">已登录</el-tag></section>
       </section>
     </main>
   </div>

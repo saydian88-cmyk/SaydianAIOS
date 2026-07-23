@@ -67,6 +67,97 @@ export class AssetAiService {
     };
   }
 
+  async suggestUploadMetadata(input: JsonRecord) {
+    const files = (Array.isArray(input.files) ? input.files : [])
+      .map((item) => item && typeof item === "object" ? item as JsonRecord : {})
+      .map((item) => ({ name: text(item.name), type: text(item.type), size: Number(item.size || 0) }))
+      .filter((item) => item.name)
+      .slice(0, 20);
+    const products = await this.prisma.product.findMany({
+      where: { status: "READY" },
+      select: { id: true, modelCode: true, name: true },
+      orderBy: { modelCode: "asc" },
+    });
+    const fileText = files.map((item) => `${item.name} ${item.type}`).join(" ");
+    const matchedProducts = products.filter((product) => {
+      const terms = [product.modelCode, product.name].map((value) => text(value).toLowerCase()).filter((value) => value.length >= 2);
+      return terms.some((term) => fileText.toLowerCase().includes(term));
+    });
+    const inferredKinds = new Set(files.map((file) => {
+      const value = `${file.type} ${file.name}`.toLowerCase();
+      if (value.includes("image/") || /\.(jpe?g|png|webp|gif|bmp)$/u.test(value)) return "IMAGE";
+      if (value.includes("video/") || /\.(mp4|mov|mkv|webm|avi)$/u.test(value)) return "VIDEO";
+      if (value.includes("audio/") || /\.(mp3|wav|m4a|aac)$/u.test(value)) return "AUDIO";
+      return "DOCUMENT";
+    }));
+    const localSuggestion: JsonRecord = {
+      assetKind: inferredKinds.size === 1 ? [...inferredKinds][0] : undefined,
+      productScope: matchedProducts.length ? "MODEL" : "UNKNOWN",
+      productIds: matchedProducts.map((product) => product.id),
+      contentDescription: files.length === 1
+        ? files[0].name.replace(/\.[^.]+$/u, "").replaceAll(/[_-]+/gu, " ").trim()
+        : `${files.length}个素材文件`,
+      sourceType: "EMPLOYEE_CAPTURE",
+      originalStatus: true,
+      rightsStatus: "COMMERCIAL",
+    };
+    if (!opsConfig.bailian.apiKey || !opsConfig.bailian.baseUrl || !opsConfig.bailian.visionModel || !files.length) {
+      return {
+        provider: "LOCAL_RULES",
+        state: "UNCONFIGURED",
+        message: "已按文件名和格式辅助填写；百炼未配置，未执行AI内容识别",
+        suggestions: localSuggestion,
+      };
+    }
+    const response = await fetch(`${opsConfig.bailian.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${opsConfig.bailian.apiKey}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        model: opsConfig.bailian.visionModel,
+        messages: [{
+          role: "user",
+          content: `根据文件名为赛电员工上传素材预填元数据。只返回JSON：{"assetKind":"IMAGE|VIDEO|AUDIO|DOCUMENT","productIds":[],"contentDescription":"简短中文说明"}。产品只能从清单选择，不要编造。文件：${JSON.stringify(files)}。产品清单：${JSON.stringify(products)}`,
+        }],
+        response_format: { type: "json_object" },
+      }),
+    });
+    if (!response.ok) {
+      return {
+        provider: "LOCAL_RULES",
+        state: "FAILED",
+        message: `AI辅助填写失败（${response.status}），已使用本地规则预填`,
+        suggestions: localSuggestion,
+      };
+    }
+    const payload = await response.json() as JsonRecord;
+    const rawContent = text(((payload.choices as Array<JsonRecord> | undefined)?.[0]?.message as JsonRecord | undefined)?.content);
+    let aiSuggestion: JsonRecord = {};
+    try {
+      aiSuggestion = rawContent ? JSON.parse(rawContent) as JsonRecord : {};
+    } catch {
+      aiSuggestion = {};
+    }
+    const validProductIds = new Set(products.map((product) => product.id));
+    const productIds = (Array.isArray(aiSuggestion.productIds) ? aiSuggestion.productIds : [])
+      .map(text)
+      .filter((id) => validProductIds.has(id));
+    const assetKind = ["IMAGE", "VIDEO", "AUDIO", "DOCUMENT"].includes(text(aiSuggestion.assetKind).toUpperCase())
+      ? text(aiSuggestion.assetKind).toUpperCase()
+      : localSuggestion.assetKind;
+    return {
+      provider: "ALIYUN_BAILIAN",
+      state: "AVAILABLE",
+      message: "AI已完成上传信息预填，请确认后上传",
+      suggestions: {
+        ...localSuggestion,
+        assetKind,
+        productIds: productIds.length ? productIds : localSuggestion.productIds,
+        productScope: (productIds.length || matchedProducts.length) ? "MODEL" : "UNKNOWN",
+        contentDescription: text(aiSuggestion.contentDescription) || localSuggestion.contentDescription,
+      },
+    };
+  }
+
   async materializeSegment(assetId: string, segmentId: string, actor: string, employeeId?: string) {
     const segment = await this.prisma.assetSegment.findFirst({
       where: { id: segmentId, assetId },

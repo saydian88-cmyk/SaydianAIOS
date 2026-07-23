@@ -6,6 +6,7 @@ import {
   AssetReviewAction,
   AssetReviewStatus,
   AssetRightsStatus,
+  IntegrationKind,
   Prisma,
   ProductScope,
   RecordStatus,
@@ -36,6 +37,7 @@ const reviewStatuses: AssetReviewStatus[] = ["PENDING", "APPROVED", "RETURNED", 
 const availabilityStatuses: AssetAvailabilityStatus[] = ["INACTIVE", "ACTIVE", "SUSPENDED", "ARCHIVED"];
 const reviewActions: AssetReviewAction[] = ["APPROVE", "RETURN", "INTERNAL_ONLY", "REJECT"];
 const moduleTypes: VideoModuleType[] = ["HOOK", "PAIN", "SCENE", "FEATURE", "BENEFIT", "PROOF", "DEMO", "COMPARE", "UGC", "STORY", "TRANSITION", "TRAFFIC", "OFFER", "CTA", "ENDING"];
+const integrationKinds: IntegrationKind[] = ["DOUYIN", "TIKTOK", "AMAZON", "SHOPIFY", "WECHAT_CHANNELS", "XIAOHONGSHU", "WECHAT_OFFICIAL", "WECOM", "TMALL", "JD", "PINDUODUO", "SAIDIAN_MALL", "JUSHUITAN", "FEIGUA", "WEB_SEARCH"];
 const imageExtensions = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"]);
 const videoExtensions = new Set([".mp4", ".mov", ".mkv", ".webm", ".avi"]);
 const audioExtensions = new Set([".mp3", ".wav", ".m4a", ".aac"]);
@@ -60,6 +62,29 @@ function json(value: unknown): Prisma.InputJsonValue {
 function enumValue<T extends string>(value: unknown, values: readonly T[], fallback: T): T {
   const candidate = text(value).toUpperCase() as T;
   return values.includes(candidate) ? candidate : fallback;
+}
+
+export function growthScore(input: {
+  baselineQuality: number;
+  views?: number | null;
+  likes?: number | null;
+  comments?: number | null;
+  shares?: number | null;
+  saves?: number | null;
+  orders?: number | null;
+}) {
+  const baselineQuality = Math.max(0, Math.min(100, Number(input.baselineQuality || 0)));
+  const views = Math.max(0, Number(input.views || 0));
+  const interactions = Math.max(0, Number(input.likes || 0) + Number(input.comments || 0) + Number(input.shares || 0) + Number(input.saves || 0));
+  const orders = Math.max(0, Number(input.orders || 0));
+  if (!views && !interactions && !orders) {
+    return { score: baselineQuality, recommendationWeight: Number(Math.max(0.2, baselineQuality / 100).toFixed(2)), hasPerformanceData: false };
+  }
+  const viewScore = Math.min(100, Math.log10(views + 1) * 20);
+  const engagementScore = views ? Math.min(100, interactions / views * 1000) : 0;
+  const conversionScore = views ? Math.min(100, orders / views * 5000) : Math.min(100, orders * 10);
+  const score = Math.round(baselineQuality * 0.45 + viewScore * 0.25 + engagementScore * 0.2 + conversionScore * 0.1);
+  return { score, recommendationWeight: Number(Math.max(0.2, Math.min(1.5, score / 80)).toFixed(2)), hasPerformanceData: true };
 }
 
 function dayCode(): string {
@@ -219,7 +244,11 @@ export class BrandDataService {
   }
 
   async createUploadBatch(body: JsonRecord, actor: string): Promise<JsonRecord & { id: string }> {
-    const employeeId = await this.validEmployeeId(body.employeeId);
+    const requestedEmployeeId = await this.validEmployeeId(body.employeeId);
+    const employeeId = requestedEmployeeId || (await this.prisma.employee.findFirst({
+      where: { name: actor, status: "ACTIVE" },
+      select: { id: true },
+    }))?.id;
     const productIds = await this.validProductIds(textArray(body.productIds));
     const batch = await this.prisma.uploadBatch.create({
       data: {
@@ -233,6 +262,10 @@ export class BrandDataService {
     });
     await this.audit(actor, "UPLOAD_BATCH_CREATE", "UploadBatch", batch.id, batch);
     return this.batchView(batch);
+  }
+
+  suggestUploadMetadata(body: JsonRecord) {
+    return this.assetAi.suggestUploadMetadata(body);
   }
 
   async uploadBatchFiles(id: string, files: DiskFile[], actor: string) {
@@ -437,17 +470,119 @@ export class BrandDataService {
     return this.prisma.assetGapSnapshot.findMany({ where: { snapshotDate: today }, orderBy: [{ severity: "desc" }, { productModel: "asc" }, { category: "asc" }] });
   }
 
+  async growthLoop(refresh = false, actor = "系统增长闭环") {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (refresh) await this.recalculateAssetScores();
+    if (refresh || !await this.prisma.assetGapSnapshot.count({ where: { snapshotDate: today } })) await this.calculateGaps(today);
+    const gaps = await this.prisma.assetGapSnapshot.findMany({ where: { snapshotDate: today, gapCount: { gt: 0 } }, orderBy: [{ severity: "desc" }, { productModel: "asc" }] });
+    if (refresh) await this.generateGapTasks(gaps, actor);
+
+    const [
+      collected, stored, processing, readyForReview, approved, active, usedAssets,
+      metricAssets, scoredAssets, openTasks, latestUsages, latestMetrics,
+    ] = await Promise.all([
+      this.prisma.asset.count(),
+      this.prisma.asset.count({ where: { objectKey: { not: null } } }),
+      this.prisma.asset.count({ where: { processingStatus: "ANALYZING" } }),
+      this.prisma.asset.count({ where: { processingStatus: "READY_FOR_REVIEW", reviewStatus: "PENDING" } }),
+      this.prisma.asset.count({ where: { reviewStatus: "APPROVED" } }),
+      this.prisma.asset.count({ where: { reviewStatus: "APPROVED", availabilityStatus: "ACTIVE" } }),
+      this.prisma.assetUsage.groupBy({ by: ["assetId"] }).then((rows) => rows.length),
+      this.prisma.assetMetricSnapshot.groupBy({ by: ["assetId"] }).then((rows) => rows.length),
+      this.prisma.asset.count({ where: { performance: { path: ["growthScore"], not: Prisma.AnyNull } } }),
+      this.prisma.opsTask.count({ where: { sourceType: "ASSET_GAP", status: "OPEN" } }),
+      this.prisma.assetUsage.findMany({ include: { asset: { select: { assetNo: true, displayName: true, fileName: true } }, metrics: { orderBy: { capturedAt: "desc" }, take: 1 } }, orderBy: { createdAt: "desc" }, take: 12 }),
+      this.prisma.assetMetricSnapshot.findMany({ include: { asset: { select: { assetNo: true, displayName: true, fileName: true, qualityScore: true, performance: true } } }, orderBy: { capturedAt: "desc" }, take: 12 }),
+    ]);
+
+    return {
+      generatedAt: new Date().toISOString(),
+      stages: [
+        { key: "COLLECT", label: "员工拍摄或收集素材", count: collected, state: collected ? "ACTIVE" : "WAITING" },
+        { key: "UPLOAD", label: "统一上传", count: stored, state: stored ? "ACTIVE" : "WAITING" },
+        { key: "AI_PROCESS", label: "AI识别、分段、标签、去重", count: processing, secondaryCount: readyForReview, state: processing ? "RUNNING" : "READY" },
+        { key: "REVIEW", label: "人工审核", count: approved, secondaryCount: readyForReview, state: readyForReview ? "ACTION_REQUIRED" : "READY" },
+        { key: "ASSET_POOL", label: "进入可调用素材池", count: active, state: active ? "ACTIVE" : "WAITING" },
+        { key: "CONTENT", label: "AI生成脚本和内容", count: usedAssets, state: usedAssets ? "ACTIVE" : "WAITING" },
+        { key: "PUBLISH", label: "员工审核和发布", count: latestUsages.filter((item) => Boolean(item.platform)).length, state: "TRACKING" },
+        { key: "METRICS", label: "获取播放、互动、销售数据", count: metricAssets, state: metricAssets ? "ACTIVE" : "WAITING" },
+        { key: "SCORE", label: "调整素材评分和推荐权重", count: scoredAssets, state: scoredAssets ? "ACTIVE" : "WAITING" },
+        { key: "GAP", label: "发现素材缺口", count: gaps.length, state: gaps.length ? "ACTION_REQUIRED" : "READY" },
+        { key: "TASK", label: "生成下一轮拍摄和收集任务", count: openTasks, state: openTasks ? "ACTION_REQUIRED" : "READY" },
+      ],
+      summary: { collected, stored, processing, readyForReview, approved, active, usedAssets, metricAssets, scoredAssets, gaps: gaps.length, openTasks },
+      gaps,
+      tasks: await this.prisma.opsTask.findMany({ where: { sourceType: "ASSET_GAP", status: "OPEN" }, orderBy: [{ priority: "asc" }, { createdAt: "desc" }], take: 30 }),
+      latestUsages,
+      latestMetrics,
+    };
+  }
+
+  async recordAssetUsage(assetId: string, body: JsonRecord, actor: string) {
+    const asset = await this.ensureAsset(assetId);
+    if (asset.reviewStatus !== "APPROVED" || asset.availabilityStatus !== "ACTIVE") throw new BadRequestException("只有已审核且可调用的素材才能进入内容生产");
+    const employeeId = await this.validEmployeeId(body.employeeId);
+    const platformText = text(body.platform).toUpperCase();
+    const usage = await this.prisma.assetUsage.create({
+      data: {
+        assetId,
+        usageType: text(body.usageType) || "CONTENT_GENERATION",
+        businessObjectType: text(body.businessObjectType) || "CONTENT",
+        businessObjectId: text(body.businessObjectId) || randomUUID(),
+        usedByEmployeeId: employeeId,
+        usedBy: actor,
+        actorType: text(body.actorType).toUpperCase() === "AI" ? "AI" : "HUMAN",
+        purpose: text(body.purpose) || undefined,
+        platform: integrationKinds.includes(platformText as IntegrationKind) ? platformText as IntegrationKind : undefined,
+        accountId: text(body.accountId) || undefined,
+      },
+    });
+    await this.prisma.asset.update({ where: { id: assetId }, data: { useCount: { increment: 1 }, lastUsedAt: new Date() } });
+    await this.audit(actor, "ASSET_USAGE_CREATE", "Asset", assetId, { usageId: usage.id, businessObjectType: usage.businessObjectType, businessObjectId: usage.businessObjectId });
+    return usage;
+  }
+
+  async recordAssetMetric(assetId: string, body: JsonRecord, actor: string) {
+    await this.ensureAsset(assetId);
+    const usageId = text(body.usageId) || undefined;
+    if (usageId) {
+      const usage = await this.prisma.assetUsage.findFirst({ where: { id: usageId, assetId }, select: { id: true } });
+      if (!usage) throw new BadRequestException("素材调用记录不存在");
+    }
+    const platformText = text(body.platform).toUpperCase();
+    const capturedAt = body.capturedAt ? new Date(text(body.capturedAt)) : new Date();
+    if (Number.isNaN(capturedAt.getTime())) throw new BadRequestException("数据采集时间无效");
+    const numberOrNull = (value: unknown) => value === null || value === undefined || value === "" ? null : Math.max(0, Number(value));
+    const snapshot = await this.prisma.assetMetricSnapshot.create({
+      data: {
+        assetId, usageId,
+        platform: integrationKinds.includes(platformText as IntegrationKind) ? platformText as IntegrationKind : undefined,
+        accountId: text(body.accountId) || undefined, externalId: text(body.externalId) || undefined, capturedAt,
+        views: numberOrNull(body.views), likes: numberOrNull(body.likes), comments: numberOrNull(body.comments),
+        shares: numberOrNull(body.shares), saves: numberOrNull(body.saves), consultations: numberOrNull(body.consultations),
+        orders: numberOrNull(body.orders), revenue: body.revenue === null || body.revenue === undefined || body.revenue === "" ? undefined : new Prisma.Decimal(Number(body.revenue)),
+        unavailableFields: textArray(body.unavailableFields), raw: json(body.raw),
+      },
+    });
+    await this.recalculateAssetScore(assetId);
+    await this.audit(actor, "ASSET_METRIC_CREATE", "Asset", assetId, { metricId: snapshot.id, usageId, platform: snapshot.platform, capturedAt });
+    return snapshot;
+  }
+
   async dailyReport(dateValue?: string) {
     const from = dateValue ? new Date(`${dateValue}T00:00:00+08:00`) : new Date();
     if (Number.isNaN(from.getTime())) throw new BadRequestException("日期格式应为 YYYY-MM-DD");
     from.setHours(0, 0, 0, 0);
     const to = new Date(from); to.setDate(to.getDate() + 1);
-    const [events, reviews, jobs, usages, gaps] = await Promise.all([
+    const [events, reviews, jobs, usages, metrics, gaps, tasks] = await Promise.all([
       this.prisma.uploadEvent.findMany({ where: { occurredAt: { gte: from, lt: to } }, include: { employee: true, asset: { select: { assetNo: true, displayName: true, fileName: true, kind: true, objectKey: true } }, batch: true }, orderBy: { occurredAt: "asc" } }),
       this.prisma.assetReviewDecision.findMany({ where: { createdAt: { gte: from, lt: to } }, include: { employee: true, asset: { select: { assetNo: true, displayName: true, fileName: true } } }, orderBy: { createdAt: "asc" } }),
       this.prisma.assetAnalysisJob.findMany({ where: { updatedAt: { gte: from, lt: to } }, include: { asset: { select: { assetNo: true, displayName: true, fileName: true } } }, orderBy: { updatedAt: "asc" } }),
       this.prisma.assetUsage.findMany({ where: { createdAt: { gte: from, lt: to } }, include: { asset: { select: { assetNo: true, displayName: true, fileName: true } }, metrics: { orderBy: { capturedAt: "desc" }, take: 1 } }, orderBy: { createdAt: "asc" } }),
+      this.prisma.assetMetricSnapshot.findMany({ where: { capturedAt: { gte: from, lt: to } }, include: { asset: { select: { assetNo: true, displayName: true, fileName: true } } }, orderBy: { capturedAt: "asc" } }),
       this.prisma.assetGapSnapshot.findMany({ where: { snapshotDate: from, gapCount: { gt: 0 } }, orderBy: { severity: "desc" } }),
+      this.prisma.opsTask.findMany({ where: { sourceType: "ASSET_GAP", createdAt: { gte: from, lt: to } }, orderBy: { createdAt: "asc" } }),
     ]);
     const employeeMap = new Map<string, { employeeId: string | null; employee: string; uploaded: number; created: number; duplicates: number; failed: number }>();
     for (const event of events) {
@@ -461,8 +596,8 @@ export class BrandDataService {
     }
     return {
       date: from.toISOString().slice(0, 10),
-      summary: { uploaded: events.length, created: events.filter((item) => item.result === "CREATED").length, duplicates: events.filter((item) => item.result === "EXACT_DUPLICATE").length, failed: events.filter((item) => item.result === "FAILED").length, approved: reviews.filter((item) => item.action === "APPROVE").length, aiDerivedModules: events.filter((item) => item.asset?.kind === "VIDEO" && item.batch.sourceType === "AI_DERIVED").length, actualUsages: usages.length, aiFailed: jobs.filter((item) => item.status === "FAILED").length, aiUnconfigured: jobs.filter((item) => item.status === "UNCONFIGURED").length, gaps: gaps.length },
-      employees: Array.from(employeeMap.values()), uploads: events.map((event) => ({ ...event, sizeBytes: Number(event.sizeBytes) })), reviews, jobs, usages, gaps,
+      summary: { uploaded: events.length, created: events.filter((item) => item.result === "CREATED").length, duplicates: events.filter((item) => item.result === "EXACT_DUPLICATE").length, failed: events.filter((item) => item.result === "FAILED").length, approved: reviews.filter((item) => item.action === "APPROVE").length, aiDerivedModules: events.filter((item) => item.asset?.kind === "VIDEO" && item.batch.sourceType === "AI_DERIVED").length, actualUsages: usages.length, metricSnapshots: metrics.length, generatedTasks: tasks.length, aiFailed: jobs.filter((item) => item.status === "FAILED").length, aiUnconfigured: jobs.filter((item) => item.status === "UNCONFIGURED").length, gaps: gaps.length },
+      employees: Array.from(employeeMap.values()), uploads: events.map((event) => ({ ...event, sizeBytes: Number(event.sizeBytes) })), reviews, jobs, usages, metrics, gaps, tasks,
       generatedAt: new Date().toISOString(),
     };
   }
@@ -550,6 +685,67 @@ export class BrandDataService {
       const code = text(item.code) || label.toLowerCase().replace(/\s+/gu, "-").slice(0, 80);
       const tag = await this.prisma.tagDefinition.upsert({ where: { namespace_code: { namespace, code } }, update: { label }, create: { namespace, code, label } });
       await this.prisma.assetTag.upsert({ where: { assetId_tagId: { assetId, tagId: tag.id } }, update: { source: "HUMAN", confidence: 1, confirmed: true, locked: true, createdBy: actor }, create: { assetId, tagId: tag.id, source: "HUMAN", confidence: 1, confirmed: true, locked: true, createdBy: actor } });
+    }
+  }
+
+  private async recalculateAssetScores() {
+    const assets = await this.prisma.asset.findMany({ select: { id: true } });
+    for (const asset of assets) await this.recalculateAssetScore(asset.id);
+  }
+
+  private async recalculateAssetScore(assetId: string) {
+    const asset = await this.prisma.asset.findUnique({
+      where: { id: assetId },
+      include: { metricSnapshots: { orderBy: { capturedAt: "desc" }, take: 1 } },
+    });
+    if (!asset) return;
+    const previous = jsonRecord(asset.performance);
+    const baselineQuality = Number(previous.baselineQualityScore ?? asset.qualityScore);
+    const latest = asset.metricSnapshots[0];
+    const calculated = growthScore({
+      baselineQuality,
+      views: latest?.views,
+      likes: latest?.likes,
+      comments: latest?.comments,
+      shares: latest?.shares,
+      saves: latest?.saves,
+      orders: latest?.orders,
+    });
+    await this.prisma.asset.update({
+      where: { id: assetId },
+      data: {
+        qualityScore: calculated.score,
+        performance: json({
+          ...previous,
+          baselineQualityScore: baselineQuality,
+          growthScore: calculated.score,
+          recommendationWeight: calculated.recommendationWeight,
+          hasPerformanceData: calculated.hasPerformanceData,
+          latestMetricId: latest?.id ?? null,
+          calculatedAt: new Date().toISOString(),
+        }),
+      },
+    });
+  }
+
+  private async generateGapTasks(gaps: Array<{ id: string; productModel: string | null; assetKind: AssetKind; category: string; gapCount: number; recommendation: string; severity: string }>, actor: string) {
+    for (const gap of gaps) {
+      const sourceId = gap.id;
+      const existing = await this.prisma.opsTask.findFirst({ where: { sourceType: "ASSET_GAP", sourceId, status: "OPEN" }, select: { id: true } });
+      if (existing) continue;
+      const dueAt = new Date();
+      dueAt.setDate(dueAt.getDate() + (gap.severity === "HIGH" ? 1 : 3));
+      await this.prisma.opsTask.create({
+        data: {
+          title: gap.recommendation || `补充 ${gap.productModel || "通用"} ${gap.category} 素材`,
+          category: "ASSET_COLLECTION",
+          priority: gap.severity === "HIGH" ? "HIGH" : "NORMAL",
+          sourceType: "ASSET_GAP",
+          sourceId,
+          dueAt,
+          result: `系统根据素材缺口生成；创建主体：${actor}`,
+        },
+      });
     }
   }
 

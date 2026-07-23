@@ -66,6 +66,12 @@ export class BrandDataController {
     return this.brandData.createUploadBatch(body, this.actor(authorization, requestedActor));
   }
 
+  @Post("upload-batches/assist")
+  assistUploadBatch(@Headers("authorization") authorization: string | undefined, @Body() body: Record<string, unknown>) {
+    this.actor(authorization);
+    return this.brandData.suggestUploadMetadata(body);
+  }
+
   @Post("upload-batches/:id/files")
   @UseInterceptors(FilesInterceptor("files", 20, { storage: batchUploadStorage, limits: { fileSize: 200 * 1024 * 1024, files: 20 } }))
   uploadBatchFiles(
@@ -99,6 +105,18 @@ export class BrandDataController {
   assetGaps(@Headers("authorization") authorization: string | undefined, @Query("refresh") refresh?: string) {
     this.actor(authorization);
     return this.brandData.assetGaps(refresh === "1" || refresh === "true");
+  }
+
+  @Get("growth-loop")
+  growthLoop(@Headers("authorization") authorization: string | undefined) {
+    this.actor(authorization);
+    return this.brandData.growthLoop();
+  }
+
+  @Post("growth-loop/refresh")
+  refreshGrowthLoop(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined) {
+    const actor = this.actor(authorization, requestedActor);
+    return this.brandData.growthLoop(true, actor);
   }
 
   @Get("reports/daily")
@@ -149,6 +167,16 @@ export class BrandDataController {
   @Post("assets/:id/reanalyze")
   reanalyzeAsset(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("id") id: string) {
     return this.brandData.reanalyzeAsset(id, this.actor(authorization, requestedActor));
+  }
+
+  @Post("assets/:id/usages")
+  recordAssetUsage(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("id") id: string, @Body() body: Record<string, unknown>) {
+    return this.brandData.recordAssetUsage(id, body, this.actor(authorization, requestedActor));
+  }
+
+  @Post("assets/:id/metrics")
+  recordAssetMetric(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("id") id: string, @Body() body: Record<string, unknown>) {
+    return this.brandData.recordAssetMetric(id, body, this.actor(authorization, requestedActor));
   }
 
   @Get("assets/:id/segments")
