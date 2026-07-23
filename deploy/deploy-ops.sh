@@ -33,6 +33,7 @@ docker compose --env-file "$production_env" --env-file "$images" -f "$compose" r
 docker compose --env-file "$production_env" --env-file "$images" -f "$compose" run --rm ops-api \
   node_modules/.bin/tsx prisma/seed.ts
 docker compose --env-file "$production_env" --env-file "$images" -f "$compose" up -d --remove-orphans
+docker compose --env-file "$production_env" --env-file "$images" -f "$compose" restart gateway
 
 healthy=0
 for _ in $(seq 1 30); do
