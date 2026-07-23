@@ -84,19 +84,22 @@ jobs:
       - name: Prepare release images
         shell: bash
         run: |
+          mkdir -p release-images
           docker pull "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-api:${{ github.sha }}"
           docker pull "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-admin:${{ github.sha }}"
           docker save \
             "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-api:${{ github.sha }}" \
             "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-admin:${{ github.sha }}" \
-            | gzip -1 > /tmp/saydian-ops-images.tar.gz
-          split -b 20m /tmp/saydian-ops-images.tar.gz /tmp/saydian-ops-images.part-
+            | gzip -1 > release-images/saydian-ops-images.tar.gz
+          split -b 20m release-images/saydian-ops-images.tar.gz release-images/saydian-ops-images.part-
+          rm release-images/saydian-ops-images.tar.gz
+          ls release-images/saydian-ops-images.part-* >/dev/null
       - name: Upload deployment files
         shell: bash
         run: |
           scp -P "${{ secrets.TENCENT_PORT || '22' }}" deploy/docker-compose.prod.yml deploy/gateway-nginx.conf deploy/deploy-ops.sh \
             "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}:/tmp/"
-          find /tmp -maxdepth 1 -name 'saidian-ops-images.part-*' -print0 \
+          find release-images -maxdepth 1 -name 'saidian-ops-images.part-*' -print0 \
             | xargs -0 -P 8 -I {} scp -P "${{ secrets.TENCENT_PORT || '22' }}" "{}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}:/tmp/"
           ssh -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}" \
             "cat /tmp/saydian-ops-images.part-* > /tmp/saydian-ops-images.tar.gz && sudo install -m 644 /tmp/docker-compose.prod.yml /opt/saydian/config/docker-compose.prod.yml && sudo install -m 644 /tmp/gateway-nginx.conf /opt/saydian/config/gateway-nginx.conf && sudo install -m 755 /tmp/deploy-ops.sh /opt/saydian/bin/deploy-ops.sh && sudo docker load -i /tmp/saydian-ops-images.tar.gz && rm -f /tmp/saydian-ops-images.tar.gz /tmp/saydian-ops-images.part-*"
