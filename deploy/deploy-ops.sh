@@ -26,6 +26,8 @@ printf 'OPS_API_IMAGE=%s\nOPS_ADMIN_IMAGE=%s\n' "$api_image" "$admin_image" > "$
 docker image inspect "$api_image" >/dev/null 2>&1 || docker pull "$api_image"
 docker image inspect "$admin_image" >/dev/null 2>&1 || docker pull "$admin_image"
 docker compose --env-file "$production_env" --env-file "$images" -f "$compose" up -d postgres
+docker compose --env-file "$production_env" --env-file "$images" -f "$compose" run --rm --user root ops-api \
+  sh -c 'mkdir -p data/upload-inbox data/derived data/bootstrap && chown -R 1001:1001 data'
 docker compose --env-file "$production_env" --env-file "$images" -f "$compose" run --rm ops-api \
   node node_modules/prisma/build/index.js migrate deploy
 docker compose --env-file "$production_env" --env-file "$images" -f "$compose" up -d --remove-orphans
