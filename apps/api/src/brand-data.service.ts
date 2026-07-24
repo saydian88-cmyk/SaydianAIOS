@@ -190,7 +190,7 @@ export class BrandDataService {
     const entries = await this.prisma.knowledgeEntry.findMany({
       where: {
         ...(type && knowledgeTypes.includes(type) ? { type } : {}),
-        ...(recordStatuses.includes(state as RecordStatus) ? { status: state as RecordStatus } : {}),
+        ...(recordStatuses.includes(state as RecordStatus) ? { status: state as RecordStatus } : { status: { not: "ARCHIVED" as RecordStatus } }),
         ...(model ? { model: { contains: model, mode: "insensitive" } } : {}),
         ...(keyword ? { OR: [{ id: { contains: keyword, mode: "insensitive" } }, { title: { contains: keyword, mode: "insensitive" } }, { summary: { contains: keyword, mode: "insensitive" } }, { reply: { contains: keyword, mode: "insensitive" } }, { body: { contains: keyword, mode: "insensitive" } }] } : {}),
       },
@@ -206,8 +206,8 @@ export class BrandDataService {
       this.prisma.productMapping.findMany({ orderBy: { commercialName: "asc" } }),
       this.prisma.phraseRule.findMany({ where: { active: true }, orderBy: [{ category: "asc" }, { blockedText: "asc" }] }),
       this.prisma.brandProfileVersion.findMany({ orderBy: { version: "desc" } }),
-      this.prisma.product.findMany({ include: { skus: true }, orderBy: { modelCode: "asc" } }),
-      this.prisma.faqEntry.findMany({ include: { variants: true, product: true }, orderBy: [{ frequency: "desc" }, { updatedAt: "desc" }], take: 500 }),
+      this.prisma.product.findMany({ where: { status: { not: "ARCHIVED" } }, include: { skus: true }, orderBy: { modelCode: "asc" } }),
+      this.prisma.faqEntry.findMany({ where: { status: { not: "ARCHIVED" } }, include: { variants: true, product: true }, orderBy: [{ frequency: "desc" }, { updatedAt: "desc" }], take: 500 }),
       this.prisma.employee.findMany({ where: { status: "ACTIVE" }, select: { id: true, employeeNo: true, name: true, department: { select: { name: true } } }, orderBy: { name: "asc" } }),
     ]);
     return { claims, mappings, phraseRules, brandProfiles, products, faqs, employees };
@@ -218,7 +218,7 @@ export class BrandDataService {
     const status = text(query.status).toUpperCase();
     return this.prisma.product.findMany({
       where: {
-        ...(recordStatuses.includes(status as RecordStatus) ? { status: status as RecordStatus } : {}),
+        ...(recordStatuses.includes(status as RecordStatus) ? { status: status as RecordStatus } : { status: { not: "ARCHIVED" as RecordStatus } }),
         ...(keyword ? {
           OR: [
             { name: { contains: keyword, mode: "insensitive" } },
@@ -392,6 +392,49 @@ export class BrandDataService {
     return { ...entry, metadata };
   }
 
+  async bulkKnowledge(body: JsonRecord, actor: string) {
+    const ids = Array.from(new Set(textArray(body.ids))).slice(0, 200);
+    const action = text(body.action).toUpperCase();
+    if (!ids.length) throw new BadRequestException("请选择知识记录");
+    if (!["APPROVE", "BLOCK", "ARCHIVE"].includes(action)) throw new BadRequestException("不支持的批量操作");
+    if (action === "ARCHIVE") {
+      const result = await this.prisma.knowledgeEntry.updateMany({ where: { id: { in: ids } }, data: { status: "ARCHIVED", externallyUsable: false } });
+      await this.audit(actor, "KNOWLEDGE_BULK_ARCHIVE", "KnowledgeEntry", ids.join(","), { ids, count: result.count });
+      return { action, count: result.count };
+    }
+    let count = 0;
+    for (const id of ids) {
+      await this.reviewKnowledge(id, action === "APPROVE", actor, text(body.note) || "批量处理");
+      count += 1;
+    }
+    return { action, count };
+  }
+
+  async bulkProducts(body: JsonRecord, actor: string) {
+    const ids = Array.from(new Set(textArray(body.ids))).slice(0, 200);
+    const action = text(body.action).toUpperCase();
+    if (!ids.length) throw new BadRequestException("请选择产品");
+    const status = ({ ENABLE: "READY", DISABLE: "BLOCKED", ARCHIVE: "ARCHIVED" } as Record<string, RecordStatus>)[action];
+    if (!status) throw new BadRequestException("不支持的批量操作");
+    const result = await this.prisma.product.updateMany({ where: { id: { in: ids } }, data: { status } });
+    await this.audit(actor, `PRODUCT_BULK_${action}`, "Product", ids.join(","), { ids, status, count: result.count });
+    return { action, count: result.count };
+  }
+
+  async bulkFaqs(body: JsonRecord, actor: string) {
+    const ids = Array.from(new Set(textArray(body.ids))).slice(0, 200);
+    const action = text(body.action).toUpperCase();
+    if (!ids.length) throw new BadRequestException("请选择FAQ");
+    const status = ({ APPROVE: "READY", BLOCK: "BLOCKED", ARCHIVE: "ARCHIVED" } as Record<string, RecordStatus>)[action];
+    if (!status) throw new BadRequestException("不支持的批量操作");
+    const result = await this.prisma.faqEntry.updateMany({
+      where: { id: { in: ids } },
+      data: { status, externallyUsable: status === "READY" },
+    });
+    await this.audit(actor, `FAQ_BULK_${action}`, "FaqEntry", ids.join(","), { ids, status, count: result.count });
+    return { action, count: result.count };
+  }
+
   async createUploadBatch(body: JsonRecord, actor: string): Promise<JsonRecord & { id: string }> {
     const requestedEmployeeId = await this.validEmployeeId(body.employeeId);
     const employeeId = requestedEmployeeId || (await this.prisma.employee.findFirst({
@@ -417,7 +460,7 @@ export class BrandDataService {
     return this.assetAi.suggestUploadMetadata(body);
   }
 
-  async uploadBatchFiles(id: string, files: DiskFile[], actor: string) {
+  async uploadBatchFiles(id: string, files: DiskFile[], actor: string, body: JsonRecord = {}) {
     const batch = await this.prisma.uploadBatch.findUnique({ where: { id } });
     if (!batch) throw new NotFoundException("上传批次不存在");
     if (!files?.length) throw new BadRequestException("请选择需要上传的素材文件");
@@ -427,12 +470,29 @@ export class BrandDataService {
     let duplicates = 0;
     let failed = 0;
     const results: JsonRecord[] = [];
+    let technicalInfo: JsonRecord[] = [];
+    let classificationTags: string[] = [];
+    try {
+      const parsed = typeof body.technicalInfo === "string" ? JSON.parse(body.technicalInfo) : body.technicalInfo;
+      technicalInfo = Array.isArray(parsed) ? parsed.filter((item) => item && typeof item === "object") as JsonRecord[] : [];
+    } catch { technicalInfo = []; }
+    try {
+      const parsed = typeof body.classificationTags === "string" ? JSON.parse(body.classificationTags) : body.classificationTags;
+      classificationTags = textArray(parsed).slice(0, 20);
+    } catch { classificationTags = []; }
     for (const file of files) {
       try {
-        const result = await this.ingestDiskFile(batch, file, actor);
+        const result = await this.ingestDiskFile(batch, file, actor, technicalInfo.find((item) => text(item.name) === file.originalname));
         results.push(result);
         if (result.duplicate) duplicates += 1;
-        else created += 1;
+        else {
+          created += 1;
+          const assetId = text((result.asset as JsonRecord | undefined)?.id);
+          if (assetId && classificationTags.length) {
+            const labels: Record<string, string> = { HOOK: "HOOK", PAIN: "痛点", FEATURE: "功能", TUTORIAL: "教程", REVIEW: "测评", STORY: "故事", HARD_AD: "硬广", LIVE_PREVIEW: "直播预告", DEMO: "演示", TRAFFIC: "引流", CTA: "CTA" };
+            await this.replaceHumanTags(assetId, classificationTags.map((code) => ({ namespace: "content_classification", code, label: labels[code] || code })), actor);
+          }
+        }
       } catch (error) {
         failed += 1;
         const reason = error instanceof Error ? error.message : "上传失败";
@@ -815,7 +875,7 @@ export class BrandDataService {
     return { url: this.oss.signedDownloadUrl(asset.objectKey), expiresIn: 1800 };
   }
 
-  private async ingestDiskFile(batch: { id: string; sourceType: string; assetKind: AssetKind | null; productScope: ProductScope; productIds: string[]; contentDescription: string | null; originalStatus: boolean; rightsStatus: AssetRightsStatus; acquiredAt: Date | null; uploadedByEmployeeId: string | null }, file: DiskFile, actor: string) {
+  private async ingestDiskFile(batch: { id: string; sourceType: string; assetKind: AssetKind | null; productScope: ProductScope; productIds: string[]; contentDescription: string | null; originalStatus: boolean; rightsStatus: AssetRightsStatus; acquiredAt: Date | null; uploadedByEmployeeId: string | null }, file: DiskFile, actor: string, technicalInfo?: JsonRecord) {
     const hash = await hashFile(file.path);
     const duplicate = await this.prisma.asset.findFirst({ where: { sha256: hash }, orderBy: { createdAt: "asc" } });
     if (duplicate) {
@@ -826,8 +886,9 @@ export class BrandDataService {
     const kind = batch.assetKind || fileKind(file.originalname, file.mimetype || "");
     const extension = extname(file.originalname).toLowerCase();
     const stored = await this.oss.uploadOriginal({ path: file.path, sha256: hash, extension, actor, sourceType: batch.sourceType });
-    let width: number | undefined;
-    let height: number | undefined;
+    let width = Number(technicalInfo?.width || 0) || undefined;
+    let height = Number(technicalInfo?.height || 0) || undefined;
+    const durationSeconds = Number(technicalInfo?.durationSeconds || 0) || undefined;
     if (kind === "IMAGE") {
       const metadata = await sharp(file.path, { animated: false }).metadata().catch(() => undefined);
       width = metadata?.width;
@@ -840,10 +901,10 @@ export class BrandDataService {
         fileName: file.originalname, originalFileName: file.originalname, extension, mediaType: kind, kind,
         assetNo: assetNo(kind), displayName: basename(file.originalname, extension), level: "ORIGINAL", productScope: batch.productScope,
         processingStatus: "STORED", reviewStatus: "PENDING", availabilityStatus: "INACTIVE", rightsStatus: batch.rightsStatus,
-        sha256: hash, sizeBytes: file.size, modifiedAt: now, width, height, aspectRatio: width && height ? `${width}:${height}` : undefined,
+        sha256: hash, sizeBytes: file.size, modifiedAt: now, width, height, durationSeconds, aspectRatio: width && height ? `${width}:${height}` : undefined,
         contentDescription: batch.contentDescription || undefined, acquiredAt: batch.acquiredAt || undefined, isOriginal: batch.originalStatus,
         status: "PENDING", qualityScore: kind === "IMAGE" && width && height ? (Math.min(width, height) >= 1080 ? 90 : 70) : 60,
-        sourceSnapshot: { uploadBatchId: batch.id, originalFileName: file.originalname }, storageProvider: "ALIYUN_OSS",
+        sourceSnapshot: json({ uploadBatchId: batch.id, originalFileName: file.originalname, technicalInfo: technicalInfo || {} }), storageProvider: "ALIYUN_OSS",
         objectKey: stored.objectKey, objectVersionId: stored.objectVersionId, etag: stored.etag, storageUrl: stored.storageUrl, storageSyncedAt: stored.uploadedAt,
         discoveredBy: actor, createdByEmployeeId: batch.uploadedByEmployeeId,
         versions: { create: { version: 1, sha256: hash, sourcePath: `oss://${stored.objectKey}`, objectKey: stored.objectKey, objectVersionId: stored.objectVersionId, etag: stored.etag, storageUrl: stored.storageUrl, createdByEmployeeId: batch.uploadedByEmployeeId, createdBy: actor, originalFileName: file.originalname, mimeType: file.mimetype, extension, sizeBytes: file.size, width, height } },

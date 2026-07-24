@@ -84,6 +84,21 @@ export class BrandDataController {
     return this.brandData.reviewKnowledge(id, Boolean(body.approved), this.actor(authorization, requestedActor), String(body.note ?? ""));
   }
 
+  @Post("knowledge/bulk")
+  bulkKnowledge(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Body() body: Record<string, unknown>) {
+    return this.brandData.bulkKnowledge(body, this.actor(authorization, requestedActor));
+  }
+
+  @Post("products/bulk")
+  bulkProducts(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Body() body: Record<string, unknown>) {
+    return this.brandData.bulkProducts(body, this.actor(authorization, requestedActor));
+  }
+
+  @Post("faqs/bulk")
+  bulkFaqs(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Body() body: Record<string, unknown>) {
+    return this.brandData.bulkFaqs(body, this.actor(authorization, requestedActor));
+  }
+
   @Post("upload-batches")
   createUploadBatch(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Body() body: Record<string, unknown>) {
     return this.brandData.createUploadBatch(body, this.actor(authorization, requestedActor));
@@ -102,8 +117,9 @@ export class BrandDataController {
     @Headers("x-ops-actor") requestedActor: string | undefined,
     @Param("id") id: string,
     @UploadedFiles() files: DiskFile[],
+    @Body() body: Record<string, unknown>,
   ) {
-    return this.brandData.uploadBatchFiles(id, files, this.actor(authorization, requestedActor));
+    return this.brandData.uploadBatchFiles(id, files, this.actor(authorization, requestedActor), body);
   }
 
   @Get("upload-batches/:id")

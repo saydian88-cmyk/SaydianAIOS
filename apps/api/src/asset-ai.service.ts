@@ -74,6 +74,7 @@ export class AssetAiService {
   }
 
   async suggestUploadMetadata(input: JsonRecord) {
+    const allowedTags = ["HOOK", "PAIN", "FEATURE", "TUTORIAL", "REVIEW", "STORY", "HARD_AD", "LIVE_PREVIEW", "DEMO", "TRAFFIC", "CTA"];
     const files = (Array.isArray(input.files) ? input.files : [])
       .map((item) => item && typeof item === "object" ? item as JsonRecord : {})
       .map((item) => ({ name: text(item.name), type: text(item.type), size: Number(item.size || 0) }))
@@ -96,6 +97,20 @@ export class AssetAiService {
       if (value.includes("audio/") || /\.(mp3|wav|m4a|aac)$/u.test(value)) return "AUDIO";
       return "DOCUMENT";
     }));
+    const classificationText = fileText.toLowerCase();
+    const localTags = [
+      /hook|钩子|勾子|开头/u.test(classificationText) && "HOOK",
+      /pain|痛点|问题/u.test(classificationText) && "PAIN",
+      /feature|功能|卖点/u.test(classificationText) && "FEATURE",
+      /tutorial|教程|教学|使用/u.test(classificationText) && "TUTORIAL",
+      /review|测评|评测/u.test(classificationText) && "REVIEW",
+      /story|故事|剧情/u.test(classificationText) && "STORY",
+      /广告|硬广|投放|ad(?:vert)?/u.test(classificationText) && "HARD_AD",
+      /直播预告|开播|live/u.test(classificationText) && "LIVE_PREVIEW",
+      /demo|演示/u.test(classificationText) && "DEMO",
+      /引流|traffic/u.test(classificationText) && "TRAFFIC",
+      /\bcta\b|行动号召|购买/u.test(classificationText) && "CTA",
+    ].filter(Boolean) as string[];
     const localSuggestion: JsonRecord = {
       assetKind: inferredKinds.size === 1 ? [...inferredKinds][0] : undefined,
       productScope: matchedProducts.length ? "MODEL" : "UNKNOWN",
@@ -106,6 +121,7 @@ export class AssetAiService {
       sourceType: "EMPLOYEE_CAPTURE",
       originalStatus: true,
       rightsStatus: "COMMERCIAL",
+      classificationTags: localTags,
     };
     if (!opsConfig.bailian.apiKey || !opsConfig.bailian.baseUrl || !opsConfig.bailian.visionModel || !files.length) {
       return {
@@ -122,7 +138,7 @@ export class AssetAiService {
         model: opsConfig.bailian.visionModel,
         messages: [{
           role: "user",
-          content: `根据文件名为赛电员工上传素材预填元数据。只返回JSON：{"assetKind":"IMAGE|VIDEO|AUDIO|DOCUMENT","productIds":[],"contentDescription":"简短中文说明"}。产品只能从清单选择，不要编造。文件：${JSON.stringify(files)}。产品清单：${JSON.stringify(products)}`,
+          content: `根据文件名为赛电员工上传素材预填元数据。只返回JSON：{"assetKind":"IMAGE|VIDEO|AUDIO|DOCUMENT","productIds":[],"contentDescription":"简短中文说明","classificationTags":[]}。classificationTags只能从${JSON.stringify(allowedTags)}选择。产品只能从清单选择，不要编造。文件：${JSON.stringify(files)}。产品清单：${JSON.stringify(products)}`,
         }],
         response_format: { type: "json_object" },
       }),
@@ -150,6 +166,9 @@ export class AssetAiService {
     const assetKind = ["IMAGE", "VIDEO", "AUDIO", "DOCUMENT"].includes(text(aiSuggestion.assetKind).toUpperCase())
       ? text(aiSuggestion.assetKind).toUpperCase()
       : localSuggestion.assetKind;
+    const classificationTags = (Array.isArray(aiSuggestion.classificationTags) ? aiSuggestion.classificationTags : [])
+      .map((item) => text(item).toUpperCase())
+      .filter((item) => allowedTags.includes(item));
     return {
       provider: "ALIYUN_BAILIAN",
       state: "AVAILABLE",
@@ -160,6 +179,7 @@ export class AssetAiService {
         productIds: productIds.length ? productIds : localSuggestion.productIds,
         productScope: (productIds.length || matchedProducts.length) ? "MODEL" : "UNKNOWN",
         contentDescription: text(aiSuggestion.contentDescription) || localSuggestion.contentDescription,
+        classificationTags: classificationTags.length ? classificationTags : localTags,
       },
     };
   }
