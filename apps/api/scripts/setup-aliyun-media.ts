@@ -6,19 +6,24 @@ import IceClient, {
   ListPipelinesRequest,
 } from "@alicloud/ice20201109";
 import { Config as OpenApiConfig } from "@alicloud/openapi-client";
-import { opsConfig } from "../src/config";
 
 const pipelineName = "saidian-ai-media-shenzhen";
 const proxyTemplateName = "saidian-ai-proxy-720p";
 const snapshotTemplateName = "saidian-ai-snapshot-3s";
+const mediaConfig = {
+  accessKeyId: process.env.ALIYUN_IMS_ACCESS_KEY_ID || process.env.OSS_ACCESS_KEY_ID || "",
+  accessKeySecret: process.env.ALIYUN_IMS_ACCESS_KEY_SECRET || process.env.OSS_ACCESS_KEY_SECRET || "",
+  regionId: process.env.ALIYUN_IMS_REGION_ID || "cn-shenzhen",
+  endpoint: process.env.ALIYUN_IMS_ENDPOINT || "ice.cn-shenzhen.aliyuncs.com",
+};
 
 function client() {
-  if (!opsConfig.ims.accessKeyId || !opsConfig.ims.accessKeySecret) throw new Error("IMS AccessKey未配置");
+  if (!mediaConfig.accessKeyId || !mediaConfig.accessKeySecret) throw new Error("IMS AccessKey未配置");
   return new IceClient(new OpenApiConfig({
-    accessKeyId: opsConfig.ims.accessKeyId,
-    accessKeySecret: opsConfig.ims.accessKeySecret,
-    regionId: opsConfig.ims.regionId,
-    endpoint: opsConfig.ims.endpoint,
+    accessKeyId: mediaConfig.accessKeyId,
+    accessKeySecret: mediaConfig.accessKeySecret,
+    regionId: mediaConfig.regionId,
+    endpoint: mediaConfig.endpoint,
   }));
 }
 
@@ -48,7 +53,7 @@ async function ensureTemplate(ice: IceClient, input: { name: string; type: numbe
 }
 
 async function main() {
-  if (opsConfig.ims.regionId !== "cn-shenzhen") throw new Error("IMS地域必须为cn-shenzhen");
+  if (mediaConfig.regionId !== "cn-shenzhen") throw new Error("IMS地域必须为cn-shenzhen");
   const ice = client();
   const pipelineId = await ensurePipeline(ice);
   const proxyTemplateId = await ensureTemplate(ice, {
@@ -69,7 +74,7 @@ async function main() {
     config: { Type: "Normal", FrameType: "intra", Time: 0, Count: 20, Interval: 3, Width: 720 },
   });
   process.stdout.write(`${JSON.stringify({
-    region: opsConfig.ims.regionId,
+    region: mediaConfig.regionId,
     pipelineId,
     proxyTemplateId,
     snapshotTemplateId,
