@@ -7,7 +7,11 @@ export class OperationsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async dashboard() {
-    const [integrationGroups, assetGroups, contentGroups, overdue, alerts, pendingReplies, activeLives, reports, jobs, employees, accounts, stores, unassignedSnapshots] = await Promise.all([
+    const dayStart = new Date();
+    dayStart.setHours(0, 0, 0, 0);
+    const dayEnd = new Date(dayStart);
+    dayEnd.setDate(dayEnd.getDate() + 1);
+    const [integrationGroups, assetGroups, contentGroups, overdue, alerts, pendingReplies, activeLives, reports, jobs, employees, accounts, stores, unassignedSnapshots, openTasks, videoPlans, remakeTasks, assetGaps] = await Promise.all([
       this.prisma.integration.groupBy({ by: ["state"], _count: { _all: true } }),
       this.prisma.asset.groupBy({ by: ["status"], _count: { _all: true } }),
       this.prisma.contentPlan.groupBy({ by: ["status"], _count: { _all: true } }),
@@ -21,10 +25,50 @@ export class OperationsService {
       this.prisma.platformAccount.count(),
       this.prisma.store.count(),
       this.prisma.businessSnapshot.count({ where: { ownerEmployeeId: null } }),
+      this.prisma.opsTask.findMany({ where: { status: { not: "DONE" } }, orderBy: [{ dueAt: "asc" }, { createdAt: "desc" }], take: 6 }),
+      this.prisma.contentPlan.findMany({
+        where: { kind: "VIDEO", planDate: { gte: dayStart, lt: dayEnd }, status: { in: ["DRAFT", "PENDING_APPROVAL", "APPROVED", "SCHEDULED"] } },
+        orderBy: [{ score: "desc" }, { createdAt: "desc" }],
+        take: 6,
+      }),
+      this.prisma.remakeTask.findMany({
+        where: { status: { in: ["PENDING_CONFIRMATION", "CONFIRMED", "ASSIGNED", "IN_PROGRESS"] } },
+        orderBy: [{ score: "desc" }, { createdAt: "desc" }],
+        take: 5,
+      }),
+      this.prisma.assetGapSnapshot.findMany({
+        where: { gapCount: { gt: 0 } },
+        orderBy: [{ snapshotDate: "desc" }, { gapCount: "desc" }],
+        take: 5,
+      }),
     ]);
     const integrationMap = Object.fromEntries(integrationGroups.map((item) => [item.state, item._count._all]));
     const assetMap = Object.fromEntries(assetGroups.map((item) => [item.status, item._count._all]));
     const contentMap = Object.fromEntries(contentGroups.map((item) => [item.status, item._count._all]));
+    const todayTodos = [
+      ...videoPlans.map((item) => ({
+        id: `content:${item.id}`, type: "SHOOT", title: `今日拍摄：${item.topic}`,
+        description: item.hook || item.objective, priority: item.score >= 85 ? "HIGH" : "MEDIUM",
+        status: item.status, score: item.score, targetPage: "content", dueAt: item.planDate,
+      })),
+      ...remakeTasks.map((item) => ({
+        id: `remake:${item.id}`, type: "VIRAL", title: `爆款仿拍：${item.title}`,
+        description: item.reason, priority: item.score >= 90 ? "HIGH" : "MEDIUM",
+        status: item.status, score: item.score, targetPage: "assets", dueAt: item.dueAt,
+      })),
+      ...assetGaps.map((item) => ({
+        id: `gap:${item.id}`, type: "GAP", title: `补拍素材：${item.productModel || "通用"} · ${item.category}`,
+        description: item.recommendation, priority: item.severity === "HIGH" ? "HIGH" : "MEDIUM",
+        status: "OPEN", score: undefined, targetPage: "assets", dueAt: undefined,
+      })),
+      ...openTasks.map((item) => ({
+        id: `task:${item.id}`, type: "TASK", title: item.title, description: item.category,
+        priority: item.priority, status: item.status, score: undefined, targetPage: "reports", dueAt: item.dueAt,
+      })),
+    ].sort((left, right) => {
+      const weight = (value: string) => value === "HIGH" || value === "高" ? 0 : value === "MEDIUM" || value === "中" ? 1 : 2;
+      return weight(left.priority) - weight(right.priority);
+    }).slice(0, 12);
     return {
       generatedAt: new Date().toISOString(),
       integrations: {
@@ -49,6 +93,7 @@ export class OperationsService {
       ledger: { employees, accounts, stores, unassignedSnapshots },
       latestReports: reports.map((report) => ({ id: report.id, kind: report.kind, title: report.title, summary: report.summary, createdAt: report.createdAt })),
       latestJobs: jobs,
+      todayTodos,
     };
   }
 

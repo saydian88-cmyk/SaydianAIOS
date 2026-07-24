@@ -471,6 +471,17 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
           <article class="metric-card green"><span>已接入能力</span><strong>{{ dashboard?.integrations.healthy ?? 0 }}</strong><small>未配置 {{ dashboard?.integrations.unconfigured ?? 0 }} · 异常 {{ dashboard?.integrations.error ?? 0 }}</small></article>
         </div>
 
+        <section class="panel today-todo-panel">
+          <div class="panel-title"><div><span>今日待办</span><small>拍摄任务、爆款分析、素材缺口与运营事项</small></div><el-button link type="primary" @click="switchPage('reports')">全部任务</el-button></div>
+          <div v-if="dashboard?.todayTodos.length" class="today-todo-grid">
+            <button v-for="item in dashboard.todayTodos" :key="item.id" type="button" @click="switchPage(item.targetPage)">
+              <span :class="['todo-type', item.type.toLowerCase()]">{{ ({ SHOOT: '拍摄', VIRAL: '爆款', GAP: '补拍', TASK: '任务' } as Record<string, string>)[item.type] }}</span>
+              <div><strong>{{ item.title }}</strong><p>{{ item.description || '待补充执行说明' }}</p><small>{{ item.score ? `建议分 ${item.score}` : statusLabel(item.status) }}<template v-if="item.dueAt"> · {{ time(item.dueAt) }}</template></small></div>
+            </button>
+          </div>
+          <el-empty v-else description="今日暂时没有待办；生成今日内容后会自动出现拍摄任务" :image-size="58" />
+        </section>
+
         <div class="two-column">
           <section class="panel">
             <div class="panel-title"><div><span>今日工作流</span><small>Asia/Shanghai</small></div><el-button link type="primary" @click="switchPage('reports')">查看任务</el-button></div>

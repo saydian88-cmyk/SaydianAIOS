@@ -7,6 +7,7 @@ export type Dashboard = {
   ledger: { employees: number; accounts: number; stores: number; unassignedSnapshots: number };
   latestReports: Array<{ id: string; kind: string; title: string; summary: string; createdAt: string }>;
   latestJobs: Array<Record<string, unknown>>;
+  todayTodos: Array<{ id: string; type: "SHOOT" | "VIRAL" | "GAP" | "TASK"; title: string; description: string; priority: string; status: string; score?: number; targetPage: string; dueAt?: string }>;
 };
 
 export type Integration = {
