@@ -1,5 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import OSS from "ali-oss";
+import { stat } from "node:fs/promises";
 import { basename } from "node:path";
 import { opsConfig } from "./config";
 
@@ -102,16 +103,24 @@ export class OssStorageService {
       if (status !== 404 && code !== "NoSuchKey" && code !== "NoSuchObject") throw error;
     }
 
-    const result = await client.put(objectKey, input.path, {
-      headers: {
-        "x-oss-forbid-overwrite": "true",
-        "x-oss-server-side-encryption": "AES256",
-        "x-oss-meta-sha256": input.sha256,
-        "x-oss-meta-originalname": headerValue(basename(input.path)),
-        "x-oss-meta-uploadedby": headerValue(input.actor),
-        "x-oss-meta-sourcetype": headerValue(input.sourceType),
-      },
-    }).catch(async (error: unknown) => {
+    const headers = {
+      "x-oss-forbid-overwrite": "true",
+      "x-oss-server-side-encryption": "AES256",
+      "x-oss-meta-sha256": input.sha256,
+      "x-oss-meta-originalname": headerValue(basename(input.path)),
+      "x-oss-meta-uploadedby": headerValue(input.actor),
+      "x-oss-meta-sourcetype": headerValue(input.sourceType),
+    };
+    const file = await stat(input.path);
+    const upload = file.size >= 16 * 1024 * 1024
+      ? client.multipartUpload(objectKey, input.path, {
+          parallel: 4,
+          partSize: 8 * 1024 * 1024,
+          timeout: 600_000,
+          headers,
+        })
+      : client.put(objectKey, input.path, { headers });
+    const result = await upload.catch(async (error: unknown) => {
       const code = typeof error === "object" && error ? String((error as { code?: unknown }).code ?? "") : "";
       if (code === "FileAlreadyExists" || code === "ObjectAlreadyExists") {
         const head = await client.head(objectKey);
@@ -124,11 +133,11 @@ export class OssStorageService {
       }
       throw error;
     });
-    const headers = result.res.headers as Record<string, string | undefined>;
+    const resultHeaders = result.res.headers as Record<string, string | undefined>;
     return {
       objectKey,
-      objectVersionId: headers["x-oss-version-id"],
-      etag: headers.etag?.replace(/^\"|\"$/g, ""),
+      objectVersionId: resultHeaders["x-oss-version-id"],
+      etag: resultHeaders.etag?.replace(/^\"|\"$/g, ""),
       storageUrl: `oss://${opsConfig.oss.bucket}/${objectKey}`,
       uploadedAt: new Date(),
     };

@@ -117,11 +117,15 @@ export class OpsController {
   }
   @Post("content/daily-video/generate") generateDailyVideo(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Body() body: Record<string, unknown>) {
     const actor = this.actor(authorization, requestedActor);
-    return this.contentService.generateDailyVideo(new Date(), actor, body.productModel ? String(body.productModel) : undefined);
+    const requestedDate = body.date ? new Date(`${String(body.date)}T00:00:00+08:00`) : new Date();
+    if (Number.isNaN(requestedDate.getTime())) throw new BadRequestException("日期格式必须为 YYYY-MM-DD");
+    return this.contentService.generateDailyVideo(requestedDate, actor, body.productModel ? String(body.productModel) : undefined);
   }
   @Post("content/daily-article/generate") generateDailyArticle(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Body() body: Record<string, unknown>) {
     const actor = this.actor(authorization, requestedActor);
-    return this.contentService.generateDailyArticle(new Date(), actor, body.productModel ? String(body.productModel) : undefined);
+    const requestedDate = body.date ? new Date(`${String(body.date)}T00:00:00+08:00`) : new Date();
+    if (Number.isNaN(requestedDate.getTime())) throw new BadRequestException("日期格式必须为 YYYY-MM-DD");
+    return this.contentService.generateDailyArticle(requestedDate, actor, body.productModel ? String(body.productModel) : undefined);
   }
   @Get("content/daily-brief") dailyBrief(@Headers("authorization") authorization: string | undefined, @Query("date") date?: string) {
     this.actor(authorization);
