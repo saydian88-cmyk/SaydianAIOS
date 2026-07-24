@@ -13,6 +13,19 @@ import type { ContentPlan, Dashboard, Integration } from "./types";
 type AnyRow = Record<string, any>;
 type Ledger = { departments: AnyRow[]; employees: AnyRow[]; products: AnyRow[]; accounts: AnyRow[]; stores: AnyRow[]; imports: AnyRow[]; snapshots: AnyRow[]; attributions: AnyRow[]; sourceHealth: AnyRow[] };
 type AuthUser = { employeeId?: string; id?: string; name: string; wecomUserId?: string; departmentNames?: string[]; isSuperAdmin?: boolean; loginType: string };
+type DouyinStatus = {
+  state: string;
+  message: string;
+  clientKey: string;
+  clientSecretConfigured: boolean;
+  authorized: boolean;
+  openIdMasked: string;
+  scope: string;
+  expiresAt?: string;
+  redirectUri: string;
+  webhookUrl: string;
+  lastSuccessAt?: string;
+};
 
 const navItems = [
   { key: "dashboard", label: "今日总览", icon: House },
@@ -54,6 +67,9 @@ const actorInput = ref(getActor());
 const opsSubTab = ref("shop");
 const reportSubTab = ref("reports");
 const ledgerSubTab = ref("employees");
+const douyinStatus = ref<DouyinStatus>();
+const douyinClientKey = ref("");
+const douyinClientSecret = ref("");
 
 const todayLabel = new Intl.DateTimeFormat("zh-CN", { dateStyle: "full" }).format(new Date());
 const pageTitle = computed(() => navItems.find((item) => item.key === active.value)?.label || "运营中台");
@@ -153,7 +169,13 @@ async function loadActive() {
   }
   if (active.value === "engagement") [comments.value, live.value] = await Promise.all([api<AnyRow[]>("/api/v1/comments"), api<AnyRow[]>("/api/v1/live")]);
   if (active.value === "reports") [reports.value, jobs.value, tasks.value, sops.value] = await Promise.all([api<AnyRow[]>("/api/v1/reports"), api<AnyRow[]>("/api/v1/jobs"), api<AnyRow[]>("/api/v1/tasks"), api<AnyRow[]>("/api/v1/sops")]);
-  if (active.value === "integrations") integrations.value = await api<Integration[]>("/api/v1/integrations");
+  if (active.value === "integrations") {
+    [integrations.value, douyinStatus.value] = await Promise.all([
+      api<Integration[]>("/api/v1/integrations"),
+      api<DouyinStatus>("/api/v1/integrations/douyin/status"),
+    ]);
+    douyinClientKey.value = douyinStatus.value.clientKey;
+  }
 }
 
 async function switchPage(key: string) {
@@ -182,6 +204,24 @@ async function checkIntegrations() {
     integrations.value = await api("/api/v1/integrations");
     if (active.value === "dashboard") await loadDashboard();
   }, "连接状态已刷新");
+}
+
+async function saveDouyinConfig() {
+  await withLoading(async () => {
+    douyinStatus.value = await post<DouyinStatus>("/api/v1/integrations/douyin/config", {
+      clientKey: douyinClientKey.value,
+      clientSecret: douyinClientSecret.value,
+    });
+    douyinClientSecret.value = "";
+    integrations.value = await api("/api/v1/integrations");
+  }, "抖音应用配置已保存");
+}
+
+async function authorizeDouyin() {
+  await withLoading(async () => {
+    const result = await api<{ url: string }>("/api/v1/integrations/douyin/authorize-url");
+    window.location.assign(result.url);
+  });
 }
 
 async function approve(item: ContentPlan) {
@@ -269,6 +309,7 @@ function openMall(path: string) {
 async function bootstrap() {
   try {
     const parameters = new URLSearchParams(window.location.search);
+    const douyinAuthorized = parameters.get("douyin") === "authorized";
     const code = parameters.get("code");
     if (code) {
       const result = await post<{ token: string; user: AuthUser }>("/api/v1/auth/wecom/login", { code });
@@ -293,6 +334,10 @@ async function bootstrap() {
     actorInput.value = authUser.value.name;
     setActor(authUser.value.name);
     await loadDashboard();
+    if (douyinAuthorized) {
+      ElMessage.success("抖音账号授权成功");
+      window.history.replaceState({}, "", window.location.pathname);
+    }
   } catch (reason) {
     clearToken();
     authUser.value = undefined;
@@ -592,6 +637,24 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
 
       <section v-else class="page">
         <div class="section-heading"><div><span class="eyebrow">INTEGRATION STATUS</span><h2>平台连接与能力状态</h2><p>每个账号分别显示能力；未验证的接口不会显示为已打通。</p></div><el-button :icon="Refresh" @click="checkIntegrations">检查全部连接</el-button></div>
+        <section class="douyin-config-panel">
+          <div class="douyin-config-head">
+            <div><strong>抖音开放平台</strong><p>授权赛电自有抖音账号，接收平台事件并为内容效果回收提供身份基础。</p></div>
+            <el-tag :type="statusType(douyinStatus?.state || 'UNCONFIGURED')">{{ statusLabel(douyinStatus?.state || "UNCONFIGURED") }}</el-tag>
+          </div>
+          <div class="douyin-config-form">
+            <el-input v-model="douyinClientKey" placeholder="Client Key"><template #prepend>Client Key</template></el-input>
+            <el-input v-model="douyinClientSecret" type="password" show-password placeholder="留空表示保留现有密钥"><template #prepend>Client Secret</template></el-input>
+            <el-button type="primary" :loading="loading" @click="saveDouyinConfig">保存应用配置</el-button>
+            <el-button :disabled="!douyinStatus?.clientSecretConfigured" @click="authorizeDouyin">{{ douyinStatus?.authorized ? "重新授权账号" : "授权抖音账号" }}</el-button>
+          </div>
+          <div class="douyin-config-meta">
+            <span>回调：{{ douyinStatus?.redirectUri || "加载中" }}</span>
+            <span>Webhook：{{ douyinStatus?.webhookUrl || "加载中" }}</span>
+            <span>账号：{{ douyinStatus?.openIdMasked || "未授权" }}</span>
+            <span>令牌有效期：{{ time(douyinStatus?.expiresAt) }}</span>
+          </div>
+        </section>
         <div class="integration-grid"><article v-for="item in integrations" :key="item.id"><div class="integration-icon">{{ item.displayName.slice(0, 1) }}</div><div class="integration-copy"><div><h3>{{ item.displayName }}</h3><el-tag :type="statusType(item.state)">{{ statusLabel(item.state) }}</el-tag></div><p>{{ item.message }}</p><div class="capability-tags"><span v-for="capability in item.capabilities" :key="capability">{{ capability }}</span><span v-if="!item.capabilities.length">暂无已验证能力</span></div><small>检查时间：{{ time(item.lastCheckedAt) }}</small></div></article></div>
         <section class="token-panel"><div><el-icon><Setting /></el-icon><div><strong>统一企业微信身份</strong><p>当前员工：{{ actorInput }}。登录、部门和员工资料由赛电商城企业微信机制统一提供。</p></div></div><el-tag type="success">已登录</el-tag></section>
       </section>

@@ -2,16 +2,14 @@ import { Injectable, Logger } from "@nestjs/common";
 import { Cron } from "@nestjs/schedule";
 import { IntegrationKind, Prisma } from "@prisma/client";
 import {
-  createCipheriv,
-  createDecipheriv,
   createHash,
-  randomBytes,
 } from "node:crypto";
 import { extname } from "node:path";
 import { CloudMediaService } from "./cloud-media.service";
 import { opsConfig } from "./config";
 import { OssStorageService } from "./oss-storage.service";
 import { PrismaService } from "./prisma.service";
+import { readIntegrationSecret, writeIntegrationSecret } from "./integration-secret";
 
 const collectorPlatforms = [
   "DOUYIN",
@@ -219,6 +217,7 @@ export class ViralCollectorService {
       enabled: input.enabled === undefined ? current.enabled : Boolean(input.enabled),
     };
     const token = text(input.token);
+    const secrets = readIntegrationSecret(integration.secretRef);
     await this.prisma.integration.update({
       where: { id: integration.id },
       data: {
@@ -226,7 +225,9 @@ export class ViralCollectorService {
           ...(integration.publicConfig as Record<string, Prisma.JsonValue>),
           viralCollector: next,
         } as Prisma.InputJsonValue,
-        secretRef: token ? this.encrypt(token) : integration.secretRef,
+        secretRef: token
+          ? writeIntegrationSecret({ ...secrets, viralCollectorToken: token })
+          : integration.secretRef,
         state: next.enabled && (next.endpoint || next.mode !== "API") ? "CONFIGURED" : "UNCONFIGURED",
         message: next.endpoint ? `${next.providerName}采集源已配置` : "API采集源未配置，可使用导入和补录",
       },
@@ -384,7 +385,7 @@ export class ViralCollectorService {
       return {
         platform,
         ...config,
-        token: integration?.secretRef ? this.decrypt(integration.secretRef) : opsConfig.viralCollector.token,
+        token: readIntegrationSecret(integration?.secretRef).viralCollectorToken || opsConfig.viralCollector.token,
         lastSuccessAt: integration?.lastSuccessAt,
         message: integration?.message,
       };
@@ -489,29 +490,4 @@ export class ViralCollectorService {
     });
   }
 
-  private encryptionKey() {
-    return createHash("sha256").update(opsConfig.authSecret).digest();
-  }
-
-  private encrypt(value: string) {
-    const iv = randomBytes(12);
-    const cipher = createCipheriv("aes-256-gcm", this.encryptionKey(), iv);
-    const encrypted = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
-    return `enc:${iv.toString("base64")}:${cipher.getAuthTag().toString("base64")}:${encrypted.toString("base64")}`;
-  }
-
-  private decrypt(value: string) {
-    if (!value.startsWith("enc:")) return value;
-    try {
-      const [, ivValue, tagValue, encryptedValue] = value.split(":");
-      const decipher = createDecipheriv("aes-256-gcm", this.encryptionKey(), Buffer.from(ivValue, "base64"));
-      decipher.setAuthTag(Buffer.from(tagValue, "base64"));
-      return Buffer.concat([
-        decipher.update(Buffer.from(encryptedValue, "base64")),
-        decipher.final(),
-      ]).toString("utf8");
-    } catch {
-      return "";
-    }
-  }
 }
