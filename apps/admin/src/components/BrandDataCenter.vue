@@ -404,7 +404,7 @@ onMounted(reload);
       <el-segmented v-model="knowledgeView" :options="[
         { label: `知识 ${knowledge.length}`, value: 'entries' }, { label: `品牌版本 ${controls.brandProfiles.length}`, value: 'brand' },
         { label: `产品 ${controls.products.length}`, value: 'products' }, { label: `FAQ ${controls.faqs.length}`, value: 'faqs' },
-        { label: `证据 ${controls.claims.length}`, value: 'claims' }, { label: `型号映射 ${controls.mappings.length}`, value: 'mappings' }, { label: `表述规则 ${controls.phraseRules.length}`, value: 'rules' },
+        { label: `资质证书 ${controls.claims.length}`, value: 'claims' }, { label: `型号映射 ${controls.mappings.length}`, value: 'mappings' }, { label: `表述规则 ${controls.phraseRules.length}`, value: 'rules' },
       ]" />
       <template v-if="knowledgeView === 'entries'">
         <div class="filter-bar knowledge-filter"><el-input v-model="knowledgeFilter.query" clearable placeholder="搜索编号、标题、正文或回复" :prefix-icon="Search" @keyup.enter="run(loadKnowledge)" /><el-select v-model="knowledgeFilter.type" clearable placeholder="知识类型"><el-option v-for="item in knowledgeTypes" :key="item.value" :label="item.label" :value="item.value" /></el-select><el-select v-model="knowledgeFilter.model" clearable filterable placeholder="适用型号"><el-option v-for="item in controls.products" :key="item.id" :label="`${item.modelCode} · ${item.name}`" :value="item.modelCode" /></el-select><el-select v-model="knowledgeFilter.status" clearable placeholder="状态"><el-option label="待审核" value="PENDING" /><el-option label="可用" value="READY" /><el-option label="禁用" value="BLOCKED" /></el-select><el-button type="primary" :icon="Search" @click="run(loadKnowledge)">查询</el-button></div>
