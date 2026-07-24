@@ -1,0 +1,11 @@
+{
+  "ApiBaseUrl": "https://stest.saydian.cn",
+  "ApiTokenEnvironmentVariable": "SAIDIAN_OPS_TOKEN",
+  "Actor": "聚水潭数据采集器",
+  "ExportFolder": "C:\\Saidian\\JushuitanExports",
+  "ArchiveFolder": "C:\\Saidian\\JushuitanExports\\Imported",
+  "StateFile": "C:\\Saidian\\JushuitanExports\\collector-state.json",
+  "ChromeProfileFolder": "C:\\Saidian\\JushuitanChromeProfile",
+  "JushuitanUrl": "https://erp321.com/epaas",
+  "PeriodDays": 7
+}

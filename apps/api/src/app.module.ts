@@ -13,6 +13,8 @@ import { ContentService } from "./content.service";
 import { HealthController, OpsController } from "./controllers";
 import { LedgerService } from "./ledger.service";
 import { MonitoringService } from "./monitoring.service";
+import { OperationAnalysisController } from "./operation-analysis.controller";
+import { OperationAnalysisService } from "./operation-analysis.service";
 import { OssStorageService } from "./oss-storage.service";
 import { OperationsService } from "./operations.service";
 import { PlatformRegistry } from "./platform/platform.adapters";
@@ -23,11 +25,12 @@ import { ViralCollectorService } from "./viral-collector.service";
 
 @Module({
   imports: [ScheduleModule.forRoot()],
-  controllers: [AppController, HealthController, OpsController, BrandDataController],
+  controllers: [AppController, HealthController, OpsController, BrandDataController, OperationAnalysisController],
   providers: [
     PrismaService, AuthService, PlatformRegistry, ContentGuardService, OssStorageService, SourceSyncService,
     AiContentService, ContentService, MonitoringService, ReportService, OperationsService, LedgerService, AutomationService,
     AliyunImsProvider, BailianVideoAiProvider, CloudMediaService, ViralCollectorService, AssetAiService, BrandDataService,
+    OperationAnalysisService,
   ],
 })
 export class AppModule {}

@@ -7,6 +7,7 @@ import {
 } from "@element-plus/icons-vue";
 import { api, clearToken, getActor, getToken, patch, post, setActor, setToken } from "./api";
 import BrandDataCenter from "./components/BrandDataCenter.vue";
+import OperationAnalysis from "./components/OperationAnalysis.vue";
 import type { ContentPlan, Dashboard, Integration } from "./types";
 
 type AnyRow = Record<string, any>;
@@ -19,7 +20,7 @@ const navItems = [
   { key: "content", label: "内容审核", icon: DocumentChecked },
   { key: "assets", label: "品牌数据中心", icon: Files },
   { key: "ledger", label: "经营责任台账", icon: Monitor },
-  { key: "operations", label: "店铺与竞品", icon: Shop },
+  { key: "operationAnalysis", label: "运营分析", icon: DataAnalysis },
   { key: "engagement", label: "评论与直播", icon: VideoCamera },
   { key: "reports", label: "报告与任务", icon: DataAnalysis },
   { key: "integrations", label: "连接设置", icon: Connection },
@@ -37,6 +38,7 @@ const dashboard = ref<Dashboard>();
 const integrations = ref<Integration[]>([]);
 const content = ref<ContentPlan[]>([]);
 const brandDataCenter = ref<{ reload: () => Promise<void> }>();
+const operationAnalysis = ref<{ reload: () => Promise<void> }>();
 const comments = ref<AnyRow[]>([]);
 const live = ref<AnyRow[]>([]);
 const shopItems = ref<AnyRow[]>([]);
@@ -142,6 +144,7 @@ async function loadActive() {
   if (active.value === "dashboard") return loadDashboard();
   if (active.value === "content") [content.value, ledger.value] = await Promise.all([api<ContentPlan[]>("/api/v1/content"), api<Ledger>("/api/v1/ledger")]);
   if (active.value === "assets") await brandDataCenter.value?.reload();
+  if (active.value === "operationAnalysis") await operationAnalysis.value?.reload();
   if (active.value === "ledger") ledger.value = await api("/api/v1/ledger");
   if (active.value === "operations") {
     [shopItems.value, competitors.value, trends.value, alerts.value] = await Promise.all([
@@ -419,7 +422,7 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
         <button v-for="item in navItems" :key="item.key" :class="['nav-item', { active: active === item.key }]" @click="switchPage(item.key)">
           <el-icon><component :is="item.icon" /></el-icon><span>{{ item.label }}</span>
           <b v-if="item.key === 'content' && dashboard?.content.pendingApproval">{{ dashboard.content.pendingApproval }}</b>
-          <b v-if="item.key === 'operations' && dashboard?.operations.alerts">{{ dashboard.operations.alerts }}</b>
+          <b v-if="item.key === 'operationAnalysis' && dashboard?.operations.alerts">{{ dashboard.operations.alerts }}</b>
         </button>
       </nav>
       <div class="schedule-card">
@@ -555,6 +558,10 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
         <div class="table-panel" v-else-if="ledgerSubTab === 'imports'"><el-table :data="ledger.imports" stripe height="560"><el-table-column label="平台" width="120"><template #default="scope">{{ scope.row.integration?.displayName || '未获取' }}</template></el-table-column><el-table-column prop="sourceName" label="数据文件/来源" min-width="220" /><el-table-column prop="format" label="格式" width="90" /><el-table-column prop="importedBy" label="导入员工" width="130" /><el-table-column prop="recordsReceived" label="收到" width="80" /><el-table-column prop="recordsImported" label="成功" width="80" /><el-table-column prop="recordsRejected" label="拒绝" width="80" /><el-table-column label="状态" width="110"><template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template></el-table-column><el-table-column label="导入时间" width="160"><template #default="scope">{{ time(scope.row.createdAt) }}</template></el-table-column></el-table></div>
         <div class="table-panel" v-else-if="ledgerSubTab === 'attributions'"><div class="table-toolbar"><el-button type="primary" @click="createAttribution">记录归因事件</el-button></div><el-table :data="ledger.attributions" stripe height="520"><el-table-column prop="attributionCode" label="归因码" min-width="200" /><el-table-column prop="eventType" label="事件" width="130" /><el-table-column label="平台/账号" min-width="180"><template #default="scope">{{ scope.row.integration?.displayName || '未获取' }} / {{ scope.row.platformAccount?.accountName || '未获取' }}</template></el-table-column><el-table-column prop="source" label="来源" min-width="180" /><el-table-column prop="consultations" label="咨询" width="80" /><el-table-column prop="orders" label="订单" width="80" /><el-table-column prop="revenue" label="成交金额" width="120"><template #default="scope">{{ scope.row.revenue ?? '未获取' }}</template></el-table-column><el-table-column label="员工" width="120"><template #default="scope">{{ scope.row.employee?.name || '未绑定' }}</template></el-table-column><el-table-column label="时间" width="160"><template #default="scope">{{ time(scope.row.occurredAt) }}</template></el-table-column></el-table></div>
         <div class="table-panel" v-else><el-table :data="ledger.sourceHealth" stripe height="560"><el-table-column label="数据源" width="150"><template #default="scope">{{ scope.row.integration?.displayName || '未获取' }}</template></el-table-column><el-table-column label="账号" width="160"><template #default="scope">{{ scope.row.platformAccount?.accountName || '连接级' }}</template></el-table-column><el-table-column label="状态" width="110"><template #default="scope"><el-tag :type="statusType(scope.row.state)">{{ statusLabel(scope.row.state) }}</el-tag></template></el-table-column><el-table-column prop="message" label="检查结果" min-width="300" /><el-table-column prop="latencyMs" label="耗时(ms)" width="100"><template #default="scope">{{ scope.row.latencyMs ?? '未获取' }}</template></el-table-column><el-table-column label="未获取原因" min-width="220"><template #default="scope">{{ scope.row.unavailableFields?.length ? scope.row.unavailableFields.join('、') : '无' }}</template></el-table-column><el-table-column label="检查时间" width="160"><template #default="scope">{{ time(scope.row.checkedAt) }}</template></el-table-column></el-table></div>
+      </section>
+
+      <section v-else-if="active === 'operationAnalysis'" class="page">
+        <OperationAnalysis ref="operationAnalysis" />
       </section>
 
       <section v-else-if="active === 'operations'" class="page">

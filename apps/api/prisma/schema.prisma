@@ -1522,22 +1522,235 @@ model Alert {
 }
 
 model OpsTask {
-  id          String    @id @default(cuid())
-  title       String
-  category    String
-  priority    String
-  status      String    @default("OPEN")
-  owner       String?
-  sourceType  String?
-  sourceId    String?
-  dueAt       DateTime?
-  completedAt DateTime?
-  result      String?
-  completedBy String?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id                 String    @id @default(cuid())
+  taskNo             String?   @unique
+  title              String
+  description        String?
+  category           String
+  priority           String
+  status             String    @default("OPEN")
+  owner              String?
+  assigneeEmployeeId String?
+  collaborators      Json      @default("[]")
+  sourceType         String?
+  sourceId           String?
+  findingId          String?   @unique
+  platform           String?
+  storeKey           String?
+  storeName          String?
+  productId          String?
+  skuCode            String?
+  metricKey          String?
+  currentValue       Float?
+  targetValue        Float?
+  expectedResult     String?
+  evidence           Json      @default("{}")
+  verification       Json      @default("{}")
+  dueAt              DateTime?
+  submittedAt        DateTime?
+  verifiedAt         DateTime?
+  verifier           String?
+  reviewAt           DateTime?
+  reopenedAt         DateTime?
+  completedAt        DateTime?
+  result             String?
+  completedBy        String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  history OperationTaskHistory[]
 
   @@index([status, dueAt])
+  @@index([platform, storeKey, productId])
+  @@index([findingId, status])
+}
+
+model OperationAnalysisRun {
+  id            String    @id @default(cuid())
+  runNo         String    @unique
+  periodStart   DateTime
+  periodEnd     DateTime
+  source        String
+  sourceName    String
+  fileHash      String?   @unique
+  status        String    @default("PENDING")
+  dataFreshness String    @default("CURRENT")
+  importedCount Int       @default(0)
+  rejectedCount Int       @default(0)
+  completeness  Float     @default(1)
+  ruleVersion   String    @default("operation-rules-v1")
+  modelVersion  String    @default("rule-engine-v1")
+  errors        Json      @default("[]")
+  createdBy     String
+  createdAt     DateTime  @default(now())
+  completedAt   DateTime?
+
+  storeMetrics   StoreMetricSnapshot[]
+  productMetrics ProductMetricSnapshot[]
+
+  @@index([periodEnd, status])
+}
+
+model StoreMetricSnapshot {
+  id                 String   @id @default(cuid())
+  runId              String
+  platform           String
+  storeKey           String
+  storeName          String
+  periodStart        DateTime
+  periodEnd          DateTime
+  salesAmount        Float?
+  salesOrders        Int?
+  salesItems         Int?
+  netSalesAmount     Float?
+  netOrders          Int?
+  netItems           Int?
+  discountAmount     Float?
+  productCost        Float?
+  freightCost        Float?
+  refundCost         Float?
+  adSpend            Float?
+  platformFees       Float?
+  taxCost            Float?
+  refundRate         Float?
+  discountRate       Float?
+  basicContribution  Float?
+  fullContribution   Float?
+  averageOrderValue  Float?
+  salesChangeRate    Float?
+  inventoryCoverDays Float?
+  dataCompleteness   Float    @default(1)
+  sourceRef          String
+  unavailableFields  String[] @default([])
+  raw                Json     @default("{}")
+  capturedAt         DateTime @default(now())
+
+  run OperationAnalysisRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, platform, storeKey])
+  @@index([platform, storeKey, periodEnd])
+}
+
+model ProductMetricSnapshot {
+  id                 String   @id @default(cuid())
+  runId              String
+  platform           String
+  storeKey           String
+  storeName          String
+  productId          String?
+  modelCode          String?
+  skuCode            String
+  platformProductId  String?
+  periodStart        DateTime
+  periodEnd          DateTime
+  salesAmount        Float?
+  salesOrders        Int?
+  salesItems         Int?
+  netSalesAmount     Float?
+  refundCost         Float?
+  productCost        Float?
+  freightCost        Float?
+  adSpend            Float?
+  platformFees       Float?
+  taxCost            Float?
+  refundRate         Float?
+  basicContribution  Float?
+  fullContribution   Float?
+  inventoryQuantity  Float?
+  inventoryCoverDays Float?
+  dataCompleteness   Float    @default(1)
+  sourceRef          String
+  unavailableFields  String[] @default([])
+  raw                Json     @default("{}")
+  capturedAt         DateTime @default(now())
+
+  run OperationAnalysisRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, platform, storeKey, skuCode])
+  @@index([modelCode, skuCode, periodEnd])
+}
+
+model CompetitorProductSnapshot {
+  id               String   @id @default(cuid())
+  platform         String
+  competitorName   String
+  shopName         String?
+  productKey       String
+  productName      String
+  productUrl       String?
+  imageUrl         String?
+  price            Float?
+  promotion        String?
+  visibleSales     Float?
+  reviewCount      Int?
+  rating           Float?
+  titleKeywords    String[] @default([])
+  sellingPoints    String[] @default([])
+  contentFrequency Int?
+  liveFrequency    Int?
+  changes          Json     @default("[]")
+  missingFields    String[] @default([])
+  sourceRef        String?
+  capturedAt       DateTime
+  raw              Json     @default("{}")
+
+  @@unique([platform, productKey, capturedAt])
+  @@index([platform, competitorName, capturedAt])
+}
+
+model OperationFinding {
+  id            String    @id @default(cuid())
+  findingNo     String    @unique
+  dedupeKey     String
+  type          String
+  platform      String?
+  storeKey      String?
+  storeName     String?
+  productId     String?
+  skuCode       String?
+  severity      String
+  title         String
+  description   String
+  periodStart   DateTime?
+  periodEnd     DateTime?
+  metricKey     String?
+  currentValue  Float?
+  baselineValue Float?
+  ruleVersion   String    @default("operation-rules-v1")
+  modelVersion  String    @default("rule-engine-v1")
+  confidence    Float     @default(1)
+  sourceRefs    String[]  @default([])
+  missingFields String[]  @default([])
+  evidence      Json      @default("{}")
+  suggestion    Json      @default("{}")
+  status        String    @default("PENDING_CONFIRMATION")
+  taskId        String?
+  firstFoundAt  DateTime  @default(now())
+  lastFoundAt   DateTime  @default(now())
+  confirmedAt   DateTime?
+  confirmedBy   String?
+  resolvedAt    DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([status, severity, lastFoundAt])
+  @@index([dedupeKey, status])
+}
+
+model OperationTaskHistory {
+  id         String   @id @default(cuid())
+  taskId     String
+  fromStatus String?
+  toStatus   String
+  action     String
+  actor      String
+  note       String?
+  data       Json     @default("{}")
+  createdAt  DateTime @default(now())
+
+  task OpsTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, createdAt])
 }
 
 model Report {
