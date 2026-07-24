@@ -57,6 +57,7 @@ const todayLabel = new Intl.DateTimeFormat("zh-CN", { dateStyle: "full" }).forma
 const pageTitle = computed(() => navItems.find((item) => item.key === active.value)?.label || "运营中台");
 const pendingContent = computed(() => content.value.filter((item) => item.status === "PENDING_APPROVAL"));
 const configuredCount = computed(() => integrations.value.filter((item) => item.state !== "UNCONFIGURED").length);
+const wecomUnconfigured = computed(() => loginMessage.value.includes("未配置"));
 
 function time(value?: string) {
   if (!value) return "未记录";
@@ -395,10 +396,11 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
       <div class="login-brand"><div class="brand-mark">S</div><div><span>SAYDIAN</span><small>统一运营系统</small></div></div>
       <h1>企业微信扫码登录</h1>
       <p>请使用手机企业微信扫一扫。扫码后自动同步员工身份、部门和操作记录。</p>
-      <el-alert v-if="loginMessage" :title="loginMessage" type="error" :closable="false" show-icon />
+      <el-alert v-if="loginMessage" :title="loginMessage" :type="wecomUnconfigured ? 'warning' : 'error'" :closable="false" show-icon />
+      <el-button v-if="wecomUnconfigured" type="primary" plain @click="openMall('/saidian-mall-admin/')">打开商城接口配置</el-button>
       <div class="wecom-qr-panel" v-loading="qrLoading">
         <iframe v-if="qrLoginUrl" :src="qrLoginUrl" title="企业微信扫码登录二维码" />
-        <div v-else class="qr-placeholder">二维码暂未加载</div>
+        <div v-else class="qr-placeholder">{{ wecomUnconfigured ? "请先在商城后台配置企业微信" : "二维码暂未加载" }}</div>
       </div>
       <div class="qr-actions">
         <span>二维码失效？</span>
