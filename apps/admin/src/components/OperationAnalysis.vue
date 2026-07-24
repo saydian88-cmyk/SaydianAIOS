@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { DataAnalysis, Refresh, UploadFilled } from "@element-plus/icons-vue";
 import { api, patch, post } from "../api";
@@ -175,6 +175,7 @@ async function verifyTask(item: Row, passed: boolean) {
 }
 
 defineExpose({ reload });
+onMounted(reload);
 </script>
 
 <template>
