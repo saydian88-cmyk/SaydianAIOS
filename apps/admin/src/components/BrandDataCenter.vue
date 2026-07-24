@@ -33,12 +33,16 @@ const knowledgeDialog = ref(false);
 const uploadDialog = ref(false);
 const metadataDialog = ref(false);
 const detailDrawer = ref(false);
+const collectorConfigDialog = ref(false);
+const collectorImportDialog = ref(false);
+const collectorLinkDialog = ref(false);
 const editingKnowledgeId = ref("");
 const editingAssetId = ref("");
 const assetDetail = ref<Row>();
 const assetPreviewUrl = ref("");
 const assetPreviewLoading = ref(false);
 const batchFiles = ref<UploadUserFile[]>([]);
+const collectorImportFiles = ref<UploadUserFile[]>([]);
 const nextCursor = ref<string | null>(null);
 const assetTotal = ref(0);
 const selectedVideoId = ref("");
@@ -51,6 +55,9 @@ const assetFilter = reactive({ query: "", kind: "", level: "", model: "", module
 const knowledgeForm = reactive({ type: "FAQ", title: "", category: "", model: "", summary: "", reply: "", body: "", source: "运营后台录入", sourceRefs: "", sourceLevel: "B", validUntil: "", evidenceIds: "", keywords: "", scenarios: "", audience: "customer" });
 const batchForm = reactive({ sourceType: "EMPLOYEE_CAPTURE", productScope: "UNKNOWN", productIds: [] as string[], assetKind: "", contentDescription: "", originalStatus: true, rightsStatus: "COMMERCIAL", acquiredAt: "" });
 const metadataForm = reactive({ displayName: "", level: "ORIGINAL", productScope: "UNKNOWN", productIds: [] as string[], rightsStatus: "AUTH_REQUIRED", contentDescription: "", acquiredAt: "", restriction: "", evidenceIds: "" });
+const collectorForm = reactive({ platform: "DOUYIN", providerName: "", mode: "API", endpoint: "", token: "", keywords: "", competitorAccounts: "", dailyLimit: 20, enabled: true });
+const collectorImportForm = reactive({ platform: "DOUYIN" });
+const collectorLinkForm = reactive({ platform: "DOUYIN", sourceUrl: "", downloadUrl: "", accountName: "", title: "", publishedAt: "", views: "", likes: "", comments: "", shares: "", saves: "" });
 
 const knowledgeTypes = [
   { label: "品牌信息", value: "BRAND" }, { label: "产品卖点", value: "PRODUCT" }, { label: "产品参数", value: "PARAMETER" },
@@ -125,6 +132,65 @@ async function loadViralWorkspace() {
   externalVideos.value = videos; remakeTasks.value = tasks; cloudJobs.value = queue; viralCapabilities.value = capabilities;
 }
 async function runViralCollector() { await run(async () => { await post("/api/v1/brand-data/viral-collector/run", {}); await loadViralWorkspace(); }, "四平台采集任务已串行执行"); }
+function openCollectorConfig(row: Row) {
+  clearObject(collectorForm, {
+    platform: row.platform,
+    providerName: row.providerName || "",
+    mode: row.mode || "API",
+    endpoint: row.endpoint || "",
+    token: "",
+    keywords: list(row.keywords) === "—" ? "" : list(row.keywords),
+    competitorAccounts: list(row.competitorAccounts) === "—" ? "" : list(row.competitorAccounts),
+    dailyLimit: row.dailyLimit || 20,
+    enabled: row.enabled !== false,
+  });
+  collectorConfigDialog.value = true;
+}
+async function saveCollectorConfig() {
+  await run(async () => {
+    await patch(`/api/v1/brand-data/viral-collector/config/${collectorForm.platform}`, collectorForm);
+    collectorConfigDialog.value = false;
+    await loadViralWorkspace();
+  }, "采集源配置已保存");
+}
+function openCollectorImport(platform = "DOUYIN") {
+  collectorImportForm.platform = platform;
+  collectorImportFiles.value = [];
+  collectorImportDialog.value = true;
+}
+function downloadCollectorTemplate() {
+  const csv = "\uFEFF视频链接,内容ID,账号,标题,发布时间,播放量,点赞量,评论量,分享量,收藏量,视频下载地址\n";
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+  link.download = "赛电爆款视频导入模板.csv";
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+async function submitCollectorImport() {
+  const file = collectorImportFiles.value[0]?.raw as File | undefined;
+  if (!file) return ElMessage.warning("请选择CSV文件");
+  await run(async () => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("platform", collectorImportForm.platform);
+    const result = await upload<Row>("/api/v1/brand-data/viral-collector/import", form);
+    collectorImportDialog.value = false;
+    await loadViralWorkspace();
+    if (result.rejected) ElMessage.warning(`导入${result.imported || 0}条，拒绝${result.rejected}条`);
+  }, "爆款数据已导入");
+}
+function openCollectorLink(platform = "DOUYIN") {
+  clearObject(collectorLinkForm, { platform, sourceUrl: "", downloadUrl: "", accountName: "", title: "", publishedAt: "", views: "", likes: "", comments: "", shares: "", saves: "" });
+  collectorLinkDialog.value = true;
+}
+async function submitCollectorLink() {
+  if (!collectorLinkForm.sourceUrl.trim()) return ElMessage.warning("请填写内容链接");
+  await run(async () => {
+    await post("/api/v1/brand-data/viral-collector/links", collectorLinkForm);
+    collectorLinkDialog.value = false;
+    await loadViralWorkspace();
+  }, "链接已进入爆款研究库");
+}
 async function confirmRemake(row: Row) { await run(async () => { await patch(`/api/v1/brand-data/remake-tasks/${row.id}`, { status: "CONFIRMED" }); await loadViralWorkspace(); }, "仿拍任务已确认"); }
 async function retryCloudJob(row: Row) { await run(async () => { await post(`/api/v1/brand-data/cloud/jobs/${row.id}/retry`, {}); await loadViralWorkspace(); }, "云任务已重新入队"); }
 function openExternal(url: string) { window.open(url, "_blank", "noopener,noreferrer"); }
@@ -340,13 +406,22 @@ onMounted(reload);
     <template v-else>
       <div class="workspace-heading">
         <div><h3>四平台爆款研究</h3><p>抖音、TikTok、小红书、视频号每日串行采集；高分视频自动生成待确认仿拍任务。</p></div>
-        <el-button type="primary" :icon="Refresh" @click="runViralCollector">立即采集</el-button>
+        <div class="collector-actions">
+          <el-button @click="openCollectorImport()">导入CSV</el-button>
+          <el-button @click="openCollectorLink()">补录链接</el-button>
+          <el-button type="primary" :icon="Refresh" @click="runViralCollector">立即采集</el-button>
+        </div>
       </div>
       <div class="collector-capabilities">
         <article v-for="item in viralCapabilities" :key="item.platform">
-          <strong>{{ item.platform }}</strong>
+          <strong>{{ ({ DOUYIN: '抖音', TIKTOK: 'TikTok', XIAOHONGSHU: '小红书', WECHAT_CHANNELS: '视频号' } as Record<string, string>)[item.platform] || item.platform }}</strong>
           <el-tag :type="statusType(item.state)">{{ statusLabel(item.state) }}</el-tag>
+          <span>{{ item.providerName }}</span>
           <span>{{ item.message }}</span>
+          <small>方式 {{ item.mode }} · 每日上限 {{ item.dailyLimit }} · 关键词 {{ item.keywords?.length || 0 }}个</small>
+          <el-button link type="primary" @click="openCollectorConfig(item)">配置</el-button>
+          <el-button link @click="openCollectorImport(item.platform)">导入</el-button>
+          <el-button link @click="openCollectorLink(item.platform)">补录</el-button>
         </article>
       </div>
       <div class="two-panels viral-panels">
@@ -387,6 +462,53 @@ onMounted(reload);
     </template>
 
     <el-dialog v-model="knowledgeDialog" :title="editingKnowledgeId ? '编辑品牌知识' : '新建品牌知识'" width="780px" destroy-on-close><el-form label-position="top" class="form-grid"><el-form-item label="知识类型" required><el-select v-model="knowledgeForm.type"><el-option v-for="item in knowledgeTypes" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item><el-form-item label="知识标题" required><el-input v-model="knowledgeForm.title" maxlength="100" /></el-form-item><el-form-item label="知识分类"><el-input v-model="knowledgeForm.category" /></el-form-item><el-form-item label="适用型号"><el-select v-model="knowledgeForm.model" clearable filterable><el-option v-for="item in controls.products" :key="item.id" :label="`${item.modelCode} · ${item.name}`" :value="item.modelCode" /></el-select></el-form-item><el-form-item label="摘要" class="full"><el-input v-model="knowledgeForm.summary" type="textarea" :rows="2" /></el-form-item><el-form-item label="标准回复/允许话术" class="full"><el-input v-model="knowledgeForm.reply" type="textarea" :rows="3" /></el-form-item><el-form-item label="完整正文" class="full"><el-input v-model="knowledgeForm.body" type="textarea" :rows="4" /></el-form-item><el-form-item label="来源等级"><el-select v-model="knowledgeForm.sourceLevel"><el-option v-for="item in ['A','B','C','D','E']" :key="item" :label="item" :value="item" /></el-select></el-form-item><el-form-item label="有效期"><el-date-picker v-model="knowledgeForm.validUntil" type="date" value-format="YYYY-MM-DD" /></el-form-item><el-form-item label="关联证据编号"><el-input v-model="knowledgeForm.evidenceIds" placeholder="逗号分隔" /></el-form-item><el-form-item label="关键词"><el-input v-model="knowledgeForm.keywords" placeholder="逗号分隔" /></el-form-item><el-form-item label="适用场景"><el-input v-model="knowledgeForm.scenarios" placeholder="逗号分隔" /></el-form-item><el-form-item label="资料来源"><el-input v-model="knowledgeForm.source" /></el-form-item><el-form-item label="来源链接/文件" class="full"><el-input v-model="knowledgeForm.sourceRefs" /></el-form-item></el-form><template #footer><el-button @click="knowledgeDialog = false">取消</el-button><el-button type="primary" @click="saveKnowledge">保存为待审核</el-button></template></el-dialog>
+
+    <el-dialog v-model="collectorConfigDialog" title="爆款采集源配置" width="720px" destroy-on-close>
+      <el-alert title="接口未开通时仍可使用CSV导入和链接补录；密钥留空会保留原配置。" type="info" :closable="false" />
+      <el-form label-position="top" class="form-grid collector-form">
+        <el-form-item label="平台"><el-input :model-value="collectorForm.platform" disabled /></el-form-item>
+        <el-form-item label="数据提供方"><el-input v-model="collectorForm.providerName" /></el-form-item>
+        <el-form-item label="默认接入方式"><el-select v-model="collectorForm.mode"><el-option label="API自动采集" value="API" /><el-option label="CSV表格导入" value="CSV" /><el-option label="链接补录" value="URL" /></el-select></el-form-item>
+        <el-form-item label="每日采集上限"><el-input-number v-model="collectorForm.dailyLimit" :min="1" :max="200" /></el-form-item>
+        <el-form-item label="Feed接口地址" class="full"><el-input v-model="collectorForm.endpoint" placeholder="未开通可留空" /></el-form-item>
+        <el-form-item label="接口Token" class="full"><el-input v-model="collectorForm.token" type="password" show-password placeholder="留空保留原密钥" /></el-form-item>
+        <el-form-item label="监控关键词" class="full"><el-input v-model="collectorForm.keywords" type="textarea" :rows="2" placeholder="智能手表、血压手表、智能戒指；逗号分隔" /></el-form-item>
+        <el-form-item label="竞品账号白名单" class="full"><el-input v-model="collectorForm.competitorAccounts" type="textarea" :rows="2" placeholder="账号名或账号ID；逗号分隔" /></el-form-item>
+        <el-form-item label="启用每日任务"><el-switch v-model="collectorForm.enabled" /></el-form-item>
+      </el-form>
+      <template #footer><el-button @click="collectorConfigDialog = false">取消</el-button><el-button type="primary" @click="saveCollectorConfig">保存配置</el-button></template>
+    </el-dialog>
+
+    <el-dialog v-model="collectorImportDialog" title="导入爆款视频数据" width="650px" destroy-on-close>
+      <el-form label-position="top">
+        <el-form-item label="平台"><el-select v-model="collectorImportForm.platform"><el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" /><el-option label="小红书" value="XIAOHONGSHU" /><el-option label="视频号" value="WECHAT_CHANNELS" /></el-select></el-form-item>
+        <el-form-item label="CSV文件">
+          <el-upload v-model:file-list="collectorImportFiles" drag :auto-upload="false" :limit="1" accept=".csv,text/csv">
+            <el-icon class="el-icon--upload"><UploadFilled /></el-icon><div class="el-upload__text">拖入CSV，或<em>点击选择</em></div>
+          </el-upload>
+        </el-form-item>
+      </el-form>
+      <el-alert title="至少包含“视频链接”。支持：内容ID、账号、标题、发布时间、播放量、点赞量、评论量、分享量、收藏量、视频下载地址。" type="info" :closable="false" />
+      <el-button class="template-download" link type="primary" :icon="Download" @click="downloadCollectorTemplate">下载CSV模板</el-button>
+      <template #footer><el-button @click="collectorImportDialog = false">取消</el-button><el-button type="primary" @click="submitCollectorImport">开始导入</el-button></template>
+    </el-dialog>
+
+    <el-dialog v-model="collectorLinkDialog" title="补录外部优质视频" width="720px" destroy-on-close>
+      <el-form label-position="top" class="form-grid">
+        <el-form-item label="平台"><el-select v-model="collectorLinkForm.platform"><el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" /><el-option label="小红书" value="XIAOHONGSHU" /><el-option label="视频号" value="WECHAT_CHANNELS" /></el-select></el-form-item>
+        <el-form-item label="账号/作者"><el-input v-model="collectorLinkForm.accountName" /></el-form-item>
+        <el-form-item label="内容链接" class="full"><el-input v-model="collectorLinkForm.sourceUrl" placeholder="必填" /></el-form-item>
+        <el-form-item label="视频下载地址" class="full"><el-input v-model="collectorLinkForm.downloadUrl" placeholder="有直接下载地址时将自动进入IMS和百炼；没有可稍后补充" /></el-form-item>
+        <el-form-item label="标题" class="full"><el-input v-model="collectorLinkForm.title" /></el-form-item>
+        <el-form-item label="发布时间"><el-date-picker v-model="collectorLinkForm.publishedAt" type="datetime" value-format="YYYY-MM-DDTHH:mm:ssZ" /></el-form-item>
+        <el-form-item label="播放量"><el-input v-model="collectorLinkForm.views" /></el-form-item>
+        <el-form-item label="点赞量"><el-input v-model="collectorLinkForm.likes" /></el-form-item>
+        <el-form-item label="评论量"><el-input v-model="collectorLinkForm.comments" /></el-form-item>
+        <el-form-item label="分享量"><el-input v-model="collectorLinkForm.shares" /></el-form-item>
+        <el-form-item label="收藏量"><el-input v-model="collectorLinkForm.saves" /></el-form-item>
+      </el-form>
+      <template #footer><el-button @click="collectorLinkDialog = false">取消</el-button><el-button type="primary" @click="submitCollectorLink">保存并分析</el-button></template>
+    </el-dialog>
 
     <el-dialog v-model="uploadDialog" title="上传素材" width="760px" destroy-on-close>
       <el-upload v-model:file-list="batchFiles" drag multiple :auto-upload="false" :limit="20" class="asset-upload">
@@ -443,7 +565,7 @@ onMounted(reload);
 .preview-link { max-width: 100%; padding: 0; border: 0; background: transparent; cursor: pointer; text-align: left; }.preview-link:hover { color: #2f83e5; text-decoration: underline; }
 .asset-preview-panel { display: grid; place-items: center; min-height: 260px; margin-bottom: 18px; padding: 14px; border: 1px solid #e5eaf1; border-radius: 14px; background: #f7f9fc; overflow: hidden; }.asset-preview-panel img, .asset-preview-panel video, .asset-preview-panel iframe { display: block; width: 100%; max-height: 560px; border: 0; border-radius: 10px; background: #10151e; object-fit: contain; }.asset-preview-panel iframe { min-height: 520px; background: #fff; }.asset-preview-panel audio { width: min(680px, 100%); }.preview-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; margin-top: 12px; }.preview-actions span { color: #8791a1; font-size: 12px; }.preview-actions > div { display: flex; gap: 8px; flex-wrap: wrap; }
 .growth-loop { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }.growth-stage { position: relative; display: flex; align-items: center; gap: 12px; min-height: 82px; padding: 14px; border: 1px solid #e6eaf1; border-radius: 14px; background: #fff; }.growth-stage:not(:last-child)::after { position: absolute; right: -10px; z-index: 2; content: "→"; color: #9aa4b3; }.stage-index { display: grid; place-items: center; flex: 0 0 34px; width: 34px; height: 34px; color: #fff; font-size: 12px; font-weight: 800; border-radius: 50%; background: #7d8798; }.growth-stage strong, .growth-stage span { display: block; }.growth-stage strong { color: #17243b; line-height: 1.35; }.growth-stage span { margin-top: 5px; color: #818b9b; font-size: 12px; }.growth-stage.state-active .stage-index, .growth-stage.state-ready .stage-index { background: #2f8f64; }.growth-stage.state-running .stage-index, .growth-stage.state-tracking .stage-index { background: #3978c5; }.growth-stage.state-action_required { border-color: #f0b8bd; background: #fff8f8; }.growth-stage.state-action_required .stage-index { background: #c53943; }
-.collector-capabilities { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }.collector-capabilities article { display: grid; grid-template-columns: 1fr auto; gap: 6px 10px; padding: 14px 16px; border: 1px solid #e7ebf2; border-radius: 13px; background: #fff; }.collector-capabilities span { grid-column: 1 / -1; color: #818b9b; font-size: 12px; }.viral-panels { grid-template-columns: 1.2fr 1fr; }
+.collector-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }.collector-capabilities { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }.collector-capabilities article { display: grid; grid-template-columns: 1fr auto auto; gap: 7px 8px; padding: 14px 16px; border: 1px solid #e7ebf2; border-radius: 13px; background: #fff; }.collector-capabilities article > strong { grid-column: 1 / 3; }.collector-capabilities span, .collector-capabilities small { grid-column: 1 / -1; color: #818b9b; font-size: 12px; }.collector-capabilities article > .el-button { margin: 0; justify-content: flex-start; }.collector-form { margin-top: 16px; }.template-download { margin-top: 8px; }.viral-panels { grid-template-columns: 1.2fr 1fr; }
 .ai-capability-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }.ai-capability-grid article { display: grid; grid-template-columns: 1fr auto; gap: 7px 10px; padding: 13px 15px; border: 1px solid #e7ebf2; border-radius: 12px; background: #fff; }.ai-capability-grid small, .ai-capability-grid span { display: block; color: #818b9b; font-size: 12px; }.ai-capability-grid article > span { grid-column: 1 / -1; }.ai-capability-grid .danger { color: #c53943; }
 @media (max-width: 1400px) { .asset-filter { grid-template-columns: minmax(220px, 1fr) repeat(3, minmax(130px, .65fr)) auto; }.report-summary { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 1400px) { .growth-loop { grid-template-columns: repeat(4, minmax(0, 1fr)); } }

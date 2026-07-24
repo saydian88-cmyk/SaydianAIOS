@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Headers, Param, Patch, Post, Query, UploadedFile, UploadedFiles, UseInterceptors } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Get, Headers, Param, Patch, Post, Query, UploadedFile, UploadedFiles, UseInterceptors } from "@nestjs/common";
 import { FileInterceptor, FilesInterceptor } from "@nestjs/platform-express";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
@@ -220,6 +220,42 @@ export class BrandDataController {
   viralCollectorCapabilities(@Headers("authorization") authorization?: string) {
     this.actor(authorization);
     return this.viralCollector.capabilities();
+  }
+
+  @Patch("viral-collector/config/:platform")
+  updateViralCollectorConfig(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("platform") platform: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    this.actor(authorization);
+    return this.viralCollector.updateConfig(platform, body);
+  }
+
+  @Post("viral-collector/import")
+  @UseInterceptors(FileInterceptor("file", { limits: { fileSize: 10 * 1024 * 1024, files: 1 } }))
+  importViralCollectorCsv(
+    @Headers("authorization") authorization: string | undefined,
+    @Headers("x-ops-actor") requestedActor: string | undefined,
+    @UploadedFile() file: { originalname: string; size: number; buffer: Buffer } | undefined,
+    @Body() body: Record<string, unknown>,
+  ) {
+    if (!file) throw new BadRequestException("请选择CSV文件");
+    return this.viralCollector.importCsv(
+      String(body.platform || ""),
+      file.buffer,
+      file.originalname,
+      this.actor(authorization, requestedActor),
+    );
+  }
+
+  @Post("viral-collector/links")
+  registerViralCollectorLink(
+    @Headers("authorization") authorization: string | undefined,
+    @Headers("x-ops-actor") requestedActor: string | undefined,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.viralCollector.registerLink(body, this.actor(authorization, requestedActor));
   }
 
   @Post("viral-collector/run")
