@@ -77,13 +77,15 @@ async function main() {
     ? [{ root: resolve(requestedRoot), type: "LOCAL_ASSET", category: "original" as const }]
     : configuredSources;
   const maxFiles = Math.max(0, Number(process.env.ASSET_AGENT_MAX_FILES || 0));
+  const offset = Math.max(0, Number(process.env.ASSET_AGENT_OFFSET || 0));
   const results: unknown[] = [];
   let scanned = 0;
   for (const source of sources) {
     let paths: string[] = [];
     try {
       paths = await walk(source.root);
-      if (maxFiles) paths = paths.slice(0, maxFiles);
+      paths.sort((left, right) => left.localeCompare(right, "zh-CN"));
+      paths = maxFiles ? paths.slice(offset, offset + maxFiles) : paths.slice(offset);
     } catch (error) {
       results.push({ source: source.root, error: error instanceof Error ? error.message : "目录读取失败" });
       continue;

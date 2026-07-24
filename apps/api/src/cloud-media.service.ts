@@ -14,6 +14,7 @@ import IceClient, {
   GetSmartHandleJobRequest,
   GetSnapshotJobRequest,
   GetTranscodeJobRequest,
+  ListPipelinesRequest,
   SubmitMediaInfoJobRequest,
   SubmitMediaInfoJobRequestInput,
   SubmitMediaInfoJobRequestScheduleConfig,
@@ -159,6 +160,15 @@ export class AliyunImsProvider implements MediaProcessingProvider {
       }));
     }
     return this.clientInstance;
+  }
+
+  async healthCheck(): Promise<{ ok: boolean; message: string }> {
+    try {
+      await this.client().listPipelines(new ListPipelinesRequest({ pageNo: 1, pageSize: 1 }));
+      return { ok: true, message: `IMS ${opsConfig.ims.regionId} 权限正常` };
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : "IMS权限检查失败" };
+    }
   }
 
   private ossUrl(objectKey: string) {
@@ -326,6 +336,33 @@ export class BailianVideoAiProvider implements VideoAiProvider {
     };
   }
 
+  async healthCheckText(): Promise<{ ok: boolean; message: string }> {
+    if (!opsConfig.bailian.apiKey) return { ok: false, message: "缺少百炼 API Key" };
+    try {
+      const response = await fetch(`${opsConfig.bailian.baseUrl.replace(/\/$/u, "")}/chat/completions`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${opsConfig.bailian.apiKey}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: opsConfig.bailian.textModel,
+          messages: [{ role: "user", content: "只回复OK" }],
+          max_tokens: 4,
+          temperature: 0,
+        }),
+        signal: AbortSignal.timeout(20_000),
+      });
+      if (!response.ok) {
+        const payload = map(await response.json().catch(() => ({})));
+        throw new Error(`百炼模型检查失败：${response.status} ${text(map(payload.error).message || payload.message)}`);
+      }
+      return { ok: true, message: `${opsConfig.bailian.textModel} 调用正常` };
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : "百炼模型检查失败" };
+    }
+  }
+
   async transcribe(input: CloudSubmitInput): Promise<CloudSubmitResult> {
     if (!opsConfig.bailian.apiKey) throw new Error("百炼 API Key 未配置");
     const response = await fetch(opsConfig.bailian.transcriptionUrl, {
@@ -441,8 +478,12 @@ export class CloudMediaService {
   }
 
   async healthCapabilities() {
-    const [oss, latestJobs, latestTextPlan] = await Promise.all([
+    const imsConfigured = Boolean(opsConfig.ims.accessKeyId && opsConfig.ims.accessKeySecret);
+    const bailianConfigured = Boolean(opsConfig.bailian.apiKey);
+    const [oss, imsProbe, bailianTextProbe, latestJobs, latestTextPlan] = await Promise.all([
       this.oss.healthCheck(),
+      imsConfigured ? this.ims.healthCheck() : Promise.resolve({ ok: false, message: "缺少IMS AccessKey" }),
+      bailianConfigured ? this.bailian.healthCheckText() : Promise.resolve({ ok: false, message: "缺少百炼API Key" }),
       this.prisma.cloudMediaJob.findMany({
         orderBy: { updatedAt: "desc" },
         take: 200,
@@ -471,13 +512,11 @@ export class CloudMediaService {
         recentError: failed?.failureReason || null,
       };
     };
-    const imsConfigured = Boolean(opsConfig.ims.accessKeyId && opsConfig.ims.accessKeySecret);
-    const bailianConfigured = Boolean(opsConfig.bailian.apiKey);
-    const item = (configured: boolean, message: string, runtime?: { lastSuccessAt: string | null; recentError: string | null }) => ({
-      state: configured ? "AVAILABLE" as const : "UNCONFIGURED" as const,
+    const item = (configured: boolean, healthy: boolean, message: string, runtime?: { lastSuccessAt: string | null; recentError: string | null }) => ({
+      state: !configured ? "UNCONFIGURED" as const : healthy ? "AVAILABLE" as const : "ERROR" as const,
       message,
       lastSuccessAt: runtime?.lastSuccessAt || null,
-      recentError: runtime?.recentError || null,
+      recentError: runtime?.recentError || (configured && !healthy ? message : null),
     });
     return {
       mode: opsConfig.ims.mode,
@@ -490,14 +529,14 @@ export class CloudMediaService {
           lastSuccessAt: oss.ok ? new Date().toISOString() : null,
           recentError: oss.ok ? null : oss.message,
         },
-        imsSubmit: item(imsConfigured, imsConfigured ? `IMS ${opsConfig.ims.regionId}` : "缺少IMS AccessKey", latest("ALIYUN_IMS", IMS_TYPES)),
-        imsCallback: item(imsConfigured, imsConfigured ? "IMS回调接口已启用" : "缺少IMS AccessKey", latest("ALIYUN_IMS", IMS_TYPES)),
-        bailianImage: item(bailianConfigured, bailianConfigured ? opsConfig.bailian.visionModel : "缺少百炼API Key", latest("ALIYUN_BAILIAN", ["VIDEO_UNDERSTANDING"])),
-        bailianVideo: item(bailianConfigured, bailianConfigured ? opsConfig.bailian.visionModel : "缺少百炼API Key", latest("ALIYUN_BAILIAN", ["VIDEO_UNDERSTANDING"])),
-        bailianTranscription: item(bailianConfigured, bailianConfigured ? opsConfig.bailian.transcriptionModel : "缺少百炼API Key", latest("ALIYUN_BAILIAN", ["TRANSCRIPTION"])),
+        imsSubmit: item(imsConfigured, imsProbe.ok, imsProbe.message, latest("ALIYUN_IMS", IMS_TYPES)),
+        imsCallback: item(imsConfigured, imsProbe.ok, imsProbe.ok ? "IMS回调接口已启用" : imsProbe.message, latest("ALIYUN_IMS", IMS_TYPES)),
+        bailianImage: item(bailianConfigured, bailianTextProbe.ok, bailianTextProbe.ok ? opsConfig.bailian.visionModel : bailianTextProbe.message, latest("ALIYUN_BAILIAN", ["VIDEO_UNDERSTANDING"])),
+        bailianVideo: item(bailianConfigured, bailianTextProbe.ok, bailianTextProbe.ok ? opsConfig.bailian.visionModel : bailianTextProbe.message, latest("ALIYUN_BAILIAN", ["VIDEO_UNDERSTANDING"])),
+        bailianTranscription: item(bailianConfigured, bailianTextProbe.ok, bailianTextProbe.ok ? opsConfig.bailian.transcriptionModel : bailianTextProbe.message, latest("ALIYUN_BAILIAN", ["TRANSCRIPTION"])),
         bailianText: {
-          ...item(bailianConfigured, bailianConfigured ? opsConfig.bailian.textModel : "缺少百炼API Key"),
-          lastSuccessAt: latestTextPlan?.createdAt.toISOString() || null,
+          ...item(bailianConfigured, bailianTextProbe.ok, bailianTextProbe.message),
+          lastSuccessAt: bailianTextProbe.ok ? new Date().toISOString() : latestTextPlan?.createdAt.toISOString() || null,
         },
       },
       configured: this.capabilities(),
