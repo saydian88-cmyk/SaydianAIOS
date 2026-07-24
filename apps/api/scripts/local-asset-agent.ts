@@ -42,7 +42,10 @@ function mediaType(extension: string) {
 }
 
 function model(path: string): string | undefined {
-  return path.match(/W8\s*Ultra-?R|W8UltraR|W8Ultra|W8PRO|W9S|W9|W8S|W8U|W8|W7PRO|M7|S8|S7|S6|E8|E6|B8|W5|R7Y|R7/iu)?.[0].replace(/\s+/g, "").toUpperCase();
+  const matched = path.match(/W8\s*Ultra-?R|W8UltraR|W8Ultra|W8\s*Pro|W8PRO|W9S|W9|W8S|W8U|W8|W7\s*Pro|W7PRO|M7|S8Z|S8|S7Z|S7|S6|E8|E6|B8|W5|R8|R7Y|R7|C1|C2|DR07|FM1|M1|M2/iu)?.[0];
+  if (!matched) return undefined;
+  const key = matched.toUpperCase().replace(/\s+/gu, "");
+  return ({ W8U: "W8Ultra", W8ULTRA: "W8Ultra", W8ULTRAR: "W8Ultra-R", "W8ULTRA-R": "W8Ultra-R", W7PRO: "W7PRO", W8PRO: "W8PRO" } as Record<string, string>)[key] || key;
 }
 
 async function send(records: Array<Record<string, unknown>>, actor: string) {
@@ -64,17 +67,23 @@ async function main() {
   const health = await storage.healthCheck();
   if (!health.ok) throw new Error(health.message);
   const actor = process.env.OPS_ASSET_AGENT_ACTOR || opsConfig.defaultActor;
-  const sources = [
+  const configuredSources = [
     ...opsConfig.assetRoots.map((root) => ({ root, type: "LOCAL_ASSET", category: "original" as const })),
     ...(opsConfig.wecomDriveRoot ? [{ root: opsConfig.wecomDriveRoot, type: "WECOM_DRIVE", category: "original" as const }] : []),
     { root: opsConfig.derivedOutputDir, type: "DERIVED_OUTPUT", category: "derived" as const },
   ];
+  const requestedRoot = String(process.env.ASSET_AGENT_ROOT || "").trim();
+  const sources = requestedRoot
+    ? [{ root: resolve(requestedRoot), type: "LOCAL_ASSET", category: "original" as const }]
+    : configuredSources;
+  const maxFiles = Math.max(0, Number(process.env.ASSET_AGENT_MAX_FILES || 0));
   const results: unknown[] = [];
   let scanned = 0;
   for (const source of sources) {
     let paths: string[] = [];
     try {
       paths = await walk(source.root);
+      if (maxFiles) paths = paths.slice(0, maxFiles);
     } catch (error) {
       results.push({ source: source.root, error: error instanceof Error ? error.message : "目录读取失败" });
       continue;

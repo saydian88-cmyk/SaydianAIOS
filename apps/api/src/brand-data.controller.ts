@@ -7,6 +7,7 @@ import { diskStorage } from "multer";
 import { AuthService } from "./auth.service";
 import { BrandDataService } from "./brand-data.service";
 import { CloudMediaService } from "./cloud-media.service";
+import { SourceSyncService } from "./source-sync.service";
 import { ViralCollectorService } from "./viral-collector.service";
 
 const uploadInbox = resolve(process.cwd(), "data", "upload-inbox");
@@ -25,6 +26,7 @@ export class BrandDataController {
     private readonly auth: AuthService,
     private readonly brandData: BrandDataService,
     private readonly cloudMedia: CloudMediaService,
+    private readonly sourceSync: SourceSyncService,
     private readonly viralCollector: ViralCollectorService,
   ) {}
 
@@ -48,6 +50,23 @@ export class BrandDataController {
   knowledgeControls(@Headers("authorization") authorization?: string) {
     this.actor(authorization);
     return this.brandData.knowledgeControls();
+  }
+
+  @Post("knowledge/sync")
+  syncKnowledge(@Headers("authorization") authorization?: string) {
+    this.actor(authorization);
+    return this.sourceSync.syncKnowledge();
+  }
+
+  @Get("products")
+  products(@Headers("authorization") authorization: string | undefined, @Query() query: Record<string, string | undefined>) {
+    this.actor(authorization);
+    return this.brandData.products(query);
+  }
+
+  @Post("products/import")
+  importProducts(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Body() body: Record<string, unknown>) {
+    return this.brandData.importProducts(body, this.actor(authorization, requestedActor));
   }
 
   @Post("knowledge")
@@ -99,6 +118,12 @@ export class BrandDataController {
     return this.brandData.assets(query);
   }
 
+  @Get("assets/ranked-search")
+  rankedAssets(@Headers("authorization") authorization: string | undefined, @Query() query: Record<string, string | undefined>) {
+    this.actor(authorization);
+    return this.brandData.rankedAssets(query);
+  }
+
   @Get("analysis-jobs")
   analysisJobs(@Headers("authorization") authorization: string | undefined, @Query() query: Record<string, string | undefined>) {
     this.actor(authorization);
@@ -132,7 +157,7 @@ export class BrandDataController {
   @Get("ai-capabilities")
   aiCapabilities(@Headers("authorization") authorization?: string) {
     this.actor(authorization);
-    return this.brandData.aiCapabilities();
+    return this.cloudMedia.healthCapabilities();
   }
 
   @Get("cloud/jobs")

@@ -5,6 +5,7 @@ import { mkdir, stat, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 import { opsConfig } from "./config";
+import { AiArticlePackage, AiContentService, AiVideoCandidate } from "./ai-content.service";
 import { ContentGuardService } from "./content-guard.service";
 import { PlatformRegistry } from "./platform/platform.adapters";
 import { PrismaService } from "./prisma.service";
@@ -13,165 +14,282 @@ import { localDateKey, makeIdempotencyKey, startOfShanghaiDay } from "./utils";
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
 
-type TopicCandidate = {
-  topic: string;
-  audience: string;
-  objective: string;
-  hook: string;
-  outline: string[];
-  score: number;
-  scoreBreakdown: Record<string, number>;
-};
-
-const videoTopics: TopicCandidate[] = [
-  {
-    topic: "给父母选智能手表，先看三个使用细节",
-    audience: "关注父母日常健康管理的子女",
-    objective: "建立长辈友好与持续服务认知",
-    hook: "给父母选表，功能多不是第一位。",
-    outline: ["屏幕是否看得清", "操作是否容易学会", "遇到问题能否找到持续服务"],
-    score: 92,
-    scoreBreakdown: { familyScene: 30, usefulness: 25, materialFit: 22, serviceClosure: 15 },
-  },
-  {
-    topic: "第一次帮父母连接手表，记住这四步",
-    audience: "首次购买智能手表的家庭",
-    objective: "降低首次使用门槛",
-    hook: "别急着讲功能，先让爸妈顺利用起来。",
-    outline: ["确认型号和说明书", "完成充电与开机", "按指引连接手机", "保存官方服务入口"],
-    score: 88,
-    scoreBreakdown: { familyScene: 28, usefulness: 28, materialFit: 18, serviceClosure: 14 },
-  },
-  {
-    topic: "异地关心父母，可以从一份日常记录开始",
-    audience: "异地工作、关注父母生活的子女",
-    objective: "连接家庭关爱场景",
-    hook: "关心父母，不必只停留在一句多注意身体。",
-    outline: ["建立固定佩戴习惯", "按说明书完成日常记录", "异常情况及时咨询专业人员", "需要时联系官方客服"],
-    score: 84,
-    scoreBreakdown: { familyScene: 32, usefulness: 22, materialFit: 16, serviceClosure: 14 },
-  },
-];
-
-const articleTopics: TopicCandidate[] = [
-  {
-    topic: "科技可以复杂，留给父母的体验应该简单",
-    audience: "为父母选购智能穿戴产品的家庭",
-    objective: "形成赛电家庭信任叙事",
-    hook: "真正适合父母的产品，要从愿意戴、看得清、会操作开始。",
-    outline: ["一个熟悉的家庭场景", "看得见的产品细节", "正确使用与日常记录", "从产品到服务品牌一直在场"],
-    score: 94,
-    scoreBreakdown: { searchIntent: 22, trust: 30, usefulness: 24, channelFit: 18 },
-  },
-  {
-    topic: "收到智能手表后的第一天，先完成这份安心清单",
-    audience: "智能手表新用户及家属",
-    objective: "承接售前咨询与售后服务",
-    hook: "先别急着研究全部功能，四件事做好就够了。",
-    outline: ["核对商品与配件", "完成充电和连接", "按说明书设置", "保存客服和售后入口"],
-    score: 89,
-    scoreBreakdown: { searchIntent: 24, trust: 22, usefulness: 28, channelFit: 15 },
-  },
-  {
-    topic: "给父母选一块愿意长期佩戴的智能手表",
-    audience: "关注长辈使用体验的子女",
-    objective: "提供选购方法并引导咨询",
-    hook: "参数表很长，父母真正每天用到的往往只有几个细节。",
-    outline: ["屏幕与字体", "佩戴舒适度", "操作路径", "充电续航", "售后指导"],
-    score: 86,
-    scoreBreakdown: { searchIntent: 27, trust: 20, usefulness: 24, channelFit: 15 },
-  },
-];
-
-function articleBody(topic: TopicCandidate): string {
-  return [
-    topic.hook,
-    "",
-    "给父母选择智能穿戴产品时，真正影响长期使用的，往往不是功能数量，而是屏幕是否看得清、佩戴是否舒适、操作是否容易记住。",
-    "",
-    "第一次使用，可以先完成充电、开机、手机连接和常用入口设置。健康相关数据用于日常记录、提醒和健康管理参考，出现异常情况应及时咨询专业人员。",
-    "",
-    "从收到产品到日常使用，赛电持续提供说明、教程和客服支持。科技可以复杂，留给家庭的体验应该简单。",
-  ].join("\n");
-}
-
-function videoBody(topic: TopicCandidate): string {
-  return [topic.hook, ...topic.outline.map((item, index) => `${index + 1}. ${item}`), "从产品到服务，赛电一直在场。"].join("\n");
-}
-
 @Injectable()
 export class ContentService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly guard: ContentGuardService,
+    private readonly aiContent: AiContentService,
     private readonly platforms: PlatformRegistry,
   ) {}
 
   async generateDaily(date = new Date(), actor = "系统内容引擎"): Promise<{ created: number; selected: string[] }> {
+    const video = await this.generateDailyVideo(date, actor);
+    const article = await this.generateDailyArticle(date, actor);
+    return {
+      created: video.created + article.created,
+      selected: [...video.selected, ...article.selected],
+    };
+  }
+
+  async generateDailyVideo(date = new Date(), actor = "系统内容引擎", productModel?: string): Promise<{ created: number; selected: string[] }> {
     const planDate = startOfShanghaiDay(date);
     const existing = await this.prisma.contentPlan.count({
-      where: { planDate: { gte: planDate, lt: new Date(planDate.getTime() + 24 * 60 * 60 * 1000) } },
+      where: { kind: "VIDEO", planDate: { gte: planDate, lt: new Date(planDate.getTime() + 24 * 60 * 60 * 1000) } },
     });
     if (existing) return { created: 0, selected: [] };
-
+    const context = await this.generationContext(productModel);
+    const candidates = await this.aiContent.generateVideoCandidates(context);
+    const allowedAssetIds = new Set((context.assets as Array<{ id: string }>).map((item) => item.id));
     const selected: string[] = [];
     let created = 0;
-    for (const [kind, topics] of [["VIDEO", videoTopics], ["ARTICLE", articleTopics]] as const) {
-      for (let index = 0; index < topics.length; index += 1) {
-        const topic = topics[index];
-        const body = kind === "VIDEO" ? videoBody(topic) : articleBody(topic);
-        const guard = await this.guard.evaluate({ title: topic.topic, body });
-        const plan = await this.prisma.contentPlan.create({
-          data: {
-            planDate,
-            kind,
-            topic: topic.topic,
-            audience: topic.audience,
-            objective: topic.objective,
-            score: topic.score,
-            scoreBreakdown: topic.scoreBreakdown,
-            hook: topic.hook,
-            outline: topic.outline,
-            sourceSignals: [{ source: "内容SOP", capturedAt: new Date().toISOString() }],
-            evidenceIds: guard.evidenceIds,
-            riskReasons: guard.reasons,
-            createdBy: actor,
-            actorType: "AI",
-            aiProvider: "RULE_TEMPLATE",
-            aiModel: "content-sop-v1",
-            promptVersion: "1.0",
-            status: index === 0 && guard.allowed ? "PENDING_APPROVAL" : "DRAFT",
-            variants: {
-              create: this.variants(kind, topic, body),
-            },
-          },
-        });
-        if (index === 0) {
-          selected.push(plan.id);
-          if (kind === "VIDEO") await this.writeVideoBrief(plan.id, topic, body);
-        }
-        created += 1;
+    for (let index = 0; index < candidates.length; index += 1) {
+      const candidate = candidates[index];
+      const body = this.videoExecutionBody(candidate);
+      const guard = await this.guard.evaluate({
+        title: candidate.topic,
+        body,
+        productModel: String(context.productModel || ""),
+        evidenceIds: (context.product as { evidenceIds?: string[] }).evidenceIds || [],
+      });
+      const assetIds = Array.from(new Set(candidate.assetIds.filter((id) => allowedAssetIds.has(id))));
+      const plan = await this.prisma.contentPlan.create({
+        data: {
+          planDate,
+          kind: "VIDEO",
+          topic: candidate.topic,
+          productModel: String(context.productModel || "") || null,
+          audience: candidate.audience,
+          objective: candidate.objective,
+          score: candidate.score,
+          scoreBreakdown: candidate.scoreBreakdown,
+          hook: candidate.hook,
+          outline: candidate.outline,
+          sourceSignals: [{ externalVideoIds: candidate.referenceIds, missingAssets: candidate.missingAssets, capturedAt: new Date().toISOString() }],
+          evidenceIds: guard.evidenceIds,
+          riskReasons: guard.reasons,
+          createdBy: actor,
+          actorType: "AI",
+          aiProvider: "ALIYUN_BAILIAN",
+          aiModel: opsConfig.bailian.textModel,
+          promptVersion: "brand-content-v2",
+          status: index === 0 && guard.allowed ? "PENDING_APPROVAL" : "DRAFT",
+          variants: { create: this.videoVariants(candidate) },
+          contentAssets: { create: assetIds.map((assetId, assetIndex) => ({ assetId, role: assetIndex === 0 ? "PRIMARY" : "RECOMMENDED" })) },
+        },
+      });
+      if (index === 0) {
+        selected.push(plan.id);
+        await this.writeVideoBrief(plan.id, candidate, body);
       }
+      created += 1;
     }
     return { created, selected };
   }
 
-  private variants(kind: ContentKind, topic: TopicCandidate, body: string): Prisma.ContentVariantCreateWithoutContentPlanInput[] {
-    if (kind === "VIDEO") {
-      return [
-        { platform: "DOUYIN", title: topic.topic, body, mediaType: "video/mp4" },
-        { platform: "WECHAT_CHANNELS", title: topic.topic, body, mediaType: "video/mp4" },
-        { platform: "XIAOHONGSHU", title: `${topic.topic}｜家庭使用清单`, body, mediaType: "video/mp4" },
-      ];
-    }
+  async generateDailyArticle(date = new Date(), actor = "系统内容引擎", productModel?: string): Promise<{ created: number; selected: string[] }> {
+    const planDate = startOfShanghaiDay(date);
+    const existing = await this.prisma.contentPlan.count({
+      where: { kind: "ARTICLE", planDate: { gte: planDate, lt: new Date(planDate.getTime() + 24 * 60 * 60 * 1000) } },
+    });
+    if (existing) return { created: 0, selected: [] };
+    const context = await this.generationContext(productModel);
+    const article = await this.aiContent.generateArticle(context);
+    const allowedAssetIds = new Set((context.assets as Array<{ id: string }>).map((item) => item.id));
+    const knowledgeRows = context.knowledge as Array<{ id: string; evidenceIds: string[] }>;
+    const allowedKnowledgeIds = new Set(knowledgeRows.map((item) => item.id));
+    const assetIds = Array.from(new Set(article.assetIds.filter((id) => allowedAssetIds.has(id))));
+    const citedKnowledgeIds = Array.from(new Set(article.citedKnowledgeIds.filter((id) => allowedKnowledgeIds.has(id))));
+    const evidenceIds = Array.from(new Set([
+      ...((context.product as { evidenceIds?: string[] }).evidenceIds || []),
+      ...knowledgeRows.filter((item) => citedKnowledgeIds.includes(item.id)).flatMap((item) => item.evidenceIds || []),
+    ]));
+    const body = Object.values(article.variants).join("\n");
+    const guard = await this.guard.evaluate({
+      title: article.title || article.topic,
+      body,
+      productModel: String(context.productModel || ""),
+      evidenceIds,
+    });
+    const missingEvidence = citedKnowledgeIds.length === 0;
+    const plan = await this.prisma.contentPlan.create({
+      data: {
+        planDate,
+        kind: "ARTICLE",
+        topic: article.topic,
+        productModel: String(context.productModel || "") || null,
+        audience: article.audience,
+        objective: article.objective,
+        score: article.score,
+        scoreBreakdown: article.scoreBreakdown,
+        hook: article.hook,
+        outline: article.outline,
+        sourceSignals: [{ knowledgeIds: citedKnowledgeIds, keywords: article.keywords, imageSuggestions: article.imageSuggestions, capturedAt: new Date().toISOString() }],
+        evidenceIds: guard.evidenceIds,
+        riskReasons: [...guard.reasons, ...(missingEvidence ? ["未引用已审核知识，需人工核实"] : [])],
+        createdBy: actor,
+        actorType: "AI",
+        aiProvider: "ALIYUN_BAILIAN",
+        aiModel: opsConfig.bailian.textModel,
+        promptVersion: "brand-content-v2",
+        status: guard.allowed && !missingEvidence ? "PENDING_APPROVAL" : "DRAFT",
+        variants: { create: this.articleVariants(article) },
+        contentAssets: { create: assetIds.map((assetId, assetIndex) => ({ assetId, role: assetIndex === 0 ? "PRIMARY_IMAGE" : "SUPPORTING_IMAGE" })) },
+      },
+    });
+    return { created: 1, selected: [plan.id] };
+  }
+
+  async dailyBrief(date = new Date()) {
+    const planDate = startOfShanghaiDay(date);
+    return this.prisma.contentPlan.findMany({
+      where: { planDate: { gte: planDate, lt: new Date(planDate.getTime() + 24 * 60 * 60 * 1000) } },
+      include: {
+        variants: true,
+        contentAssets: { include: { asset: { select: { id: true, assetNo: true, displayName: true, qualityScore: true, storageUrl: true } } } },
+      },
+      orderBy: [{ kind: "asc" }, { score: "desc" }],
+    });
+  }
+
+  private videoVariants(candidate: AiVideoCandidate): Prisma.ContentVariantCreateWithoutContentPlanInput[] {
+    const zhBody = `15秒脚本：\n${candidate.scripts.zh15}\n\n30秒脚本：\n${candidate.scripts.zh30}\n\n标签：${candidate.hashtags.join(" ")}`;
+    const enBody = `15s Script:\n${candidate.scripts.en15}\n\n30s Script:\n${candidate.scripts.en30}\n\nTags: ${candidate.hashtags.join(" ")}`;
     return [
-      { platform: "WECHAT_OFFICIAL", title: topic.topic, body, mediaType: "text/markdown" },
-      { platform: "XIAOHONGSHU", title: `${topic.topic}｜给父母选表`, body, mediaType: "text/markdown" },
-      { platform: "WECOM", title: topic.topic, body: `${topic.hook}\n${topic.outline.slice(0, 3).join("；")}。`, mediaType: "text/plain" },
+      { platform: "DOUYIN", title: candidate.titleZh || candidate.topic, body: zhBody, mediaType: "video/mp4", metadata: { coverText: candidate.coverTextZh, language: "zh-CN" } },
+      { platform: "TIKTOK", title: candidate.titleEn || candidate.topic, body: enBody, mediaType: "video/mp4", metadata: { coverText: candidate.coverTextEn, language: "en-US" } },
+      { platform: "WECHAT_CHANNELS", title: candidate.titleZh || candidate.topic, body: zhBody, mediaType: "video/mp4", metadata: { coverText: candidate.coverTextZh, language: "zh-CN" } },
     ];
   }
 
-  private async writeVideoBrief(planId: string, topic: TopicCandidate, body: string): Promise<void> {
+  private articleVariants(article: AiArticlePackage): Prisma.ContentVariantCreateWithoutContentPlanInput[] {
+    return [
+      { platform: "WECHAT_OFFICIAL", title: article.title || article.topic, body: article.variants.wechatOfficial, mediaType: "text/markdown", metadata: { summary: article.summary, keywords: article.keywords, cta: article.cta } },
+      { platform: "XIAOHONGSHU", title: article.title || article.topic, body: article.variants.xiaohongshu, mediaType: "text/markdown", metadata: { summary: article.summary, keywords: article.keywords, cta: article.cta } },
+      { platform: "WECOM", title: article.title || article.topic, body: article.variants.wecomMoments || article.variants.shortPost, mediaType: "text/plain", metadata: { summary: article.summary, keywords: article.keywords, cta: article.cta } },
+    ];
+  }
+
+  private videoExecutionBody(candidate: AiVideoCandidate) {
+    return [
+      `Hook：${candidate.hook}`,
+      `镜头：${candidate.outline.join("；")}`,
+      `15秒中文：${candidate.scripts.zh15}`,
+      `15秒英文：${candidate.scripts.en15}`,
+      `30秒中文：${candidate.scripts.zh30}`,
+      `30秒英文：${candidate.scripts.en30}`,
+      `缺失素材：${candidate.missingAssets.join("；") || "无"}`,
+    ].join("\n");
+  }
+
+  private async generationContext(productModel?: string): Promise<Record<string, unknown>> {
+    const products = await this.prisma.product.findMany({
+      where: { status: "READY" },
+      include: { skus: { where: { active: true }, select: { skuCode: true, name: true } } },
+      orderBy: { modelCode: "asc" },
+    });
+    if (!products.length) throw new BadRequestException("没有已审核产品，无法生成内容");
+    const product = productModel
+      ? products.find((item) => item.modelCode.toLowerCase() === productModel.toLowerCase())
+      : products[new Date().getDate() % products.length];
+    if (!product) throw new BadRequestException(`未找到已审核产品：${productModel}`);
+    const metadata = product.metadata && typeof product.metadata === "object" && !Array.isArray(product.metadata)
+      ? product.metadata as Record<string, unknown>
+      : {};
+    const [knowledge, faqs, assets, externalVideos] = await Promise.all([
+      this.prisma.knowledgeEntry.findMany({
+        where: {
+          status: "READY",
+          externallyUsable: true,
+          OR: [{ model: null }, { model: "" }, { model: { contains: product.modelCode, mode: "insensitive" } }],
+        },
+        select: { id: true, type: true, title: true, summary: true, reply: true, body: true, evidenceIds: true, source: true },
+        orderBy: { updatedAt: "desc" },
+        take: 30,
+      }),
+      this.prisma.faqEntry.findMany({
+        where: {
+          status: "READY",
+          externallyUsable: true,
+          OR: [{ productId: product.id }, { productId: null }],
+        },
+        select: { id: true, standardQuestion: true, shortAnswer: true, detailedAnswer: true, category: true, frequency: true, source: true },
+        orderBy: [{ frequency: "desc" }, { updatedAt: "desc" }],
+        take: 20,
+      }),
+      this.prisma.asset.findMany({
+        where: {
+          reviewStatus: "APPROVED",
+          availabilityStatus: "ACTIVE",
+          rightsStatus: { in: ["COMMERCIAL", "EDIT_ONLY"] },
+          qualityScore: { gte: 60 },
+          OR: [
+            { products: { some: { productId: product.id } } },
+            { productScope: { in: ["BRAND", "COMMON"] } },
+          ],
+        },
+        select: {
+          id: true,
+          assetNo: true,
+          displayName: true,
+          kind: true,
+          level: true,
+          qualityScore: true,
+          contentDescription: true,
+          scene: true,
+          tags: { select: { tag: { select: { namespace: true, code: true, label: true } } } },
+          segments: { select: { moduleType: true, startSeconds: true, endSeconds: true, transcript: true, confidence: true }, orderBy: { startSeconds: "asc" } },
+        },
+        orderBy: [{ qualityScore: "desc" }, { useCount: "desc" }],
+        take: 20,
+      }),
+      this.prisma.externalVideo.findMany({
+        where: { status: "READY", rightsStatus: "INTERNAL", level: "REFERENCE", availabilityStatus: "INACTIVE" },
+        select: {
+          id: true,
+          platform: true,
+          sourceUrl: true,
+          title: true,
+          description: true,
+          moduleSummary: true,
+          analysis: true,
+          metrics: { orderBy: { capturedAt: "desc" }, take: 1, select: { views: true, likes: true, comments: true, shares: true, saves: true, capturedAt: true } },
+          scoreSnapshots: { orderBy: { createdAt: "desc" }, take: 1, select: { score: true, grade: true, dimensions: true, explanation: true } },
+        },
+        orderBy: { discoveredAt: "desc" },
+        take: 10,
+      }),
+    ]);
+    return {
+      productId: product.id,
+      productModel: product.modelCode,
+      product: {
+        id: product.id,
+        name: product.name,
+        modelCode: product.modelCode,
+        category: product.category,
+        evidenceIds: product.evidenceIds,
+        publicKnowledge: metadata.publicKnowledge || {},
+        aliases: metadata.aliases || [],
+        skus: product.skus,
+      },
+      knowledge,
+      faqs,
+      assets: assets.map((asset) => ({
+        ...asset,
+        tags: asset.tags.map((item) => item.tag),
+        grade: asset.qualityScore >= 90 ? "S" : asset.qualityScore >= 80 ? "A" : "B",
+      })),
+      externalReferences: externalVideos,
+      constraints: {
+        ownedAssetsOnly: "仅APPROVED+ACTIVE+COMMERCIAL/EDIT_ONLY可作为商用素材",
+        externalReferences: "仅供拆解和仿拍，不得直接商用",
+        unsupportedFacts: "无法由已审核知识确认的型号或事实必须进入待审核",
+      },
+    };
+  }
+
+  private async writeVideoBrief(planId: string, topic: AiVideoCandidate, body: string): Promise<void> {
     const output = resolve(opsConfig.derivedOutputDir, localDateKey(), planId);
     await mkdir(output, { recursive: true });
     const brief = [
@@ -193,7 +311,9 @@ export class ContentService {
       body,
       "",
       "## Assets",
-      "优先从赛电品牌素材库选择与主题、型号和场景一致的已审核素材。",
+      `推荐素材：${topic.assetIds.join("、") || "待补充"}`,
+      `参考视频：${topic.referenceIds.join("、") || "无"}`,
+      `补拍缺口：${topic.missingAssets.join("；") || "无"}`,
       "",
       "## Verification",
       "1080x1920；MP4；音视频可解码；字幕无截断；不得出现素材来源角标。",

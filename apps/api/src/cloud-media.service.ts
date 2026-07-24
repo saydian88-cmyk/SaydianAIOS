@@ -375,7 +375,12 @@ export class BailianVideoAiProvider implements VideoAiProvider {
   }
 
   scoreAsset(input: VideoUnderstandingInput) {
-    return this.chat(input, "按100分制评分，维度含前三秒、信息明确、画面、情绪、产品展示、复用性、转化力，返回严格JSON");
+    return this.chat(
+      input,
+      input.external
+        ? "按外部爆款参考评分：数据热度、前三秒、节奏、表达、可仿拍性和赛电产品匹配度，返回严格JSON"
+        : "按自有素材初始评分：基础质量20%、内容价值50%、复用价值30%。基础质量含清晰度、完整性和技术问题；内容价值含前三秒、信息、情绪、产品展示和CTA；复用价值含模块独立性、平台适配和二次剪辑价值，返回严格JSON",
+    );
   }
 
   generateRemakeBrief(input: VideoUnderstandingInput) {
@@ -390,7 +395,7 @@ export class BailianVideoAiProvider implements VideoAiProvider {
     content.push({
       type: "text",
       text: `${instruction}。外部参考=${input.external}。标题=${input.title || ""}。转写=${(input.transcript || "").slice(0, 18000)}。
-JSON结构：{"summary":"","modules":[{"type":"HOOK","startSecond":0,"endSecond":3,"confidence":0.9,"reason":""}],"products":[],"scenes":[],"audiences":[],"emotions":[],"features":[],"painPoints":[],"trafficMethods":[],"score":0,"grade":"A|B|C|D","dimensions":{},"recommendation":"","remakeBrief":{}}。不得添加Markdown。`,
+JSON结构：{"summary":"","modules":[{"type":"HOOK","startSecond":0,"endSecond":3,"confidence":0.9,"reason":""}],"products":[],"scenes":[],"audiences":[],"emotions":[],"features":[],"painPoints":[],"trafficMethods":[],"score":0,"grade":"S|A|B|C|D","dimensions":{"basicQuality":0,"contentValue":0,"reuseValue":0},"recommendation":"","remakeBrief":{}}。等级S=90-100、A=80-89、B=60-79、C=40-59、D<40。不得添加Markdown。`,
     });
     const response = await fetch(`${opsConfig.bailian.baseUrl}/chat/completions`, {
       method: "POST",
@@ -432,6 +437,71 @@ export class CloudMediaService {
       bucket: opsConfig.oss.bucket,
       ims: this.ims.capabilities(),
       bailian: this.bailian.capabilities(),
+    };
+  }
+
+  async healthCapabilities() {
+    const [oss, latestJobs, latestTextPlan] = await Promise.all([
+      this.oss.healthCheck(),
+      this.prisma.cloudMediaJob.findMany({
+        orderBy: { updatedAt: "desc" },
+        take: 200,
+        select: {
+          provider: true,
+          type: true,
+          status: true,
+          completedAt: true,
+          submittedAt: true,
+          failureReason: true,
+          updatedAt: true,
+        },
+      }),
+      this.prisma.contentPlan.findFirst({
+        where: { aiProvider: "ALIYUN_BAILIAN" },
+        orderBy: { createdAt: "desc" },
+        select: { createdAt: true },
+      }),
+    ]);
+    const latest = (provider: CloudMediaProvider, types: CloudMediaJobType[]) => {
+      const matching = latestJobs.filter((job) => job.provider === provider && types.includes(job.type));
+      const success = matching.find((job) => job.status === "SUCCEEDED");
+      const failed = matching.find((job) => job.status === "FAILED");
+      return {
+        lastSuccessAt: success?.completedAt?.toISOString() || null,
+        recentError: failed?.failureReason || null,
+      };
+    };
+    const imsConfigured = Boolean(opsConfig.ims.accessKeyId && opsConfig.ims.accessKeySecret);
+    const bailianConfigured = Boolean(opsConfig.bailian.apiKey);
+    const item = (configured: boolean, message: string, runtime?: { lastSuccessAt: string | null; recentError: string | null }) => ({
+      state: configured ? "AVAILABLE" as const : "UNCONFIGURED" as const,
+      message,
+      lastSuccessAt: runtime?.lastSuccessAt || null,
+      recentError: runtime?.recentError || null,
+    });
+    return {
+      mode: opsConfig.ims.mode,
+      region: opsConfig.ims.regionId,
+      bucket: opsConfig.oss.bucket,
+      items: {
+        oss: {
+          state: oss.ok ? "AVAILABLE" as const : "ERROR" as const,
+          message: oss.message,
+          lastSuccessAt: oss.ok ? new Date().toISOString() : null,
+          recentError: oss.ok ? null : oss.message,
+        },
+        imsSubmit: item(imsConfigured, imsConfigured ? `IMS ${opsConfig.ims.regionId}` : "缺少IMS AccessKey", latest("ALIYUN_IMS", IMS_TYPES)),
+        imsCallback: item(imsConfigured, imsConfigured ? "IMS回调接口已启用" : "缺少IMS AccessKey", latest("ALIYUN_IMS", IMS_TYPES)),
+        bailianImage: item(bailianConfigured, bailianConfigured ? opsConfig.bailian.visionModel : "缺少百炼API Key", latest("ALIYUN_BAILIAN", ["VIDEO_UNDERSTANDING"])),
+        bailianVideo: item(bailianConfigured, bailianConfigured ? opsConfig.bailian.visionModel : "缺少百炼API Key", latest("ALIYUN_BAILIAN", ["VIDEO_UNDERSTANDING"])),
+        bailianTranscription: item(bailianConfigured, bailianConfigured ? opsConfig.bailian.transcriptionModel : "缺少百炼API Key", latest("ALIYUN_BAILIAN", ["TRANSCRIPTION"])),
+        bailianText: {
+          ...item(bailianConfigured, bailianConfigured ? opsConfig.bailian.textModel : "缺少百炼API Key"),
+          lastSuccessAt: latestTextPlan?.createdAt.toISOString() || null,
+        },
+      },
+      configured: this.capabilities(),
+      checkedAt: new Date().toISOString(),
     };
   }
 

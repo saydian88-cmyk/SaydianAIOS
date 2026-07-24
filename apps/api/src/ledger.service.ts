@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
-import { BusinessSnapshotType, IntegrationKind, Prisma } from "@prisma/client";
+import { AssetKind, BusinessSnapshotType, IntegrationKind, Prisma } from "@prisma/client";
+import { randomUUID } from "node:crypto";
 import { PrismaService } from "./prisma.service";
 import { safeJson, stringValue, toDate } from "./utils";
 
@@ -264,6 +265,8 @@ export class LedgerService {
     if (!rows.length) throw new BadRequestException("素材清单不能为空");
     let created = 0;
     let updated = 0;
+    let duplicates = 0;
+    const assetIds: string[] = [];
     const errors: Array<{ row: number; message: string }> = [];
     const employee = await this.prisma.employee.findFirst({ where: { name: actor, status: "ACTIVE" } });
     for (const [index, row] of rows.entries()) {
@@ -278,14 +281,29 @@ export class LedgerService {
         continue;
       }
       const existing = await this.prisma.asset.findUnique({ where: { sourceKey } });
+      const duplicate = existing ? null : await this.prisma.asset.findFirst({ where: { sha256 }, orderBy: { createdAt: "asc" } });
+      if (duplicate) {
+        duplicates += 1;
+        assetIds.push(duplicate.id);
+        await this.audit(actor, "ASSET_EXACT_DUPLICATE", "Asset", duplicate.id, { sourceKey, sourcePath, fileName, sha256 });
+        continue;
+      }
+      const kind = (["IMAGE", "VIDEO", "AUDIO", "DOCUMENT"].includes(stringValue(row.mediaType).toUpperCase())
+        ? stringValue(row.mediaType).toUpperCase()
+        : "DOCUMENT") as AssetKind;
+      const importedModel = stringValue(row.model) || undefined;
       const asset = await this.prisma.asset.upsert({
         where: { sourceKey },
         create: {
           sourceKey, sourceType: stringValue(row.sourceType) || "LOCAL_AGENT", sourcePath, fileName,
-          extension: stringValue(row.extension), mediaType: stringValue(row.mediaType) || "DOCUMENT", sha256,
+          extension: stringValue(row.extension), mediaType: kind, kind, sha256,
           sizeBytes: BigInt(sizeBytes), modifiedAt, width: Number(row.width) || undefined, height: Number(row.height) || undefined,
           durationSeconds: Number(row.durationSeconds) || undefined, aspectRatio: stringValue(row.aspectRatio) || undefined,
-          model: stringValue(row.model) || undefined, scene: stringValue(row.scene) || undefined, evidenceIds: stringList(row.evidenceIds),
+          assetNo: `SD-${kind}-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${randomUUID().slice(0, 6).toUpperCase()}`,
+          displayName: fileName.replace(/\.[^.]+$/u, ""),
+          level: "ORIGINAL", productScope: importedModel ? "MODEL" : "UNKNOWN", processingStatus: "STORED",
+          reviewStatus: "PENDING", availabilityStatus: "INACTIVE", rightsStatus: "EDIT_ONLY",
+          originalFileName: fileName, isOriginal: true, model: importedModel, scene: stringValue(row.scene) || undefined, evidenceIds: stringList(row.evidenceIds),
           qualityScore: Number(row.qualityScore) || 0, discoveredBy: actor, storageProvider: "ALIYUN_OSS",
           objectKey: stringValue(row.objectKey) || undefined, objectVersionId: stringValue(row.objectVersionId) || undefined,
           etag: stringValue(row.etag) || undefined, storageUrl: stringValue(row.storageUrl) || undefined,
@@ -304,11 +322,22 @@ export class LedgerService {
       if (!latest || latest.sha256 !== asset.sha256 || latest.objectVersionId !== asset.objectVersionId) {
         await this.prisma.assetVersion.create({ data: { assetId: asset.id, version: (latest?.version ?? 0) + 1, sha256: asset.sha256, sourcePath: asset.sourcePath, objectKey: asset.objectKey, objectVersionId: asset.objectVersionId, etag: asset.etag, storageUrl: asset.storageUrl, createdByEmployeeId: employee?.id, createdBy: actor } });
       }
+      if (importedModel) {
+        const product = await this.prisma.product.findFirst({ where: { modelCode: { equals: importedModel, mode: "insensitive" } } });
+        if (product) {
+          await this.prisma.assetProduct.upsert({
+            where: { assetId_productId: { assetId: asset.id, productId: product.id } },
+            update: { scope: "MODEL", confidence: 1, confirmed: true },
+            create: { assetId: asset.id, productId: product.id, scope: "MODEL", confidence: 1, confirmed: true },
+          });
+        }
+      }
+      assetIds.push(asset.id);
       await this.audit(actor, existing ? "ASSET_UPDATED" : "ASSET_ADDED", "Asset", asset.id, { fileName: asset.fileName, sourceType: asset.sourceType, mediaType: asset.mediaType, model: asset.model, sha256: asset.sha256, qualityScore: asset.qualityScore, storageProvider: asset.storageProvider, objectKey: asset.objectKey, storageSyncedAt: asset.storageSyncedAt?.toISOString() });
       if (existing) updated += 1;
       else created += 1;
     }
-    return { received: rows.length, created, updated, rejected: errors.length, errors };
+    return { received: rows.length, created, updated, duplicates, rejected: errors.length, errors, assetIds: Array.from(new Set(assetIds)) };
   }
 
   private async audit(actor: string, action: string, entityType: string, entityId: string, after: unknown) {

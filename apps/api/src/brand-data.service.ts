@@ -64,6 +64,30 @@ function enumValue<T extends string>(value: unknown, values: readonly T[], fallb
   return values.includes(candidate) ? candidate : fallback;
 }
 
+const modelAliases: Record<string, { canonical: string; aliases: string[] }> = {
+  W8U: { canonical: "W8Ultra", aliases: ["W8U", "W8ULTRA"] },
+  W8ULTRA: { canonical: "W8Ultra", aliases: ["W8U", "W8ULTRA"] },
+  W8R: { canonical: "W8Ultra-R", aliases: ["W8R", "W8ULTRA-R"] },
+  "W8ULTRA-R": { canonical: "W8Ultra-R", aliases: ["W8R", "W8ULTRA-R"] },
+  W7PRO: { canonical: "W7PRO", aliases: ["W7 PRO", "W7PRO"] },
+  W8PRO: { canonical: "W8PRO", aliases: ["W8 PRO", "W8PRO"] },
+  R7Y: { canonical: "R7Y", aliases: ["R7Y"] },
+};
+
+function normalizeModel(value: unknown): { canonical: string; aliases: string[] } {
+  const original = text(value);
+  const key = original.toUpperCase().replace(/[＿_\s]+/gu, "").replace(/–|—/gu, "-");
+  return modelAliases[key] || { canonical: original.toUpperCase(), aliases: [original.toUpperCase()] };
+}
+
+function assetGrade(score: number): "S" | "A" | "B" | "C" | "D" {
+  if (score >= 90) return "S";
+  if (score >= 80) return "A";
+  if (score >= 60) return "B";
+  if (score >= 40) return "C";
+  return "D";
+}
+
 export function growthScore(input: {
   baselineQuality: number;
   views?: number | null;
@@ -83,7 +107,8 @@ export function growthScore(input: {
   const viewScore = Math.min(100, Math.log10(views + 1) * 20);
   const engagementScore = views ? Math.min(100, interactions / views * 1000) : 0;
   const conversionScore = views ? Math.min(100, orders / views * 5000) : Math.min(100, orders * 10);
-  const score = Math.round(baselineQuality * 0.45 + viewScore * 0.25 + engagementScore * 0.2 + conversionScore * 0.1);
+  const performanceScore = viewScore * 0.45 + engagementScore * 0.35 + conversionScore * 0.2;
+  const score = Math.round(baselineQuality * 0.6 + performanceScore * 0.4);
   return { score, recommendationWeight: Number(Math.max(0.2, Math.min(1.5, score / 80)).toFixed(2)), hasPerformanceData: true };
 }
 
@@ -186,6 +211,130 @@ export class BrandDataService {
       this.prisma.employee.findMany({ where: { status: "ACTIVE" }, select: { id: true, employeeNo: true, name: true, department: { select: { name: true } } }, orderBy: { name: "asc" } }),
     ]);
     return { claims, mappings, phraseRules, brandProfiles, products, faqs, employees };
+  }
+
+  async products(query: Record<string, string | undefined>) {
+    const keyword = text(query.query);
+    const status = text(query.status).toUpperCase();
+    return this.prisma.product.findMany({
+      where: {
+        ...(recordStatuses.includes(status as RecordStatus) ? { status: status as RecordStatus } : {}),
+        ...(keyword ? {
+          OR: [
+            { name: { contains: keyword, mode: "insensitive" } },
+            { modelCode: { contains: keyword, mode: "insensitive" } },
+            { category: { contains: keyword, mode: "insensitive" } },
+          ],
+        } : {}),
+      },
+      include: { skus: true, _count: { select: { assets: true, faqEntries: true } } },
+      orderBy: [{ category: "asc" }, { modelCode: "asc" }],
+      take: 500,
+    });
+  }
+
+  async importProducts(body: JsonRecord, actor: string) {
+    const rows = Array.isArray(body.rows) ? body.rows.map((item) => item && typeof item === "object" && !Array.isArray(item) ? item as JsonRecord : {}) : [];
+    if (!rows.length) throw new BadRequestException("产品导入数据不能为空");
+    let created = 0;
+    let updated = 0;
+    const skipped: Array<{ row: number; reason: string }> = [];
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index];
+      const rawCode = text(row.modelCode ?? row.model ?? row["型号"] ?? row["产品型号"]);
+      const businessCode = text(row.businessCode ?? row.skuCode ?? row.code ?? row["编码"] ?? row["产品编码"]);
+      const name = text(row.name ?? row.productName ?? row["品名"] ?? row["产品名称"]);
+      const category = text(row.category ?? row["品类"] ?? row["产品分类"]);
+      if (!businessCode || !rawCode || !name) {
+        skipped.push({ row: index + 1, reason: "缺少编码、型号或产品名称" });
+        continue;
+      }
+      const normalized = normalizeModel(rawCode);
+      const existing = await this.prisma.product.findUnique({ where: { modelCode: normalized.canonical } });
+      const internal = {
+        cost: row.cost ?? row["成本"] ?? row["成本价"] ?? null,
+        minimumPrice: row.minimumPrice ?? row["最低售价"] ?? row["最低销售价"] ?? null,
+      };
+      const publicKnowledge = {
+        facts: row.facts ?? {},
+        functions: row.functions ?? [],
+        customerValues: row.customerValues ?? [],
+        audiences: row.audiences ?? [],
+        scenes: row.scenes ?? [],
+        contentDirections: row.contentDirections ?? [],
+        evidenceIds: row.evidenceIds ?? [],
+      };
+      const product = await this.prisma.product.upsert({
+        where: { modelCode: normalized.canonical },
+        create: {
+          name,
+          modelCode: normalized.canonical,
+          category: category || "待分类",
+          evidenceIds: textArray(row.evidenceIds),
+          status: "READY",
+          metadata: json({
+            source: text(body.source) || "赛电产品表20260626.xlsx",
+            sourceRow: index + 2,
+            aliases: Array.from(new Set([rawCode, ...normalized.aliases])),
+            publicKnowledge,
+            internal,
+            importedBy: actor,
+          }),
+        },
+        update: {
+          name,
+          category: category || existing?.category || "待分类",
+          evidenceIds: textArray(row.evidenceIds),
+          status: "READY",
+          metadata: json({
+            ...jsonRecord(existing?.metadata),
+            source: text(body.source) || "赛电产品表20260626.xlsx",
+            sourceRow: index + 2,
+            aliases: Array.from(new Set([rawCode, ...normalized.aliases])),
+            publicKnowledge,
+            internal,
+            importedBy: actor,
+            importedAt: new Date().toISOString(),
+          }),
+        },
+      });
+      await this.prisma.productSku.upsert({
+        where: { skuCode: businessCode },
+        create: {
+          productId: product.id,
+          skuCode: businessCode,
+          name,
+          attributes: json({ model: normalized.canonical, aliases: normalized.aliases, internal }),
+        },
+        update: {
+          productId: product.id,
+          name,
+          active: true,
+          attributes: json({ model: normalized.canonical, aliases: normalized.aliases, internal }),
+        },
+      });
+      await this.prisma.productMapping.upsert({
+        where: { commercialName: normalized.canonical },
+        create: {
+          commercialName: normalized.canonical,
+          pageFacts: `${name}；${category || "待分类"}`,
+          nameplateModel: normalized.canonical,
+          status: "READY",
+          raw: json({ aliases: Array.from(new Set([rawCode, ...normalized.aliases])), source: text(body.source) || "赛电产品表20260626.xlsx" }),
+        },
+        update: {
+          pageFacts: `${name}；${category || "待分类"}`,
+          nameplateModel: normalized.canonical,
+          status: "READY",
+          requiredAction: null,
+          raw: json({ aliases: Array.from(new Set([rawCode, ...normalized.aliases])), source: text(body.source) || "赛电产品表20260626.xlsx" }),
+        },
+      });
+      if (existing) updated += 1;
+      else created += 1;
+    }
+    await this.audit(actor, "PRODUCT_IMPORT", "Product", "batch", { created, updated, skipped, source: body.source });
+    return { received: rows.length, created, updated, skipped, imported: created + updated };
   }
 
   async createKnowledge(body: JsonRecord, actor: string) {
@@ -353,6 +502,58 @@ export class BrandDataService {
     const items = rows.slice(0, take).map((row) => this.assetView(row));
     if (!query.pageSize && !query.cursor) return items;
     return { items, total, nextCursor, pageSize: take };
+  }
+
+  async rankedAssets(query: Record<string, string | undefined>) {
+    const keyword = text(query.query);
+    const model = text(query.model);
+    const kind = text(query.kind).toUpperCase();
+    const moduleType = text(query.moduleType).toUpperCase();
+    const minimumScore = Math.max(0, Math.min(100, Number(query.minimumScore || 0)));
+    const limit = Math.min(Math.max(Number(query.limit || 30), 1), 100);
+    const rows = await this.prisma.asset.findMany({
+      where: {
+        reviewStatus: "APPROVED",
+        availabilityStatus: "ACTIVE",
+        rightsStatus: { in: ["COMMERCIAL", "EDIT_ONLY"] },
+        qualityScore: { gte: minimumScore },
+        ...(assetKinds.includes(kind as AssetKind) ? { kind: kind as AssetKind } : {}),
+        ...(model ? {
+          OR: [
+            { model: { contains: model, mode: "insensitive" } },
+            { products: { some: { product: { modelCode: { contains: model, mode: "insensitive" } } } } },
+          ],
+        } : {}),
+        ...(moduleTypes.includes(moduleType as VideoModuleType) ? { segments: { some: { moduleType: moduleType as VideoModuleType } } } : {}),
+        ...(keyword ? {
+          AND: [{
+            OR: [
+              { assetNo: { contains: keyword, mode: "insensitive" } },
+              { displayName: { contains: keyword, mode: "insensitive" } },
+              { contentDescription: { contains: keyword, mode: "insensitive" } },
+              { scene: { contains: keyword, mode: "insensitive" } },
+              { tags: { some: { tag: { label: { contains: keyword, mode: "insensitive" } } } } },
+            ],
+          }],
+        } : {}),
+      },
+      include: {
+        versions: { orderBy: { version: "desc" }, take: 1 },
+        products: { include: { product: true } },
+        tags: { include: { tag: true } },
+        segments: { orderBy: { startSeconds: "asc" } },
+        createdByEmployee: true,
+        _count: { select: { usages: true } },
+      },
+      orderBy: [{ qualityScore: "desc" }, { useCount: "desc" }, { updatedAt: "desc" }],
+      take: limit,
+    });
+    return rows.map((row) => ({
+      ...this.assetView(row),
+      grade: assetGrade(row.qualityScore),
+      callable: true,
+      moduleTypes: Array.from(new Set(row.segments.map((segment) => segment.moduleType).filter(Boolean))),
+    }));
   }
 
   async asset(id: string) {

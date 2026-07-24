@@ -115,6 +115,19 @@ export class OpsController {
   @Post("content/generate") generateContent(@Headers("authorization") authorization?: string, @Headers("x-ops-actor") requestedActor?: string) {
     const actor = this.actor(authorization, requestedActor); return this.contentService.generateDaily(new Date(), actor);
   }
+  @Post("content/daily-video/generate") generateDailyVideo(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Body() body: Record<string, unknown>) {
+    const actor = this.actor(authorization, requestedActor);
+    return this.contentService.generateDailyVideo(new Date(), actor, body.productModel ? String(body.productModel) : undefined);
+  }
+  @Post("content/daily-article/generate") generateDailyArticle(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Body() body: Record<string, unknown>) {
+    const actor = this.actor(authorization, requestedActor);
+    return this.contentService.generateDailyArticle(new Date(), actor, body.productModel ? String(body.productModel) : undefined);
+  }
+  @Get("content/daily-brief") dailyBrief(@Headers("authorization") authorization: string | undefined, @Query("date") date?: string) {
+    this.actor(authorization);
+    const requestedDate = date ? new Date(`${date}T00:00:00+08:00`) : new Date();
+    return this.contentService.dailyBrief(requestedDate);
+  }
   @Post("content/:id/approve") approveContent(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("id") id: string, @Body() body: Record<string, unknown>) {
     return this.contentService.approve(id, this.actor(authorization, requestedActor), body.note ? String(body.note) : undefined);
   }

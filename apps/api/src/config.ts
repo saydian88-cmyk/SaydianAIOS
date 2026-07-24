@@ -16,7 +16,7 @@ export const opsConfig = {
   defaultActor: process.env.OPS_DEFAULT_ACTOR || "运营负责人",
   publicBaseUrl: process.env.OPS_PUBLIC_BASE_URL || "http://127.0.0.1:3210",
   webBaseUrl: process.env.OPS_WEB_BASE_URL || "http://127.0.0.1:5173/",
-  assetRoots: list(process.env.ASSET_ROOTS || "F:\\xcodeplace\\视频创作\\赛电品牌素材库"),
+  assetRoots: list(process.env.ASSET_ROOTS || "F:\\xcodeplace\\视频创作\\赛电品牌素材库;F:\\xcodeplace\\.赛电产品图片整理_20260626"),
   wecomDriveRoot: process.env.WECOM_DRIVE_SYNC_ROOT?.trim() || "",
   derivedOutputDir: resolve(
     process.env.DERIVED_OUTPUT_DIR || resolve(process.cwd(), "data", "derived"),
@@ -65,7 +65,7 @@ export const opsConfig = {
     snapshotTemplateId: process.env.ALIYUN_IMS_SNAPSHOT_TEMPLATE_ID || "",
     callbackBaseUrl:
       process.env.ALIYUN_IMS_CALLBACK_BASE_URL ||
-      `${process.env.OPS_PUBLIC_BASE_URL || "http://127.0.0.1:3210"}/api/brand-data/cloud/callbacks`,
+      `${process.env.OPS_PUBLIC_BASE_URL || "http://127.0.0.1:3210"}/api/v1/brand-data/cloud/callbacks`,
     mode: (process.env.MEDIA_PROCESSING_MODE || "cloud").toLowerCase(),
   },
   viralCollector: {

@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { ScheduleModule } from "@nestjs/schedule";
 import { AppController } from "./root.controller";
+import { AiContentService } from "./ai-content.service";
 import { AssetAiService } from "./asset-ai.service";
 import { AuthService } from "./auth.service";
 import { AutomationService } from "./automation.service";
@@ -25,7 +26,7 @@ import { ViralCollectorService } from "./viral-collector.service";
   controllers: [AppController, HealthController, OpsController, BrandDataController],
   providers: [
     PrismaService, AuthService, PlatformRegistry, ContentGuardService, OssStorageService, SourceSyncService,
-    ContentService, MonitoringService, ReportService, OperationsService, LedgerService, AutomationService,
+    AiContentService, ContentService, MonitoringService, ReportService, OperationsService, LedgerService, AutomationService,
     AliyunImsProvider, BailianVideoAiProvider, CloudMediaService, ViralCollectorService, AssetAiService, BrandDataService,
   ],
 })

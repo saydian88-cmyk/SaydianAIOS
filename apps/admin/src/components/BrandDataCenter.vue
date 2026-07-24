@@ -26,6 +26,7 @@ const growthLoop = ref<Row>();
 const externalVideos = ref<Row[]>([]);
 const remakeTasks = ref<Row[]>([]);
 const cloudJobs = ref<Row[]>([]);
+const aiCapabilities = ref<Row>();
 const viralCapabilities = ref<Row[]>([]);
 const controls = ref<{ claims: Row[]; mappings: Row[]; phraseRules: Row[]; brandProfiles: Row[]; products: Row[]; faqs: Row[]; employees: Row[] }>({ claims: [], mappings: [], phraseRules: [], brandProfiles: [], products: [], faqs: [], employees: [] });
 const knowledgeDialog = ref(false);
@@ -59,6 +60,17 @@ const levelOptions = ["ORIGINAL", "MODULE", "FINISHED", "REFERENCE", "AI_GENERAT
 const moduleOptions = ["HOOK", "PAIN", "SCENE", "FEATURE", "BENEFIT", "PROOF", "DEMO", "COMPARE", "UGC", "STORY", "TRANSITION", "TRAFFIC", "OFFER", "CTA", "ENDING"];
 const rightsOptions = ["COMMERCIAL", "INTERNAL", "EDIT_ONLY", "AUTH_REQUIRED", "EXPIRED", "PROHIBITED"];
 const videoAssets = computed(() => assets.value.filter((item) => item.kind === "VIDEO"));
+const aiCapabilityItems = computed<Array<{ key: string; label: string; state: string; message: string; lastSuccessAt?: string | null; recentError?: string | null }>>(() => Object.entries(aiCapabilities.value?.items || {}).map(([key, value]) => {
+  const capability = value as Row;
+  return {
+    key,
+    label: ({ oss: "OSS连接", imsSubmit: "IMS任务提交", imsCallback: "IMS回调", bailianImage: "百炼图片理解", bailianVideo: "百炼视频理解", bailianTranscription: "百炼语音转写", bailianText: "百炼文本生成" } as Record<string, string>)[key] || key,
+    state: String(capability.state || "UNCONFIGURED"),
+    message: String(capability.message || "未配置"),
+    lastSuccessAt: capability.lastSuccessAt,
+    recentError: capability.recentError,
+  };
+}));
 
 function typeLabel(value: string) { return knowledgeTypes.find((item) => item.value === value)?.label || value; }
 function dateTime(value?: string) { if (!value) return "未记录"; const date = new Date(value); return Number.isNaN(date.getTime()) ? "未记录" : new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(date); }
@@ -84,6 +96,7 @@ async function loadAssets(reset = true) {
   assets.value = reset ? result.items : [...assets.value, ...result.items]; assetTotal.value = result.total; nextCursor.value = result.nextCursor;
 }
 async function loadJobs() { jobs.value = await api<Row[]>("/api/v1/brand-data/analysis-jobs"); }
+async function loadAiCapabilities() { aiCapabilities.value = await api<Row>("/api/v1/brand-data/ai-capabilities"); }
 async function loadGaps(refresh = false) { gaps.value = await api<Row[]>(`/api/v1/brand-data/asset-gaps${refresh ? "?refresh=1" : ""}`); }
 async function loadReport() { dailyReport.value = await api<Row>("/api/v1/brand-data/reports/daily"); }
 async function loadGrowthLoop() { growthLoop.value = await api<Row>("/api/v1/brand-data/growth-loop"); }
@@ -106,7 +119,7 @@ async function reload() {
   await run(async () => {
     const [summary, knowledgeRows, controlsRows] = await Promise.all([api<Overview>("/api/v1/brand-data/overview"), api<Row[]>("/api/v1/brand-data/knowledge"), api<typeof controls.value>("/api/v1/brand-data/knowledge-controls")]);
     overview.value = summary; knowledge.value = knowledgeRows; controls.value = controlsRows;
-    await Promise.all([loadAssets(), loadJobs(), loadGaps(), loadReport(), loadGrowthLoop(), loadViralWorkspace()]);
+    await Promise.all([loadAssets(), loadJobs(), loadAiCapabilities(), loadGaps(), loadReport(), loadGrowthLoop(), loadViralWorkspace()]);
   });
 }
 
@@ -267,7 +280,15 @@ onMounted(reload);
       </template>
 
       <template v-else-if="assetView === 'jobs'">
-        <div class="capability-note"><strong>AI能力：</strong>{{ overview?.ai.message }}<el-button link type="primary" @click="run(loadJobs)">刷新队列</el-button></div>
+        <div class="capability-note"><strong>AI能力状态</strong><span>深圳OSS / IMS / 百炼分项显示最近成功和最近错误</span><el-button link type="primary" @click="run(async () => { await loadJobs(); await loadAiCapabilities(); })">刷新状态与队列</el-button></div>
+        <div class="ai-capability-grid">
+          <article v-for="item in aiCapabilityItems" :key="item.key">
+            <div><strong>{{ item.label }}</strong><small>{{ item.message }}</small></div>
+            <el-tag :type="statusType(item.state)">{{ statusLabel(item.state) }}</el-tag>
+            <span>最后成功：{{ dateTime(item.lastSuccessAt || undefined) }}</span>
+            <span v-if="item.recentError" class="danger">最近错误：{{ item.recentError }}</span>
+          </article>
+        </div>
         <div class="data-panel"><el-table :data="jobs" stripe height="545"><el-table-column label="素材" min-width="210"><template #default="scope">{{ scope.row.asset?.assetNo }}<small class="cell-note">{{ scope.row.asset?.displayName || scope.row.asset?.fileName }}</small></template></el-table-column><el-table-column prop="type" label="任务" width="190" /><el-table-column prop="provider" label="执行方" width="150" /><el-table-column prop="model" label="模型" width="150"><template #default="scope">{{ scope.row.model || '本地工具' }}</template></el-table-column><el-table-column label="状态" width="120"><template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template></el-table-column><el-table-column prop="attempts" label="尝试" width="75" /><el-table-column prop="failureReason" label="失败/未配置原因" min-width="260" show-overflow-tooltip /><el-table-column label="更新时间" width="145"><template #default="scope">{{ dateTime(scope.row.updatedAt) }}</template></el-table-column></el-table></div>
       </template>
 
@@ -367,6 +388,7 @@ onMounted(reload);
 .filter-bar { display: grid; gap: 10px; padding: 14px; border: 1px solid #e7ebf2; border-radius: 14px; background: #fff; }.knowledge-filter { grid-template-columns: minmax(260px, 1.5fr) 150px 160px 130px auto; }.asset-filter { grid-template-columns: minmax(240px, 1.5fr) 140px 190px 140px auto; }.advanced-filter { grid-column: 1 / -1; }.advanced-filter-grid { display: grid; grid-template-columns: repeat(4, minmax(130px, 1fr)); gap: 10px; padding-top: 5px; }.asset-index { display: flex; gap: 8px; overflow-x: auto; padding: 2px; }.asset-index button { min-width: 105px; padding: 11px 15px; color: #5f6b7d; border: 1px solid #e2e7ef; border-radius: 11px; background: #fff; cursor: pointer; }.asset-index button.active { color: #a2202b; border-color: #e1a9ae; background: #fff7f7; }.asset-index b { margin-left: 5px; }.data-panel { overflow: hidden; border: 1px solid #e7ebf2; border-radius: 15px; background: #fff; }.data-panel h4 { margin: 0; padding: 15px 17px; color: #1b2941; border-bottom: 1px solid #edf0f5; }.cell-note { display: block; margin-top: 2px; color: #9099a8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.cell-note.danger { color: #c53943; }.form-grid { display: grid; grid-template-columns: 1fr 1fr; column-gap: 18px; }.form-grid .full { grid-column: 1 / -1; }.asset-upload { margin-bottom: 14px; }.ai-assist { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 15px; padding: 13px 15px; border: 1px solid #dce7f5; border-radius: 12px; background: #f5f9ff; }.ai-assist strong, .ai-assist span { display: block; }.ai-assist span { margin-top: 3px; color: #778398; font-size: 12px; }.upload-advanced { margin-top: 2px; }.load-more { display: flex; justify-content: center; }.video-toolbar, .capability-note { display: flex; align-items: center; gap: 16px; padding: 14px 16px; color: #6f798b; border: 1px solid #e7ebf2; border-radius: 14px; background: #fff; }.video-toolbar .el-select { width: 460px; }.time-range { display: flex; align-items: center; gap: 5px; }.time-range .el-input-number { width: 88px; }.two-panels { display: grid; grid-template-columns: .8fr 1.2fr; gap: 14px; }.detail-head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 18px; }.detail-head span { color: #8b95a5; }.detail-head h3 { margin: 4px 0 0; font-size: 23px; color: #17243b; }.detail-head > div:last-child { display: flex; gap: 7px; }.detail-grid { display: grid; gap: 16px; margin-top: 18px; }.detail-grid section { border: 1px solid #e8ecf2; border-radius: 12px; overflow: hidden; }.detail-grid h4 { margin: 0; padding: 12px 15px; background: #f7f9fc; }.tag-cloud { display: flex; flex-wrap: wrap; gap: 8px; padding: 15px; }
 .growth-loop { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }.growth-stage { position: relative; display: flex; align-items: center; gap: 12px; min-height: 82px; padding: 14px; border: 1px solid #e6eaf1; border-radius: 14px; background: #fff; }.growth-stage:not(:last-child)::after { position: absolute; right: -10px; z-index: 2; content: "→"; color: #9aa4b3; }.stage-index { display: grid; place-items: center; flex: 0 0 34px; width: 34px; height: 34px; color: #fff; font-size: 12px; font-weight: 800; border-radius: 50%; background: #7d8798; }.growth-stage strong, .growth-stage span { display: block; }.growth-stage strong { color: #17243b; line-height: 1.35; }.growth-stage span { margin-top: 5px; color: #818b9b; font-size: 12px; }.growth-stage.state-active .stage-index, .growth-stage.state-ready .stage-index { background: #2f8f64; }.growth-stage.state-running .stage-index, .growth-stage.state-tracking .stage-index { background: #3978c5; }.growth-stage.state-action_required { border-color: #f0b8bd; background: #fff8f8; }.growth-stage.state-action_required .stage-index { background: #c53943; }
 .collector-capabilities { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }.collector-capabilities article { display: grid; grid-template-columns: 1fr auto; gap: 6px 10px; padding: 14px 16px; border: 1px solid #e7ebf2; border-radius: 13px; background: #fff; }.collector-capabilities span { grid-column: 1 / -1; color: #818b9b; font-size: 12px; }.viral-panels { grid-template-columns: 1.2fr 1fr; }
+.ai-capability-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }.ai-capability-grid article { display: grid; grid-template-columns: 1fr auto; gap: 7px 10px; padding: 13px 15px; border: 1px solid #e7ebf2; border-radius: 12px; background: #fff; }.ai-capability-grid small, .ai-capability-grid span { display: block; color: #818b9b; font-size: 12px; }.ai-capability-grid article > span { grid-column: 1 / -1; }.ai-capability-grid .danger { color: #c53943; }
 @media (max-width: 1400px) { .asset-filter { grid-template-columns: minmax(220px, 1fr) repeat(3, minmax(130px, .65fr)) auto; }.report-summary { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 1400px) { .growth-loop { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 @media (max-width: 1100px) { .brand-metrics { grid-template-columns: repeat(2, 1fr); }.knowledge-filter { grid-template-columns: repeat(3, 1fr); }.two-panels { grid-template-columns: 1fr; }.growth-loop { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
