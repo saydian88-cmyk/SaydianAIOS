@@ -1,6 +1,5 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import { AssetKind, BusinessSnapshotType, IntegrationKind, Prisma } from "@prisma/client";
-import { randomUUID } from "node:crypto";
 import { PrismaService } from "./prisma.service";
 import { safeJson, stringValue, toDate } from "./utils";
 
@@ -299,7 +298,7 @@ export class LedgerService {
           extension: stringValue(row.extension), mediaType: kind, kind, sha256,
           sizeBytes: BigInt(sizeBytes), modifiedAt, width: Number(row.width) || undefined, height: Number(row.height) || undefined,
           durationSeconds: Number(row.durationSeconds) || undefined, aspectRatio: stringValue(row.aspectRatio) || undefined,
-          assetNo: `SD-${kind}-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${randomUUID().slice(0, 6).toUpperCase()}`,
+          assetNo: `SD-${kind}-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${sha256.slice(0, 12).toUpperCase()}`,
           displayName: fileName.replace(/\.[^.]+$/u, ""),
           level: "ORIGINAL", productScope: importedModel ? "MODEL" : "UNKNOWN", processingStatus: "STORED",
           reviewStatus: "PENDING", availabilityStatus: "INACTIVE", rightsStatus: "EDIT_ONLY",
