@@ -69,6 +69,11 @@ export class BrandDataController {
     return this.brandData.importProducts(body, this.actor(authorization, requestedActor));
   }
 
+  @Patch("products/:id")
+  updateProduct(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("id") id: string, @Body() body: Record<string, unknown>) {
+    return this.brandData.updateProduct(id, body, this.actor(authorization, requestedActor));
+  }
+
   @Post("knowledge")
   createKnowledge(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Body() body: Record<string, unknown>) {
     return this.brandData.createKnowledge(body, this.actor(authorization, requestedActor));

@@ -337,6 +337,42 @@ export class BrandDataService {
     return { received: rows.length, created, updated, skipped, imported: created + updated };
   }
 
+  async updateProduct(id: string, body: JsonRecord, actor: string) {
+    const existing = await this.prisma.product.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException("产品不存在");
+    const name = body.name === undefined ? existing.name : text(body.name);
+    const category = body.category === undefined ? existing.category : text(body.category);
+    if (!name || !category) throw new BadRequestException("产品名称和系列不能为空");
+    const existingMetadata = jsonRecord(existing.metadata);
+    const existingPublicKnowledge = jsonRecord(existingMetadata.publicKnowledge as Prisma.JsonValue);
+    const metadata = {
+      ...existingMetadata,
+      ...(body.aliases !== undefined ? { aliases: textArray(body.aliases) } : {}),
+      publicKnowledge: {
+        ...existingPublicKnowledge,
+        ...(body.functions !== undefined ? { functions: textArray(body.functions) } : {}),
+        ...(body.customerValues !== undefined ? { customerValues: textArray(body.customerValues) } : {}),
+        ...(body.audiences !== undefined ? { audiences: textArray(body.audiences) } : {}),
+        ...(body.scenes !== undefined ? { scenes: textArray(body.scenes) } : {}),
+        ...(body.contentDirections !== undefined ? { contentDirections: textArray(body.contentDirections) } : {}),
+      },
+      updatedBy: actor,
+      updatedAt: new Date().toISOString(),
+    };
+    const product = await this.prisma.product.update({
+      where: { id },
+      data: {
+        name,
+        category,
+        ...(body.status !== undefined ? { status: enumValue(body.status, recordStatuses, existing.status) } : {}),
+        metadata: json(metadata),
+      },
+      include: { skus: true },
+    });
+    await this.audit(actor, "PRODUCT_UPDATE", "Product", id, { name: product.name, category: product.category, status: product.status });
+    return product;
+  }
+
   async createKnowledge(body: JsonRecord, actor: string) {
     const title = text(body.title);
     const type = text(body.type).toUpperCase();
