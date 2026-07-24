@@ -229,7 +229,7 @@ async function runJob(kind: string) {
 async function startWecomLogin() {
   loginMessage.value = "";
   try {
-    const redirectUri = `${window.location.origin}${window.location.pathname}`;
+    const redirectUri = `${window.location.origin}/saidian-ops/`;
     const result = await api<{ url: string }>(`/api/v1/auth/wecom/authorize-url?redirectUri=${encodeURIComponent(redirectUri)}`);
     window.location.assign(result.url);
   } catch (reason) {
@@ -241,7 +241,7 @@ async function loadWecomQr() {
   qrLoading.value = true;
   loginMessage.value = "";
   try {
-    const redirectUri = `${window.location.origin}${window.location.pathname}?wecom_qr=1`;
+    const redirectUri = `${window.location.origin}/saidian-ops/?wecom_qr=1`;
     const result = await api<{ url: string }>(`/api/v1/auth/wecom/qr-authorize-url?redirectUri=${encodeURIComponent(redirectUri)}`);
     qrLoginUrl.value = result.url;
   } catch (reason) {
