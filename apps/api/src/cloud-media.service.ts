@@ -41,6 +41,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { opsConfig } from "./config";
 import { OssStorageService } from "./oss-storage.service";
 import { PrismaService } from "./prisma.service";
+import { buildAiAssetName, isIrregularAssetName } from "./asset-naming";
 
 type JsonMap = Record<string, unknown>;
 
@@ -432,7 +433,7 @@ export class BailianVideoAiProvider implements VideoAiProvider {
     content.push({
       type: "text",
       text: `${instruction}。外部参考=${input.external}。标题=${input.title || ""}。转写=${(input.transcript || "").slice(0, 18000)}。
-JSON结构：{"summary":"","modules":[{"type":"HOOK","startSecond":0,"endSecond":3,"confidence":0.9,"reason":""}],"products":[],"scenes":[],"audiences":[],"emotions":[],"features":[],"painPoints":[],"trafficMethods":[],"score":0,"grade":"S|A|B|C|D","dimensions":{"basicQuality":0,"contentValue":0,"reuseValue":0},"recommendation":"","remakeBrief":{}}。等级S=90-100、A=80-89、B=60-79、C=40-59、D<40。不得添加Markdown。`,
+JSON结构：{"suggestedName":"","summary":"","modules":[{"type":"HOOK","startSecond":0,"endSecond":3,"confidence":0.9,"reason":""}],"products":[],"scenes":[],"audiences":[],"emotions":[],"features":[],"painPoints":[],"trafficMethods":[],"score":0,"grade":"S|A|B|C|D","dimensions":{"basicQuality":0,"contentValue":0,"reuseValue":0},"recommendation":"","remakeBrief":{}}。suggestedName必须是30字内、便于搜索的中文素材名，格式优先为“型号-模块-核心内容”，不能使用原文件编号或无意义名称。等级S=90-100、A=80-89、B=60-79、C=40-59、D<40。不得添加Markdown。`,
     });
     const response = await fetch(`${opsConfig.bailian.baseUrl}/chat/completions`, {
       method: "POST",
@@ -898,6 +899,10 @@ export class CloudMediaService {
     });
     const modules = Array.isArray(result.modules) ? result.modules.map(map) : [];
     if (assetId) {
+      const assetForNaming = await this.prisma.asset.findUnique({
+        where: { id: assetId },
+        include: { products: { include: { product: { select: { modelCode: true } } } } },
+      });
       for (const module of modules) {
         const moduleType = text(module.type).toUpperCase();
         const start = number(module.startSecond);
@@ -930,6 +935,9 @@ export class CloudMediaService {
         data: {
           qualityScore: score,
           contentDescription: text(result.summary) || undefined,
+          ...(assetForNaming && isIrregularAssetName(assetForNaming.displayName || assetForNaming.fileName)
+            ? { displayName: buildAiAssetName(result, assetForNaming.products.map((item) => item.product.modelCode)) }
+            : {}),
           processingStatus: "READY_FOR_REVIEW",
           lastAnalysisAt: new Date(),
         },

@@ -11,6 +11,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
 import sharp from "sharp";
+import { buildAiAssetName, isIrregularAssetName } from "./asset-naming";
 import { CloudMediaService } from "./cloud-media.service";
 import { opsConfig } from "./config";
 import { OssStorageService } from "./oss-storage.service";
@@ -462,7 +463,7 @@ export class AssetAiService {
     if (!objectKey) throw new Error("素材缺少OSS对象");
     const prompt = type === "OCR"
       ? "识别图片中的全部文字。返回JSON：{text,language,blocks:[{text,position}]}. 不要添加解释。"
-      : "分析赛电品牌素材。返回JSON：{summary,products,people,scenes,features,painPoints,audiences,platforms,moduleSuggestion,tags,riskWords}. 只返回JSON。";
+      : "分析赛电品牌素材。返回JSON：{suggestedName,summary,products,people,scenes,features,painPoints,audiences,platforms,moduleSuggestion,tags,riskWords}。suggestedName必须是30字内、便于搜索的中文素材名，格式优先为“型号-模块-核心内容”，不能使用原文件编号或无意义名称。只返回JSON。";
     const response = await fetch(`${opsConfig.bailian.baseUrl}/chat/completions`, {
       method: "POST",
       headers: { authorization: `Bearer ${opsConfig.bailian.apiKey}`, "content-type": "application/json" },
@@ -477,6 +478,10 @@ export class AssetAiService {
   }
 
   private async applyAiResult(assetId: string, result: JsonRecord) {
+    const asset = await this.prisma.asset.findUnique({
+      where: { id: assetId },
+      include: { products: { include: { product: { select: { modelCode: true } } } } },
+    });
     const tags = ["scenes", "features", "painPoints", "audiences", "platforms", "tags"].flatMap((namespace) => {
       const values = Array.isArray(result[namespace]) ? result[namespace] as unknown[] : [];
       return values.map((value) => ({ namespace, label: text(value) })).filter((item) => item.label);
@@ -487,7 +492,16 @@ export class AssetAiService {
       const existing = await this.prisma.assetTag.findUnique({ where: { assetId_tagId: { assetId, tagId: tag.id } } });
       if (!existing?.locked) await this.prisma.assetTag.upsert({ where: { assetId_tagId: { assetId, tagId: tag.id } }, update: { source: "AI", confidence: 0.8, modelVersion: opsConfig.bailian.visionModel }, create: { assetId, tagId: tag.id, source: "AI", confidence: 0.8, modelVersion: opsConfig.bailian.visionModel, createdBy: "阿里云百炼" } });
     }
-    await this.prisma.asset.update({ where: { id: assetId }, data: { contentDescription: text(result.summary) || undefined } });
+    const displayName = asset && isIrregularAssetName(asset.displayName || asset.fileName)
+      ? buildAiAssetName(result, asset.products.map((item) => item.product.modelCode))
+      : undefined;
+    await this.prisma.asset.update({
+      where: { id: assetId },
+      data: {
+        contentDescription: text(result.summary) || undefined,
+        ...(displayName ? { displayName } : {}),
+      },
+    });
   }
 
   private async transcription(asset: JsonRecord) {
