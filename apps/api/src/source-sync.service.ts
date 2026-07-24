@@ -28,7 +28,7 @@ function recordStatus(value: unknown): RecordStatus {
   const text = stringValue(value);
   if (/停用|禁止|隔离|不可用/.test(text)) return "BLOCKED";
   if (/过期|归档/.test(text)) return "ARCHIVED";
-  if (/可用|确认|发布/.test(text) && !/有条件|待|限制/.test(text)) return "READY";
+  if (/可用|确认|发布|已核对|已明确|流程已明确/.test(text) && !/有条件|待|限制/.test(text)) return "READY";
   return "PENDING";
 }
 
@@ -415,6 +415,7 @@ export class SourceSyncService {
         const row = safeJson(raw);
         const id = `${type}:${stringValue(row.id)}`;
         if (!stringValue(row.id)) continue;
+        const status = recordStatus(row.status);
         await this.prisma.knowledgeEntry.upsert({
           where: { id },
           create: {
@@ -428,7 +429,8 @@ export class SourceSyncService {
             body: stringValue(row.steps || row.url || row.tags) || undefined,
             source: stringValue(row.source) || "赛电客服帮助网站",
             sourceRefs: stringValue(row.sourceRefs || row.originalUrl) || undefined,
-            status: recordStatus(row.status),
+            status,
+            externallyUsable: status === "READY",
             audience: stringValue(row.audience) || "customer",
             updatedAtSource: toDate(row.updatedAt),
             raw: row as Prisma.InputJsonValue,
@@ -442,12 +444,48 @@ export class SourceSyncService {
             body: stringValue(row.steps || row.url || row.tags) || undefined,
             source: stringValue(row.source) || "赛电客服帮助网站",
             sourceRefs: stringValue(row.sourceRefs || row.originalUrl) || undefined,
-            status: recordStatus(row.status),
+            status,
+            externallyUsable: status === "READY",
             audience: stringValue(row.audience) || "customer",
             updatedAtSource: toDate(row.updatedAt),
             raw: row as Prisma.InputJsonValue,
           },
         });
+        if (type === "faq") {
+          const question = stringValue(row.title).trim();
+          const answer = stringValue(row.reply || row.summary).trim();
+          if (question && answer) {
+            const faqNo = `KF-${stringValue(row.id)}`;
+            await this.prisma.faqEntry.upsert({
+              where: { faqNo },
+              create: {
+                faqNo,
+                standardQuestion: question,
+                shortAnswer: answer,
+                detailedAnswer: stringValue(row.steps) || undefined,
+                category: stringValue(row.category) || "其他",
+                intent: stringValue(row.category) || "customer_support",
+                frequency: Number.parseInt(stringValue(row.frequency), 10) || 0,
+                priority: status === "READY" ? "NORMAL" : "REVIEW",
+                source: stringValue(row.source) || "赛电客服帮助网站",
+                status,
+                externallyUsable: status === "READY",
+              },
+              update: {
+                standardQuestion: question,
+                shortAnswer: answer,
+                detailedAnswer: stringValue(row.steps) || undefined,
+                category: stringValue(row.category) || "其他",
+                intent: stringValue(row.category) || "customer_support",
+                frequency: Number.parseInt(stringValue(row.frequency), 10) || 0,
+                priority: status === "READY" ? "NORMAL" : "REVIEW",
+                source: stringValue(row.source) || "赛电客服帮助网站",
+                status,
+                externallyUsable: status === "READY",
+              },
+            });
+          }
+        }
       }
     }
     await this.updateIntegration("HELP_CENTER", {
