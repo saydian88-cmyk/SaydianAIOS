@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
   Bell, Connection, DataAnalysis, DocumentChecked, Files, House, Monitor, Promotion,
   Refresh, Search, Setting, Shop, VideoCamera,
 } from "@element-plus/icons-vue";
-import { api, clearToken, getActor, getToken, patch, post, setActor, setToken } from "./api";
+import { api, clearToken, getActor, getToken, patch, post, remove, setActor, setToken } from "./api";
 import BrandDataCenter from "./components/BrandDataCenter.vue";
 import OperationAnalysis from "./components/OperationAnalysis.vue";
 import type { ContentPlan, Dashboard, Integration } from "./types";
@@ -67,6 +67,11 @@ const actorInput = ref(getActor());
 const opsSubTab = ref("shop");
 const reportSubTab = ref("reports");
 const ledgerSubTab = ref("employees");
+const ledgerDialog = ref(false);
+const ledgerFormType = ref<"employees" | "products" | "accounts" | "stores">("employees");
+const ledgerEditingId = ref("");
+const ledgerContinue = ref(false);
+const ledgerForm = reactive<Record<string, any>>({});
 const douyinStatus = ref<DouyinStatus>();
 const douyinClientKey = ref("");
 const douyinClientSecret = ref("");
@@ -357,45 +362,50 @@ async function promptValue(title: string, placeholder: string, value = "") {
   return String(result.value || "").trim();
 }
 
-async function createEmployee() {
-  const name = await promptValue("新增员工", "员工姓名");
-  const role = await promptValue("新增员工", "岗位/角色", "运营");
-  await withLoading(async () => {
-    await post("/api/v1/ledger/employees", { name, role });
-    ledger.value = await api("/api/v1/ledger");
-  }, "员工已加入责任台账");
+function resetLedgerForm(type: "employees" | "products" | "accounts" | "stores", row?: AnyRow) {
+  Object.keys(ledgerForm).forEach((key) => delete ledgerForm[key]);
+  const metadata = row?.metadata || {};
+  if (type === "employees") Object.assign(ledgerForm, { name: row?.name || "", employeeNo: row?.employeeNo || "", departmentId: row?.departmentId || "", role: row?.role || "运营", wecomUserId: row?.wecomUserId || "", mobileMasked: row?.mobileMasked || "", isSuperAdmin: Boolean(row?.isSuperAdmin), status: row?.status || "ACTIVE" });
+  if (type === "products") Object.assign(ledgerForm, { modelCode: row?.modelCode || "", name: row?.name || "", category: row?.category || "智能健康穿戴", status: row?.status || "PENDING", aliases: (metadata.aliases || []).join("、"), functions: (metadata.publicKnowledge?.functions || []).join("、"), customerValues: (metadata.publicKnowledge?.customerValues || []).join("、"), audiences: (metadata.publicKnowledge?.audiences || []).join("、"), scenes: (metadata.publicKnowledge?.scenes || []).join("、"), contentDirections: (metadata.publicKnowledge?.contentDirections || []).join("、"), skus: (row?.skus || []).map((item: AnyRow) => item.skuCode).join("、") });
+  if (type === "accounts") Object.assign(ledgerForm, { integrationKind: row?.integration?.kind || "", accountName: row?.accountName || "", externalAccountId: row?.externalAccountId || "", region: row?.region || "CN", ownerEmployeeId: row?.ownerEmployeeId || "", message: row?.message || "" });
+  if (type === "stores") Object.assign(ledgerForm, { platformAccountId: row?.platformAccountId || "", name: row?.name || "", externalStoreId: row?.externalStoreId || "", region: row?.region || "CN", ownerEmployeeId: row?.ownerEmployeeId || "", notes: metadata.notes || "" });
 }
 
-async function createAccount() {
-  const integrationKind = (await promptValue("新增平台账号", "平台代码，例如 DOUYIN、TIKTOK、AMAZON、SHOPIFY")).toUpperCase();
-  const accountName = await promptValue("新增平台账号", "账号名称");
-  const externalAccountId = await promptValue("新增平台账号", "平台账号编号；未知时填写内部唯一编号");
-  const region = await promptValue("新增平台账号", "区域：CN、US或GLOBAL", ["TIKTOK", "AMAZON", "SHOPIFY"].includes(integrationKind) ? "US" : "CN");
-  await withLoading(async () => {
-    await post("/api/v1/ledger/accounts", { integrationKind, accountName, externalAccountId, region });
-    ledger.value = await api("/api/v1/ledger");
-  }, "平台账号已记录，能力默认未配置");
+function openLedgerForm(type: "employees" | "products" | "accounts" | "stores", row?: AnyRow) {
+  ledgerFormType.value = type;
+  ledgerEditingId.value = row?.id || "";
+  ledgerContinue.value = false;
+  resetLedgerForm(type, row);
+  ledgerDialog.value = true;
 }
 
-async function createProduct() {
-  const name = await promptValue("新增产品", "产品名称");
-  const modelCode = await promptValue("新增产品", "型号代码，例如 W9S");
-  const category = await promptValue("新增产品", "产品分类", "智能健康穿戴");
-  await withLoading(async () => {
-    await post("/api/v1/ledger/products", { name, modelCode, category, evidenceIds: [] });
-    ledger.value = await api("/api/v1/ledger");
-  }, "产品主数据已保存");
+function splitLedgerList(value: unknown) {
+  return String(value || "").split(/[、,，;\n]/).map((item) => item.trim()).filter(Boolean);
 }
 
-async function createStore() {
-  const accountOptions = ledger.value.accounts.map((item) => `${item.accountName}=${item.id}`).join("；");
-  const platformAccountId = await promptValue("新增店铺", `平台账号ID：${accountOptions || "请先新增平台账号"}`);
-  const name = await promptValue("新增店铺", "店铺名称");
-  const externalStoreId = await promptValue("新增店铺", "平台店铺编号；未知时填写内部唯一编号");
+async function saveLedgerForm(continueAdding = false) {
+  const payload: AnyRow = { ...ledgerForm };
+  if (ledgerFormType.value === "products") {
+    payload.metadata = { aliases: splitLedgerList(ledgerForm.aliases), publicKnowledge: { functions: splitLedgerList(ledgerForm.functions), customerValues: splitLedgerList(ledgerForm.customerValues), audiences: splitLedgerList(ledgerForm.audiences), scenes: splitLedgerList(ledgerForm.scenes), contentDirections: splitLedgerList(ledgerForm.contentDirections) } };
+    payload.skus = splitLedgerList(ledgerForm.skus).map((skuCode) => ({ skuCode, name: skuCode }));
+  }
+  if (ledgerFormType.value === "stores") payload.metadata = { notes: ledgerForm.notes || "" };
   await withLoading(async () => {
-    await post("/api/v1/ledger/stores", { platformAccountId, name, externalStoreId });
+    const base = `/api/v1/ledger/${ledgerFormType.value}`;
+    if (ledgerEditingId.value) await patch(`${base}/${ledgerEditingId.value}`, payload);
+    else await post(base, payload);
     ledger.value = await api("/api/v1/ledger");
-  }, "店铺已加入责任台账");
+    if (continueAdding && !ledgerEditingId.value) resetLedgerForm(ledgerFormType.value);
+    else ledgerDialog.value = false;
+  }, ledgerEditingId.value ? "资料已更新" : "主数据已新增");
+}
+
+async function archiveLedger(type: "employees" | "products" | "accounts" | "stores", row: AnyRow) {
+  await ElMessageBox.confirm(`确认删除“${row.name || row.accountName}”？历史记录会保留。`, "归档删除", { confirmButtonText: "确认删除", cancelButtonText: "取消", type: "warning" });
+  await withLoading(async () => {
+    await remove(`/api/v1/ledger/${type}/${row.id}`);
+    ledger.value = await api("/api/v1/ledger");
+  }, "记录已归档");
 }
 
 async function createAttribution() {
@@ -583,7 +593,7 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
       <section v-else-if="active === 'ledger'" class="page">
         <div class="section-heading">
           <div><span class="eyebrow">ACCOUNTABILITY LEDGER</span><h2>经营主数据与责任台账</h2><p>员工、产品、账号、店铺、经营快照和归因记录使用同一条审计链路。</p></div>
-          <div class="hero-actions"><el-button @click="createEmployee">新增员工</el-button><el-button @click="createProduct">新增产品</el-button><el-button @click="createAccount">新增账号</el-button><el-button @click="createStore">新增店铺</el-button><el-button type="primary" @click="importCsv">导入CSV</el-button></div>
+          <div class="hero-actions"><el-button @click="openLedgerForm('employees')">新增员工</el-button><el-button @click="openLedgerForm('products')">新增产品</el-button><el-button @click="openLedgerForm('accounts')">新增账号</el-button><el-button @click="openLedgerForm('stores')">新增店铺</el-button><el-button type="primary" @click="importCsv">导入CSV</el-button></div>
         </div>
         <el-segmented v-model="ledgerSubTab" :options="[
           { label: `员工 ${ledger.employees.length}`, value: 'employees' },
@@ -595,10 +605,10 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
           { label: `归因 ${ledger.attributions.length}`, value: 'attributions' },
           { label: `数据源 ${ledger.sourceHealth.length}`, value: 'sources' },
         ]" />
-        <div class="table-panel" v-if="ledgerSubTab === 'employees'"><el-table :data="ledger.employees" stripe height="560"><el-table-column prop="name" label="员工" width="140" /><el-table-column prop="employeeNo" label="员工编号" width="130"><template #default="scope">{{ scope.row.employeeNo || '未配置' }}</template></el-table-column><el-table-column label="部门" width="150"><template #default="scope">{{ scope.row.department?.name || '未分配' }}</template></el-table-column><el-table-column prop="role" label="岗位/角色" min-width="180" /><el-table-column prop="wecomUserId" label="企微身份" min-width="180"><template #default="scope">{{ scope.row.wecomUserId || '未配置' }}</template></el-table-column><el-table-column label="权限" width="120"><template #default="scope">{{ scope.row.isSuperAdmin ? '超级管理员' : '普通员工' }}</template></el-table-column><el-table-column label="状态" width="100"><template #default="scope"><el-tag :type="scope.row.status === 'ACTIVE' ? 'success' : 'info'">{{ scope.row.status }}</el-tag></template></el-table-column></el-table></div>
-        <div class="table-panel" v-else-if="ledgerSubTab === 'products'"><el-table :data="ledger.products" stripe height="560"><el-table-column prop="modelCode" label="型号" width="130" /><el-table-column prop="name" label="产品" min-width="220" /><el-table-column prop="category" label="分类" min-width="180" /><el-table-column label="SKU" min-width="240"><template #default="scope">{{ scope.row.skus?.length ? scope.row.skus.map((i: AnyRow) => i.skuCode).join('、') : '未配置' }}</template></el-table-column><el-table-column label="证据" width="100"><template #default="scope">{{ scope.row.evidenceIds?.length || 0 }}项</template></el-table-column><el-table-column label="状态" width="100"><template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template></el-table-column></el-table></div>
-        <div class="table-panel" v-else-if="ledgerSubTab === 'accounts'"><el-table :data="ledger.accounts" stripe height="560"><el-table-column label="平台" width="120"><template #default="scope">{{ scope.row.integration?.displayName || '未获取' }}</template></el-table-column><el-table-column prop="accountName" label="账号" min-width="180" /><el-table-column prop="externalAccountId" label="平台账号编号" min-width="180" /><el-table-column prop="region" label="区域" width="90" /><el-table-column label="负责人" width="130"><template #default="scope">{{ scope.row.ownerEmployee?.name || '待分配' }}</template></el-table-column><el-table-column label="能力状态" min-width="260"><template #default="scope"><span v-if="Object.keys(scope.row.capabilityStatus || {}).length">{{ Object.entries(scope.row.capabilityStatus).map(([k,v]) => `${k}:${statusLabel(String(v))}`).join('；') }}</span><span v-else>未配置</span></template></el-table-column><el-table-column label="状态" width="110"><template #default="scope"><el-tag :type="statusType(scope.row.state)">{{ statusLabel(scope.row.state) }}</el-tag></template></el-table-column></el-table></div>
-        <div class="table-panel" v-else-if="ledgerSubTab === 'stores'"><el-table :data="ledger.stores" stripe height="560"><el-table-column label="平台" width="120"><template #default="scope">{{ scope.row.platformAccount?.integration?.displayName || '未获取' }}</template></el-table-column><el-table-column label="账号" width="160"><template #default="scope">{{ scope.row.platformAccount?.accountName || '未获取' }}</template></el-table-column><el-table-column prop="name" label="店铺" min-width="200" /><el-table-column prop="externalStoreId" label="平台店铺编号" min-width="180" /><el-table-column prop="region" label="区域" width="90" /><el-table-column label="负责人" width="130"><template #default="scope">{{ scope.row.ownerEmployee?.name || '待分配' }}</template></el-table-column><el-table-column label="状态" width="110"><template #default="scope"><el-tag :type="statusType(scope.row.state)">{{ statusLabel(scope.row.state) }}</el-tag></template></el-table-column></el-table></div>
+        <div class="table-panel" v-if="ledgerSubTab === 'employees'"><el-table :data="ledger.employees" stripe height="560"><el-table-column prop="name" label="员工" width="140" /><el-table-column prop="employeeNo" label="员工编号" width="130"><template #default="scope">{{ scope.row.employeeNo || '未配置' }}</template></el-table-column><el-table-column label="部门" width="150"><template #default="scope">{{ scope.row.department?.name || '未分配' }}</template></el-table-column><el-table-column prop="role" label="岗位/角色" min-width="180" /><el-table-column prop="wecomUserId" label="企微身份" min-width="180"><template #default="scope">{{ scope.row.wecomUserId || '未配置' }}</template></el-table-column><el-table-column label="权限" width="120"><template #default="scope">{{ scope.row.isSuperAdmin ? '超级管理员' : '普通员工' }}</template></el-table-column><el-table-column label="状态" width="100"><template #default="scope"><el-tag :type="scope.row.status === 'ACTIVE' ? 'success' : 'info'">{{ scope.row.status }}</el-tag></template></el-table-column><el-table-column label="操作" width="130" fixed="right"><template #default="scope"><el-button link type="primary" @click="openLedgerForm('employees', scope.row)">编辑</el-button><el-button link type="danger" @click="archiveLedger('employees', scope.row)">删除</el-button></template></el-table-column></el-table></div>
+        <div class="table-panel" v-else-if="ledgerSubTab === 'products'"><el-table :data="ledger.products" stripe height="560"><el-table-column prop="modelCode" label="型号" width="130" /><el-table-column prop="name" label="产品" min-width="220" /><el-table-column prop="category" label="分类" min-width="180" /><el-table-column label="SKU" min-width="240"><template #default="scope">{{ scope.row.skus?.length ? scope.row.skus.map((i: AnyRow) => i.skuCode).join('、') : '未配置' }}</template></el-table-column><el-table-column label="状态" width="100"><template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template></el-table-column><el-table-column label="操作" width="130" fixed="right"><template #default="scope"><el-button link type="primary" @click="openLedgerForm('products', scope.row)">编辑</el-button><el-button link type="danger" @click="archiveLedger('products', scope.row)">删除</el-button></template></el-table-column></el-table></div>
+        <div class="table-panel" v-else-if="ledgerSubTab === 'accounts'"><el-table :data="ledger.accounts" stripe height="560"><el-table-column label="平台" width="120"><template #default="scope">{{ scope.row.integration?.displayName || '未获取' }}</template></el-table-column><el-table-column prop="accountName" label="账号" min-width="180" /><el-table-column prop="externalAccountId" label="平台账号编号" min-width="180" /><el-table-column prop="region" label="区域" width="90" /><el-table-column label="负责人" width="130"><template #default="scope">{{ scope.row.ownerEmployee?.name || '待分配' }}</template></el-table-column><el-table-column label="能力状态" min-width="260"><template #default="scope"><span v-if="Object.keys(scope.row.capabilityStatus || {}).length">{{ Object.entries(scope.row.capabilityStatus).map(([k,v]) => `${k}:${statusLabel(String(v))}`).join('；') }}</span><span v-else>未配置</span></template></el-table-column><el-table-column label="状态" width="110"><template #default="scope"><el-tag :type="statusType(scope.row.state)">{{ statusLabel(scope.row.state) }}</el-tag></template></el-table-column><el-table-column label="操作" width="130" fixed="right"><template #default="scope"><el-button link type="primary" @click="openLedgerForm('accounts', scope.row)">编辑</el-button><el-button link type="danger" @click="archiveLedger('accounts', scope.row)">删除</el-button></template></el-table-column></el-table></div>
+        <div class="table-panel" v-else-if="ledgerSubTab === 'stores'"><el-table :data="ledger.stores" stripe height="560"><el-table-column label="平台" width="120"><template #default="scope">{{ scope.row.platformAccount?.integration?.displayName || '未获取' }}</template></el-table-column><el-table-column label="账号" width="160"><template #default="scope">{{ scope.row.platformAccount?.accountName || '未获取' }}</template></el-table-column><el-table-column prop="name" label="店铺" min-width="200" /><el-table-column prop="externalStoreId" label="平台店铺编号" min-width="180" /><el-table-column prop="region" label="区域" width="90" /><el-table-column label="负责人" width="130"><template #default="scope">{{ scope.row.ownerEmployee?.name || '待分配' }}</template></el-table-column><el-table-column label="状态" width="110"><template #default="scope"><el-tag :type="statusType(scope.row.state)">{{ statusLabel(scope.row.state) }}</el-tag></template></el-table-column><el-table-column label="操作" width="130" fixed="right"><template #default="scope"><el-button link type="primary" @click="openLedgerForm('stores', scope.row)">编辑</el-button><el-button link type="danger" @click="archiveLedger('stores', scope.row)">删除</el-button></template></el-table-column></el-table></div>
         <div class="table-panel" v-else-if="ledgerSubTab === 'snapshots'"><el-table :data="ledger.snapshots" stripe height="560"><el-table-column label="平台" width="120"><template #default="scope">{{ scope.row.integration?.displayName || '未获取' }}</template></el-table-column><el-table-column label="账号/店铺" min-width="180"><template #default="scope">{{ scope.row.platformAccount?.accountName || '未绑定账号' }} / {{ scope.row.store?.name || '未绑定店铺' }}</template></el-table-column><el-table-column prop="type" label="类型" width="130" /><el-table-column prop="sourceId" label="外部编号" min-width="170" /><el-table-column prop="status" label="状态" width="120" /><el-table-column prop="amount" label="金额" width="120"><template #default="scope">{{ scope.row.amount ?? '未获取' }} {{ scope.row.currency || '' }}</template></el-table-column><el-table-column label="负责人" width="130"><template #default="scope">{{ scope.row.ownerEmployee?.name || '待分配' }}</template></el-table-column><el-table-column label="发生时间" width="160"><template #default="scope">{{ time(scope.row.occurredAt) }}</template></el-table-column><el-table-column label="未获取字段" min-width="200"><template #default="scope">{{ scope.row.unavailableFields?.length ? scope.row.unavailableFields.join('、') : '无' }}</template></el-table-column></el-table></div>
         <div class="table-panel" v-else-if="ledgerSubTab === 'imports'"><el-table :data="ledger.imports" stripe height="560"><el-table-column label="平台" width="120"><template #default="scope">{{ scope.row.integration?.displayName || '未获取' }}</template></el-table-column><el-table-column prop="sourceName" label="数据文件/来源" min-width="220" /><el-table-column prop="format" label="格式" width="90" /><el-table-column prop="importedBy" label="导入员工" width="130" /><el-table-column prop="recordsReceived" label="收到" width="80" /><el-table-column prop="recordsImported" label="成功" width="80" /><el-table-column prop="recordsRejected" label="拒绝" width="80" /><el-table-column label="状态" width="110"><template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template></el-table-column><el-table-column label="导入时间" width="160"><template #default="scope">{{ time(scope.row.createdAt) }}</template></el-table-column></el-table></div>
         <div class="table-panel" v-else-if="ledgerSubTab === 'attributions'"><div class="table-toolbar"><el-button type="primary" @click="createAttribution">记录归因事件</el-button></div><el-table :data="ledger.attributions" stripe height="520"><el-table-column prop="attributionCode" label="归因码" min-width="200" /><el-table-column prop="eventType" label="事件" width="130" /><el-table-column label="平台/账号" min-width="180"><template #default="scope">{{ scope.row.integration?.displayName || '未获取' }} / {{ scope.row.platformAccount?.accountName || '未获取' }}</template></el-table-column><el-table-column prop="source" label="来源" min-width="180" /><el-table-column prop="consultations" label="咨询" width="80" /><el-table-column prop="orders" label="订单" width="80" /><el-table-column prop="revenue" label="成交金额" width="120"><template #default="scope">{{ scope.row.revenue ?? '未获取' }}</template></el-table-column><el-table-column label="员工" width="120"><template #default="scope">{{ scope.row.employee?.name || '未绑定' }}</template></el-table-column><el-table-column label="时间" width="160"><template #default="scope">{{ time(scope.row.occurredAt) }}</template></el-table-column></el-table></div>
@@ -658,6 +668,36 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
         <div class="integration-grid"><article v-for="item in integrations" :key="item.id"><div class="integration-icon">{{ item.displayName.slice(0, 1) }}</div><div class="integration-copy"><div><h3>{{ item.displayName }}</h3><el-tag :type="statusType(item.state)">{{ statusLabel(item.state) }}</el-tag></div><p>{{ item.message }}</p><div class="capability-tags"><span v-for="capability in item.capabilities" :key="capability">{{ capability }}</span><span v-if="!item.capabilities.length">暂无已验证能力</span></div><small>检查时间：{{ time(item.lastCheckedAt) }}</small></div></article></div>
         <section class="token-panel"><div><el-icon><Setting /></el-icon><div><strong>统一企业微信身份</strong><p>当前员工：{{ actorInput }}。登录、部门和员工资料由赛电商城企业微信机制统一提供。</p></div></div><el-tag type="success">已登录</el-tag></section>
       </section>
+
+      <el-dialog v-model="ledgerDialog" :title="`${ledgerEditingId ? '编辑' : '新增'}${({ employees: '员工', products: '产品', accounts: '账号', stores: '店铺' } as Record<string,string>)[ledgerFormType]}`" width="820px" destroy-on-close>
+        <el-form label-position="top" class="ledger-form-grid">
+          <template v-if="ledgerFormType === 'employees'">
+            <el-form-item label="姓名" required><el-input v-model="ledgerForm.name" /></el-form-item><el-form-item label="员工编号"><el-input v-model="ledgerForm.employeeNo" /></el-form-item>
+            <el-form-item label="部门"><el-select v-model="ledgerForm.departmentId" clearable filterable><el-option v-for="item in ledger.departments" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item><el-form-item label="岗位/角色"><el-input v-model="ledgerForm.role" /></el-form-item>
+            <el-form-item label="企微身份"><el-input v-model="ledgerForm.wecomUserId" /></el-form-item><el-form-item label="脱敏手机"><el-input v-model="ledgerForm.mobileMasked" placeholder="例如 138****0000" /></el-form-item>
+            <el-form-item label="权限"><el-switch v-model="ledgerForm.isSuperAdmin" active-text="超级管理员" inactive-text="普通员工" /></el-form-item><el-form-item label="状态"><el-select v-model="ledgerForm.status"><el-option label="在职" value="ACTIVE" /><el-option label="停用" value="INACTIVE" /></el-select></el-form-item>
+          </template>
+          <template v-else-if="ledgerFormType === 'products'">
+            <el-form-item label="型号" required><el-input v-model="ledgerForm.modelCode" :disabled="Boolean(ledgerEditingId)" /></el-form-item><el-form-item label="产品名称" required><el-input v-model="ledgerForm.name" /></el-form-item>
+            <el-form-item label="分类"><el-input v-model="ledgerForm.category" /></el-form-item><el-form-item label="状态"><el-select v-model="ledgerForm.status"><el-option label="待审核" value="PENDING" /><el-option label="可用" value="READY" /><el-option label="禁用" value="BLOCKED" /></el-select></el-form-item>
+            <el-form-item label="别名" class="full"><el-input v-model="ledgerForm.aliases" placeholder="多个值用顿号或逗号分隔" /></el-form-item>
+            <el-form-item label="核心功能" class="full"><el-input v-model="ledgerForm.functions" type="textarea" :rows="2" /></el-form-item><el-form-item label="用户价值" class="full"><el-input v-model="ledgerForm.customerValues" type="textarea" :rows="2" /></el-form-item>
+            <el-form-item label="目标人群"><el-input v-model="ledgerForm.audiences" /></el-form-item><el-form-item label="适用场景"><el-input v-model="ledgerForm.scenes" /></el-form-item>
+            <el-form-item label="内容方向" class="full"><el-input v-model="ledgerForm.contentDirections" type="textarea" :rows="2" /></el-form-item><el-form-item label="SKU明细" class="full"><el-input v-model="ledgerForm.skus" placeholder="SKU编码用顿号或逗号分隔" /></el-form-item>
+          </template>
+          <template v-else-if="ledgerFormType === 'accounts'">
+            <el-form-item label="平台" required><el-select v-model="ledgerForm.integrationKind" :disabled="Boolean(ledgerEditingId)" filterable><el-option v-for="item in integrations" :key="item.kind" :label="item.displayName" :value="item.kind" /></el-select></el-form-item><el-form-item label="账号名称" required><el-input v-model="ledgerForm.accountName" /></el-form-item>
+            <el-form-item label="平台账号编号" required><el-input v-model="ledgerForm.externalAccountId" /></el-form-item><el-form-item label="区域"><el-select v-model="ledgerForm.region"><el-option label="中国" value="CN" /><el-option label="美国" value="US" /><el-option label="全球" value="GLOBAL" /></el-select></el-form-item>
+            <el-form-item label="负责人"><el-select v-model="ledgerForm.ownerEmployeeId" clearable filterable><el-option v-for="item in ledger.employees" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item><el-form-item label="备注"><el-input v-model="ledgerForm.message" /></el-form-item>
+          </template>
+          <template v-else>
+            <el-form-item label="所属账号" required><el-select v-model="ledgerForm.platformAccountId" filterable><el-option v-for="item in ledger.accounts" :key="item.id" :label="`${item.accountName} · ${item.integration?.displayName || item.region}`" :value="item.id" /></el-select></el-form-item><el-form-item label="店铺名称" required><el-input v-model="ledgerForm.name" /></el-form-item>
+            <el-form-item label="平台店铺编号" required><el-input v-model="ledgerForm.externalStoreId" /></el-form-item><el-form-item label="区域"><el-select v-model="ledgerForm.region"><el-option label="中国" value="CN" /><el-option label="美国" value="US" /><el-option label="全球" value="GLOBAL" /></el-select></el-form-item>
+            <el-form-item label="负责人"><el-select v-model="ledgerForm.ownerEmployeeId" clearable filterable><el-option v-for="item in ledger.employees" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item><el-form-item label="备注"><el-input v-model="ledgerForm.notes" /></el-form-item>
+          </template>
+        </el-form>
+        <template #footer><el-button @click="ledgerDialog = false">取消</el-button><el-button v-if="!ledgerEditingId" @click="saveLedgerForm(true)">保存并继续新增</el-button><el-button type="primary" @click="saveLedgerForm(false)">保存</el-button></template>
+      </el-dialog>
     </main>
   </div>
 </template>

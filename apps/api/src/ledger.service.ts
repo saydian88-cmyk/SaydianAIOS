@@ -53,10 +53,10 @@ export class LedgerService {
   async overview() {
     const [departments, employees, products, accounts, stores, imports, snapshots, attributions, sourceHealth] = await Promise.all([
       this.prisma.department.findMany({ orderBy: { name: "asc" } }),
-      this.prisma.employee.findMany({ include: { department: true }, orderBy: [{ status: "asc" }, { name: "asc" }] }),
-      this.prisma.product.findMany({ include: { skus: true }, orderBy: { modelCode: "asc" } }),
-      this.prisma.platformAccount.findMany({ include: { integration: true, ownerEmployee: true }, orderBy: [{ region: "asc" }, { accountName: "asc" }] }),
-      this.prisma.store.findMany({ include: { platformAccount: { include: { integration: true } }, ownerEmployee: true }, orderBy: [{ region: "asc" }, { name: "asc" }] }),
+      this.prisma.employee.findMany({ where: { status: { not: "ARCHIVED" } }, include: { department: true }, orderBy: [{ status: "asc" }, { name: "asc" }] }),
+      this.prisma.product.findMany({ where: { status: { not: "ARCHIVED" } }, include: { skus: true }, orderBy: { modelCode: "asc" } }),
+      this.prisma.platformAccount.findMany({ where: { archivedAt: null }, include: { integration: true, ownerEmployee: true }, orderBy: [{ region: "asc" }, { accountName: "asc" }] }),
+      this.prisma.store.findMany({ where: { archivedAt: null }, include: { platformAccount: { include: { integration: true } }, ownerEmployee: true }, orderBy: [{ region: "asc" }, { name: "asc" }] }),
       this.prisma.importBatch.findMany({ include: { integration: true, platformAccount: true }, orderBy: { createdAt: "desc" }, take: 100 }),
       this.prisma.businessSnapshot.findMany({ include: { integration: true, platformAccount: true, store: true, ownerEmployee: true }, orderBy: { capturedAt: "desc" }, take: 300 }),
       this.prisma.attributionTouch.findMany({ include: { integration: true, platformAccount: true, employee: true }, orderBy: { occurredAt: "desc" }, take: 200 }),
@@ -85,6 +85,7 @@ export class LedgerService {
         wecomUserId: stringValue(body.wecomUserId) || undefined,
         mobileMasked: stringValue(body.mobileMasked) || undefined,
         isSuperAdmin: body.isSuperAdmin === true,
+        status: stringValue(body.status) || "ACTIVE",
       },
     });
     await this.audit(actor, "EMPLOYEE_CREATE", "Employee", employee.id, employee);
@@ -100,10 +101,12 @@ export class LedgerService {
       where: { modelCode },
       create: {
         name, modelCode, category: stringValue(body.category) || "智能健康穿戴", evidenceIds: stringList(body.evidenceIds),
+        status: ["DRAFT", "PENDING", "READY", "BLOCKED"].includes(stringValue(body.status).toUpperCase()) ? stringValue(body.status).toUpperCase() as never : "PENDING",
         metadata: safeJson(body.metadata) as Prisma.InputJsonValue,
       },
       update: {
         name, category: stringValue(body.category) || "智能健康穿戴", evidenceIds: stringList(body.evidenceIds),
+        ...(["DRAFT", "PENDING", "READY", "BLOCKED"].includes(stringValue(body.status).toUpperCase()) ? { status: stringValue(body.status).toUpperCase() as never } : {}),
         metadata: safeJson(body.metadata) as Prisma.InputJsonValue,
       },
     });
@@ -129,8 +132,8 @@ export class LedgerService {
     if (!integration) throw new BadRequestException("平台连接不存在，请先执行初始化数据");
     const account = await this.prisma.platformAccount.upsert({
       where: { integrationId_externalAccountId: { integrationId: integration.id, externalAccountId } },
-      create: { integrationId: integration.id, accountName, externalAccountId, region: stringValue(body.region) || integration.region, ownerEmployeeId: stringValue(body.ownerEmployeeId) || undefined },
-      update: { accountName, region: stringValue(body.region) || integration.region, ownerEmployeeId: stringValue(body.ownerEmployeeId) || undefined },
+      create: { integrationId: integration.id, accountName, externalAccountId, region: stringValue(body.region) || integration.region, ownerEmployeeId: stringValue(body.ownerEmployeeId) || undefined, message: stringValue(body.message) || "未配置", archivedAt: null },
+      update: { accountName, region: stringValue(body.region) || integration.region, ownerEmployeeId: stringValue(body.ownerEmployeeId) || undefined, ...(body.message !== undefined ? { message: stringValue(body.message) || "未配置" } : {}), archivedAt: null },
     });
     await this.audit(actor, "PLATFORM_ACCOUNT_UPSERT", "PlatformAccount", account.id, account);
     return account;
@@ -145,11 +148,92 @@ export class LedgerService {
     if (!account) throw new BadRequestException("平台账号不存在");
     const store = await this.prisma.store.upsert({
       where: { platformAccountId_externalStoreId: { platformAccountId, externalStoreId } },
-      create: { platformAccountId, name, externalStoreId, region: stringValue(body.region) || account.region, ownerEmployeeId: stringValue(body.ownerEmployeeId) || undefined, metadata: safeJson(body.metadata) as Prisma.InputJsonValue },
-      update: { name, region: stringValue(body.region) || account.region, ownerEmployeeId: stringValue(body.ownerEmployeeId) || undefined, metadata: safeJson(body.metadata) as Prisma.InputJsonValue },
+      create: { platformAccountId, name, externalStoreId, region: stringValue(body.region) || account.region, ownerEmployeeId: stringValue(body.ownerEmployeeId) || undefined, metadata: safeJson(body.metadata) as Prisma.InputJsonValue, archivedAt: null },
+      update: { name, region: stringValue(body.region) || account.region, ownerEmployeeId: stringValue(body.ownerEmployeeId) || undefined, metadata: safeJson(body.metadata) as Prisma.InputJsonValue, archivedAt: null },
     });
     await this.audit(actor, "STORE_UPSERT", "Store", store.id, store);
     return store;
+  }
+
+  async updateEmployee(id: string, body: Record<string, unknown>, actor: string) {
+    const existing = await this.prisma.employee.findUnique({ where: { id } });
+    if (!existing) throw new BadRequestException("员工不存在");
+    const employee = await this.prisma.employee.update({ where: { id }, data: {
+      ...(body.name !== undefined ? { name: stringValue(body.name) } : {}),
+      ...(body.employeeNo !== undefined ? { employeeNo: stringValue(body.employeeNo) || null } : {}),
+      ...(body.departmentId !== undefined ? { departmentId: stringValue(body.departmentId) || null } : {}),
+      ...(body.role !== undefined ? { role: stringValue(body.role) || "运营" } : {}),
+      ...(body.wecomUserId !== undefined ? { wecomUserId: stringValue(body.wecomUserId) || null } : {}),
+      ...(body.mobileMasked !== undefined ? { mobileMasked: stringValue(body.mobileMasked) || null } : {}),
+      ...(body.isSuperAdmin !== undefined ? { isSuperAdmin: Boolean(body.isSuperAdmin) } : {}),
+      ...(body.status !== undefined ? { status: stringValue(body.status) || existing.status } : {}),
+    }, include: { department: true } });
+    await this.audit(actor, "EMPLOYEE_UPDATE", "Employee", id, employee);
+    return employee;
+  }
+
+  async updateProduct(id: string, body: Record<string, unknown>, actor: string) {
+    const existing = await this.prisma.product.findUnique({ where: { id } });
+    if (!existing) throw new BadRequestException("产品不存在");
+    return this.createProduct({ ...body, modelCode: existing.modelCode, name: body.name ?? existing.name, category: body.category ?? existing.category }, actor);
+  }
+
+  async updateAccount(id: string, body: Record<string, unknown>, actor: string) {
+    const existing = await this.prisma.platformAccount.findUnique({ where: { id } });
+    if (!existing) throw new BadRequestException("平台账号不存在");
+    const account = await this.prisma.platformAccount.update({ where: { id }, data: {
+      ...(body.accountName !== undefined ? { accountName: stringValue(body.accountName) } : {}),
+      ...(body.externalAccountId !== undefined ? { externalAccountId: stringValue(body.externalAccountId) } : {}),
+      ...(body.region !== undefined ? { region: stringValue(body.region) || existing.region } : {}),
+      ...(body.ownerEmployeeId !== undefined ? { ownerEmployeeId: stringValue(body.ownerEmployeeId) || null } : {}),
+      ...(body.message !== undefined ? { message: stringValue(body.message) || "未配置" } : {}),
+    }, include: { integration: true, ownerEmployee: true } });
+    await this.audit(actor, "PLATFORM_ACCOUNT_UPDATE", "PlatformAccount", id, account);
+    return account;
+  }
+
+  async updateStore(id: string, body: Record<string, unknown>, actor: string) {
+    const existing = await this.prisma.store.findUnique({ where: { id } });
+    if (!existing) throw new BadRequestException("店铺不存在");
+    const accountId = body.platformAccountId !== undefined ? stringValue(body.platformAccountId) : existing.platformAccountId;
+    const account = await this.prisma.platformAccount.findFirst({ where: { id: accountId, archivedAt: null } });
+    if (!account) throw new BadRequestException("平台账号不存在或已归档");
+    const store = await this.prisma.store.update({ where: { id }, data: {
+      platformAccountId: accountId,
+      ...(body.name !== undefined ? { name: stringValue(body.name) } : {}),
+      ...(body.externalStoreId !== undefined ? { externalStoreId: stringValue(body.externalStoreId) } : {}),
+      ...(body.region !== undefined ? { region: stringValue(body.region) || account.region } : {}),
+      ...(body.ownerEmployeeId !== undefined ? { ownerEmployeeId: stringValue(body.ownerEmployeeId) || null } : {}),
+      ...(body.metadata !== undefined ? { metadata: safeJson(body.metadata) as Prisma.InputJsonValue } : {}),
+    }, include: { platformAccount: { include: { integration: true } }, ownerEmployee: true } });
+    await this.audit(actor, "STORE_UPDATE", "Store", id, store);
+    return store;
+  }
+
+  async archiveEmployee(id: string, actor: string) {
+    const row = await this.prisma.employee.update({ where: { id }, data: { status: "ARCHIVED" } });
+    await this.audit(actor, "EMPLOYEE_ARCHIVE", "Employee", id, row);
+    return row;
+  }
+
+  async archiveProduct(id: string, actor: string) {
+    const row = await this.prisma.product.update({ where: { id }, data: { status: "ARCHIVED" } });
+    await this.audit(actor, "PRODUCT_ARCHIVE", "Product", id, row);
+    return row;
+  }
+
+  async archiveAccount(id: string, actor: string) {
+    const stores = await this.prisma.store.count({ where: { platformAccountId: id, archivedAt: null } });
+    if (stores) throw new BadRequestException(`该账号仍关联${stores}个店铺，请先归档店铺`);
+    const row = await this.prisma.platformAccount.update({ where: { id }, data: { archivedAt: new Date() } });
+    await this.audit(actor, "PLATFORM_ACCOUNT_ARCHIVE", "PlatformAccount", id, row);
+    return row;
+  }
+
+  async archiveStore(id: string, actor: string) {
+    const row = await this.prisma.store.update({ where: { id }, data: { archivedAt: new Date() } });
+    await this.audit(actor, "STORE_ARCHIVE", "Store", id, row);
+    return row;
   }
 
   async importSnapshots(body: Record<string, unknown>, actor: string) {

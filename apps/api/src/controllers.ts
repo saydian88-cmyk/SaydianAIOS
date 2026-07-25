@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Headers, Param, Patch, Post, Query } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Delete, Get, Headers, Param, Patch, Post, Query } from "@nestjs/common";
 import { PrismaService } from "./prisma.service";
 import { AuthService } from "./auth.service";
 import { AutomationService, jobKinds, type AutomationKind } from "./automation.service";
@@ -90,6 +90,30 @@ export class OpsController {
   }
   @Post("ledger/stores") createStore(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Body() body: Record<string, unknown>) {
     return this.ledger.createStore(body, this.actor(authorization, requestedActor));
+  }
+  @Patch("ledger/employees/:id") updateEmployee(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("id") id: string, @Body() body: Record<string, unknown>) {
+    return this.ledger.updateEmployee(id, body, this.actor(authorization, requestedActor));
+  }
+  @Delete("ledger/employees/:id") archiveEmployee(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("id") id: string) {
+    return this.ledger.archiveEmployee(id, this.actor(authorization, requestedActor));
+  }
+  @Patch("ledger/products/:id") updateLedgerProduct(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("id") id: string, @Body() body: Record<string, unknown>) {
+    return this.ledger.updateProduct(id, body, this.actor(authorization, requestedActor));
+  }
+  @Delete("ledger/products/:id") archiveLedgerProduct(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("id") id: string) {
+    return this.ledger.archiveProduct(id, this.actor(authorization, requestedActor));
+  }
+  @Patch("ledger/accounts/:id") updateAccount(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("id") id: string, @Body() body: Record<string, unknown>) {
+    return this.ledger.updateAccount(id, body, this.actor(authorization, requestedActor));
+  }
+  @Delete("ledger/accounts/:id") archiveAccount(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("id") id: string) {
+    return this.ledger.archiveAccount(id, this.actor(authorization, requestedActor));
+  }
+  @Patch("ledger/stores/:id") updateStore(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("id") id: string, @Body() body: Record<string, unknown>) {
+    return this.ledger.updateStore(id, body, this.actor(authorization, requestedActor));
+  }
+  @Delete("ledger/stores/:id") archiveStore(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("id") id: string) {
+    return this.ledger.archiveStore(id, this.actor(authorization, requestedActor));
   }
   @Post("ledger/import-snapshots") importSnapshots(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Body() body: Record<string, unknown>) {
     return this.ledger.importSnapshots(body, this.actor(authorization, requestedActor));

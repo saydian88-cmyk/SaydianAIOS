@@ -201,16 +201,17 @@ export class BrandDataService {
   }
 
   async knowledgeControls() {
-    const [claims, mappings, phraseRules, brandProfiles, products, faqs, employees] = await Promise.all([
-      this.prisma.evidenceClaim.findMany({ orderBy: { updatedAt: "desc" } }),
-      this.prisma.productMapping.findMany({ orderBy: { commercialName: "asc" } }),
+    const [claims, mappings, phraseRules, brandProfiles, products, faqs, employees, categoryRows] = await Promise.all([
+      this.prisma.evidenceClaim.findMany({ where: { status: { not: "ARCHIVED" } }, orderBy: { updatedAt: "desc" } }),
+      this.prisma.productMapping.findMany({ where: { status: { not: "ARCHIVED" } }, orderBy: { commercialName: "asc" } }),
       this.prisma.phraseRule.findMany({ where: { active: true }, orderBy: [{ category: "asc" }, { blockedText: "asc" }] }),
-      this.prisma.brandProfileVersion.findMany({ orderBy: { version: "desc" } }),
+      this.prisma.brandProfileVersion.findMany({ where: { status: { not: "ARCHIVED" } }, orderBy: { version: "desc" } }),
       this.prisma.product.findMany({ where: { status: { not: "ARCHIVED" } }, include: { skus: true }, orderBy: { modelCode: "asc" } }),
       this.prisma.faqEntry.findMany({ where: { status: { not: "ARCHIVED" } }, include: { variants: true, product: true }, orderBy: [{ frequency: "desc" }, { updatedAt: "desc" }], take: 500 }),
       this.prisma.employee.findMany({ where: { status: "ACTIVE" }, select: { id: true, employeeNo: true, name: true, department: { select: { name: true } } }, orderBy: { name: "asc" } }),
+      this.prisma.knowledgeEntry.findMany({ where: { status: { not: "ARCHIVED" }, category: { not: null } }, select: { category: true }, distinct: ["category"], orderBy: { category: "asc" } }),
     ]);
-    return { claims, mappings, phraseRules, brandProfiles, products, faqs, employees };
+    return { claims, mappings, phraseRules, brandProfiles, products, faqs, employees, categories: categoryRows.map((row) => text(row.category)).filter(Boolean) };
   }
 
   async products(query: Record<string, string | undefined>) {
@@ -376,29 +377,42 @@ export class BrandDataService {
   async createKnowledge(body: JsonRecord, actor: string) {
     const title = text(body.title);
     const type = text(body.type).toUpperCase();
+    const category = text(body.category);
+    const direct = text(body.publishMode).toUpperCase() === "READY";
     if (!title) throw new BadRequestException("知识标题不能为空");
     if (!knowledgeTypes.includes(type)) throw new BadRequestException("请选择有效的知识类型");
+    if (!category) throw new BadRequestException("请选择知识分类");
+    if (!text(body.reply) && !text(body.body)) throw new BadRequestException("标准回复或完整正文至少填写一项");
     const id = text(body.id) || knowledgeNo();
-    const metadata = { keywords: textArray(body.keywords), scenarios: textArray(body.scenarios), owner: text(body.owner) || actor, version: 1, createdBy: actor };
+    const metadata = { keywords: textArray(body.keywords), scenarios: textArray(body.scenarios), owner: text(body.owner) || actor, version: 1, createdBy: actor, publishMode: direct ? "READY" : "PENDING" };
     const entry = await this.prisma.knowledgeEntry.create({
       data: {
-        id, type, title, category: text(body.category) || undefined, model: text(body.model) || undefined,
+        id, type, title, category, model: text(body.model) || undefined,
         summary: text(body.summary) || undefined, reply: text(body.reply) || undefined, body: text(body.body) || undefined,
         source: text(body.source) || "运营后台录入", sourceRefs: text(body.sourceRefs) || undefined,
-        status: enumValue(body.status, recordStatuses, "PENDING"), audience: text(body.audience) || "customer",
-        sourceLevel: text(body.sourceLevel) || "B", validUntil: parseDate(body.validUntil), externallyUsable: false,
+        status: direct ? "READY" : "PENDING", audience: text(body.audience) || "customer",
+        sourceLevel: text(body.sourceLevel) || "B", validUntil: parseDate(body.validUntil), externallyUsable: direct,
         evidenceIds: textArray(body.evidenceIds), raw: metadata,
+        reviewedBy: direct ? actor : undefined, reviewedAt: direct ? new Date() : undefined,
       },
     });
-    await this.audit(actor, "KNOWLEDGE_CREATE", "KnowledgeEntry", entry.id, entry);
+    await this.audit(actor, direct ? "KNOWLEDGE_CREATE_DIRECT" : "KNOWLEDGE_CREATE_PENDING", "KnowledgeEntry", entry.id, entry);
     return { ...entry, metadata };
   }
 
   async updateKnowledge(id: string, body: JsonRecord, actor: string) {
     const existing = await this.prisma.knowledgeEntry.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException("知识记录不存在");
+    const nextTitle = body.title !== undefined ? text(body.title) : existing.title;
+    const nextCategory = body.category !== undefined ? text(body.category) : text(existing.category);
+    const nextReply = body.reply !== undefined ? text(body.reply) : text(existing.reply);
+    const nextBody = body.body !== undefined ? text(body.body) : text(existing.body);
+    const direct = text(body.publishMode).toUpperCase() === "READY";
+    if (!nextTitle) throw new BadRequestException("知识标题不能为空");
+    if (!nextCategory) throw new BadRequestException("请选择知识分类");
+    if (!nextReply && !nextBody) throw new BadRequestException("标准回复或完整正文至少填写一项");
     const existingMetadata = jsonRecord(existing.raw);
-    const metadata = { ...existingMetadata, ...(body.keywords !== undefined ? { keywords: textArray(body.keywords) } : {}), ...(body.scenarios !== undefined ? { scenarios: textArray(body.scenarios) } : {}), version: Number(existingMetadata.version || 1) + 1, updatedBy: actor, updatedAt: new Date().toISOString() };
+    const metadata = { ...existingMetadata, ...(body.keywords !== undefined ? { keywords: textArray(body.keywords) } : {}), ...(body.scenarios !== undefined ? { scenarios: textArray(body.scenarios) } : {}), version: Number(existingMetadata.version || 1) + 1, updatedBy: actor, updatedAt: new Date().toISOString(), publishMode: direct ? "READY" : "PENDING" };
     const entry = await this.prisma.knowledgeEntry.update({
       where: { id },
       data: {
@@ -409,12 +423,118 @@ export class BrandDataService {
         ...(body.source !== undefined ? { source: text(body.source) || "运营后台录入" } : {}), ...(body.sourceRefs !== undefined ? { sourceRefs: text(body.sourceRefs) || null } : {}),
         ...(body.audience !== undefined ? { audience: text(body.audience) || "customer" } : {}), ...(body.sourceLevel !== undefined ? { sourceLevel: text(body.sourceLevel) || "B" } : {}),
         ...(body.validUntil !== undefined ? { validUntil: parseDate(body.validUntil) || null } : {}), ...(body.evidenceIds !== undefined ? { evidenceIds: textArray(body.evidenceIds) } : {}),
-        ...(body.status !== undefined ? { status: enumValue(body.status, recordStatuses, existing.status) } : {}), raw: metadata,
-        externallyUsable: false,
+        status: direct ? "READY" : "PENDING", raw: metadata,
+        externallyUsable: direct,
+        reviewedBy: direct ? actor : null,
+        reviewedAt: direct ? new Date() : null,
       },
     });
-    await this.audit(actor, "KNOWLEDGE_UPDATE", "KnowledgeEntry", id, entry);
+    await this.audit(actor, direct ? "KNOWLEDGE_UPDATE_DIRECT" : "KNOWLEDGE_UPDATE_PENDING", "KnowledgeEntry", id, entry);
     return { ...entry, metadata };
+  }
+
+  async updateKnowledgeControl(resource: string, id: string, body: JsonRecord, actor: string) {
+    const key = text(resource).toLowerCase();
+    if (key === "products") return this.updateProduct(id, body, actor);
+    if (key === "faqs") {
+      const existing = await this.prisma.faqEntry.findUnique({ where: { id } });
+      if (!existing) throw new NotFoundException("FAQ不存在");
+      const status = body.status === undefined ? existing.status : enumValue(body.status, recordStatuses, existing.status);
+      const row = await this.prisma.faqEntry.update({ where: { id }, data: {
+        ...(body.standardQuestion !== undefined ? { standardQuestion: text(body.standardQuestion) } : {}),
+        ...(body.shortAnswer !== undefined ? { shortAnswer: text(body.shortAnswer) } : {}),
+        ...(body.detailedAnswer !== undefined ? { detailedAnswer: text(body.detailedAnswer) || null } : {}),
+        ...(body.category !== undefined ? { category: text(body.category) } : {}),
+        ...(body.intent !== undefined ? { intent: text(body.intent) } : {}),
+        ...(body.language !== undefined ? { language: text(body.language) || "zh-CN" } : {}),
+        ...(body.market !== undefined ? { market: text(body.market) || "CN" } : {}),
+        ...(body.frequency !== undefined ? { frequency: Math.max(0, Number(body.frequency) || 0) } : {}),
+        ...(body.priority !== undefined ? { priority: text(body.priority) || "NORMAL" } : {}),
+        ...(body.source !== undefined ? { source: text(body.source) } : {}),
+        ...(body.sourceLevel !== undefined ? { sourceLevel: text(body.sourceLevel) || "B" } : {}),
+        ...(body.productId !== undefined ? { productId: text(body.productId) || null } : {}),
+        status, externallyUsable: status === "READY",
+      } });
+      await this.audit(actor, "FAQ_UPDATE", "FaqEntry", id, row);
+      return row;
+    }
+    if (key === "claims") {
+      const existing = await this.prisma.evidenceClaim.findUnique({ where: { id } });
+      if (!existing) throw new NotFoundException("资质证书不存在");
+      const row = await this.prisma.evidenceClaim.update({ where: { id }, data: {
+        ...(body.name !== undefined ? { name: text(body.name) } : {}),
+        ...(body.evidenceType !== undefined ? { evidenceType: text(body.evidenceType) } : {}),
+        ...(body.source !== undefined ? { source: text(body.source) } : {}),
+        ...(body.entityIdentifier !== undefined ? { entityIdentifier: text(body.entityIdentifier) || null } : {}),
+        ...(body.coveredObject !== undefined ? { coveredObject: text(body.coveredObject) || null } : {}),
+        ...(body.validFrom !== undefined ? { validFrom: parseDate(body.validFrom) || null } : {}),
+        ...(body.validUntil !== undefined ? { validUntil: parseDate(body.validUntil) || null } : {}),
+        ...(body.confirmedFact !== undefined ? { confirmedFact: text(body.confirmedFact) || null } : {}),
+        ...(body.publicWording !== undefined ? { publicWording: text(body.publicWording) || null } : {}),
+        ...(body.internalRestriction !== undefined ? { internalRestriction: text(body.internalRestriction) || null } : {}),
+        ...(body.status !== undefined ? { status: enumValue(body.status, recordStatuses, existing.status) } : {}),
+      } });
+      await this.audit(actor, "EVIDENCE_CLAIM_UPDATE", "EvidenceClaim", id, row);
+      return row;
+    }
+    if (key === "mappings") {
+      const existing = await this.prisma.productMapping.findUnique({ where: { id } });
+      if (!existing) throw new NotFoundException("型号映射不存在");
+      const row = await this.prisma.productMapping.update({ where: { id }, data: {
+        ...(body.commercialName !== undefined ? { commercialName: text(body.commercialName) } : {}),
+        ...(body.pageFacts !== undefined ? { pageFacts: text(body.pageFacts) || null } : {}),
+        ...(body.nameplateModel !== undefined ? { nameplateModel: text(body.nameplateModel) || null } : {}),
+        ...(body.registeredModel !== undefined ? { registeredModel: text(body.registeredModel) || null } : {}),
+        ...(body.registrationNumber !== undefined ? { registrationNumber: text(body.registrationNumber) || null } : {}),
+        ...(body.productionRelation !== undefined ? { productionRelation: text(body.productionRelation) || null } : {}),
+        ...(body.requiredAction !== undefined ? { requiredAction: text(body.requiredAction) || null } : {}),
+        ...(body.status !== undefined ? { status: enumValue(body.status, recordStatuses, existing.status) } : {}),
+      } });
+      await this.audit(actor, "PRODUCT_MAPPING_UPDATE", "ProductMapping", id, row);
+      return row;
+    }
+    if (key === "rules") {
+      const existing = await this.prisma.phraseRule.findUnique({ where: { id } });
+      if (!existing) throw new NotFoundException("表述规则不存在");
+      const row = await this.prisma.phraseRule.update({ where: { id }, data: {
+        ...(body.category !== undefined ? { category: text(body.category) } : {}),
+        ...(body.blockedText !== undefined ? { blockedText: text(body.blockedText) } : {}),
+        ...(body.replacement !== undefined ? { replacement: text(body.replacement) || null } : {}),
+        ...(body.condition !== undefined ? { condition: text(body.condition) || null } : {}),
+        ...(body.active !== undefined ? { active: Boolean(body.active) } : {}),
+      } });
+      await this.audit(actor, "PHRASE_RULE_UPDATE", "PhraseRule", id, row);
+      return row;
+    }
+    if (key === "brand-profiles") {
+      const existing = await this.prisma.brandProfileVersion.findUnique({ where: { id } });
+      if (!existing) throw new NotFoundException("品牌版本不存在");
+      const row = await this.prisma.brandProfileVersion.update({ where: { id }, data: {
+        ...(body.title !== undefined ? { title: text(body.title) } : {}),
+        ...(body.positioning !== undefined ? { positioning: text(body.positioning) || null } : {}),
+        ...(body.story !== undefined ? { story: text(body.story) || null } : {}),
+        ...(body.source !== undefined ? { source: text(body.source) } : {}),
+        ...(body.status !== undefined ? { status: enumValue(body.status, recordStatuses, existing.status) } : {}),
+        ...(body.effectiveAt !== undefined ? { effectiveAt: parseDate(body.effectiveAt) || null } : {}),
+      } });
+      await this.audit(actor, "BRAND_PROFILE_UPDATE", "BrandProfileVersion", id, row);
+      return row;
+    }
+    throw new BadRequestException("不支持的知识库栏目");
+  }
+
+  async archiveKnowledgeControl(resource: string, id: string, actor: string) {
+    const key = text(resource).toLowerCase();
+    let row: unknown;
+    if (key === "products") row = await this.prisma.product.update({ where: { id }, data: { status: "ARCHIVED" } });
+    else if (key === "faqs") row = await this.prisma.faqEntry.update({ where: { id }, data: { status: "ARCHIVED", externallyUsable: false } });
+    else if (key === "claims") row = await this.prisma.evidenceClaim.update({ where: { id }, data: { status: "ARCHIVED" } });
+    else if (key === "mappings") row = await this.prisma.productMapping.update({ where: { id }, data: { status: "ARCHIVED" } });
+    else if (key === "rules") row = await this.prisma.phraseRule.update({ where: { id }, data: { active: false } });
+    else if (key === "brand-profiles") row = await this.prisma.brandProfileVersion.update({ where: { id }, data: { status: "ARCHIVED" } });
+    else throw new BadRequestException("不支持的知识库栏目");
+    await this.audit(actor, "KNOWLEDGE_CONTROL_ARCHIVE", key, id, row);
+    return row;
   }
 
   async reviewKnowledge(id: string, approved: boolean, actor: string, note?: string) {
@@ -575,13 +695,21 @@ export class BrandDataService {
     const moduleType = text(query.moduleType).toUpperCase();
     const employeeId = text(query.employeeId);
     const reviewStatus = text(query.reviewStatus || query.status).toUpperCase();
+    const reviewScope = text(query.reviewScope).toUpperCase();
     const availabilityStatus = text(query.availabilityStatus).toUpperCase();
     const rightsStatus = text(query.rightsStatus).toUpperCase();
     const minimumScore = Number(query.minimumScore || 0);
     const where: Prisma.AssetWhereInput = {
+      status: { not: "ARCHIVED" },
       ...(assetKinds.includes(kind as AssetKind) ? { kind: kind as AssetKind } : {}),
       ...(assetLevels.includes(level as AssetLevel) ? { level: level as AssetLevel } : {}),
-      ...(reviewStatuses.includes(reviewStatus as AssetReviewStatus) ? { reviewStatus: reviewStatus as AssetReviewStatus } : {}),
+      ...(reviewStatuses.includes(reviewStatus as AssetReviewStatus)
+        ? { reviewStatus: reviewStatus as AssetReviewStatus }
+        : reviewScope === "PENDING"
+          ? { reviewStatus: "PENDING" }
+          : reviewScope === "NORMAL"
+            ? { reviewStatus: { not: "PENDING" } }
+            : {}),
       ...(availabilityStatuses.includes(availabilityStatus as AssetAvailabilityStatus) ? { availabilityStatus: availabilityStatus as AssetAvailabilityStatus } : {}),
       ...(rightsStatuses.includes(rightsStatus as AssetRightsStatus) ? { rightsStatus: rightsStatus as AssetRightsStatus } : {}),
       ...(employeeId ? { createdByEmployeeId: employeeId } : {}),
@@ -595,7 +723,16 @@ export class BrandDataService {
       this.prisma.asset.count({ where }),
     ]);
     const nextCursor = rows.length > take ? rows[take - 1].id : null;
-    const items = rows.slice(0, take).map((row) => this.assetView(row));
+    const items = rows.slice(0, take).map((row) => {
+      const view = this.assetView(row);
+      const latest = row.versions[0];
+      const thumbnailObjectKey = row.kind === "IMAGE" ? (latest?.previewObjectKey || latest?.objectKey || row.objectKey) : null;
+      let thumbnailUrl: string | null = null;
+      if (thumbnailObjectKey && this.oss.isConfigured()) {
+        try { thumbnailUrl = this.oss.signedDownloadUrl(thumbnailObjectKey, 900); } catch { thumbnailUrl = null; }
+      }
+      return { ...view, thumbnailUrl };
+    });
     if (!query.pageSize && !query.cursor) return items;
     return { items, total, nextCursor, pageSize: take };
   }
@@ -694,6 +831,104 @@ export class BrandDataService {
     if (body.tags !== undefined) await this.replaceHumanTags(id, body.tags, actor);
     await this.audit(actor, "ASSET_METADATA_UPDATE", "Asset", id, { displayName: asset.displayName, productIds, rightsStatus: asset.rightsStatus });
     return this.asset(id);
+  }
+
+  async bulkAssets(body: JsonRecord, actor: string) {
+    const ids = Array.from(new Set(textArray(body.ids))).slice(0, 200);
+    const action = text(body.action).toUpperCase();
+    if (!ids.length) throw new BadRequestException("请选择素材");
+    if (!["UPDATE", "APPROVE", "RETURN", "REANALYZE", "ARCHIVE"].includes(action)) throw new BadRequestException("不支持的批量操作");
+    let count = 0;
+    for (const id of ids) {
+      if (action === "UPDATE") {
+        const patch = jsonRecord(body.patch as Prisma.JsonValue);
+        await this.updateAsset(id, patch, actor);
+        const tagMode = text(body.tagMode).toUpperCase() || "APPEND";
+        if (patch.tags !== undefined) {
+          if (tagMode === "REPLACE") {
+            await this.prisma.assetTag.deleteMany({ where: { assetId: id, source: "HUMAN" } });
+            await this.replaceHumanTags(id, patch.tags, actor);
+          } else if (tagMode === "REMOVE") {
+            const tags = Array.isArray(patch.tags) ? patch.tags as JsonRecord[] : [];
+            for (const item of tags) {
+              const tag = await this.prisma.tagDefinition.findUnique({ where: { namespace_code: { namespace: text(item.namespace) || "manual", code: text(item.code) || text(item.label).toLowerCase().replace(/\s+/gu, "-").slice(0, 80) } } });
+              if (tag) await this.prisma.assetTag.deleteMany({ where: { assetId: id, tagId: tag.id } });
+            }
+          }
+        }
+      } else if (action === "APPROVE") await this.reviewAssetV2(id, { action: "APPROVE", note: text(body.note) || "批量通过" }, actor);
+      else if (action === "RETURN") await this.reviewAssetV2(id, { action: "RETURN", note: text(body.note) || "批量退回" }, actor);
+      else if (action === "REANALYZE") await this.reanalyzeAsset(id, actor);
+      else {
+        await this.prisma.asset.update({ where: { id }, data: { status: "ARCHIVED", availabilityStatus: "ARCHIVED" } });
+        await this.audit(actor, "ASSET_ARCHIVE", "Asset", id, { status: "ARCHIVED" });
+      }
+      count += 1;
+    }
+    await this.audit(actor, `ASSET_BULK_${action}`, "Asset", ids.join(","), { ids, count, tagMode: body.tagMode });
+    return { action, count };
+  }
+
+  async replaceAssetVersion(id: string, file: MemoryFile | undefined, actor: string) {
+    if (!file?.buffer?.length) throw new BadRequestException("请选择替换文件");
+    const existing = await this.prisma.asset.findUnique({ where: { id }, include: { versions: { orderBy: { version: "desc" }, take: 1 } } });
+    if (!existing) throw new NotFoundException("素材不存在");
+    const nextKind = fileKind(file.originalname, file.mimetype);
+    if (existing.kind && nextKind !== existing.kind) throw new BadRequestException(`替换文件必须保持为${existing.kind}类型`);
+    const extension = extname(file.originalname).toLowerCase() || existing.extension;
+    const sha256 = createHash("sha256").update(file.buffer).digest("hex");
+    const upload = await this.oss.uploadBuffer({ buffer: file.buffer, originalName: file.originalname, sha256, extension, actor, sourceType: "ASSET_VERSION_REPLACEMENT" });
+    const version = Number(existing.versions[0]?.version || 0) + 1;
+    let width: number | null = null;
+    let height: number | null = null;
+    if (nextKind === "IMAGE") {
+      const metadata = await sharp(file.buffer).metadata();
+      width = metadata.width || null;
+      height = metadata.height || null;
+    }
+    await this.prisma.$transaction(async (tx) => {
+      await tx.assetVersion.create({ data: {
+        assetId: id, version, sha256, sourcePath: `web-replacement://${file.originalname}`,
+        objectKey: upload.objectKey, objectVersionId: upload.objectVersionId, etag: upload.etag, storageUrl: upload.storageUrl,
+        createdBy: actor, originalFileName: file.originalname, mimeType: file.mimetype, extension, sizeBytes: BigInt(file.size),
+        width, height, technicalMetadata: json({ replacedAt: new Date().toISOString(), replacedBy: actor }),
+      } });
+      await tx.asset.update({ where: { id }, data: {
+        fileName: file.originalname, originalFileName: file.originalname, extension, mediaType: file.mimetype,
+        sha256, sizeBytes: BigInt(file.size), modifiedAt: new Date(), width, height,
+        objectKey: upload.objectKey, objectVersionId: upload.objectVersionId, etag: upload.etag, storageUrl: upload.storageUrl, storageSyncedAt: upload.uploadedAt,
+        kind: nextKind, processingStatus: "STORED", reviewStatus: "PENDING", availabilityStatus: "INACTIVE", status: "PENDING",
+        reviewedBy: null, reviewedAt: null,
+      } });
+    });
+    await this.audit(actor, "ASSET_VERSION_REPLACE", "Asset", id, { version, fileName: file.originalname, sha256 });
+    await this.assetAi.enqueue(id, nextKind, existing.analysisVersion + 1);
+    return this.asset(id);
+  }
+
+  async documentContent(id: string) {
+    const asset = await this.prisma.asset.findUnique({ where: { id } });
+    if (!asset) throw new NotFoundException("素材不存在");
+    if (![".txt", ".md"].includes(asset.extension.toLowerCase())) throw new BadRequestException("仅TXT和Markdown支持在线编辑");
+    if (!asset.objectKey) throw new BadRequestException("素材尚未存储到OSS");
+    if (Number(asset.sizeBytes) > 2 * 1024 * 1024) throw new BadRequestException("在线编辑仅支持2MB以内的文本");
+    const buffer = await this.oss.downloadBuffer(asset.objectKey);
+    return { content: buffer.toString("utf8"), extension: asset.extension, fileName: asset.originalFileName || asset.fileName };
+  }
+
+  async updateDocumentContent(id: string, body: JsonRecord, actor: string) {
+    const asset = await this.prisma.asset.findUnique({ where: { id } });
+    if (!asset) throw new NotFoundException("素材不存在");
+    if (![".txt", ".md"].includes(asset.extension.toLowerCase())) throw new BadRequestException("仅TXT和Markdown支持在线编辑");
+    const content = text(body.content);
+    const buffer = Buffer.from(content, "utf8");
+    if (buffer.length > 2 * 1024 * 1024) throw new BadRequestException("正文不能超过2MB");
+    return this.replaceAssetVersion(id, {
+      originalname: asset.originalFileName || asset.fileName,
+      mimetype: asset.extension.toLowerCase() === ".md" ? "text/markdown" : "text/plain",
+      size: buffer.length,
+      buffer,
+    }, actor);
   }
 
   async reviewAssetV2(id: string, body: JsonRecord, actor: string) {

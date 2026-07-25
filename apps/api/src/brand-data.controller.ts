@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Headers, Param, Patch, Post, Query, UploadedFile, UploadedFiles, UseInterceptors } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Delete, Get, Headers, Param, Patch, Post, Query, UploadedFile, UploadedFiles, UseInterceptors } from "@nestjs/common";
 import { FileInterceptor, FilesInterceptor } from "@nestjs/platform-express";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
@@ -102,6 +102,16 @@ export class BrandDataController {
   @Post("faqs/bulk")
   bulkFaqs(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Body() body: Record<string, unknown>) {
     return this.brandData.bulkFaqs(body, this.actor(authorization, requestedActor));
+  }
+
+  @Patch("knowledge-controls/:resource/:id")
+  updateKnowledgeControl(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("resource") resource: string, @Param("id") id: string, @Body() body: Record<string, unknown>) {
+    return this.brandData.updateKnowledgeControl(resource, id, body, this.actor(authorization, requestedActor));
+  }
+
+  @Delete("knowledge-controls/:resource/:id")
+  archiveKnowledgeControl(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("resource") resource: string, @Param("id") id: string) {
+    return this.brandData.archiveKnowledgeControl(resource, id, this.actor(authorization, requestedActor));
   }
 
   @Post("upload-batches")
@@ -294,6 +304,33 @@ export class BrandDataController {
     @Body() body: Record<string, unknown>,
   ) {
     return this.brandData.uploadAsset(file, body, this.actor(authorization, requestedActor));
+  }
+
+  @Post("assets/bulk")
+  bulkAssets(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Body() body: Record<string, unknown>) {
+    return this.brandData.bulkAssets(body, this.actor(authorization, requestedActor));
+  }
+
+  @Post("assets/:id/versions")
+  @UseInterceptors(FileInterceptor("file", { limits: { fileSize: 200 * 1024 * 1024, files: 1 } }))
+  replaceAssetVersion(
+    @Headers("authorization") authorization: string | undefined,
+    @Headers("x-ops-actor") requestedActor: string | undefined,
+    @Param("id") id: string,
+    @UploadedFile() file: { originalname: string; mimetype: string; size: number; buffer: Buffer } | undefined,
+  ) {
+    return this.brandData.replaceAssetVersion(id, file, this.actor(authorization, requestedActor));
+  }
+
+  @Get("assets/:id/document-content")
+  documentContent(@Headers("authorization") authorization: string | undefined, @Param("id") id: string) {
+    this.actor(authorization);
+    return this.brandData.documentContent(id);
+  }
+
+  @Patch("assets/:id/document-content")
+  updateDocumentContent(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("id") id: string, @Body() body: Record<string, unknown>) {
+    return this.brandData.updateDocumentContent(id, body, this.actor(authorization, requestedActor));
   }
 
   @Get("assets/:id")

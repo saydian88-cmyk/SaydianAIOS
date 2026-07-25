@@ -220,4 +220,9 @@ export class OssStorageService {
   signedDownloadUrl(objectKey: string, expiresSeconds = 1_800): string {
     return this.client().signatureUrl(objectKey, { expires: expiresSeconds, method: "GET" });
   }
+
+  async downloadBuffer(objectKey: string): Promise<Buffer> {
+    const result = await this.client().get(objectKey);
+    return Buffer.isBuffer(result.content) ? result.content : Buffer.from(result.content);
+  }
 }

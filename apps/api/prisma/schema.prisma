@@ -424,6 +424,7 @@ model PlatformAccount {
   message           String           @default("未配置")
   lastCheckedAt     DateTime?
   lastSuccessAt     DateTime?
+  archivedAt        DateTime?
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
 
@@ -438,7 +439,7 @@ model PlatformAccount {
   contentVariants   ContentVariant[]
 
   @@unique([integrationId, externalAccountId])
-  @@index([region, state])
+  @@index([region, state, archivedAt])
 }
 
 model Store {
@@ -450,6 +451,7 @@ model Store {
   state             IntegrationState @default(UNCONFIGURED)
   ownerEmployeeId   String?
   metadata          Json             @default("{}")
+  archivedAt        DateTime?
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
 
@@ -458,6 +460,7 @@ model Store {
   businessSnapshots BusinessSnapshot[]
 
   @@unique([platformAccountId, externalStoreId])
+  @@index([archivedAt])
   @@index([region, state])
 }
 

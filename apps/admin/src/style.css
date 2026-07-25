@@ -102,6 +102,7 @@ nav { display: grid; gap: 7px; margin-top: 22px; }
 .variant-account-list { display: grid; gap: 8px; margin-top: 12px; }.variant-account-list > div { display: grid; grid-template-columns: 92px 1fr; align-items: center; gap: 8px; }.variant-account-list small { color: #777; }
 
 .el-segmented { margin-bottom: 16px; }.table-panel { overflow: hidden; }.table-panel small { margin-left: 7px; color: #777; }.el-table { --el-table-header-bg-color: #f5f2ed; --el-table-row-hover-bg-color: #fff6f3; }
+.ledger-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 18px; }.ledger-form-grid .full { grid-column: 1 / -1; }
 .card-list, .alert-list, .report-cards, .integration-grid, .sop-list { display: grid; gap: 13px; margin-top: 16px; }
 .card-list article, .alert-list article, .sop-list article { display: flex; justify-content: space-between; gap: 25px; padding: 19px; border: 1px solid var(--line); border-radius: 15px; background: var(--panel); }
 .card-list h3, .alert-list h3 { margin: 9px 0 6px; }.card-list p, .alert-list p, .sop-list p { margin: 0; color: #6f7277; line-height: 1.6; }.alert-list article.warning { border-left: 4px solid #e89a35; }.alert-list article.critical { border-left: 4px solid var(--brand); }
@@ -120,6 +121,6 @@ nav { display: grid; gap: 7px; margin-top: 22px; }
 @media (max-width: 820px) {
   .shell { display: block; }.sidebar { position: static; width: 100%; height: auto; padding: 16px; }.brand { padding-bottom: 14px; }.sidebar nav { display: flex; overflow-x: auto; }.nav-item { min-width: 125px; grid-template-columns: 22px 1fr; }.schedule-card { display: none; }
   .main { padding: 0 16px 30px; }.topbar { min-height: 72px; }.connection-state, .employee-identity { display: none; }.actor-input { width: 105px; }.hero-panel { padding: 28px 24px; }.hero-copy h2 { font-size: 31px; }.two-column, .metric-grid, .content-grid, .integration-grid, .module-grid, .today-todo-grid { grid-template-columns: 1fr; }
-  .section-heading { align-items: flex-start; flex-direction: column; }.summary-strip { overflow-x: auto; }.summary-strip span { white-space: nowrap; }.token-panel { grid-template-columns: 1fr; }
+  .section-heading { align-items: flex-start; flex-direction: column; }.summary-strip { overflow-x: auto; }.summary-strip span { white-space: nowrap; }.token-panel, .ledger-form-grid { grid-template-columns: 1fr; }.ledger-form-grid .full { grid-column: auto; }
   .douyin-config-form { grid-template-columns: 1fr; }
 }
