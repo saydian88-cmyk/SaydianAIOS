@@ -901,10 +901,16 @@ export class BrandDataService {
   }
 
   async bulkAssets(body: JsonRecord, actor: string) {
-    const ids = Array.from(new Set(textArray(body.ids))).slice(0, 200);
     const action = text(body.action).toUpperCase();
-    if (!ids.length) throw new BadRequestException("请选择素材");
-    if (!["UPDATE", "APPROVE", "RETURN", "REANALYZE", "ARCHIVE"].includes(action)) throw new BadRequestException("不支持的批量操作");
+    const ids = action === "PURGE_ALL"
+      ? (await this.prisma.asset.findMany({ select: { id: true } })).map((item) => item.id)
+      : Array.from(new Set(textArray(body.ids))).slice(0, 200);
+    if (!ids.length) throw new BadRequestException(action === "PURGE_ALL" ? "素材库已经为空" : "请选择素材");
+    if (!["UPDATE", "APPROVE", "RETURN", "REANALYZE", "ARCHIVE", "PURGE", "PURGE_ALL"].includes(action)) throw new BadRequestException("不支持的批量操作");
+    if (["PURGE", "PURGE_ALL"].includes(action)) {
+      if (text(body.confirmation) !== "永久删除") throw new BadRequestException("永久删除确认文字不正确");
+      return this.permanentlyDeleteAssets(ids, actor, action);
+    }
     let count = 0;
     for (const id of ids) {
       if (action === "UPDATE") {
@@ -934,6 +940,35 @@ export class BrandDataService {
     }
     await this.audit(actor, `ASSET_BULK_${action}`, "Asset", ids.join(","), { ids, count, tagMode: body.tagMode });
     return { action, count };
+  }
+
+  private async permanentlyDeleteAssets(ids: string[], actor: string, action: string) {
+    const assets = await this.prisma.asset.findMany({
+      where: { id: { in: ids } },
+      select: {
+        id: true,
+        objectKey: true,
+        versions: { select: { objectKey: true } },
+        cloudMediaJobs: { select: { outputs: { select: { objectKey: true } } } },
+      },
+    });
+    if (!assets.length) throw new BadRequestException("所选素材不存在");
+    const objectKeys = assets.flatMap((asset) => [
+      asset.objectKey,
+      ...asset.versions.map((version) => version.objectKey),
+      ...asset.cloudMediaJobs.flatMap((job) => job.outputs.map((output) => output.objectKey)),
+    ]).filter((key): key is string => Boolean(key));
+    const ossResult = await this.oss.deleteAssetObjects(assets.map((asset) => asset.id), objectKeys);
+    await this.prisma.$transaction(async (tx) => {
+      await tx.contentAsset.deleteMany({ where: { assetId: { in: assets.map((asset) => asset.id) } } });
+      await tx.asset.deleteMany({ where: { id: { in: assets.map((asset) => asset.id) } } });
+    }, { timeout: 120_000 });
+    await this.audit(actor, `ASSET_BULK_${action}`, "Asset", "permanent-delete", {
+      requested: ids.length,
+      deletedAssets: assets.length,
+      deletedOssObjects: ossResult.deleted,
+    });
+    return { action, count: assets.length, deletedOssObjects: ossResult.deleted };
   }
 
   async replaceAssetVersion(id: string, file: MemoryFile | undefined, actor: string) {
