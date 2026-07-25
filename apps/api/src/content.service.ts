@@ -383,6 +383,10 @@ export class ContentService {
     const plan = await this.prisma.contentPlan.findUnique({ where: { id }, include: { variants: true } });
     if (!plan) throw new NotFoundException("内容不存在");
     const body = plan.variants.map((variant) => `${variant.title}\n${variant.body}`).join("\n");
+    const existingRequirements = Array.isArray(plan.shootRequirements) ? plan.shootRequirements : [];
+    const shootRequirements = plan.kind === "VIDEO" && existingRequirements.length === 0
+      ? [{ id: "shot-main", description: "本脚本所需拍摄素材", status: "OPEN", assetIds: [] }]
+      : existingRequirements;
     const guard = await this.guard.evaluate({ title: plan.topic, body, productModel: plan.productModel ?? undefined, evidenceIds: plan.evidenceIds });
     if (!guard.allowed) throw new BadRequestException(guard.reasons.join("；"));
     return this.prisma.$transaction(async (tx) => {
@@ -393,6 +397,7 @@ export class ContentService {
           approvedBy: actor,
           approvedAt: new Date(),
           riskReasons: [],
+          shootRequirements,
           owner: options.owner || actor,
           targetPlatforms: options.targetPlatforms?.length ? options.targetPlatforms : plan.variants.map((variant) => variant.platform),
           productionStage: plan.kind === "VIDEO" ? "AWAITING_ASSETS" : "PACKAGING_REVIEW",
