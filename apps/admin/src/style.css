@@ -128,6 +128,12 @@ nav { display: grid; gap: 7px; margin-top: 22px; }
 .workflow-block { display: grid; gap: 9px; margin: 12px 0; padding: 12px; border: 1px solid #e4e9f1; border-radius: 12px; background: #f8fafc; }
 .workflow-block > strong { color: #27354c; }
 .shoot-row, .package-row, .optimization-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.shoot-copy { display: grid; gap: 3px; min-width: 0; }
+.shoot-copy small { padding-left: 24px; color: #7c8799; }
+.shoot-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.production-upload-context { display: grid; gap: 6px; margin-bottom: 16px; padding: 12px 14px; border: 1px solid #dce7f5; border-radius: 12px; background: #f6f9fd; }
+.production-upload-context span { color: #334155; }
+.production-upload-context small { color: #718096; line-height: 1.6; }
 .package-row, .optimization-row { padding-top: 9px; border-top: 1px solid #e4e9f1; }
 .package-row > div:first-child, .optimization-row > div:first-child { display: grid; gap: 3px; }
 .package-row span, .package-row small, .optimization-row small { color: #7b8697; }

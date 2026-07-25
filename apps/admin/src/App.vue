@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElMessage, ElMessageBox, type UploadUserFile } from "element-plus";
 import {
   Bell, Connection, DataAnalysis, DocumentChecked, Files, House, Monitor, Promotion,
-  Refresh, Search, Setting, Shop, VideoCamera,
+  Refresh, Search, Setting, Shop, UploadFilled, VideoCamera,
 } from "@element-plus/icons-vue";
-import { api, clearToken, download, getActor, getToken, patch, post, remove, setActor, setToken } from "./api";
+import { api, clearToken, download, getActor, getToken, patch, post, remove, setActor, setToken, uploadWithProgress } from "./api";
 import BrandDataCenter from "./components/BrandDataCenter.vue";
 import OperationAnalysis from "./components/OperationAnalysis.vue";
 import type { ContentPlan, Dashboard, Integration } from "./types";
@@ -75,6 +75,11 @@ const ledgerForm = reactive<Record<string, any>>({});
 const douyinStatus = ref<DouyinStatus>();
 const douyinClientKey = ref("");
 const douyinClientSecret = ref("");
+const productionUploadDialog = ref(false);
+const productionUploadFiles = ref<UploadUserFile[]>([]);
+const productionUploadProgress = ref(0);
+const productionUploading = ref(false);
+const productionUploadTarget = ref<{ plan: ContentPlan; requirement: ContentPlan["shootRequirements"][number] }>();
 
 const todayLabel = new Intl.DateTimeFormat("zh-CN", { dateStyle: "full" }).format(new Date());
 const pageTitle = computed(() => navItems.find((item) => item.key === active.value)?.label || "运营中台");
@@ -264,6 +269,59 @@ async function setShootRequirement(item: ContentPlan, requirementId: string, don
     await patch(`/api/v1/content/${item.id}/shoot-requirements`, { requirements });
     content.value = await api("/api/v1/content");
   }, done ? "补拍项已完成" : "补拍项已重新打开");
+}
+
+function openProductionUpload(item: ContentPlan, requirement: ContentPlan["shootRequirements"][number]) {
+  productionUploadTarget.value = { plan: item, requirement };
+  productionUploadFiles.value = [];
+  productionUploadProgress.value = 0;
+  productionUploadDialog.value = true;
+}
+
+async function submitProductionUpload() {
+  const target = productionUploadTarget.value;
+  const files = productionUploadFiles.value.map((item) => item.raw).filter(Boolean) as File[];
+  if (!target || !files.length) return ElMessage.warning("请选择需要上传的拍摄素材");
+  if (files.length > 20) return ElMessage.warning("每次最多上传20个文件");
+  productionUploading.value = true;
+  productionUploadProgress.value = 0;
+  try {
+    const assisted = await post<AnyRow>("/api/v1/brand-data/upload-batches/assist", {
+      files: files.map((file) => ({ name: file.name, type: file.type, size: file.size })),
+    });
+    const suggestions = assisted.suggestions || {};
+    const classificationTags = Array.isArray(suggestions.classificationTags) ? suggestions.classificationTags : [];
+    const productIds = Array.isArray(suggestions.productIds) ? suggestions.productIds : [];
+    const batch = await post<AnyRow>("/api/v1/brand-data/upload-batches", {
+      sourceType: "EMPLOYEE_CAPTURE",
+      productScope: productIds.length ? "MODEL" : "UNKNOWN",
+      productIds,
+      assetKind: suggestions.assetKind || undefined,
+      contentDescription: suggestions.contentDescription || target.requirement.description,
+      classificationTags,
+      originalStatus: true,
+      rightsStatus: "COMMERCIAL",
+      acquiredAt: new Date().toISOString(),
+      contentPlanId: target.plan.id,
+      shootRequirementId: target.requirement.id,
+    });
+    const form = new FormData();
+    files.forEach((file) => form.append("files", file));
+    form.append("classificationTags", JSON.stringify(classificationTags));
+    form.append("productionDirect", "true");
+    const result = await uploadWithProgress<AnyRow>(`/api/v1/brand-data/upload-batches/${batch.id}/files`, form, (loaded, total) => {
+      productionUploadProgress.value = total ? Math.min(100, Math.round((loaded / total) * 100)) : 0;
+    });
+    if (Number(result.failedCount || 0) > 0) throw new Error(`有 ${result.failedCount} 个文件上传失败，请重新上传`);
+    content.value = await api("/api/v1/content");
+    productionUploadDialog.value = false;
+    const updated = content.value.find((item) => item.id === target.plan.id);
+    ElMessage.success(updated?.productionStage === "READY_TO_EDIT" ? "素材已自动分类归档，可以继续AI剪辑" : "素材已归档到对应补拍项");
+  } catch (uploadError) {
+    ElMessage.error(uploadError instanceof Error ? uploadError.message : "素材上传失败");
+  } finally {
+    productionUploading.value = false;
+  }
 }
 
 async function startVideoEditing(item: ContentPlan) {
@@ -658,7 +716,7 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
             <ol><li v-for="line in item.outline" :key="line">{{ line }}</li></ol>
             <el-alert v-if="item.riskReasons.length" :title="item.riskReasons.join('；')" type="warning" :closable="false" show-icon />
             <div v-if="item.kind === 'VIDEO' && item.status === 'PENDING_APPROVAL'" class="workflow-block"><strong>脚本审核通过后生产的平台</strong><el-checkbox-group v-model="item.targetPlatforms"><el-checkbox v-for="variant in item.variants" :key="variant.id" :value="variant.platform">{{ platformName(variant.platform) }}</el-checkbox></el-checkbox-group></div>
-            <div v-if="item.kind === 'VIDEO' && item.shootRequirements?.length" class="workflow-block"><strong>补拍清单</strong><div v-for="requirement in item.shootRequirements" :key="requirement.id" class="shoot-row"><el-checkbox :model-value="requirement.status === 'DONE'" @change="setShootRequirement(item, requirement.id, Boolean($event))">{{ requirement.description }}</el-checkbox><el-tag size="small" :type="requirement.status === 'DONE' ? 'success' : 'warning'">{{ statusLabel(requirement.status) }}</el-tag></div></div>
+            <div v-if="item.kind === 'VIDEO' && item.shootRequirements?.length" class="workflow-block"><strong>补拍清单</strong><div v-for="requirement in item.shootRequirements" :key="requirement.id" class="shoot-row"><div class="shoot-copy"><el-checkbox :model-value="requirement.status === 'DONE'" disabled>{{ requirement.description }}</el-checkbox><small v-if="requirement.assetIds?.length">已归档 {{ requirement.assetIds.length }} 项素材</small></div><div class="shoot-actions"><el-tag size="small" :type="requirement.status === 'DONE' ? 'success' : 'warning'">{{ statusLabel(requirement.status) }}</el-tag><el-button v-if="item.productionStage === 'AWAITING_ASSETS'" size="small" type="primary" plain @click="openProductionUpload(item, requirement)">{{ requirement.assetIds?.length ? '补充素材' : '上传对应素材' }}</el-button></div></div></div>
             <div class="platform-tags"><span v-for="variant in item.variants.filter(v => !item.targetPlatforms?.length || item.targetPlatforms.includes(v.platform))" :key="variant.id">{{ platformName(variant.platform) }}</span></div>
             <div class="variant-account-list"><div v-for="variant in item.variants" :key="`${variant.id}-account`"><small>{{ platformName(variant.platform) }}发布账号</small><el-select :model-value="variant.targetAccountId" placeholder="未指定，不会进入发布队列" clearable @change="assignVariantAccount(variant.id, $event)"><el-option v-for="account in ledger.accounts.filter(account => account.integration?.kind === variant.platform)" :key="account.id" :label="`${account.accountName}（${account.region}）`" :value="account.id" /></el-select></div></div>
             <div class="card-actions" v-if="item.status === 'PENDING_APPROVAL'"><el-button @click="reject(item)">退回修改</el-button><el-button type="primary" @click="approve(item)">审核通过</el-button></div>
@@ -757,6 +815,21 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
         <div class="integration-grid"><article v-for="item in integrations" :key="item.id"><div class="integration-icon">{{ item.displayName.slice(0, 1) }}</div><div class="integration-copy"><div><h3>{{ item.displayName }}</h3><el-tag :type="statusType(item.state)">{{ statusLabel(item.state) }}</el-tag></div><p>{{ item.message }}</p><div class="capability-tags"><span v-for="capability in item.capabilities" :key="capability">{{ capability }}</span><span v-if="!item.capabilities.length">暂无已验证能力</span></div><small>检查时间：{{ time(item.lastCheckedAt) }}</small></div></article></div>
         <section class="token-panel"><div><el-icon><Setting /></el-icon><div><strong>统一企业微信身份</strong><p>当前员工：{{ actorInput }}。登录、部门和员工资料由赛电商城企业微信机制统一提供。</p></div></div><el-tag type="success">已登录</el-tag></section>
       </section>
+
+      <el-dialog v-model="productionUploadDialog" title="上传对应拍摄素材" width="680px" destroy-on-close>
+        <div class="production-upload-context">
+          <strong>{{ productionUploadTarget?.plan.productionNo || '历史内容' }} · {{ productionUploadTarget?.plan.topic }}</strong>
+          <span>{{ productionUploadTarget?.requirement.description }}</span>
+          <small>本入口按公司原创、可商用素材归档；系统自动识别类型、型号和分类，并关联当前补拍项。</small>
+        </div>
+        <el-upload v-model:file-list="productionUploadFiles" drag multiple :auto-upload="false" :limit="20" :disabled="productionUploading">
+          <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
+          <div class="el-upload__text">拖入拍摄素材，或<em>点击选择</em></div>
+          <template #tip><div class="el-upload__tip">最多20个文件；上传后自动存入素材库并完成当前补拍项。</div></template>
+        </el-upload>
+        <el-progress v-if="productionUploading || productionUploadProgress" :percentage="productionUploadProgress" />
+        <template #footer><el-button :disabled="productionUploading" @click="productionUploadDialog = false">取消</el-button><el-button type="primary" :loading="productionUploading" @click="submitProductionUpload">{{ productionUploading ? `正在上传 ${productionUploadProgress}%` : '上传并继续' }}</el-button></template>
+      </el-dialog>
 
       <el-dialog v-model="ledgerDialog" :title="`${ledgerEditingId ? '编辑' : '新增'}${({ employees: '员工', products: '产品', accounts: '账号', stores: '店铺' } as Record<string,string>)[ledgerFormType]}`" width="820px" destroy-on-close>
         <el-form label-position="top" class="ledger-form-grid">

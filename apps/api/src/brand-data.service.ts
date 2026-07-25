@@ -632,6 +632,16 @@ export class BrandDataService {
     if (!batch) throw new NotFoundException("上传批次不存在");
     if (!files?.length) throw new BadRequestException("请选择需要上传的素材文件");
     if (files.length > 20) throw new BadRequestException("每批最多上传20个文件");
+    const directProductionRequested = ["true", "1"].includes(text(body.productionDirect).toLowerCase());
+    const directProduction = directProductionRequested
+      && Boolean(batch.contentPlanId)
+      && Boolean(batch.shootRequirementId)
+      && batch.sourceType === "EMPLOYEE_CAPTURE"
+      && batch.originalStatus
+      && batch.rightsStatus === "COMMERCIAL";
+    if (directProductionRequested && !directProduction) {
+      throw new BadRequestException("生产单快捷上传仅支持公司原创、可商用的员工拍摄素材");
+    }
     await this.prisma.uploadBatch.update({ where: { id }, data: { status: "UPLOADING", receivedCount: { increment: files.length } } });
     let created = 0;
     let duplicates = 0;
@@ -662,6 +672,9 @@ export class BrandDataService {
             const labels: Record<string, string> = { HOOK: "HOOK", PAIN: "痛点", FEATURE: "功能", TUTORIAL: "教程", REVIEW: "测评", STORY: "故事", HARD_AD: "硬广", LIVE_PREVIEW: "直播预告", DEMO: "演示", TRAFFIC: "引流", CTA: "CTA" };
             await this.replaceHumanTags(assetId, classificationTags.map((code) => ({ namespace: "content_classification", code, label: labels[code] || code })), actor);
           }
+        }
+        if (assetId && directProduction) {
+          await this.reviewAssetV2(assetId, { action: "APPROVE", note: "生产单内公司原创素材快捷上传，系统自动归档" }, actor);
         }
       } catch (error) {
         failed += 1;
