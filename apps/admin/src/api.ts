@@ -53,6 +53,22 @@ export function remove<T>(path: string) {
   return api<T>(path, { method: "DELETE" });
 }
 
+export async function download(path: string, fileName: string) {
+  const response = await fetch(`${apiBase}${path}`, {
+    headers: { authorization: `Bearer ${getToken()}`, "x-ops-actor": encodeURIComponent(getActor()) },
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(String(body.message || body.error || `下载失败：${response.status}`));
+  }
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 export function upload<T>(path: string, body: FormData) {
   return api<T>(path, { method: "POST", body });
 }

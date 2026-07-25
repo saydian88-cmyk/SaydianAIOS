@@ -1117,6 +1117,14 @@ model KnowledgeEntry {
 
 model ContentPlan {
   id                 String        @id @default(cuid())
+  productionNo       String?       @unique
+  productionStage    String        @default("SCRIPT_REVIEW")
+  workflowVersion    Int           @default(1)
+  owner              String?
+  targetPlatforms    IntegrationKind[] @default([])
+  shootRequirements  Json          @default("[]")
+  masterVideoPath    String?
+  masterVideoStatus  String        @default("PENDING")
   planDate           DateTime
   kind               ContentKind
   topic              String
@@ -1152,9 +1160,11 @@ model ContentPlan {
   contentAssets    ContentAsset[]
   assignedEmployee Employee?          @relation(fields: [assignedEmployeeId], references: [id], onDelete: SetNull)
   attributions     AttributionTouch[]
+  optimizations    ContentOptimizationSuggestion[]
 
   @@index([planDate, kind])
   @@index([status])
+  @@index([productionStage, planDate])
 }
 
 model ContentVariant {
@@ -1166,6 +1176,15 @@ model ContentVariant {
   mediaType       String?
   mediaPath       String?
   coverPath       String?
+  packagingStatus String          @default("PENDING")
+  coverSpec       Json            @default("{}")
+  packagedAt      DateTime?
+  packagingReviewedBy String?
+  packagingReviewedAt DateTime?
+  packagingRejectedReason String?
+  manualPublishUrl String?
+  manualExternalId String?
+  manualPublishedAt DateTime?
   targetAccountId String?
   metadata        Json            @default("{}")
   status          ContentStatus   @default(DRAFT)
@@ -1178,6 +1197,31 @@ model ContentVariant {
 
   @@unique([contentPlanId, platform])
   @@index([targetAccountId])
+  @@index([packagingStatus, platform])
+}
+
+model ContentOptimizationSuggestion {
+  id              String   @id @default(cuid())
+  contentPlanId   String
+  checkpointHours Int
+  status          String   @default("PENDING_CONFIRMATION")
+  summary         String
+  evidence        Json     @default("{}")
+  recommendations Json     @default("[]")
+  rulePatch       Json     @default("{}")
+  generatedBy     String   @default("系统数据复盘")
+  confirmedBy     String?
+  confirmedAt     DateTime?
+  rejectedBy      String?
+  rejectedAt      DateTime?
+  note            String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  contentPlan ContentPlan @relation(fields: [contentPlanId], references: [id], onDelete: Cascade)
+
+  @@unique([contentPlanId, checkpointHours])
+  @@index([status, createdAt])
 }
 
 model ContentAsset {

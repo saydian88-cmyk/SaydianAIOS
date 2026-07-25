@@ -1,8 +1,9 @@
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { ContentKind, ContentStatus, IntegrationKind, Prisma } from "@prisma/client";
 import { exec, execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdir, stat, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { promisify } from "node:util";
 import { opsConfig } from "./config";
 import { AiArticlePackage, AiContentService, AiVideoCandidate } from "./ai-content.service";
@@ -22,6 +23,10 @@ export class ContentService {
     private readonly aiContent: AiContentService,
     private readonly platforms: PlatformRegistry,
   ) {}
+
+  private productionNo(date = new Date()) {
+    return `VP-${localDateKey(date).replaceAll("-", "")}-${randomUUID().slice(0, 6).toUpperCase()}`;
+  }
 
   async generateDaily(date = new Date(), actor = "系统内容引擎"): Promise<{ created: number; selected: string[] }> {
     const video = await this.generateDailyVideo(date, actor);
@@ -55,6 +60,13 @@ export class ContentService {
       const assetIds = Array.from(new Set(candidate.assetIds.filter((id) => allowedAssetIds.has(id))));
       const plan = await this.prisma.contentPlan.create({
         data: {
+          productionNo: this.productionNo(date),
+          productionStage: "SCRIPT_REVIEW",
+          shootRequirements: candidate.missingAssets.map((description, requirementIndex) => ({
+            id: `shot-${requirementIndex + 1}`,
+            description,
+            status: "OPEN",
+          })),
           planDate,
           kind: "VIDEO",
           topic: candidate.topic,
@@ -156,9 +168,10 @@ export class ContentService {
     const zhBody = `15秒脚本：\n${candidate.scripts.zh15}\n\n30秒脚本：\n${candidate.scripts.zh30}\n\n标签：${candidate.hashtags.join(" ")}`;
     const enBody = `15s Script:\n${candidate.scripts.en15}\n\n30s Script:\n${candidate.scripts.en30}\n\nTags: ${candidate.hashtags.join(" ")}`;
     return [
-      { platform: "DOUYIN", title: candidate.titleZh || candidate.topic, body: zhBody, mediaType: "video/mp4", metadata: { coverText: candidate.coverTextZh, language: "zh-CN" } },
-      { platform: "TIKTOK", title: candidate.titleEn || candidate.topic, body: enBody, mediaType: "video/mp4", metadata: { coverText: candidate.coverTextEn, language: "en-US" } },
-      { platform: "WECHAT_CHANNELS", title: candidate.titleZh || candidate.topic, body: zhBody, mediaType: "video/mp4", metadata: { coverText: candidate.coverTextZh, language: "zh-CN" } },
+      { platform: "DOUYIN", title: candidate.titleZh || candidate.topic, body: zhBody, mediaType: "video/mp4", packagingStatus: "PENDING", metadata: { scriptTitle: candidate.titleZh, coverText: candidate.coverTextZh, language: "zh-CN" } },
+      { platform: "TIKTOK", title: candidate.titleEn || candidate.topic, body: enBody, mediaType: "video/mp4", packagingStatus: "PENDING", metadata: { scriptTitle: candidate.titleEn, coverText: candidate.coverTextEn, language: "en-US" } },
+      { platform: "WECHAT_CHANNELS", title: candidate.titleZh || candidate.topic, body: zhBody, mediaType: "video/mp4", packagingStatus: "PENDING", metadata: { scriptTitle: candidate.titleZh, coverText: candidate.coverTextZh, language: "zh-CN" } },
+      { platform: "XIAOHONGSHU", title: candidate.titleZh || candidate.topic, body: zhBody, mediaType: "video/mp4", packagingStatus: "PENDING", metadata: { scriptTitle: candidate.titleZh, coverText: candidate.coverTextZh, language: "zh-CN" } },
     ];
   }
 
@@ -327,7 +340,10 @@ export class ContentService {
         data: { metadata: { briefPath, renderState: opsConfig.videoRenderCommand ? "QUEUED" : "WAITING_RENDER_PROVIDER" } },
       });
     }
-    if (opsConfig.videoRenderCommand) await this.renderVideo(planId, briefPath, output);
+    await this.prisma.contentPlan.update({
+      where: { id: planId },
+      data: { masterVideoStatus: opsConfig.videoRenderCommand ? "WAITING_ASSETS" : "WAITING_RENDER_PROVIDER" },
+    });
   }
 
   private async renderVideo(planId: string, briefPath: string, outputDir: string): Promise<void> {
@@ -347,6 +363,10 @@ export class ContentService {
         where: { contentPlanId: planId, mediaType: "video/mp4" },
         data: { mediaPath: outputPath, metadata: { briefPath, outputPath, renderState: "READY", verifiedAt: new Date().toISOString() } },
       });
+      await this.prisma.contentPlan.update({
+        where: { id: planId },
+        data: { masterVideoPath: outputPath, masterVideoStatus: "READY_FOR_REVIEW", productionStage: "VIDEO_REVIEW" },
+      });
       await this.prisma.auditLog.create({ data: { actor: "系统视频渲染", action: "VIDEO_RENDERED", entityType: "ContentPlan", entityId: planId, after: { outputPath } } });
     } catch (error) {
       const message = error instanceof Error ? error.message : "视频渲染失败";
@@ -354,11 +374,12 @@ export class ContentService {
         where: { contentPlanId: planId, mediaType: "video/mp4" },
         data: { metadata: { briefPath, renderState: "FAILED", error: message } },
       });
+      await this.prisma.contentPlan.update({ where: { id: planId }, data: { masterVideoStatus: "FAILED", productionStage: "EDITING" } });
       await this.prisma.alert.create({ data: { level: "WARNING", category: "CONTENT", title: "每日主视频渲染失败", message, sourceType: "ContentPlan", sourceId: planId } });
     }
   }
 
-  async approve(id: string, actor: string, note?: string) {
+  async approve(id: string, actor: string, note?: string, options: { owner?: string; targetPlatforms?: IntegrationKind[] } = {}) {
     const plan = await this.prisma.contentPlan.findUnique({ where: { id }, include: { variants: true } });
     if (!plan) throw new NotFoundException("内容不存在");
     const body = plan.variants.map((variant) => `${variant.title}\n${variant.body}`).join("\n");
@@ -367,10 +388,18 @@ export class ContentService {
     return this.prisma.$transaction(async (tx) => {
       const updated = await tx.contentPlan.update({
         where: { id },
-        data: { status: "APPROVED", approvedBy: actor, approvedAt: new Date(), riskReasons: [] },
+        data: {
+          status: "APPROVED",
+          approvedBy: actor,
+          approvedAt: new Date(),
+          riskReasons: [],
+          owner: options.owner || actor,
+          targetPlatforms: options.targetPlatforms?.length ? options.targetPlatforms : plan.variants.map((variant) => variant.platform),
+          productionStage: plan.kind === "VIDEO" ? "AWAITING_ASSETS" : "PACKAGING_REVIEW",
+        },
       });
-      await tx.contentVariant.updateMany({ where: { contentPlanId: id }, data: { status: "APPROVED" } });
-      await tx.approval.create({ data: { contentPlanId: id, action: "APPROVE", actor, note } });
+      if (plan.kind !== "VIDEO") await tx.contentVariant.updateMany({ where: { contentPlanId: id }, data: { status: "APPROVED" } });
+      await tx.approval.create({ data: { contentPlanId: id, action: "SCRIPT_APPROVE", actor, note } });
       await tx.auditLog.create({ data: { actor, action: "CONTENT_APPROVE", entityType: "ContentPlan", entityId: id, after: { status: "APPROVED" } } });
       return updated;
     });
@@ -381,9 +410,265 @@ export class ContentService {
     return this.prisma.$transaction(async (tx) => {
       const updated = await tx.contentPlan.update({ where: { id }, data: { status: "REJECTED", rejectedReason: reason } });
       await tx.contentVariant.updateMany({ where: { contentPlanId: id }, data: { status: "REJECTED" } });
-      await tx.approval.create({ data: { contentPlanId: id, action: "REJECT", actor, note: reason } });
+      await tx.approval.create({ data: { contentPlanId: id, action: "SCRIPT_REJECT", actor, note: reason } });
       await tx.auditLog.create({ data: { actor, action: "CONTENT_REJECT", entityType: "ContentPlan", entityId: id, after: { status: "REJECTED", reason } } });
       return updated;
+    });
+  }
+
+  async updateShootRequirements(id: string, requirements: unknown[], actor: string) {
+    const plan = await this.prisma.contentPlan.findUnique({ where: { id } });
+    if (!plan || plan.kind !== "VIDEO") throw new NotFoundException("视频生产单不存在");
+    const rows = requirements.map((value, index) => {
+      const row = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+      const description = String(row.description || "").trim();
+      if (!description) throw new BadRequestException(`第${index + 1}项补拍要求缺少说明`);
+      return {
+        id: String(row.id || `shot-${index + 1}`),
+        description,
+        status: ["OPEN", "IN_PROGRESS", "DONE"].includes(String(row.status)) ? String(row.status) : "OPEN",
+        assetIds: Array.isArray(row.assetIds) ? row.assetIds.map(String).filter(Boolean) : [],
+        note: String(row.note || ""),
+      };
+    });
+    const updated = await this.prisma.contentPlan.update({
+      where: { id },
+      data: {
+        shootRequirements: rows,
+        productionStage: rows.every((row) => row.status === "DONE") ? "READY_TO_EDIT" : "AWAITING_ASSETS",
+      },
+    });
+    await this.prisma.auditLog.create({ data: { actor, action: "SHOOT_REQUIREMENTS_UPDATE", entityType: "ContentPlan", entityId: id, after: { requirements: rows } } });
+    return updated;
+  }
+
+  async startEditing(id: string, actor: string) {
+    const plan = await this.prisma.contentPlan.findUnique({
+      where: { id },
+      include: { variants: true, contentAssets: { include: { asset: true } } },
+    });
+    if (!plan || plan.kind !== "VIDEO") throw new NotFoundException("视频生产单不存在");
+    if (!["APPROVED", "SCHEDULED"].includes(plan.status)) throw new BadRequestException("脚本尚未审核通过");
+    const requirements = Array.isArray(plan.shootRequirements) ? plan.shootRequirements as Array<Record<string, unknown>> : [];
+    if (requirements.some((item) => String(item.status) !== "DONE")) throw new BadRequestException("补拍素材尚未全部完成");
+    const unavailable = plan.contentAssets.filter(({ asset }) =>
+      asset.reviewStatus !== "APPROVED"
+      || asset.availabilityStatus !== "ACTIVE"
+      || !["COMMERCIAL", "EDIT_ONLY"].includes(asset.rightsStatus),
+    );
+    if (unavailable.length) throw new BadRequestException(`有${unavailable.length}项素材未满足审核、可用或权限要求`);
+    if (!opsConfig.videoRenderCommand) throw new BadRequestException("视频剪辑执行器未配置");
+    const variant = plan.variants.find((item) => item.platform === "DOUYIN") || plan.variants[0];
+    const metadata = variant?.metadata && typeof variant.metadata === "object" && !Array.isArray(variant.metadata)
+      ? variant.metadata as Record<string, unknown>
+      : {};
+    const briefPath = String(metadata.briefPath || "");
+    if (!briefPath) throw new BadRequestException("生产单缺少剪辑任务书");
+    await this.prisma.contentPlan.update({ where: { id }, data: { productionStage: "EDITING", masterVideoStatus: "RUNNING" } });
+    await this.prisma.auditLog.create({ data: { actor, action: "VIDEO_EDIT_START", entityType: "ContentPlan", entityId: id, after: { briefPath } } });
+    await this.renderVideo(id, briefPath, dirname(briefPath));
+    return this.workflow(id);
+  }
+
+  async reviewMasterVideo(id: string, approved: boolean, actor: string, note = "") {
+    const plan = await this.prisma.contentPlan.findUnique({ where: { id } });
+    if (!plan || plan.kind !== "VIDEO") throw new NotFoundException("视频生产单不存在");
+    if (!plan.masterVideoPath || plan.masterVideoStatus !== "READY_FOR_REVIEW") throw new BadRequestException("主成片尚未进入审核");
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.contentPlan.update({
+        where: { id },
+        data: approved
+          ? { masterVideoStatus: "APPROVED", productionStage: "PLATFORM_PACKAGING" }
+          : { masterVideoStatus: "RETURNED", productionStage: "EDITING" },
+      });
+      await tx.approval.create({ data: { contentPlanId: id, action: approved ? "VIDEO_APPROVE" : "VIDEO_REJECT", actor, note } });
+      await tx.auditLog.create({ data: { actor, action: approved ? "VIDEO_APPROVE" : "VIDEO_REJECT", entityType: "ContentPlan", entityId: id, after: { note } } });
+      return updated;
+    });
+  }
+
+  async generatePackaging(id: string, actor: string) {
+    const plan = await this.prisma.contentPlan.findUnique({ where: { id }, include: { variants: true } });
+    if (!plan || plan.kind !== "VIDEO") throw new NotFoundException("视频生产单不存在");
+    if (plan.masterVideoStatus !== "APPROVED") throw new BadRequestException("主成片尚未审核通过");
+    const selected = plan.variants.filter((variant) => plan.targetPlatforms.includes(variant.platform));
+    for (const variant of selected) {
+      const packaging = await this.aiContent.generatePlatformPackaging({
+        productionNo: plan.productionNo,
+        platform: variant.platform,
+        topic: plan.topic,
+        hook: plan.hook,
+        outline: plan.outline,
+        masterVideoPath: plan.masterVideoPath,
+        existingTitle: variant.title,
+        existingBody: variant.body,
+      });
+      await this.prisma.contentVariant.update({
+        where: { id: variant.id },
+        data: {
+          title: packaging.title || variant.title,
+          body: packaging.body || variant.body,
+          coverSpec: { ...packaging.coverSpec, coverText: packaging.coverText, hashtags: packaging.hashtags },
+          packagingStatus: "WAITING_COVER_PROVIDER",
+          packagedAt: new Date(),
+          packagingRejectedReason: null,
+        },
+      });
+    }
+    await this.prisma.contentPlan.update({ where: { id }, data: { productionStage: "PACKAGING_REVIEW" } });
+    await this.prisma.auditLog.create({ data: { actor, action: "PLATFORM_PACKAGING_GENERATE", entityType: "ContentPlan", entityId: id, after: { platforms: selected.map((item) => item.platform) } } });
+    return this.workflow(id);
+  }
+
+  async reviewPackaging(variantId: string, approved: boolean, actor: string, input: { note?: string; coverPath?: string } = {}) {
+    const variant = await this.prisma.contentVariant.findUnique({ where: { id: variantId }, include: { contentPlan: true } });
+    if (!variant) throw new NotFoundException("平台包装不存在");
+    const coverPath = String(input.coverPath || variant.coverPath || "").trim();
+    if (approved && !coverPath) throw new BadRequestException("封面成品尚未生成或上传");
+    await this.prisma.$transaction(async (tx) => {
+      await tx.contentVariant.update({
+        where: { id: variantId },
+        data: approved
+          ? { coverPath, packagingStatus: "APPROVED", packagingReviewedBy: actor, packagingReviewedAt: new Date(), packagingRejectedReason: null, status: "APPROVED" }
+          : { packagingStatus: "RETURNED", packagingReviewedBy: actor, packagingReviewedAt: new Date(), packagingRejectedReason: input.note || "平台包装退回", status: "REJECTED" },
+      });
+      await tx.approval.create({ data: { contentPlanId: variant.contentPlanId, action: approved ? `PACKAGING_APPROVE:${variant.platform}` : `PACKAGING_REJECT:${variant.platform}`, actor, note: input.note } });
+      const remaining = await tx.contentVariant.count({
+        where: { contentPlanId: variant.contentPlanId, platform: { in: variant.contentPlan.targetPlatforms }, packagingStatus: { not: "APPROVED" } },
+      });
+      if (approved && remaining === 0) await tx.contentPlan.update({ where: { id: variant.contentPlanId }, data: { productionStage: "READY_TO_PUBLISH", status: "APPROVED" } });
+    });
+    return this.workflow(variant.contentPlanId);
+  }
+
+  async recordManualPublish(variantId: string, actor: string, input: { remoteUrl?: string; remoteId?: string; publishedAt?: string }) {
+    const variant = await this.prisma.contentVariant.findUnique({ where: { id: variantId }, include: { contentPlan: true } });
+    if (!variant) throw new NotFoundException("平台版本不存在");
+    if (variant.packagingStatus !== "APPROVED") throw new BadRequestException("平台包装尚未审核通过");
+    const remoteUrl = String(input.remoteUrl || "").trim();
+    const remoteId = String(input.remoteId || "").trim();
+    if (!remoteUrl && !remoteId) throw new BadRequestException("请回填作品链接或作品ID");
+    const integration = await this.prisma.integration.findUnique({ where: { kind: variant.platform } });
+    if (!integration) throw new BadRequestException("平台集成记录不存在");
+    const publishedAt = input.publishedAt ? new Date(input.publishedAt) : new Date();
+    const idempotencyKey = makeIdempotencyKey("manual-publish", variant.id, remoteId || remoteUrl);
+    const job = await this.prisma.publishJob.upsert({
+      where: { idempotencyKey },
+      create: {
+        idempotencyKey,
+        contentPlanId: variant.contentPlanId,
+        variantId,
+        integrationId: integration.id,
+        platformAccountId: variant.targetAccountId,
+        operator: actor,
+        operatorType: "HUMAN",
+        status: "SUCCEEDED",
+        scheduledAt: publishedAt,
+        publishedAt,
+        remoteId: remoteId || null,
+        remoteUrl: remoteUrl || null,
+        receipt: { mode: "MANUAL", recordedBy: actor },
+      },
+      update: {},
+    });
+    const metricHours = [1, 3, 6, 24, 72, 168, 720];
+    await this.prisma.$transaction([
+      this.prisma.contentVariant.update({ where: { id: variantId }, data: { status: "PUBLISHED", manualPublishUrl: remoteUrl || null, manualExternalId: remoteId || null, manualPublishedAt: publishedAt } }),
+      this.prisma.contentPlan.update({ where: { id: variant.contentPlanId }, data: { status: "PUBLISHED", productionStage: "TRACKING", publishedAt } }),
+      this.prisma.automationJob.createMany({
+        data: metricHours.map((hours) => ({
+          kind: "SYNC_METRICS",
+          idempotencyKey: makeIdempotencyKey("metrics", job.id, `${hours}h`),
+          payload: { publishJobId: job.id, checkpointHours: hours },
+          scheduledAt: new Date(publishedAt.getTime() + hours * 60 * 60 * 1000),
+        })),
+        skipDuplicates: true,
+      }),
+    ]);
+    return this.workflow(variant.contentPlanId);
+  }
+
+  async deliveryManifest(variantId: string) {
+    const variant = await this.prisma.contentVariant.findUnique({ where: { id: variantId }, include: { contentPlan: true } });
+    if (!variant) throw new NotFoundException("平台版本不存在");
+    if (variant.packagingStatus !== "APPROVED") throw new BadRequestException("平台包装尚未审核通过");
+    return {
+      productionNo: variant.contentPlan.productionNo,
+      platform: variant.platform,
+      title: variant.title,
+      body: variant.body,
+      coverSpec: variant.coverSpec,
+      files: {
+        video: variant.mediaPath ? `/api/v1/content/variants/${variant.id}/delivery/video` : null,
+        cover: variant.coverPath ? `/api/v1/content/variants/${variant.id}/delivery/cover` : null,
+      },
+    };
+  }
+
+  async deliveryFile(variantId: string, type: "video" | "cover") {
+    const variant = await this.prisma.contentVariant.findUnique({ where: { id: variantId }, include: { contentPlan: true } });
+    if (!variant) throw new NotFoundException("平台版本不存在");
+    if (variant.packagingStatus !== "APPROVED") throw new BadRequestException("平台包装尚未审核通过");
+    const path = type === "video" ? variant.mediaPath : variant.coverPath;
+    if (!path) throw new NotFoundException(type === "video" ? "成片文件不存在" : "封面文件不存在");
+    const file = await stat(path).catch(() => null);
+    if (!file?.isFile()) throw new NotFoundException("交付文件不可用");
+    const suffix = type === "video" ? ".mp4" : path.slice(path.lastIndexOf(".")) || ".jpg";
+    return { path, fileName: `${variant.contentPlan.productionNo || variant.contentPlan.id}-${variant.platform}-${type}${suffix}` };
+  }
+
+  async generateOptimization(id: string, checkpointHours: 168 | 720) {
+    const plan = await this.prisma.contentPlan.findUnique({
+      where: { id },
+      include: { publishJobs: { include: { metrics: true, variant: true } } },
+    });
+    if (!plan) throw new NotFoundException("内容生产单不存在");
+    const snapshots = plan.publishJobs.flatMap((job) => job.metrics.map((metric) => ({ ...metric, platform: job.variant.platform })));
+    if (!snapshots.length) throw new BadRequestException("尚无可用于复盘的发布数据");
+    const latestByPlatform = Array.from(new Map(snapshots.sort((a, b) => b.capturedAt.getTime() - a.capturedAt.getTime()).map((item) => [item.platform, item])).values());
+    const evidence = latestByPlatform.map((item) => ({
+      platform: item.platform,
+      views: item.views,
+      completionRate: item.completionRate,
+      likes: item.likes,
+      comments: item.comments,
+      shares: item.shares,
+      unavailableFields: item.unavailableFields,
+    }));
+    const recommendations = [
+      ...latestByPlatform.filter((item) => item.completionRate != null && item.completionRate < 0.25).map((item) => `${item.platform}完播偏低，下一轮缩短开场并提前核心卖点`),
+      ...latestByPlatform.filter((item) => item.comments != null && item.views && item.comments / item.views > 0.01).map((item) => `${item.platform}评论反馈较强，保留当前问题式Hook`),
+    ];
+    const summary = `${checkpointHours === 168 ? "7日初评" : "30日终评"}：已汇总${latestByPlatform.length}个平台的最新有效快照`;
+    return this.prisma.contentOptimizationSuggestion.upsert({
+      where: { contentPlanId_checkpointHours: { contentPlanId: id, checkpointHours } },
+      create: { contentPlanId: id, checkpointHours, summary, evidence, recommendations, rulePatch: { recommendations } },
+      update: { summary, evidence, recommendations, rulePatch: { recommendations }, status: "PENDING_CONFIRMATION" },
+    });
+  }
+
+  async decideOptimization(suggestionId: string, confirmed: boolean, actor: string, note = "") {
+    const suggestion = await this.prisma.contentOptimizationSuggestion.findUnique({ where: { id: suggestionId } });
+    if (!suggestion) throw new NotFoundException("优化建议不存在");
+    const updated = await this.prisma.contentOptimizationSuggestion.update({
+      where: { id: suggestionId },
+      data: confirmed
+        ? { status: "CONFIRMED", confirmedBy: actor, confirmedAt: new Date(), rejectedBy: null, rejectedAt: null, note }
+        : { status: "REJECTED", rejectedBy: actor, rejectedAt: new Date(), confirmedBy: null, confirmedAt: null, note },
+    });
+    await this.prisma.auditLog.create({ data: { actor, action: confirmed ? "OPTIMIZATION_CONFIRM" : "OPTIMIZATION_REJECT", entityType: "ContentOptimizationSuggestion", entityId: suggestionId, after: { contentPlanId: suggestion.contentPlanId, note } } });
+    return updated;
+  }
+
+  workflow(id: string) {
+    return this.prisma.contentPlan.findUnique({
+      where: { id },
+      include: {
+        variants: { include: { publishJobs: { include: { metrics: { orderBy: { capturedAt: "desc" } } } } } },
+        approvals: { orderBy: { createdAt: "desc" } },
+        contentAssets: { include: { asset: true } },
+        optimizations: { orderBy: { checkpointHours: "asc" } },
+      },
     });
   }
 
@@ -405,7 +690,15 @@ export class ContentService {
     let queued = 0;
     const skipped: Array<{ platform: string; reason: string }> = [];
     for (const plan of plans) {
-      for (const variant of plan.variants) {
+      const queuedBeforePlan = queued;
+      const selectedVariants = plan.kind === "VIDEO"
+        ? plan.variants.filter((variant) => plan.targetPlatforms.includes(variant.platform))
+        : plan.variants;
+      for (const variant of selectedVariants) {
+        if (plan.kind === "VIDEO" && variant.packagingStatus !== "APPROVED") {
+          skipped.push({ platform: variant.platform, reason: "平台标题和封面尚未审核通过" });
+          continue;
+        }
         const adapter = this.platforms.get(variant.platform as IntegrationKind);
         if (!adapter.capabilities().includes("publish")) {
           skipped.push({ platform: variant.platform, reason: "发布能力未配置" });
@@ -449,7 +742,7 @@ export class ContentService {
         });
         queued += 1;
       }
-      if (queued) await this.prisma.contentPlan.update({ where: { id: plan.id }, data: { status: "SCHEDULED", scheduledAt: now } });
+      if (queued > queuedBeforePlan) await this.prisma.contentPlan.update({ where: { id: plan.id }, data: { status: "SCHEDULED", productionStage: "PUBLISHING", scheduledAt: now } });
     }
     return { queued, skipped };
   }
@@ -516,7 +809,11 @@ export class ContentService {
   async list(status?: ContentStatus) {
     return this.prisma.contentPlan.findMany({
       where: status ? { status } : {},
-      include: { variants: true, approvals: { orderBy: { createdAt: "desc" }, take: 3 } },
+      include: {
+        variants: { include: { publishJobs: { orderBy: { createdAt: "desc" }, take: 1 } } },
+        approvals: { orderBy: { createdAt: "desc" }, take: 10 },
+        optimizations: { orderBy: { checkpointHours: "asc" } },
+      },
       orderBy: [{ planDate: "desc" }, { score: "desc" }],
       take: 100,
     });

@@ -1,4 +1,5 @@
-import { BadRequestException, Body, Controller, Delete, Get, Headers, Param, Patch, Post, Query } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Delete, Get, Headers, Param, Patch, Post, Query, Res, StreamableFile } from "@nestjs/common";
+import { createReadStream } from "node:fs";
 import { PrismaService } from "./prisma.service";
 import { AuthService } from "./auth.service";
 import { AutomationService, jobKinds, type AutomationKind } from "./automation.service";
@@ -134,7 +135,7 @@ export class OpsController {
     this.actor(authorization); return this.operations.evidence();
   }
   @Get("content") content(@Headers("authorization") authorization?: string, @Query("status") status?: string) {
-    this.actor(authorization); return this.operations.content(status);
+    this.actor(authorization); return this.contentService.list(status as never);
   }
   @Post("content/generate") generateContent(@Headers("authorization") authorization?: string, @Headers("x-ops-actor") requestedActor?: string) {
     const actor = this.actor(authorization, requestedActor); return this.contentService.generateDaily(new Date(), actor);
@@ -157,7 +158,10 @@ export class OpsController {
     return this.contentService.dailyBrief(requestedDate);
   }
   @Post("content/:id/approve") approveContent(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("id") id: string, @Body() body: Record<string, unknown>) {
-    return this.contentService.approve(id, this.actor(authorization, requestedActor), body.note ? String(body.note) : undefined);
+    return this.contentService.approve(id, this.actor(authorization, requestedActor), body.note ? String(body.note) : undefined, {
+      owner: body.owner ? String(body.owner) : undefined,
+      targetPlatforms: Array.isArray(body.targetPlatforms) ? body.targetPlatforms.map(String) as never : undefined,
+    });
   }
   @Post("content/:id/reject") rejectContent(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("id") id: string, @Body() body: Record<string, unknown>) {
     return this.contentService.reject(id, this.actor(authorization, requestedActor), String(body.reason ?? ""));
@@ -166,6 +170,46 @@ export class OpsController {
     const accountId = String(body.platformAccountId ?? "").trim();
     if (!accountId) throw new BadRequestException("请选择发布账号");
     return this.contentService.assignVariantAccount(id, accountId, this.actor(authorization, requestedActor));
+  }
+  @Get("content/:id/workflow") contentWorkflow(@Headers("authorization") authorization: string | undefined, @Param("id") id: string) {
+    this.actor(authorization); return this.contentService.workflow(id);
+  }
+  @Patch("content/:id/shoot-requirements") updateShootRequirements(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("id") id: string, @Body() body: Record<string, unknown>) {
+    return this.contentService.updateShootRequirements(id, Array.isArray(body.requirements) ? body.requirements : [], this.actor(authorization, requestedActor));
+  }
+  @Post("content/:id/edit") startContentEditing(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("id") id: string) {
+    return this.contentService.startEditing(id, this.actor(authorization, requestedActor));
+  }
+  @Post("content/:id/video-review") reviewMasterVideo(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("id") id: string, @Body() body: Record<string, unknown>) {
+    return this.contentService.reviewMasterVideo(id, Boolean(body.approved), this.actor(authorization, requestedActor), String(body.note ?? ""));
+  }
+  @Post("content/:id/platform-packaging") generatePlatformPackaging(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("id") id: string) {
+    return this.contentService.generatePackaging(id, this.actor(authorization, requestedActor));
+  }
+  @Post("content/variants/:id/packaging-review") reviewPlatformPackaging(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("id") id: string, @Body() body: Record<string, unknown>) {
+    return this.contentService.reviewPackaging(id, Boolean(body.approved), this.actor(authorization, requestedActor), { note: String(body.note ?? ""), coverPath: body.coverPath ? String(body.coverPath) : undefined });
+  }
+  @Post("content/variants/:id/manual-publish") recordManualPublish(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("id") id: string, @Body() body: Record<string, unknown>) {
+    return this.contentService.recordManualPublish(id, this.actor(authorization, requestedActor), { remoteUrl: body.remoteUrl ? String(body.remoteUrl) : undefined, remoteId: body.remoteId ? String(body.remoteId) : undefined, publishedAt: body.publishedAt ? String(body.publishedAt) : undefined });
+  }
+  @Get("content/variants/:id/delivery") deliveryManifest(@Headers("authorization") authorization: string | undefined, @Param("id") id: string) {
+    this.actor(authorization); return this.contentService.deliveryManifest(id);
+  }
+  @Get("content/variants/:id/delivery/:type") async deliveryFile(@Headers("authorization") authorization: string | undefined, @Param("id") id: string, @Param("type") type: string, @Res({ passthrough: true }) response: { setHeader: (name: string, value: string) => void }) {
+    this.actor(authorization);
+    if (type !== "video" && type !== "cover") throw new BadRequestException("仅支持下载成片或封面");
+    const file = await this.contentService.deliveryFile(id, type);
+    response.setHeader("content-disposition", `attachment; filename*=UTF-8''${encodeURIComponent(file.fileName)}`);
+    return new StreamableFile(createReadStream(file.path));
+  }
+  @Post("content/:id/optimizations/:checkpointHours") generateContentOptimization(@Headers("authorization") authorization: string | undefined, @Param("id") id: string, @Param("checkpointHours") checkpointHours: string) {
+    this.actor(authorization);
+    const checkpoint = Number(checkpointHours);
+    if (checkpoint !== 168 && checkpoint !== 720) throw new BadRequestException("仅支持7日或30日复盘");
+    return this.contentService.generateOptimization(id, checkpoint);
+  }
+  @Post("content/optimizations/:id/decision") decideContentOptimization(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("id") id: string, @Body() body: Record<string, unknown>) {
+    return this.contentService.decideOptimization(id, Boolean(body.confirmed), this.actor(authorization, requestedActor), String(body.note ?? ""));
   }
   @Post("content/queue-publish") queuePublish(@Headers("authorization") authorization?: string) {
     this.actor(authorization); return this.contentService.queueApproved();

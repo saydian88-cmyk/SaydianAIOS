@@ -43,6 +43,14 @@ export type AiArticlePackage = {
   };
 };
 
+export type AiPlatformPackaging = {
+  title: string;
+  body: string;
+  hashtags: string[];
+  coverText: string;
+  coverSpec: Record<string, unknown>;
+};
+
 type JsonRecord = Record<string, unknown>;
 
 function text(value: unknown): string {
@@ -143,6 +151,22 @@ export class AiContentService {
         shortPost: text(variants.shortPost),
         wecomMoments: text(variants.wecomMoments),
       },
+    };
+  }
+
+  async generatePlatformPackaging(context: JsonRecord): Promise<AiPlatformPackaging> {
+    const result = await this.callJson(
+      `根据已审核脚本、主成片信息和目标平台规则，生成一个平台发布包装。
+不得新增未经输入确认的产品事实。封面文案应简短，coverSpec必须包含layout、background、headline、productPlacement和style。
+返回JSON：{"title":"","body":"","hashtags":[],"coverText":"","coverSpec":{"layout":"","background":"","headline":"","productPlacement":"","style":""}}。
+输入：${JSON.stringify(context)}`,
+    );
+    return {
+      title: text(result.title),
+      body: text(result.body),
+      hashtags: strings(result.hashtags),
+      coverText: text(result.coverText),
+      coverSpec: object(result.coverSpec),
     };
   }
 
