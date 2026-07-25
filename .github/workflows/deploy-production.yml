@@ -84,18 +84,12 @@ jobs:
       - name: Upload deployment files
         shell: bash
         run: |
-          mkdir -p release-images
-          docker pull "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-api:${{ github.sha }}"
-          docker pull "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-admin:${{ github.sha }}"
-          docker save \
-            "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-api:${{ github.sha }}" \
-            "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-admin:${{ github.sha }}" \
-            | gzip -1 > release-images/saydian-ops-images.tar.gz
+          git archive --format=tar.gz --output=/tmp/saydian-ops-source.tar.gz HEAD
           scp -P "${{ secrets.TENCENT_PORT || '22' }}" deploy/docker-compose.prod.yml deploy/gateway-nginx.conf deploy/deploy-ops.sh \
-            release-images/saydian-ops-images.tar.gz \
+            /tmp/saydian-ops-source.tar.gz \
             "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}:/tmp/"
           ssh -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}" \
-            "sudo bash -lc 'set -euo pipefail; install -m 644 /tmp/docker-compose.prod.yml /opt/saydian/config/docker-compose.prod.yml; install -m 644 /tmp/gateway-nginx.conf /opt/saydian/config/gateway-nginx.conf; install -m 755 /tmp/deploy-ops.sh /opt/saydian/bin/deploy-ops.sh; docker load -i /tmp/saydian-ops-images.tar.gz; rm -f /tmp/saydian-ops-images.tar.gz'"
+            "sudo GHCR_REPOSITORY='${{ github.repository_owner }}/saydianaios' RELEASE_SHA='${{ github.sha }}' bash -lc 'set -euo pipefail; build_dir=/opt/saydian/build/\$RELEASE_SHA; mkdir -p \"\$build_dir\"; tar -xzf /tmp/saydian-ops-source.tar.gz -C \"\$build_dir\"; docker build -f \"\$build_dir/Dockerfile.api\" -t \"ghcr.io/\$GHCR_REPOSITORY/ops-api:\$RELEASE_SHA\" \"\$build_dir\"; docker build -f \"\$build_dir/Dockerfile.admin\" -t \"ghcr.io/\$GHCR_REPOSITORY/ops-admin:\$RELEASE_SHA\" \"\$build_dir\"; install -m 644 /tmp/docker-compose.prod.yml /opt/saydian/config/docker-compose.prod.yml; install -m 644 /tmp/gateway-nginx.conf /opt/saydian/config/gateway-nginx.conf; install -m 755 /tmp/deploy-ops.sh /opt/saydian/bin/deploy-ops.sh; rm -f /tmp/saydian-ops-source.tar.gz'"
       - name: Deploy and verify
         shell: bash
         run: |
