@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildAiAssetName, isIrregularAssetName } from "./asset-naming";
-import { AssetAiService } from "./asset-ai.service";
+import { AssetAiService, shouldApplyAiRename } from "./asset-ai.service";
 
 describe("AssetAiService capabilities", () => {
   it("separates local media capabilities from external AI configuration", () => {
@@ -33,5 +33,12 @@ describe("AI asset naming", () => {
       features: ["气囊血压测量"],
       summary: "展示手表测量过程",
     }, ["W9"])).toBe("W9-功能-气囊血压测量");
+  });
+
+  it("honors the upload rename option while preserving legacy naming behavior", () => {
+    expect(shouldApplyAiRename({ aiRename: true }, "客户已经命名的素材")).toBe(true);
+    expect(shouldApplyAiRename({ aiRename: false }, "18")).toBe(false);
+    expect(shouldApplyAiRename({}, "IMG_0018.jpg")).toBe(true);
+    expect(shouldApplyAiRename({}, "W9父母健康场景")).toBe(false);
   });
 });

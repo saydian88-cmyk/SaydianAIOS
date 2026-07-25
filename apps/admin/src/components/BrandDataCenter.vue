@@ -86,7 +86,7 @@ const knowledgeFilter = reactive({ query: "", type: "", status: "", model: "" })
 const assetFilter = reactive({ query: "", kind: "", level: "", model: "", moduleType: "", employeeId: "", reviewStatus: "", reviewScope: "NORMAL", availabilityStatus: "", rightsStatus: "", minimumScore: "" });
 const knowledgeForm = reactive({ type: "FAQ", title: "", category: "", model: "", reply: "", body: "", source: "运营后台录入", sourceRefs: "", sourceLevel: "B", keywords: "", scenarios: "", audience: "customer" });
 const productForm = reactive({ modelCode: "", name: "", category: "", status: "READY", aliases: "", functions: "", customerValues: "", audiences: "", scenes: "", contentDirections: "" });
-const batchForm = reactive({ sourceType: "EMPLOYEE_CAPTURE", productScope: "UNKNOWN", productIds: [] as string[], assetKind: "", contentDescription: "", classificationTags: [] as string[], originalStatus: true, rightsStatus: "COMMERCIAL", acquiredAt: "", contentPlanId: "", shootRequirementId: "" });
+const batchForm = reactive({ sourceType: "EMPLOYEE_CAPTURE", productScope: "UNKNOWN", productIds: [] as string[], assetKind: "", contentDescription: "", classificationTags: [] as string[], aiRename: true, originalStatus: true, rightsStatus: "COMMERCIAL", acquiredAt: "", contentPlanId: "", shootRequirementId: "" });
 const metadataForm = reactive({ displayName: "", level: "ORIGINAL", productScope: "UNKNOWN", productIds: [] as string[], rightsStatus: "AUTH_REQUIRED", contentDescription: "", acquiredAt: "", restriction: "", evidenceIds: "" });
 const assetBulkForm = reactive({ level: "", productScope: "", productIds: [] as string[], rightsStatus: "", acquiredAt: "", restriction: "", contentDescription: "", tags: [] as string[], tagMode: "APPEND" });
 const controlForm = reactive<Record<string, any>>({});
@@ -458,7 +458,7 @@ async function openBatchUpload() {
   uploadProgress.value = 0;
   uploadEta.value = "";
   uploadStage.value = "";
-  clearObject(batchForm, { sourceType: "EMPLOYEE_CAPTURE", productScope: "UNKNOWN", productIds: [], assetKind: "", contentDescription: "", classificationTags: [], originalStatus: true, rightsStatus: "COMMERCIAL", acquiredAt: "", contentPlanId: "", shootRequirementId: "" });
+  clearObject(batchForm, { sourceType: "EMPLOYEE_CAPTURE", productScope: "UNKNOWN", productIds: [], assetKind: "", contentDescription: "", classificationTags: [], aiRename: true, originalStatus: true, rightsStatus: "COMMERCIAL", acquiredAt: "", contentPlanId: "", shootRequirementId: "" });
   const plans = await api<Row[]>("/api/v1/content");
   productionPlans.value = plans.filter((item) => item.kind === "VIDEO" && item.productionStage === "AWAITING_ASSETS");
   uploadDialog.value = true;
@@ -556,6 +556,7 @@ async function submitBatch() {
     const form = new FormData();
     files.forEach((file) => form.append("files", file));
     form.append("classificationTags", JSON.stringify(batchForm.classificationTags));
+    form.append("aiRename", String(batchForm.aiRename));
     form.append("technicalInfo", JSON.stringify(uploadTechnicalInfo.value));
     const startedAt = Date.now();
     const result = await uploadWithProgress<Row>(`/api/v1/brand-data/upload-batches/${batch.id}/files`, form, (loaded, total) => {
@@ -691,6 +692,24 @@ async function quickFilter(kind = "", reviewStatus = "") {
   assetFilter.reviewScope = reviewStatus === "PENDING" ? "PENDING" : "NORMAL";
   await run(() => loadAssets());
 }
+
+const quickAssetTags = computed(() => {
+  const counts = new Map<string, number>();
+  for (const asset of assets.value) {
+    for (const tag of asset.tags || []) {
+      const label = String(tag.label || "").trim();
+      if (label && !["product_model"].includes(String(tag.namespace || ""))) counts.set(label, (counts.get(label) || 0) + 1);
+    }
+  }
+  return [...counts.entries()].sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0], "zh-CN")).slice(0, 20);
+});
+
+async function filterByAssetTag(label: string) {
+  detailDrawer.value = false;
+  assetView.value = "list";
+  assetFilter.query = label;
+  await run(() => loadAssets());
+}
 async function handleAssetViewChange(value: string) {
   if (value === "gaps") await run(async () => { await Promise.all([loadGaps(), loadGapTasks()]); });
   if (value === "review") {
@@ -787,6 +806,10 @@ onMounted(reload);
           <el-select v-model="assetFilter.reviewStatus" clearable placeholder="审核状态"><el-option label="待审核" value="PENDING" /><el-option label="已通过" value="APPROVED" /><el-option label="已退回" value="RETURNED" /><el-option label="已拒绝" value="REJECTED" /></el-select>
           <el-button type="primary" :icon="Search" @click="run(() => loadAssets())">查询</el-button>
           <el-collapse class="advanced-filter"><el-collapse-item title="更多筛选" name="advanced"><div class="advanced-filter-grid"><el-select v-model="assetFilter.level" clearable placeholder="素材层级"><el-option v-for="item in levelOptions" :key="item" :label="item" :value="item" /></el-select><el-select v-model="assetFilter.moduleType" clearable placeholder="视频模块"><el-option v-for="item in moduleOptions" :key="item" :label="item" :value="item" /></el-select><el-select v-model="assetFilter.employeeId" clearable filterable placeholder="上传员工"><el-option v-for="item in controls.employees" :key="item.id" :label="item.name" :value="item.id" /></el-select><el-select v-model="assetFilter.rightsStatus" clearable placeholder="使用权限"><el-option v-for="item in rightsOptions" :key="item" :label="statusLabel(item)" :value="item" /></el-select></div></el-collapse-item></el-collapse>
+        </div>
+        <div v-if="assetView === 'list' && quickAssetTags.length" class="asset-tag-filters">
+          <span>AI标签快捷筛选</span>
+          <el-tag v-for="[label, count] in quickAssetTags" :key="label" class="clickable-tag" :type="assetFilter.query === label ? 'primary' : 'info'" :effect="assetFilter.query === label ? 'dark' : 'plain'" @click="filterByAssetTag(label)">{{ label }} {{ count }}</el-tag>
         </div>
         <div v-if="assetView === 'list' && assets.length" class="editing-index-strip">
           <div class="editing-index-strip-head"><strong>剪辑AI索引</strong><span>组合名称与结构化标签均可被上方搜索框检索</span></div>
@@ -1038,9 +1061,10 @@ onMounted(reload);
         <el-form-item label="人工基础分类（确认后锁定）" class="full"><el-select v-model="batchForm.classificationTags" multiple clearable filterable placeholder="用于人工归类；详细剪辑索引由AI看画面后生成"><el-option v-for="item in classificationOptions" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item>
         <div class="full upload-index-preview">
           <div><strong>剪辑AI详细索引</strong><el-tag size="small" type="info">上传后自动生成</el-tag></div>
-          <p>文件进入OSS后，AI会查看实际画面并生成组合名称，例如：<b>{{ selectedUploadModels[0] || 'W9S' }}－功能展示－心电图测量</b>。不会只依赖文件名或内容说明。</p>
+          <p>文件进入OSS后，AI会查看实际画面并生成标签；开启重命名时组合成易读名称，例如：<b>{{ selectedUploadModels[0] || 'W9S' }}－功能展示－心电图测量</b>。</p>
           <div><span v-for="item in editingIndexDimensions" :key="item">{{ item }}</span></div>
         </div>
+        <el-form-item label="素材名称" class="full"><div class="upload-rename-option"><el-switch v-model="batchForm.aiRename" active-text="用AI标签重新命名" inactive-text="保留原文件名" /><small>{{ batchForm.aiRename ? 'AI分析完成后，用“型号－用途－核心功能/场景”作为素材名称' : '仍会生成AI标签和索引，但素材名称保持上传时的文件名' }}</small></div></el-form-item>
         <el-collapse class="full upload-advanced"><el-collapse-item title="更多信息（一般无需修改）" name="advanced"><div class="advanced-filter-grid"><el-select v-model="batchForm.assetKind" clearable placeholder="素材类型自动识别"><el-option v-for="item in kindOptions" :key="item" :label="kindLabel(item)" :value="item" /></el-select><el-select v-model="batchForm.rightsStatus"><el-option v-for="item in rightsOptions" :key="item" :label="statusLabel(item)" :value="item" /></el-select><el-date-picker v-model="batchForm.acquiredAt" type="date" value-format="YYYY-MM-DD" placeholder="获得/拍摄日期" /><el-switch v-model="batchForm.originalStatus" active-text="公司原创" inactive-text="非原创" /></div><div v-if="uploadTechnicalInfo.length" class="technical-info"><strong>文件与AI预检信息</strong><el-table :data="uploadTechnicalInfo" size="small" max-height="210"><el-table-column prop="name" label="文件" min-width="180" show-overflow-tooltip /><el-table-column prop="format" label="格式" width="72" /><el-table-column label="大小" width="90"><template #default="scope">{{ fileSize(scope.row.size) }}</template></el-table-column><el-table-column label="时长" width="90"><template #default="scope">{{ durationLabel(scope.row.durationSeconds) }}</template></el-table-column><el-table-column label="分辨率" width="105"><template #default="scope">{{ scope.row.width && scope.row.height ? `${scope.row.width}×${scope.row.height}` : '—' }}</template></el-table-column><el-table-column prop="quality" label="质量" width="90" /></el-table></div></el-collapse-item></el-collapse>
       </el-form>
       <div v-if="uploading || uploadProgress" class="upload-progress"><div><span>{{ uploadStage }}</span><small>{{ uploadProgress < 100 ? `预计剩余 ${uploadEta}` : '文件已上传，正在云端入库' }}</small></div><el-progress :percentage="uploadProgress" :status="uploadProgress === 100 && !uploading ? 'success' : undefined" /></div>
@@ -1098,7 +1122,7 @@ onMounted(reload);
           </div>
         </section>
         <el-descriptions :column="3" border><el-descriptions-item label="原始文件名">{{ assetDetail.originalFileName || assetDetail.fileName }}</el-descriptions-item><el-descriptions-item label="类型/层级">{{ assetDetail.kind }} / {{ assetDetail.level }}</el-descriptions-item><el-descriptions-item label="权限">{{ statusLabel(assetDetail.rightsStatus) }}</el-descriptions-item><el-descriptions-item label="OSS对象" :span="2">{{ assetDetail.objectKey || '未存储' }}</el-descriptions-item><el-descriptions-item label="SHA256">{{ assetDetail.sha256?.slice(0, 18) }}…</el-descriptions-item><el-descriptions-item label="上传员工">{{ assetDetail.createdByEmployee?.name || assetDetail.actor }}</el-descriptions-item><el-descriptions-item label="型号">{{ assetDetail.products?.map((item: Row) => item.modelCode).join('、') || '待确认' }}</el-descriptions-item><el-descriptions-item label="质量评分">{{ assetDetail.qualityScore }}</el-descriptions-item></el-descriptions>
-        <div class="detail-grid"><section><h4>受控标签</h4><div class="tag-cloud"><el-tag v-for="item in assetDetail.tags" :key="`${item.namespace}-${item.code}`" :type="item.locked ? 'success' : 'info'">{{ item.namespace }}：{{ item.label }}</el-tag><span v-if="!assetDetail.tags?.length">暂无标签</span></div></section><section><h4>版本</h4><el-table :data="assetDetail.versions" size="small"><el-table-column prop="version" label="版本" width="65" /><el-table-column prop="originalFileName" label="原文件名" min-width="150" /><el-table-column prop="objectKey" label="OSS对象" min-width="210" show-overflow-tooltip /></el-table></section><section><h4>AI任务</h4><el-table :data="assetDetail.analysisJobs" size="small"><el-table-column prop="type" label="任务" min-width="150" /><el-table-column label="状态" width="105"><template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template></el-table-column><el-table-column prop="failureReason" label="原因" min-width="180" show-overflow-tooltip /></el-table></section><section><h4>审核记录</h4><el-table :data="assetDetail.reviewDecisions" size="small"><el-table-column prop="action" label="动作" width="110" /><el-table-column prop="reviewer" label="审核人" width="120" /><el-table-column prop="note" label="说明" min-width="180" /><el-table-column label="时间" width="135"><template #default="scope">{{ dateTime(scope.row.createdAt) }}</template></el-table-column></el-table></section><section><h4>使用与效果</h4><el-table :data="assetDetail.usages" size="small"><el-table-column prop="businessObjectType" label="业务对象" width="120" /><el-table-column prop="businessObjectId" label="对象编号" min-width="150" /><el-table-column prop="usedBy" label="使用人/AI" width="120" /><el-table-column label="最新播放" width="90"><template #default="scope">{{ scope.row.metrics?.[0]?.views ?? '未获取' }}</template></el-table-column><el-table-column label="订单" width="80"><template #default="scope">{{ scope.row.metrics?.[0]?.orders ?? '未获取' }}</template></el-table-column></el-table></section></div>
+        <div class="detail-grid"><section><h4>受控标签（点击可筛选）</h4><div class="tag-cloud"><el-tag v-for="item in assetDetail.tags" :key="`${item.namespace}-${item.code}`" class="clickable-tag" :type="item.locked ? 'success' : 'info'" @click="filterByAssetTag(item.label)">{{ item.namespace }}：{{ item.label }}</el-tag><span v-if="!assetDetail.tags?.length">暂无标签</span></div></section><section><h4>版本</h4><el-table :data="assetDetail.versions" size="small"><el-table-column prop="version" label="版本" width="65" /><el-table-column prop="originalFileName" label="原文件名" min-width="150" /><el-table-column prop="objectKey" label="OSS对象" min-width="210" show-overflow-tooltip /></el-table></section><section><h4>AI任务</h4><el-table :data="assetDetail.analysisJobs" size="small"><el-table-column prop="type" label="任务" min-width="150" /><el-table-column label="状态" width="105"><template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template></el-table-column><el-table-column prop="failureReason" label="原因" min-width="180" show-overflow-tooltip /></el-table></section><section><h4>审核记录</h4><el-table :data="assetDetail.reviewDecisions" size="small"><el-table-column prop="action" label="动作" width="110" /><el-table-column prop="reviewer" label="审核人" width="120" /><el-table-column prop="note" label="说明" min-width="180" /><el-table-column label="时间" width="135"><template #default="scope">{{ dateTime(scope.row.createdAt) }}</template></el-table-column></el-table></section><section><h4>使用与效果</h4><el-table :data="assetDetail.usages" size="small"><el-table-column prop="businessObjectType" label="业务对象" width="120" /><el-table-column prop="businessObjectId" label="对象编号" min-width="150" /><el-table-column prop="usedBy" label="使用人/AI" width="120" /><el-table-column label="最新播放" width="90"><template #default="scope">{{ scope.row.metrics?.[0]?.views ?? '未获取' }}</template></el-table-column><el-table-column label="订单" width="80"><template #default="scope">{{ scope.row.metrics?.[0]?.orders ?? '未获取' }}</template></el-table-column></el-table></section></div>
       </template>
     </el-drawer>
   </section>
@@ -1120,6 +1144,8 @@ onMounted(reload);
 .upload-index-preview { display: grid; gap: 8px; margin-bottom: 16px; padding: 13px 15px; border: 1px solid #dce7f5; border-radius: 12px; background: #f7faff; }
 .upload-index-preview > div:first-child { display: flex; align-items: center; gap: 8px; }.upload-index-preview p { margin: 0; color: #647187; font-size: 13px; line-height: 1.6; }.upload-index-preview p b { color: #253a58; }
 .upload-index-preview > div:last-child { display: flex; flex-wrap: wrap; gap: 6px; }.upload-index-preview > div:last-child span { padding: 3px 7px; color: #52647d; font-size: 11px; border-radius: 6px; background: #edf2f8; }
+.upload-rename-option { display: grid; gap: 6px; width: 100%; padding: 11px 13px; border: 1px solid #e3e8f0; border-radius: 10px; background: #fafbfd; }.upload-rename-option small { color: #7c8798; line-height: 1.5; }
+.asset-tag-filters { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; padding: 10px 12px; border: 1px solid #e7ebf2; border-radius: 12px; background: #fff; }.asset-tag-filters > span { margin-right: 4px; color: #68758a; font-size: 12px; font-weight: 700; }.clickable-tag { cursor: pointer; user-select: none; }
 .asset-structured-index { margin: 0 0 16px; border: 1px solid #e4e9f1; border-radius: 12px; overflow: hidden; }.asset-structured-index h4 { margin: 0; padding: 11px 14px; background: #f7f9fc; }
 .detail-index-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 13px 14px 7px; }.detail-index-head strong { color: #263850; }.detail-index-head span { color: #8490a2; font-size: 12px; }
 .structured-index { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; padding: 7px 14px 14px; }.structured-index > div { display: grid; grid-template-columns: 58px 1fr; gap: 8px; padding: 7px 9px; border-radius: 8px; background: #f7f9fc; }.structured-index b { color: #637086; font-size: 12px; }.structured-index span { color: #293b55; font-size: 12px; line-height: 1.45; }

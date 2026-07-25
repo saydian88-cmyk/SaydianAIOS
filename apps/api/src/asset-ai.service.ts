@@ -25,6 +25,11 @@ const retryMinutes = [1, 5, 30];
 
 type JsonRecord = Record<string, unknown>;
 
+export function shouldApplyAiRename(sourceSnapshot: JsonRecord, currentName: string): boolean {
+  return sourceSnapshot.aiRename === true
+    || (sourceSnapshot.aiRename === undefined && isIrregularAssetName(currentName));
+}
+
 function json(value: unknown): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value ?? {})) as Prisma.InputJsonValue;
 }
@@ -568,7 +573,11 @@ suggestedName必须使用“型号-用途-核心功能或画面”的格式，�
       if (!existing?.locked) await this.prisma.assetTag.upsert({ where: { assetId_tagId: { assetId, tagId: tag.id } }, update: { source: "AI", confidence: indexConfidence, modelVersion: opsConfig.bailian.visionModel }, create: { assetId, tagId: tag.id, source: "AI", confidence: indexConfidence, modelVersion: opsConfig.bailian.visionModel, createdBy: "阿里云百炼" } });
     }
     const productCodes = asset?.products.map((item) => item.product.modelCode) || [];
-    const displayName = asset && isIrregularAssetName(asset.displayName || asset.fileName)
+    const sourceSnapshot = asset?.sourceSnapshot && typeof asset.sourceSnapshot === "object" && !Array.isArray(asset.sourceSnapshot)
+      ? asset.sourceSnapshot as JsonRecord
+      : {};
+    const aiRename = shouldApplyAiRename(sourceSnapshot, asset?.displayName || asset?.fileName || "");
+    const displayName = asset && aiRename
       ? buildAiAssetName(result, productCodes)
       : undefined;
     const aiIndex = Object.fromEntries(indexFields.map(([namespace, field]) => [namespace, labels(result[field])]));

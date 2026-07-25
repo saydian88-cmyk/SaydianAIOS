@@ -677,6 +677,7 @@ export class BrandDataService {
     const results: JsonRecord[] = [];
     let technicalInfo: JsonRecord[] = [];
     let classificationTags: string[] = [];
+    const aiRename = !["false", "0"].includes(text(body.aiRename).toLowerCase());
     try {
       const parsed = typeof body.technicalInfo === "string" ? JSON.parse(body.technicalInfo) : body.technicalInfo;
       technicalInfo = Array.isArray(parsed) ? parsed.filter((item) => item && typeof item === "object") as JsonRecord[] : [];
@@ -687,7 +688,7 @@ export class BrandDataService {
     } catch { classificationTags = []; }
     for (const file of files) {
       try {
-        const result = await this.ingestDiskFile(batch, file, actor, technicalInfo.find((item) => text(item.name) === file.originalname));
+        const result = await this.ingestDiskFile(batch, file, actor, technicalInfo.find((item) => text(item.name) === file.originalname), aiRename);
         results.push(result);
         const assetId = text((result.asset as JsonRecord | undefined)?.id);
         if (assetId && batch.contentPlanId && batch.shootRequirementId) {
@@ -1405,7 +1406,7 @@ export class BrandDataService {
     return { url: this.oss.signedDownloadUrl(asset.objectKey), expiresIn: 1800 };
   }
 
-  private async ingestDiskFile(batch: { id: string; sourceType: string; assetKind: AssetKind | null; productScope: ProductScope; productIds: string[]; contentDescription: string | null; originalStatus: boolean; rightsStatus: AssetRightsStatus; acquiredAt: Date | null; uploadedByEmployeeId: string | null }, file: DiskFile, actor: string, technicalInfo?: JsonRecord) {
+  private async ingestDiskFile(batch: { id: string; sourceType: string; assetKind: AssetKind | null; productScope: ProductScope; productIds: string[]; contentDescription: string | null; originalStatus: boolean; rightsStatus: AssetRightsStatus; acquiredAt: Date | null; uploadedByEmployeeId: string | null }, file: DiskFile, actor: string, technicalInfo?: JsonRecord, aiRename = true) {
     const hash = await hashFile(file.path);
     const duplicate = await this.prisma.asset.findFirst({ where: { sha256: hash }, orderBy: { createdAt: "asc" } });
     if (duplicate) {
@@ -1434,7 +1435,7 @@ export class BrandDataService {
         sha256: hash, sizeBytes: file.size, modifiedAt: now, width, height, durationSeconds, aspectRatio: width && height ? `${width}:${height}` : undefined,
         contentDescription: batch.contentDescription || undefined, acquiredAt: batch.acquiredAt || undefined, isOriginal: batch.originalStatus,
         status: "PENDING", qualityScore: kind === "IMAGE" && width && height ? (Math.min(width, height) >= 1080 ? 90 : 70) : 60,
-        sourceSnapshot: json({ uploadBatchId: batch.id, originalFileName: file.originalname, technicalInfo: technicalInfo || {} }), storageProvider: "ALIYUN_OSS",
+        sourceSnapshot: json({ uploadBatchId: batch.id, originalFileName: file.originalname, technicalInfo: technicalInfo || {}, aiRename }), storageProvider: "ALIYUN_OSS",
         objectKey: stored.objectKey, objectVersionId: stored.objectVersionId, etag: stored.etag, storageUrl: stored.storageUrl, storageSyncedAt: stored.uploadedAt,
         discoveredBy: actor, createdByEmployeeId: batch.uploadedByEmployeeId,
         versions: { create: { version: 1, sha256: hash, sourcePath: `oss://${stored.objectKey}`, objectKey: stored.objectKey, objectVersionId: stored.objectVersionId, etag: stored.etag, storageUrl: stored.storageUrl, createdByEmployeeId: batch.uploadedByEmployeeId, createdBy: actor, originalFileName: file.originalname, mimeType: file.mimetype, extension, sizeBytes: file.size, width, height } },
@@ -1442,7 +1443,7 @@ export class BrandDataService {
         uploadEvents: { create: { uploadBatchId: batch.id, uploadedByEmployeeId: batch.uploadedByEmployeeId, originalFileName: file.originalname, sha256: hash, sizeBytes: file.size, result: "CREATED" } },
       },
     });
-    await this.audit(actor, "ASSET_UPLOAD", "Asset", asset.id, { assetNo: asset.assetNo, fileName: file.originalname, objectKey: stored.objectKey, sha256: hash, uploadBatchId: batch.id });
+    await this.audit(actor, "ASSET_UPLOAD", "Asset", asset.id, { assetNo: asset.assetNo, fileName: file.originalname, objectKey: stored.objectKey, sha256: hash, uploadBatchId: batch.id, aiRename });
     await this.assetAi.enqueue(asset.id, kind, 1);
     return { fileName: file.originalname, duplicate: false, asset: this.assetView(asset) };
   }
