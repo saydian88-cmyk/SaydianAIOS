@@ -114,13 +114,18 @@ export class AiContentService {
 
   async generateVideoCandidates(context: JsonRecord): Promise<AiVideoCandidate[]> {
     const assetOnly = context.generationMode === "ASSET_ONLY";
+    const restricted = context.contentRestrictionMode === "HEALTH_RESTRICTED";
     const assetPolicy = assetOnly
       ? "本次为快速成片模式：每一个镜头都必须能由输入中的已有素材覆盖，只能引用真实assetId；严禁设计任何需要补拍的新镜头，missingAssets必须为空。"
       : "优先围绕输入中的已有素材设计镜头，在内容质量相近时选择现有素材覆盖率更高、需要补拍更少的方案；只有确实无法表达核心内容时才列出缺失素材。";
+    const restrictionPolicy = restricted
+      ? `本次为健康内容受限模式。脚本、标题、字幕、封面、标签、镜头描述和画面规划均不得出现restrictedWords中的词及其谐音、拆字、缩写、暗示或变体；不得设计restrictedVisuals描述的画面。只能引用输入assets中的素材，输入素材已经过风险过滤，严禁引用其他素材。`
+      : "本次为普通模式，不额外应用健康内容受限规则。";
     const result = await this.callJson(
       `根据已审核的赛电产品知识、FAQ、高分自有素材和外部参考，生成3个短视频候选方向。第1个为今日主执行包。
 只使用输入中的assetId、referenceId、产品事实和证据；缺素材写入missingAssets，不得虚构。
 ${assetPolicy}
+${restrictionPolicy}
 每个候选必须含15秒和30秒中英文脚本、Hook、节奏化镜头大纲、字幕/CTA思路、标题、封面文案和标签。
 返回JSON：{"candidates":[{"topic":"","audience":"","objective":"","hook":"","outline":[],"score":0,"scoreBreakdown":{},"assetIds":[],"referenceIds":[],"missingAssets":[],"titleZh":"","titleEn":"","coverTextZh":"","coverTextEn":"","hashtags":[],"scripts":{"zh15":"","en15":"","zh30":"","en30":""}}]}。
 输入：${JSON.stringify(context)}`,
@@ -231,6 +236,7 @@ matchedAssetIds为视频主画面和图片辅助的合并列表。无法由视�
     const result = await this.callJson(
       `根据已审核脚本、主成片信息和目标平台规则，生成一个平台发布包装。
 不得新增未经输入确认的产品事实。封面文案应简短，coverSpec必须包含layout、background、headline、productPlacement和style。
+当contentRestrictionMode为HEALTH_RESTRICTED时，标题、正文、标签、封面文字和封面画面描述均不得出现restrictedWords及其谐音、拆字或变体，也不得包含restrictedVisuals描述的画面。
 返回JSON：{"title":"","body":"","hashtags":[],"coverText":"","coverSpec":{"layout":"","background":"","headline":"","productPlacement":"","style":""}}。
 输入：${JSON.stringify(context)}`,
     );

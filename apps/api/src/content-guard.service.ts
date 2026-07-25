@@ -19,7 +19,9 @@ export class ContentGuardService {
   }): Promise<GuardResult> {
     const reasons: string[] = [];
     const text = `${input.title}\n${input.body}`.toLowerCase();
-    const rules = await this.prisma.phraseRule.findMany({ where: { active: true } });
+    const rules = await this.prisma.phraseRule.findMany({
+      where: { active: true, category: { notIn: ["HEALTH_RESTRICTED_WORD", "HEALTH_RESTRICTED_VISUAL"] } },
+    });
     for (const rule of rules) {
       const blocked = rule.blockedText.trim().toLowerCase();
       if (blocked && text.includes(blocked)) reasons.push(`命中表述规则：${rule.blockedText}`);

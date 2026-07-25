@@ -111,6 +111,11 @@ export class BrandDataController {
     return this.brandData.updateKnowledgeControl(resource, id, body, this.actor(authorization, requestedActor));
   }
 
+  @Post("knowledge-controls/rules/bulk")
+  createRestrictedRules(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Body() body: Record<string, unknown>) {
+    return this.brandData.createRestrictedRules(body, this.actor(authorization, requestedActor));
+  }
+
   @Delete("knowledge-controls/:resource/:id")
   archiveKnowledgeControl(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("resource") resource: string, @Param("id") id: string) {
     return this.brandData.archiveKnowledgeControl(resource, id, this.actor(authorization, requestedActor));

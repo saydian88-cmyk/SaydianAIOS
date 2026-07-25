@@ -47,6 +47,7 @@ const assetBulkDialog = ref(false);
 const replaceDialog = ref(false);
 const documentEditorDialog = ref(false);
 const controlDialog = ref(false);
+const restrictedRulesDialog = ref(false);
 const detailDrawer = ref(false);
 const collectorConfigDialog = ref(false);
 const collectorImportDialog = ref(false);
@@ -89,6 +90,7 @@ const batchForm = reactive({ sourceType: "EMPLOYEE_CAPTURE", productScope: "UNKN
 const metadataForm = reactive({ displayName: "", level: "ORIGINAL", productScope: "UNKNOWN", productIds: [] as string[], rightsStatus: "AUTH_REQUIRED", contentDescription: "", acquiredAt: "", restriction: "", evidenceIds: "" });
 const assetBulkForm = reactive({ level: "", productScope: "", productIds: [] as string[], rightsStatus: "", acquiredAt: "", restriction: "", contentDescription: "", tags: [] as string[], tagMode: "APPEND" });
 const controlForm = reactive<Record<string, any>>({});
+const restrictedRulesForm = reactive({ category: "HEALTH_RESTRICTED_WORD", values: "" });
 const collectorForm = reactive({
   platform: "DOUYIN",
   providerName: "",
@@ -425,6 +427,21 @@ async function saveControl() {
     await loadControls();
   }, `${controlTitle()}已更新`);
 }
+
+async function saveRestrictedRules() {
+  const values = restrictedRulesForm.values.split(/\r?\n/gu).map((item) => item.trim()).filter(Boolean);
+  if (!values.length) return ElMessage.warning("请按每行一条填写风险词或风险画面");
+  await run(async () => {
+    const result = await post<Row>("/api/v1/brand-data/knowledge-controls/rules/bulk", {
+      category: restrictedRulesForm.category,
+      values,
+    });
+    restrictedRulesDialog.value = false;
+    restrictedRulesForm.values = "";
+    await loadControls();
+    ElMessage.success(`新增${result.created || 0}条，跳过重复${result.skipped || 0}条`);
+  });
+}
 async function archiveControl(resource: string, row: Row) {
   await ElMessageBox.confirm(`确认删除“${row.title || row.name || row.standardQuestion || row.commercialName || row.blockedText}”？删除后将归档并停止调用。`, "归档删除", { confirmButtonText: "确认删除", cancelButtonText: "取消", type: "warning" });
   await run(async () => {
@@ -733,7 +750,7 @@ onMounted(reload);
       <div v-else-if="knowledgeView === 'faqs'"><div class="bulk-toolbar"><span>已选 {{ selectedFaqs.length }} 条</span><el-button size="small" type="success" :disabled="!selectedFaqs.length" @click="bulkManage('faqs', 'APPROVE')">批量通过</el-button><el-button size="small" :disabled="!selectedFaqs.length" @click="bulkManage('faqs', 'BLOCK')">批量禁用</el-button><el-button size="small" type="danger" plain :disabled="!selectedFaqs.length" @click="bulkManage('faqs', 'ARCHIVE')">批量删除</el-button></div><div class="data-panel"><el-table :data="controls.faqs" stripe height="500" @selection-change="selectedFaqs = $event"><el-table-column type="selection" width="46" /><el-table-column prop="standardQuestion" label="标准问题" min-width="220" /><el-table-column prop="shortAnswer" label="短回复" min-width="280" show-overflow-tooltip /><el-table-column label="不同问法" width="100"><template #default="scope">{{ scope.row.variants?.length || 0 }}</template></el-table-column><el-table-column prop="frequency" label="频次" width="80" /><el-table-column label="状态" width="90"><template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template></el-table-column><el-table-column label="AI调用" width="100"><template #default="scope"><el-tag :type="scope.row.externallyUsable ? 'success' : 'info'">{{ scope.row.externallyUsable ? '可调用' : '未进入' }}</el-tag></template></el-table-column><el-table-column label="操作" width="130" fixed="right"><template #default="scope"><el-button link type="primary" @click="openControl('faqs', scope.row)">编辑</el-button><el-button link type="danger" @click="archiveControl('faqs', scope.row)">删除</el-button></template></el-table-column><el-table-column prop="faqNo" label="FAQ编号" width="165" fixed="right" show-overflow-tooltip /></el-table></div></div>
       <div v-else-if="knowledgeView === 'claims'" class="data-panel"><el-table :data="controls.claims" stripe height="545"><el-table-column prop="name" label="证书名称" min-width="210" /><el-table-column prop="coveredObject" label="适用范围" min-width="230" show-overflow-tooltip /><el-table-column prop="publicWording" label="允许表述" min-width="320" show-overflow-tooltip /><el-table-column prop="internalRestriction" label="使用限制" min-width="250" show-overflow-tooltip /><el-table-column label="状态" width="100"><template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template></el-table-column><el-table-column label="操作" width="130" fixed="right"><template #default="scope"><el-button link type="primary" @click="openControl('claims', scope.row)">编辑</el-button><el-button link type="danger" @click="archiveControl('claims', scope.row)">删除</el-button></template></el-table-column></el-table></div>
       <div v-else-if="knowledgeView === 'mappings'" class="data-panel"><el-table :data="controls.mappings" stripe height="545"><el-table-column prop="commercialName" label="商品名称" min-width="180" /><el-table-column prop="nameplateModel" label="包装/铭牌型号" min-width="190" /><el-table-column prop="registeredModel" label="注册型号" min-width="190" /><el-table-column prop="registrationNumber" label="注册编号" min-width="200" /><el-table-column prop="requiredAction" label="发布前动作" min-width="300" show-overflow-tooltip /><el-table-column label="操作" width="130" fixed="right"><template #default="scope"><el-button link type="primary" @click="openControl('mappings', scope.row)">编辑</el-button><el-button link type="danger" @click="archiveControl('mappings', scope.row)">删除</el-button></template></el-table-column></el-table></div>
-      <div v-else class="data-panel"><el-table :data="controls.phraseRules" stripe height="545"><el-table-column prop="category" label="规则类别" width="140" /><el-table-column prop="blockedText" label="拦截表述" min-width="260" /><el-table-column prop="replacement" label="建议替代表述" min-width="320" /><el-table-column prop="condition" label="使用条件" min-width="300" /><el-table-column label="操作" width="130" fixed="right"><template #default="scope"><el-button link type="primary" @click="openControl('rules', scope.row)">编辑</el-button><el-button link type="danger" @click="archiveControl('rules', scope.row)">删除</el-button></template></el-table-column></el-table></div>
+      <div v-else><div class="bulk-toolbar"><span>受限脚本会同时检查文案和素材画面标签</span><el-button type="primary" :icon="Plus" @click="restrictedRulesDialog = true">批量添加受限规则</el-button></div><div class="data-panel"><el-table :data="controls.phraseRules" stripe height="500"><el-table-column label="规则类别" width="160"><template #default="scope">{{ scope.row.category === 'HEALTH_RESTRICTED_WORD' ? '受限脚本风险词' : scope.row.category === 'HEALTH_RESTRICTED_VISUAL' ? '受限脚本风险画面' : scope.row.category }}</template></el-table-column><el-table-column prop="blockedText" label="禁用内容" min-width="260" /><el-table-column prop="replacement" label="建议替代表述" min-width="260" /><el-table-column prop="condition" label="使用条件" min-width="240" /><el-table-column label="操作" width="130" fixed="right"><template #default="scope"><el-button link type="primary" @click="openControl('rules', scope.row)">编辑</el-button><el-button link type="danger" @click="archiveControl('rules', scope.row)">删除</el-button></template></el-table-column></el-table></div></div>
     </template>
 
     <template v-else-if="activeTab === 'assets'">
@@ -1045,6 +1062,15 @@ onMounted(reload);
       <template v-else-if="controlResource === 'mappings'"><el-form-item label="商品名称"><el-input v-model="controlForm.commercialName" /></el-form-item><el-form-item label="页面事实"><el-input v-model="controlForm.pageFacts" /></el-form-item><el-form-item label="包装/铭牌型号"><el-input v-model="controlForm.nameplateModel" /></el-form-item><el-form-item label="注册型号"><el-input v-model="controlForm.registeredModel" /></el-form-item><el-form-item label="注册编号"><el-input v-model="controlForm.registrationNumber" /></el-form-item><el-form-item label="生产关系"><el-input v-model="controlForm.productionRelation" /></el-form-item><el-form-item label="发布前动作" class="full"><el-input v-model="controlForm.requiredAction" type="textarea" :rows="3" /></el-form-item></template>
       <template v-else><el-form-item label="规则类别"><el-input v-model="controlForm.category" /></el-form-item><el-form-item label="拦截表述"><el-input v-model="controlForm.blockedText" /></el-form-item><el-form-item label="建议替代表述" class="full"><el-input v-model="controlForm.replacement" /></el-form-item><el-form-item label="使用条件" class="full"><el-input v-model="controlForm.condition" /></el-form-item><el-form-item label="启用"><el-switch v-model="controlForm.active" /></el-form-item></template>
     </el-form><template #footer><el-button @click="controlDialog = false">取消</el-button><el-button type="primary" @click="saveControl">保存</el-button></template></el-dialog>
+
+    <el-dialog v-model="restrictedRulesDialog" title="批量添加受限内容规则" width="620px" destroy-on-close>
+      <el-form label-position="top">
+        <el-form-item label="规则类型"><el-radio-group v-model="restrictedRulesForm.category"><el-radio-button value="HEALTH_RESTRICTED_WORD">风险词</el-radio-button><el-radio-button value="HEALTH_RESTRICTED_VISUAL">风险画面</el-radio-button></el-radio-group></el-form-item>
+        <el-form-item label="规则内容（每行一条）"><el-input v-model="restrictedRulesForm.values" type="textarea" :rows="12" :placeholder="restrictedRulesForm.category === 'HEALTH_RESTRICTED_WORD' ? '血压\n心电\n医疗' : '血压测量界面\n心电波形画面\n吸烟画面'" /></el-form-item>
+        <el-alert title="重复内容会自动跳过；新增规则只限制“健康内容受限脚本”，普通脚本不受影响。" type="info" :closable="false" />
+      </el-form>
+      <template #footer><el-button @click="restrictedRulesDialog = false">取消</el-button><el-button type="primary" @click="saveRestrictedRules">确认批量添加</el-button></template>
+    </el-dialog>
 
     <el-drawer v-model="detailDrawer" title="素材对象详情" size="62%" destroy-on-close>
       <template v-if="assetDetail">

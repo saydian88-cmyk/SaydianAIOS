@@ -52,6 +52,7 @@ const integrations = ref<Integration[]>([]);
 const content = ref<ContentPlan[]>([]);
 const contentFilter = ref<"ALL" | "PENDING_APPROVAL" | "APPROVED" | "PUBLISHED">("ALL");
 const assetOnlyProductModel = ref("");
+const contentRestrictionMode = ref<"NORMAL" | "HEALTH_RESTRICTED">("NORMAL");
 const brandDataCenter = ref<{ reload: () => Promise<void> }>();
 const operationAnalysis = ref<{ reload: () => Promise<void> }>();
 const comments = ref<AnyRow[]>([]);
@@ -216,7 +217,7 @@ async function runDaily() {
 
 async function generateContent() {
   await withLoading(async () => {
-    await post("/api/v1/content/generate");
+    await post("/api/v1/content/generate", { contentRestrictionMode: contentRestrictionMode.value });
     active.value = "content";
     await loadActive();
   }, "今日选题已生成");
@@ -225,7 +226,7 @@ async function generateContent() {
 async function generateAssetOnlyVideo() {
   if (!assetOnlyProductModel.value) return ElMessage.warning("请先选择需要快速成片的产品型号");
   await withLoading(async () => {
-    await post("/api/v1/content/asset-only-video/generate", { productModel: assetOnlyProductModel.value });
+    await post("/api/v1/content/asset-only-video/generate", { productModel: assetOnlyProductModel.value, contentRestrictionMode: contentRestrictionMode.value });
     contentFilter.value = "PENDING_APPROVAL";
     await loadActive();
   }, "无需补拍脚本已生成，审核通过后可直接启动AI剪辑");
@@ -305,6 +306,10 @@ function shotRequirements(item: ContentPlan, coverage: "EXISTING" | "MISSING") {
   return item.shootRequirements.filter((requirement) => coverage === "EXISTING"
     ? requirement.coverage === "EXISTING" && requirement.status === "DONE"
     : requirement.coverage !== "EXISTING" || requirement.status !== "DONE");
+}
+
+function isHealthRestricted(item: ContentPlan) {
+  return item.sourceSignals?.some((signal) => signal.contentRestrictionMode === "HEALTH_RESTRICTED") || false;
 }
 
 async function previewProductionAsset(item: ContentPlan, assetId: string) {
@@ -775,6 +780,10 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
         <div class="section-heading">
           <div><span class="eyebrow">CONTENT COMMAND</span><h2>今日内容审核台</h2><p>普通生成优先复用已有素材；快速成片模式只生成无需补拍的脚本。</p></div>
           <div class="content-generate-actions">
+            <el-select v-model="contentRestrictionMode" style="width: 190px">
+              <el-option label="普通脚本" value="NORMAL" />
+              <el-option label="健康内容受限脚本" value="HEALTH_RESTRICTED" />
+            </el-select>
             <el-select v-model="assetOnlyProductModel" clearable filterable placeholder="快速成片产品型号"><el-option v-for="product in ledger.products.filter(product => product.status === 'READY')" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" /></el-select>
             <el-button @click="generateAssetOnlyVideo">生成无需补拍脚本</el-button>
             <el-button type="primary" :icon="DocumentChecked" @click="generateContent">生成今日候选</el-button>
@@ -788,7 +797,7 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
         </div>
         <div class="content-grid">
           <article v-for="item in filteredContent" :key="item.id" class="content-card">
-            <div class="content-card-head"><div><el-tag :type="item.kind === 'VIDEO' ? 'danger' : 'warning'" effect="dark">{{ item.kind === 'VIDEO' ? '视频' : '软文' }}</el-tag><el-tag :type="statusType(item.status)" effect="plain">{{ statusLabel(item.status) }}</el-tag></div><div class="score"><b>{{ item.score }}</b><span>选题分</span></div></div>
+            <div class="content-card-head"><div><el-tag :type="item.kind === 'VIDEO' ? 'danger' : 'warning'" effect="dark">{{ item.kind === 'VIDEO' ? '视频' : '软文' }}</el-tag><el-tag :type="statusType(item.status)" effect="plain">{{ statusLabel(item.status) }}</el-tag><el-tag v-if="isHealthRestricted(item)" type="success" effect="plain">健康内容受限</el-tag></div><div class="score"><b>{{ item.score }}</b><span>选题分</span></div></div>
             <h3>{{ item.topic }}</h3>
             <div v-if="item.kind === 'VIDEO'" class="production-meta"><span>{{ item.productionNo || '历史内容' }}</span><el-tag type="primary">{{ statusLabel(item.productionStage) }}</el-tag><span>负责人：{{ item.owner || '待脚本审核时确定' }}</span></div>
             <p class="hook">“{{ item.hook }}”</p>

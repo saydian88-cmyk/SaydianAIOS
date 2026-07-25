@@ -27,6 +27,14 @@ export function resolveVideoShotAssets(
   return { videoAssetIds, imageAssetIds, assetIds: [...videoAssetIds, ...imageAssetIds] };
 }
 
+export function matchesRestrictedTerms(content: unknown, terms: string[]): boolean {
+  const normalized = (typeof content === "string" ? content : JSON.stringify(content ?? "")).toLowerCase();
+  return terms.some((term) => {
+    const blocked = term.trim().toLowerCase();
+    return blocked.length > 0 && normalized.includes(blocked);
+  });
+}
+
 @Injectable()
 export class ContentService {
   constructor(
@@ -77,8 +85,8 @@ export class ContentService {
     return { ...plan, shootRequirements: normalized, productionStage };
   }
 
-  async generateDaily(date = new Date(), actor = "系统内容引擎"): Promise<{ created: number; selected: string[] }> {
-    const video = await this.generateDailyVideo(date, actor);
+  async generateDaily(date = new Date(), actor = "系统内容引擎", options: { restricted?: boolean } = {}): Promise<{ created: number; selected: string[] }> {
+    const video = await this.generateDailyVideo(date, actor, undefined, options);
     const article = await this.generateDailyArticle(date, actor);
     return {
       created: video.created + article.created,
@@ -90,24 +98,44 @@ export class ContentService {
     date = new Date(),
     actor = "系统内容引擎",
     productModel?: string,
-    options: { assetOnly?: boolean } = {},
+    options: { assetOnly?: boolean; restricted?: boolean } = {},
   ): Promise<{ created: number; selected: string[] }> {
     const planDate = startOfShanghaiDay(date);
-    if (!options.assetOnly) {
+    if (!options.assetOnly && !options.restricted) {
       const existing = await this.prisma.contentPlan.count({
         where: { kind: "VIDEO", planDate: { gte: planDate, lt: new Date(planDate.getTime() + 24 * 60 * 60 * 1000) } },
       });
       if (existing) return { created: 0, selected: [] };
     }
-    const baseContext = await this.generationContext(productModel);
+    const baseContext = await this.generationContext(productModel, options.restricted);
+    const restrictionRules = options.restricted
+      ? await this.prisma.phraseRule.findMany({
+        where: { active: true, category: { in: ["HEALTH_RESTRICTED_WORD", "HEALTH_RESTRICTED_VISUAL"] } },
+        select: { category: true, blockedText: true, condition: true },
+        orderBy: [{ category: "asc" }, { blockedText: "asc" }],
+      })
+      : [];
     const context: Record<string, unknown> = {
       ...baseContext,
       generationMode: options.assetOnly ? "ASSET_ONLY" : "ASSET_FIRST",
+      contentRestrictionMode: options.restricted ? "HEALTH_RESTRICTED" : "NORMAL",
+      restrictedWords: restrictionRules.filter((item) => item.category === "HEALTH_RESTRICTED_WORD").map((item) => item.blockedText),
+      restrictedVisuals: restrictionRules.filter((item) => item.category === "HEALTH_RESTRICTED_VISUAL").map((item) => item.blockedText),
       generationGoal: options.assetOnly
         ? "只使用素材库已有素材，审核通过后直接进入AI剪辑"
         : "优先复用素材库已有素材，尽量减少补拍",
     };
-    const candidates = await this.aiContent.generateVideoCandidates(context);
+    const generatedCandidates = await this.aiContent.generateVideoCandidates(context);
+    const restrictedTerms = restrictionRules.map((item) => item.blockedText.trim().toLowerCase()).filter(Boolean);
+    const candidates = options.restricted
+      ? generatedCandidates.filter((candidate) => {
+        const candidateText = this.videoExecutionBody(candidate).toLowerCase();
+        return !matchesRestrictedTerms(candidateText, restrictedTerms);
+      })
+      : generatedCandidates;
+    if (options.restricted && !candidates.length) {
+      throw new BadRequestException("AI生成结果仍包含受限词，请调整限制规则或稍后重试");
+    }
     const assetRows = context.assets as Array<{ id: string; kind?: string }>;
     const allowedAssetIds = new Set(assetRows.map((item) => item.id));
     const assetKindById = new Map(assetRows.map((item) => [item.id, String(item.kind || "").toUpperCase()]));
@@ -172,14 +200,14 @@ export class ContentService {
           scoreBreakdown: candidate.scoreBreakdown,
           hook: candidate.hook,
           outline: candidate.outline,
-          sourceSignals: [{ externalVideoIds: candidate.referenceIds, missingAssets: shootRequirements.filter((item) => item.coverage === "MISSING").map((item) => item.description), generationMode: options.assetOnly ? "ASSET_ONLY" : "ASSET_FIRST", existingAssetCount: assetIds.length, missingShotCount: missingCount, capturedAt: new Date().toISOString() }],
+          sourceSignals: [{ externalVideoIds: candidate.referenceIds, missingAssets: shootRequirements.filter((item) => item.coverage === "MISSING").map((item) => item.description), generationMode: options.assetOnly ? "ASSET_ONLY" : "ASSET_FIRST", contentRestrictionMode: options.restricted ? "HEALTH_RESTRICTED" : "NORMAL", existingAssetCount: assetIds.length, missingShotCount: missingCount, capturedAt: new Date().toISOString() }],
           evidenceIds: guard.evidenceIds,
           riskReasons: guard.reasons,
           createdBy: actor,
           actorType: "AI",
           aiProvider: "ALIYUN_BAILIAN",
           aiModel: opsConfig.bailian.textModel,
-          promptVersion: options.assetOnly ? "brand-content-asset-only-v1" : "brand-content-asset-first-v3",
+          promptVersion: `${options.assetOnly ? "brand-content-asset-only-v1" : "brand-content-asset-first-v3"}${options.restricted ? "-health-restricted-v1" : ""}`,
           status: index === 0 && guard.allowed ? "PENDING_APPROVAL" : "DRAFT",
           variants: { create: this.videoVariants(candidate) },
           contentAssets: { create: assetIds.map((assetId) => ({ assetId, role: "SCRIPT_MATCH" })) },
@@ -290,7 +318,7 @@ export class ContentService {
     ].join("\n");
   }
 
-  private async generationContext(productModel?: string): Promise<Record<string, unknown>> {
+  private async generationContext(productModel?: string, restricted = false): Promise<Record<string, unknown>> {
     const products = await this.prisma.product.findMany({
       where: { status: "READY" },
       include: { skus: { where: { active: true }, select: { skuCode: true, name: true } } },
@@ -304,7 +332,7 @@ export class ContentService {
     const metadata = product.metadata && typeof product.metadata === "object" && !Array.isArray(product.metadata)
       ? product.metadata as Record<string, unknown>
       : {};
-    const [knowledge, faqs, assets, externalVideos] = await Promise.all([
+    const [knowledge, faqs, assetRows, externalVideos, restrictedRules] = await Promise.all([
       this.prisma.knowledgeEntry.findMany({
         where: {
           status: "READY",
@@ -370,7 +398,25 @@ export class ContentService {
         orderBy: { discoveredAt: "desc" },
         take: 10,
       }),
+      restricted
+        ? this.prisma.phraseRule.findMany({
+          where: { active: true, category: { in: ["HEALTH_RESTRICTED_WORD", "HEALTH_RESTRICTED_VISUAL"] } },
+          select: { blockedText: true },
+        })
+        : Promise.resolve([]),
     ]);
+    const restrictedTerms = restrictedRules.map((item) => item.blockedText.trim().toLowerCase()).filter(Boolean);
+    const assets = restricted ? assetRows.filter((asset) => {
+      const indexText = [
+        asset.displayName,
+        asset.contentDescription,
+        asset.searchText,
+        JSON.stringify(asset.aiIndex),
+        ...asset.tags.flatMap((item) => [item.tag.code, item.tag.label]),
+        ...asset.segments.flatMap((item) => [item.moduleType, item.transcript]),
+      ].filter(Boolean).join(" ").toLowerCase();
+      return !matchesRestrictedTerms(indexText, restrictedTerms);
+    }) : assetRows;
     return {
       productId: product.id,
       productModel: product.modelCode,
@@ -556,7 +602,9 @@ export class ContentService {
     const plan = await this.prisma.contentPlan.findUnique({ where: { id }, include: { variants: true } });
     if (!plan || plan.kind !== "VIDEO") throw new NotFoundException("视频生产单不存在");
     if (!["APPROVED", "SCHEDULED"].includes(plan.status)) throw new BadRequestException("请先通过脚本审核，再分析素材覆盖");
-    const context = await this.generationContext(plan.productModel || undefined);
+    const signals = Array.isArray(plan.sourceSignals) ? plan.sourceSignals as Array<Record<string, unknown>> : [];
+    const restricted = signals.some((item) => item.contentRestrictionMode === "HEALTH_RESTRICTED");
+    const context = await this.generationContext(plan.productModel || undefined, restricted);
     const assetRows = context.assets as Array<{ id: string; kind?: string }>;
     const allowedAssetIds = new Set(assetRows.map((item) => item.id));
     const assetKindById = new Map(assetRows.map((item) => [item.id, String(item.kind || "").toUpperCase()]));
@@ -670,6 +718,15 @@ export class ContentService {
     const plan = await this.prisma.contentPlan.findUnique({ where: { id }, include: { variants: true } });
     if (!plan || plan.kind !== "VIDEO") throw new NotFoundException("视频生产单不存在");
     if (plan.masterVideoStatus !== "APPROVED") throw new BadRequestException("主成片尚未审核通过");
+    const signals = Array.isArray(plan.sourceSignals) ? plan.sourceSignals as Array<Record<string, unknown>> : [];
+    const restricted = signals.some((item) => item.contentRestrictionMode === "HEALTH_RESTRICTED");
+    const restrictionRules = restricted ? await this.prisma.phraseRule.findMany({
+      where: { active: true, category: { in: ["HEALTH_RESTRICTED_WORD", "HEALTH_RESTRICTED_VISUAL"] } },
+      select: { category: true, blockedText: true },
+    }) : [];
+    const restrictedWords = restrictionRules.filter((item) => item.category === "HEALTH_RESTRICTED_WORD").map((item) => item.blockedText);
+    const restrictedVisuals = restrictionRules.filter((item) => item.category === "HEALTH_RESTRICTED_VISUAL").map((item) => item.blockedText);
+    const restrictedTerms = [...restrictedWords, ...restrictedVisuals];
     const selected = plan.variants.filter((variant) => plan.targetPlatforms.includes(variant.platform));
     for (const variant of selected) {
       const packaging = await this.aiContent.generatePlatformPackaging({
@@ -681,7 +738,13 @@ export class ContentService {
         masterVideoPath: plan.masterVideoPath,
         existingTitle: variant.title,
         existingBody: variant.body,
+        contentRestrictionMode: restricted ? "HEALTH_RESTRICTED" : "NORMAL",
+        restrictedWords,
+        restrictedVisuals,
       });
+      if (restricted && matchesRestrictedTerms(packaging, restrictedTerms)) {
+        throw new BadRequestException(`${variant.platform}平台包装仍包含受限内容，请重新生成`);
+      }
       await this.prisma.contentVariant.update({
         where: { id: variant.id },
         data: {
