@@ -526,6 +526,8 @@ model Asset {
   indexNeedsReview    Boolean                 @default(true)
   indexReviewedAt     DateTime?
   indexReviewCount    Int                     @default(0)
+  deletedAt           DateTime?
+  purgeAfter          DateTime?
   createdByEmployeeId String?
 
   contentAssets     ContentAsset[]
@@ -552,6 +554,7 @@ model Asset {
   @@index([createdByEmployeeId, createdAt])
   @@index([perceptualHash])
   @@index([indexVersion, processingStatus])
+  @@index([deletedAt, purgeAfter])
 }
 
 model AssetVersion {

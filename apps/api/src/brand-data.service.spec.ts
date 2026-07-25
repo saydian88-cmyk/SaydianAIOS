@@ -27,18 +27,39 @@ describe("growthScore", () => {
   });
 });
 
-describe("permanent asset deletion", () => {
-  it("deletes only selected OSS objects before removing related database rows", async () => {
+describe("asset trash retention", () => {
+  it("moves selected assets to the three-day recycle bin without deleting OSS", async () => {
+    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const prisma = {
+      asset: { updateMany },
+      auditLog: { create: vi.fn() },
+    };
+    const oss = { deleteAssetObjects: vi.fn() };
+    const service = new BrandDataService(prisma as never, oss as never, {} as never, {} as never);
+
+    const result = await service.bulkAssets({ ids: ["asset-1"], action: "TRASH", confirmation: "移入回收站" }, "测试员工");
+
+    expect(updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: { in: ["asset-1"] }, deletedAt: null },
+      data: expect.objectContaining({ status: "ARCHIVED", availabilityStatus: "ARCHIVED" }),
+    }));
+    expect(oss.deleteAssetObjects).not.toHaveBeenCalled();
+    expect(result.count).toBe(1);
+  });
+
+  it("permanently deletes expired trash from OSS before database rows", async () => {
     const contentAssetDeleteMany = vi.fn();
     const assetDeleteMany = vi.fn();
     const prisma = {
       asset: {
-        findMany: vi.fn().mockResolvedValue([{
+        findMany: vi.fn()
+          .mockResolvedValueOnce([{ id: "asset-1" }])
+          .mockResolvedValueOnce([{
           id: "asset-1",
           objectKey: "brand-assets/original/a1/file.mp4",
           versions: [{ objectKey: "brand-assets/original/a1/file.mp4" }],
           cloudMediaJobs: [{ outputs: [{ objectKey: "brand-assets/derived/asset-1/proxy.mp4" }] }],
-        }]),
+          }]),
         deleteMany: assetDeleteMany,
       },
       contentAsset: { deleteMany: contentAssetDeleteMany },
@@ -48,7 +69,7 @@ describe("permanent asset deletion", () => {
     const oss = { deleteAssetObjects: vi.fn().mockResolvedValue({ deleted: 2 }) };
     const service = new BrandDataService(prisma as never, oss as never, {} as never, {} as never);
 
-    const result = await service.bulkAssets({ ids: ["asset-1"], action: "PURGE", confirmation: "永久删除" }, "测试员工");
+    const result = await service.purgeExpiredTrash();
 
     expect(oss.deleteAssetObjects).toHaveBeenCalledWith(["asset-1"], [
       "brand-assets/original/a1/file.mp4",
@@ -57,6 +78,6 @@ describe("permanent asset deletion", () => {
     ]);
     expect(contentAssetDeleteMany).toHaveBeenCalledWith({ where: { assetId: { in: ["asset-1"] } } });
     expect(assetDeleteMany).toHaveBeenCalledWith({ where: { id: { in: ["asset-1"] } } });
-    expect(result).toEqual({ action: "PURGE", count: 1, deletedOssObjects: 2 });
+    expect(result).toEqual({ action: "PURGE_EXPIRED", count: 1, deletedOssObjects: 2 });
   });
 });
