@@ -19,6 +19,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, extname, join } from "node:path";
 import sharp from "sharp";
+import { AiContentService } from "./ai-content.service";
 import { AssetAiService } from "./asset-ai.service";
 import { isIrregularAssetName } from "./asset-naming";
 import { OssStorageService } from "./oss-storage.service";
@@ -155,6 +156,7 @@ export class BrandDataService {
     private readonly prisma: PrismaService,
     private readonly oss: OssStorageService,
     private readonly assetAi: AssetAiService,
+    private readonly aiContent: AiContentService,
   ) {}
 
   async overview() {
@@ -1100,6 +1102,129 @@ export class BrandDataService {
     today.setHours(0, 0, 0, 0);
     if (refresh || !await this.prisma.assetGapSnapshot.count({ where: { snapshotDate: today } })) await this.calculateGaps(today);
     return this.prisma.assetGapSnapshot.findMany({ where: { snapshotDate: today }, orderBy: [{ severity: "desc" }, { productModel: "asc" }, { category: "asc" }] });
+  }
+
+  async analyzeProductAssetGaps(productModel: string, actor: string) {
+    const model = text(productModel);
+    if (!model) throw new BadRequestException("请选择产品型号");
+    const product = await this.prisma.product.findFirst({
+      where: { modelCode: { equals: model, mode: "insensitive" }, status: "READY" },
+      select: { id: true, modelCode: true, name: true, category: true, metadata: true },
+    });
+    if (!product) throw new NotFoundException(`未找到已审核产品：${model}`);
+    const assets = await this.prisma.asset.findMany({
+      where: {
+        reviewStatus: "APPROVED",
+        availabilityStatus: "ACTIVE",
+        rightsStatus: { in: ["COMMERCIAL", "EDIT_ONLY"] },
+        OR: [{ products: { some: { productId: product.id } } }, { productScope: { in: ["BRAND", "COMMON"] } }],
+      },
+      select: { id: true, displayName: true, kind: true, contentDescription: true, aiIndex: true, searchText: true, indexConfidence: true, qualityScore: true },
+      orderBy: [{ qualityScore: "desc" }, { useCount: "desc" }],
+      take: 120,
+    });
+    const gaps = await this.aiContent.analyzeProductAssetGaps({
+      product,
+      availableAssetCount: assets.length,
+      assets,
+      rule: "只判断当前已审核、可用且有权限的素材；已有索引能够覆盖的画面不得重复列为缺口",
+    });
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    await this.prisma.$transaction(async (tx) => {
+      await tx.assetGapSnapshot.deleteMany({ where: { snapshotDate: today, productId: product.id, generatedBy: "AI素材缺口分析" } });
+      if (gaps.length) {
+        await tx.assetGapSnapshot.createMany({
+          data: gaps.map((gap) => ({
+            snapshotDate: today,
+            productId: product.id,
+            productModel: product.modelCode,
+            assetKind: gap.assetKind,
+            category: gap.category,
+            requiredCount: 1,
+            activeCount: 0,
+            gapCount: 1,
+            severity: gap.priority,
+            recommendation: gap.description,
+            generatedBy: "AI素材缺口分析",
+          })),
+        });
+      }
+      await tx.auditLog.create({ data: { actor, action: "AI_ASSET_GAP_ANALYZE", entityType: "Product", entityId: product.id, after: json({ model: product.modelCode, assetCount: assets.length, gaps }) } });
+    });
+    return this.prisma.assetGapSnapshot.findMany({ where: { snapshotDate: today, productId: product.id, generatedBy: "AI素材缺口分析" }, orderBy: [{ severity: "asc" }, { category: "asc" }] });
+  }
+
+  async createSelectedGapTasks(ids: string[], actor: string) {
+    const gapIds = Array.from(new Set(ids.map(text).filter(Boolean)));
+    if (!gapIds.length) throw new BadRequestException("请选择需要生成补拍任务的缺失素材");
+    const gaps = await this.prisma.assetGapSnapshot.findMany({ where: { id: { in: gapIds }, gapCount: { gt: 0 } } });
+    let created = 0;
+    for (const gap of gaps) {
+      const existing = await this.prisma.opsTask.findFirst({ where: { sourceType: "AI_ASSET_GAP", sourceId: gap.id, status: { not: "DONE" } }, select: { id: true } });
+      if (existing) continue;
+      const dueAt = new Date();
+      dueAt.setDate(dueAt.getDate() + (gap.severity === "HIGH" ? 1 : 3));
+      await this.prisma.opsTask.create({
+        data: {
+          title: `${gap.productModel || "通用"}补拍：${gap.category}`,
+          description: gap.recommendation,
+          category: "素材补拍",
+          priority: gap.severity,
+          sourceType: "AI_ASSET_GAP",
+          sourceId: gap.id,
+          productId: gap.productId,
+          evidence: json({ assetKind: gap.assetKind, productModel: gap.productModel, gapCategory: gap.category, gapId: gap.id }),
+          dueAt,
+          result: `由${actor}从AI缺失素材分析中确认生成`,
+        },
+      });
+      created += 1;
+    }
+    await this.audit(actor, "AI_ASSET_GAP_TASK_CREATE", "AssetGapSnapshot", gapIds.join(","), { requested: gapIds.length, created });
+    return { requested: gapIds.length, created };
+  }
+
+  async gapTasks(productModel?: string) {
+    return this.prisma.opsTask.findMany({
+      where: {
+        sourceType: "AI_ASSET_GAP",
+        ...(productModel ? { evidence: { path: ["productModel"], equals: productModel } } : {}),
+      },
+      orderBy: [{ status: "asc" }, { dueAt: "asc" }, { createdAt: "desc" }],
+      take: 100,
+    });
+  }
+
+  async uploadGapTaskFiles(taskId: string, files: DiskFile[], actor: string) {
+    const task = await this.prisma.opsTask.findUnique({ where: { id: taskId } });
+    if (!task || task.sourceType !== "AI_ASSET_GAP") throw new NotFoundException("补拍任务不存在");
+    if (task.status === "DONE") throw new BadRequestException("该补拍任务已经完成");
+    const evidence = jsonRecord(task.evidence);
+    const productIds = task.productId ? [task.productId] : [];
+    const batch = await this.createUploadBatch({
+      sourceType: "EMPLOYEE_CAPTURE",
+      productScope: productIds.length ? "MODEL" : "UNKNOWN",
+      productIds,
+      assetKind: text(evidence.assetKind) || "VIDEO",
+      contentDescription: task.description || task.title,
+      originalStatus: true,
+      rightsStatus: "COMMERCIAL",
+      acquiredAt: new Date().toISOString(),
+    }, actor);
+    const result = await this.uploadBatchFiles(batch.id, files, actor);
+    const completed = result.results.some((item) => !item.failed) && result.results.every((item) => !item.failed);
+    await this.prisma.opsTask.update({
+      where: { id: taskId },
+      data: {
+        status: completed ? "DONE" : "IN_PROGRESS",
+        completedAt: completed ? new Date() : null,
+        completedBy: completed ? actor : null,
+        result: completed ? "补拍素材已上传素材库，正在进行AI分类、索引和标签分析" : "部分素材上传失败，请补充上传",
+      },
+    });
+    await this.audit(actor, "AI_ASSET_GAP_TASK_UPLOAD", "OpsTask", taskId, { batchId: batch.id, completed, result });
+    return { taskId, completed, batchId: batch.id, ...result };
   }
 
   async growthLoop(refresh = false, actor = "系统增长闭环") {
