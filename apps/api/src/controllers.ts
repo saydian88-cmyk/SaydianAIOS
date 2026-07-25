@@ -137,8 +137,9 @@ export class OpsController {
   @Get("content") content(@Headers("authorization") authorization?: string, @Query("status") status?: string) {
     this.actor(authorization); return this.contentService.list(status as never);
   }
-  @Post("content/generate") generateContent(@Headers("authorization") authorization?: string, @Headers("x-ops-actor") requestedActor?: string) {
-    const actor = this.actor(authorization, requestedActor); return this.contentService.generateDaily(new Date(), actor);
+  @Post("content/generate") generateContent(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Body() body: Record<string, unknown>) {
+    const actor = this.actor(authorization, requestedActor);
+    return this.contentService.generateDaily(new Date(), actor, { restricted: body.contentRestrictionMode === "HEALTH_RESTRICTED" });
   }
   @Post("content/daily-video/generate") generateDailyVideo(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Body() body: Record<string, unknown>) {
     const actor = this.actor(authorization, requestedActor);
@@ -148,7 +149,10 @@ export class OpsController {
   }
   @Post("content/asset-only-video/generate") generateAssetOnlyVideo(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Body() body: Record<string, unknown>) {
     const actor = this.actor(authorization, requestedActor);
-    return this.contentService.generateDailyVideo(new Date(), actor, body.productModel ? String(body.productModel) : undefined, { assetOnly: true });
+    return this.contentService.generateDailyVideo(new Date(), actor, body.productModel ? String(body.productModel) : undefined, {
+      assetOnly: true,
+      restricted: body.contentRestrictionMode === "HEALTH_RESTRICTED",
+    });
   }
   @Post("content/daily-article/generate") generateDailyArticle(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Body() body: Record<string, unknown>) {
     const actor = this.actor(authorization, requestedActor);

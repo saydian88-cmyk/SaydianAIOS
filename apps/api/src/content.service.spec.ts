@@ -1,8 +1,13 @@
 import { BadRequestException } from "@nestjs/common";
 import { describe, expect, it, vi } from "vitest";
-import { ContentService, resolveVideoShotAssets } from "./content.service";
+import { ContentService, matchesRestrictedTerms, resolveVideoShotAssets } from "./content.service";
 
 describe("ContentService production workflow", () => {
+  it("detects restricted terms in script text and structured asset indexes", () => {
+    expect(matchesRestrictedTerms("展示心电波形画面", ["血压", "心电"])).toBe(true);
+    expect(matchesRestrictedTerms({ features: ["运动计步"], scenes: ["户外跑步"] }, ["血压", "心电"])).toBe(false);
+  });
+
   it("does not treat an image-only match as a covered timed video shot", () => {
     const resolved = resolveVideoShotAssets(
       { matchedAssetIds: ["image-1"], matchedVideoAssetIds: [], auxiliaryImageAssetIds: ["image-1"] },

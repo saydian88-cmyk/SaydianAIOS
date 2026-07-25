@@ -509,12 +509,20 @@ export class AssetAiService {
   private async bailianVision(type: AssetJobType, asset: JsonRecord) {
     const objectKey = text(asset.objectKey);
     if (!objectKey) throw new Error("素材缺少OSS对象");
+    const restrictedRules = type === "OCR" ? [] : await this.prisma.phraseRule.findMany({
+      where: { active: true, category: { in: ["HEALTH_RESTRICTED_WORD", "HEALTH_RESTRICTED_VISUAL"] } },
+      select: { category: true, blockedText: true },
+      orderBy: [{ category: "asc" }, { blockedText: "asc" }],
+    });
+    const restrictedWords = restrictedRules.filter((item) => item.category === "HEALTH_RESTRICTED_WORD").map((item) => item.blockedText);
+    const restrictedVisuals = restrictedRules.filter((item) => item.category === "HEALTH_RESTRICTED_VISUAL").map((item) => item.blockedText);
     const prompt = type === "OCR"
       ? "识别图片中的全部文字。返回JSON：{text,language,blocks:[{text,position}]}. 不要添加解释。"
       : `分析赛电品牌图片或视频素材，为后续AI剪辑建立一次性结构化检索索引。
 返回JSON：{"suggestedName":"","summary":"","products":[],"purposes":[],"features":[],"scenes":[],"actions":[],"shotTypes":[],"people":[],"objects":[],"audiences":[],"platforms":[],"visualStyles":[],"orientations":[],"speechTopics":[],"painPoints":[],"moduleSuggestion":"","tags":[],"riskWords":[],"indexConfidence":0.0,"uncertainFields":[]}。
 purposes描述素材用途，如功能展示、佩戴演示、生活场景、产品外观、开场钩子；features写具体功能，如心电图测量、血压测量、SOS。
 actions写画面动作；shotTypes写特写、中景、全景、俯拍等；scenes写具体环境；orientations写横屏或竖屏。
+riskWords必须标出画面、字幕、包装文字、界面文字、语音或动作中命中的风险词和风险画面概念。当前风险词：${JSON.stringify(restrictedWords)}；当前风险画面：${JSON.stringify(restrictedVisuals)}。
 suggestedName必须使用“型号-用途-核心功能或画面”的格式，例如“W9S-功能展示-心电图测量”，不能使用原文件编号或无意义名称。只返回JSON。`;
     const response = await fetch(`${opsConfig.bailian.baseUrl}/chat/completions`, {
       method: "POST",
@@ -540,6 +548,7 @@ suggestedName必须使用“型号-用途-核心功能或画面”的格式，�
       ["person", "people"], ["object", "objects"], ["audience", "audiences"],
       ["platform", "platforms"], ["visual_style", "visualStyles"], ["orientation", "orientations"],
       ["speech_topic", "speechTopics"], ["pain_point", "painPoints"], ["keyword", "tags"],
+      ["restricted_risk", "riskWords"],
     ];
     const labels = (value: unknown): string[] => (Array.isArray(value) ? value : []).map((item) => {
       if (item && typeof item === "object" && !Array.isArray(item)) {

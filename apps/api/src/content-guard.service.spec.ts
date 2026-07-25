@@ -34,4 +34,17 @@ describe("发布前内容门禁", () => {
     const result = await service.evaluate({ title: "家庭健康管理", body: "数据用于日常监测参考", productModel: "W9S", evidenceIds: ["E-1"] });
     expect(result).toEqual({ allowed: true, reasons: [], evidenceIds: ["E-1"] });
   });
+
+  it("普通发布门禁不套用仅限受限脚本的词和画面规则", async () => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    const service = new ContentGuardService({
+      phraseRule: { findMany },
+      evidenceClaim: { findMany: vi.fn() },
+      productMapping: { findUnique: vi.fn() },
+    } as never);
+    await service.evaluate({ title: "普通脚本", body: "血压功能介绍" });
+    expect(findMany).toHaveBeenCalledWith({
+      where: { active: true, category: { notIn: ["HEALTH_RESTRICTED_WORD", "HEALTH_RESTRICTED_VISUAL"] } },
+    });
+  });
 });

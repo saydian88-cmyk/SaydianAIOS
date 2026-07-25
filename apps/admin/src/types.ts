@@ -40,6 +40,7 @@ export type ContentPlan = {
   outline: string[];
   status: string;
   riskReasons: string[];
+  sourceSignals?: Array<{ contentRestrictionMode?: string; generationMode?: string }>;
   planDate: string;
   createdBy: string;
   approvedBy?: string;

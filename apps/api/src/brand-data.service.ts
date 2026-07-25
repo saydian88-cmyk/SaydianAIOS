@@ -526,6 +526,32 @@ export class BrandDataService {
     throw new BadRequestException("不支持的知识库栏目");
   }
 
+  async createRestrictedRules(body: JsonRecord, actor: string) {
+    const category = text(body.category).toUpperCase();
+    if (!["HEALTH_RESTRICTED_WORD", "HEALTH_RESTRICTED_VISUAL"].includes(category)) {
+      throw new BadRequestException("规则类型必须是风险词或风险画面");
+    }
+    const values = Array.from(new Set(
+      (Array.isArray(body.values) ? body.values : String(body.values || "").split(/\r?\n/gu))
+        .map((item) => text(item).trim())
+        .filter(Boolean),
+    ));
+    if (!values.length) throw new BadRequestException("请至少填写一条规则");
+    if (values.length > 200) throw new BadRequestException("单次最多添加200条规则");
+    let created = 0;
+    for (const blockedText of values) {
+      const existing = await this.prisma.phraseRule.findUnique({ where: { category_blockedText: { category, blockedText } } });
+      await this.prisma.phraseRule.upsert({
+        where: { category_blockedText: { category, blockedText } },
+        create: { category, blockedText, condition: "仅用于健康内容受限模式", active: true },
+        update: { active: true },
+      });
+      if (!existing) created += 1;
+    }
+    await this.audit(actor, "RESTRICTED_RULE_BULK_CREATE", "PhraseRule", category, { submitted: values.length, created });
+    return { submitted: values.length, created, skipped: values.length - created };
+  }
+
   async archiveKnowledgeControl(resource: string, id: string, actor: string) {
     const key = text(resource).toLowerCase();
     let row: unknown;
