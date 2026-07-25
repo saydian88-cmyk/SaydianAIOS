@@ -50,6 +50,7 @@ const qrLoading = ref(false);
 const dashboard = ref<Dashboard>();
 const integrations = ref<Integration[]>([]);
 const content = ref<ContentPlan[]>([]);
+const contentFilter = ref<"ALL" | "PENDING_APPROVAL" | "APPROVED" | "PUBLISHED">("ALL");
 const brandDataCenter = ref<{ reload: () => Promise<void> }>();
 const operationAnalysis = ref<{ reload: () => Promise<void> }>();
 const comments = ref<AnyRow[]>([]);
@@ -80,10 +81,18 @@ const productionUploadFiles = ref<UploadUserFile[]>([]);
 const productionUploadProgress = ref(0);
 const productionUploading = ref(false);
 const productionUploadTarget = ref<{ plan: ContentPlan; requirement: ContentPlan["shootRequirements"][number] }>();
+const assetPreviewDialog = ref(false);
+const assetPreviewLoading = ref(false);
+const assetPreviewUrl = ref("");
+const assetPreviewName = ref("");
+const assetPreviewKind = ref("");
 
 const todayLabel = new Intl.DateTimeFormat("zh-CN", { dateStyle: "full" }).format(new Date());
 const pageTitle = computed(() => navItems.find((item) => item.key === active.value)?.label || "运营中台");
 const pendingContent = computed(() => content.value.filter((item) => item.status === "PENDING_APPROVAL"));
+const filteredContent = computed(() => contentFilter.value === "ALL"
+  ? content.value
+  : content.value.filter((item) => item.status === contentFilter.value));
 const configuredCount = computed(() => integrations.value.filter((item) => item.state !== "UNCONFIGURED").length);
 const wecomUnconfigured = computed(() => loginMessage.value.includes("未配置"));
 
@@ -282,9 +291,28 @@ function productionAsset(item: ContentPlan, assetId: string) {
   return item.contentAssets?.find((contentAsset) => contentAsset.asset.id === assetId)?.asset;
 }
 
+function shotRequirements(item: ContentPlan, coverage: "EXISTING" | "MISSING") {
+  return item.shootRequirements.filter((requirement) => coverage === "EXISTING"
+    ? requirement.coverage === "EXISTING" && requirement.status === "DONE"
+    : requirement.coverage !== "EXISTING" || requirement.status !== "DONE");
+}
+
 async function previewProductionAsset(item: ContentPlan, assetId: string) {
-  const result = await api<{ url: string }>(`/api/v1/brand-data/assets/${assetId}/download-url`);
-  window.open(result.url, "_blank", "noopener,noreferrer");
+  const asset = productionAsset(item, assetId);
+  assetPreviewName.value = asset?.displayName || asset?.assetNo || assetId;
+  assetPreviewKind.value = String(asset?.kind || "").toUpperCase();
+  assetPreviewUrl.value = "";
+  assetPreviewDialog.value = true;
+  assetPreviewLoading.value = true;
+  try {
+    const result = await api<{ url: string }>(`/api/v1/brand-data/assets/${assetId}/download-url`);
+    assetPreviewUrl.value = result.url;
+  } catch (reason) {
+    assetPreviewDialog.value = false;
+    ElMessage.error(reason instanceof Error ? reason.message : "素材预览加载失败");
+  } finally {
+    assetPreviewLoading.value = false;
+  }
 }
 
 async function refreshAssetCoverage(item: ContentPlan) {
@@ -733,9 +761,14 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
 
       <section v-else-if="active === 'content'" class="page">
         <div class="section-heading"><div><span class="eyebrow">CONTENT COMMAND</span><h2>今日内容审核台</h2><p>系统保留3个候选，自动选出最高分内容进入审核。</p></div><el-button type="primary" :icon="DocumentChecked" @click="generateContent">生成今日候选</el-button></div>
-        <div class="summary-strip"><span>全部 <b>{{ content.length }}</b></span><span>待审核 <b>{{ pendingContent.length }}</b></span><span>已审核 <b>{{ content.filter(i => i.status === 'APPROVED').length }}</b></span><span>已发布 <b>{{ content.filter(i => i.status === 'PUBLISHED').length }}</b></span></div>
+        <div class="summary-strip content-filters" role="tablist" aria-label="内容状态筛选">
+          <button type="button" :class="{ active: contentFilter === 'ALL' }" @click="contentFilter = 'ALL'">全部 <b>{{ content.length }}</b></button>
+          <button type="button" :class="{ active: contentFilter === 'PENDING_APPROVAL' }" @click="contentFilter = 'PENDING_APPROVAL'">待审核 <b>{{ pendingContent.length }}</b></button>
+          <button type="button" :class="{ active: contentFilter === 'APPROVED' }" @click="contentFilter = 'APPROVED'">已审核 <b>{{ content.filter(i => i.status === 'APPROVED').length }}</b></button>
+          <button type="button" :class="{ active: contentFilter === 'PUBLISHED' }" @click="contentFilter = 'PUBLISHED'">已发布 <b>{{ content.filter(i => i.status === 'PUBLISHED').length }}</b></button>
+        </div>
         <div class="content-grid">
-          <article v-for="item in content" :key="item.id" class="content-card">
+          <article v-for="item in filteredContent" :key="item.id" class="content-card">
             <div class="content-card-head"><div><el-tag :type="item.kind === 'VIDEO' ? 'danger' : 'warning'" effect="dark">{{ item.kind === 'VIDEO' ? '视频' : '软文' }}</el-tag><el-tag :type="statusType(item.status)" effect="plain">{{ statusLabel(item.status) }}</el-tag></div><div class="score"><b>{{ item.score }}</b><span>选题分</span></div></div>
             <h3>{{ item.topic }}</h3>
             <div v-if="item.kind === 'VIDEO'" class="production-meta"><span>{{ item.productionNo || '历史内容' }}</span><el-tag type="primary">{{ statusLabel(item.productionStage) }}</el-tag><span>负责人：{{ item.owner || '待脚本审核时确定' }}</span></div>
@@ -745,21 +778,34 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
             <el-alert v-if="item.riskReasons.length" :title="item.riskReasons.join('；')" type="warning" :closable="false" show-icon />
             <div v-if="item.kind === 'VIDEO' && item.status === 'PENDING_APPROVAL'" class="workflow-block"><strong>脚本审核通过后生产的平台</strong><el-checkbox-group v-model="item.targetPlatforms"><el-checkbox v-for="variant in item.variants" :key="variant.id" :value="variant.platform">{{ platformName(variant.platform) }}</el-checkbox></el-checkbox-group></div>
             <div v-if="item.kind === 'VIDEO' && item.status === 'APPROVED'" class="workflow-block shot-library-block">
-              <div class="workflow-block-head"><strong>镜头素材清单</strong><el-button size="small" @click="refreshAssetCoverage(item)">按当前素材库重新分析</el-button></div>
-              <div v-for="requirement in item.shootRequirements" :key="requirement.id" class="shoot-row">
-                <div class="shoot-copy">
-                  <span>{{ requirement.description }}</span>
-                  <small v-if="requirement.reason">{{ requirement.reason }}</small>
-                  <div v-if="requirement.assetIds?.length" class="matched-assets">
-                    <el-button v-for="assetId in requirement.assetIds" :key="assetId" size="small" text type="primary" @click="previewProductionAsset(item, assetId)">预览 · {{ productionAsset(item, assetId)?.displayName || productionAsset(item, assetId)?.assetNo || assetId }}</el-button>
-                  </div>
-                </div>
-                <div class="shoot-actions">
-                  <el-tag size="small" :type="requirement.coverage === 'EXISTING' && requirement.status === 'DONE' ? 'success' : 'warning'">{{ requirement.coverage === 'EXISTING' && requirement.status === 'DONE' ? '素材库已有' : '需要补拍' }}</el-tag>
-                  <el-button v-if="requirement.coverage === 'EXISTING' && requirement.status === 'DONE'" size="small" @click="replaceShotAsset(item, requirement)">拍摄替换</el-button>
-                  <el-button v-else-if="item.productionStage === 'AWAITING_ASSETS'" size="small" type="primary" plain @click="openProductionUpload(item, requirement)">上传对应素材</el-button>
-                </div>
+              <div class="workflow-block-head">
+                <div><strong>镜头素材清单</strong><small>已有 {{ shotRequirements(item, 'EXISTING').length }} 项 · 需补拍 {{ shotRequirements(item, 'MISSING').length }} 项</small></div>
+                <el-button size="small" @click="refreshAssetCoverage(item)">按当前素材库重新分析</el-button>
               </div>
+              <el-collapse v-if="item.shootRequirements?.length" class="shot-groups">
+                <el-collapse-item name="existing">
+                  <template #title><span class="shot-group-title"><el-tag size="small" type="success">已有素材</el-tag><b>{{ shotRequirements(item, 'EXISTING').length }}项</b><small>点击展开预览或选择重拍</small></span></template>
+                  <div v-for="requirement in shotRequirements(item, 'EXISTING')" :key="requirement.id" class="shoot-row">
+                    <div class="shoot-copy">
+                      <span>{{ requirement.description }}</span>
+                      <small v-if="requirement.reason">{{ requirement.reason }}</small>
+                      <div v-if="requirement.assetIds?.length" class="matched-assets">
+                        <el-button v-for="assetId in requirement.assetIds" :key="assetId" size="small" text type="primary" @click.stop="previewProductionAsset(item, assetId)">预览 · {{ productionAsset(item, assetId)?.displayName || productionAsset(item, assetId)?.assetNo || assetId }}</el-button>
+                      </div>
+                    </div>
+                    <div class="shoot-actions"><el-button size="small" @click="replaceShotAsset(item, requirement)">拍摄替换</el-button></div>
+                  </div>
+                  <el-empty v-if="!shotRequirements(item, 'EXISTING').length" description="当前没有可直接使用的已有素材" :image-size="42" />
+                </el-collapse-item>
+                <el-collapse-item name="missing">
+                  <template #title><span class="shot-group-title"><el-tag size="small" type="warning">需要补拍</el-tag><b>{{ shotRequirements(item, 'MISSING').length }}项</b><small>点击展开上传对应素材</small></span></template>
+                  <div v-for="requirement in shotRequirements(item, 'MISSING')" :key="requirement.id" class="shoot-row">
+                    <div class="shoot-copy"><span>{{ requirement.description }}</span><small v-if="requirement.reason">{{ requirement.reason }}</small></div>
+                    <div class="shoot-actions"><el-button v-if="item.productionStage === 'AWAITING_ASSETS'" size="small" type="primary" plain @click="openProductionUpload(item, requirement)">上传对应素材</el-button></div>
+                  </div>
+                  <el-empty v-if="!shotRequirements(item, 'MISSING').length" description="素材已经齐全，无需补拍" :image-size="42" />
+                </el-collapse-item>
+              </el-collapse>
               <el-empty v-if="!item.shootRequirements?.length" description="尚未分析镜头素材覆盖情况" :image-size="50" />
             </div>
             <div class="platform-tags"><span v-for="variant in item.variants.filter(v => !item.targetPlatforms?.length || item.targetPlatforms.includes(v.platform))" :key="variant.id">{{ platformName(variant.platform) }}</span></div>
@@ -776,6 +822,7 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
           </article>
         </div>
         <el-empty v-if="!content.length" description="今日内容尚未生成" />
+        <el-empty v-else-if="!filteredContent.length" description="当前分类暂无内容" />
       </section>
 
       <section v-else-if="active === 'assets'" class="page">
@@ -874,6 +921,16 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
         </el-upload>
         <el-progress v-if="productionUploading || productionUploadProgress" :percentage="productionUploadProgress" />
         <template #footer><el-button :disabled="productionUploading" @click="productionUploadDialog = false">取消</el-button><el-button type="primary" :loading="productionUploading" @click="submitProductionUpload">{{ productionUploading ? `正在上传 ${productionUploadProgress}%` : '上传并继续' }}</el-button></template>
+      </el-dialog>
+
+      <el-dialog v-model="assetPreviewDialog" :title="`素材预览 · ${assetPreviewName}`" width="min(900px, 92vw)" destroy-on-close @closed="assetPreviewUrl = ''">
+        <div class="production-asset-preview" v-loading="assetPreviewLoading">
+          <video v-if="assetPreviewUrl && assetPreviewKind === 'VIDEO'" :src="assetPreviewUrl" controls playsinline preload="metadata" />
+          <img v-else-if="assetPreviewUrl && assetPreviewKind === 'IMAGE'" :src="assetPreviewUrl" :alt="assetPreviewName" />
+          <audio v-else-if="assetPreviewUrl && assetPreviewKind === 'AUDIO'" :src="assetPreviewUrl" controls preload="metadata" />
+          <iframe v-else-if="assetPreviewUrl" :src="assetPreviewUrl" :title="assetPreviewName" />
+          <el-empty v-else-if="!assetPreviewLoading" description="该素材暂时无法在线预览" />
+        </div>
       </el-dialog>
 
       <el-dialog v-model="ledgerDialog" :title="`${ledgerEditingId ? '编辑' : '新增'}${({ employees: '员工', products: '产品', accounts: '账号', stores: '店铺' } as Record<string,string>)[ledgerFormType]}`" width="820px" destroy-on-close>
