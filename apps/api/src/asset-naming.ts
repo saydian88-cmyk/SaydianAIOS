@@ -55,11 +55,8 @@ export function isIrregularAssetName(value: unknown): boolean {
 }
 
 export function buildAiAssetName(result: AnalysisRecord, productCodes: string[] = []): string | undefined {
-  const suggested = clean(result.suggestedName, 40);
-  if (suggested && !isIrregularAssetName(suggested)) return suggested;
-
   const model = clean(productCodes[0] || firstValue(result.products), 16);
-  const rawModule = clean(result.moduleSuggestion || firstValue(result.modules), 20).toUpperCase();
+  const rawModule = clean(firstValue(result.purposes) || result.moduleSuggestion || firstValue(result.modules), 20).toUpperCase();
   const moduleName = moduleNames[rawModule] || clean(rawModule, 12);
   const detail = firstValue(result.features)
     || firstValue(result.painPoints)
@@ -68,5 +65,8 @@ export function buildAiAssetName(result: AnalysisRecord, productCodes: string[] 
     || clean(result.summary, 18);
   const parts = [model, moduleName, detail].filter((item, index, values) => item && values.indexOf(item) === index);
   const generated = clean(parts.join("-"), 40);
-  return generated && !isIrregularAssetName(generated) ? generated : undefined;
+  if (generated && !isIrregularAssetName(generated) && parts.length >= 2) return generated;
+
+  const suggested = clean(result.suggestedName, 40);
+  return suggested && !isIrregularAssetName(suggested) ? suggested : undefined;
 }

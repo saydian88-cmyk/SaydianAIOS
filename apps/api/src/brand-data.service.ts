@@ -743,7 +743,7 @@ export class BrandDataService {
       ...(minimumScore ? { qualityScore: { gte: minimumScore } } : {}),
       ...(model ? { OR: [{ model: { contains: model, mode: "insensitive" } }, { products: { some: { product: { modelCode: { contains: model, mode: "insensitive" } } } } }] } : {}),
       ...(moduleTypes.includes(moduleType as VideoModuleType) ? { segments: { some: { moduleType: moduleType as VideoModuleType } } } : {}),
-      ...(keyword ? { AND: [{ OR: [{ assetNo: { contains: keyword, mode: "insensitive" } }, { displayName: { contains: keyword, mode: "insensitive" } }, { fileName: { contains: keyword, mode: "insensitive" } }, { contentDescription: { contains: keyword, mode: "insensitive" } }, { discoveredBy: { contains: keyword, mode: "insensitive" } }] }] } : {}),
+      ...(keyword ? { AND: [{ OR: [{ assetNo: { contains: keyword, mode: "insensitive" } }, { displayName: { contains: keyword, mode: "insensitive" } }, { fileName: { contains: keyword, mode: "insensitive" } }, { contentDescription: { contains: keyword, mode: "insensitive" } }, { searchText: { contains: keyword, mode: "insensitive" } }, { discoveredBy: { contains: keyword, mode: "insensitive" } }] }] } : {}),
     };
     const [rows, total] = await Promise.all([
       this.prisma.asset.findMany({ where, include: { versions: { orderBy: { version: "desc" }, take: 1 }, products: { include: { product: true } }, tags: { include: { tag: true } }, createdByEmployee: true, _count: { select: { uploadEvents: true, analysisJobs: true, usages: true } } }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: take + 1, ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}) }),
@@ -791,6 +791,7 @@ export class BrandDataService {
               { assetNo: { contains: keyword, mode: "insensitive" } },
               { displayName: { contains: keyword, mode: "insensitive" } },
               { contentDescription: { contains: keyword, mode: "insensitive" } },
+              { searchText: { contains: keyword, mode: "insensitive" } },
               { scene: { contains: keyword, mode: "insensitive" } },
               { tags: { some: { tag: { label: { contains: keyword, mode: "insensitive" } } } } },
             ],
@@ -1053,6 +1054,20 @@ export class BrandDataService {
     await this.assetAi.enqueue(id, kind, version);
     await this.audit(actor, "ASSET_REANALYZE", "Asset", id, { analysisVersion: version });
     return this.asset(id);
+  }
+
+  async rebuildAssetIndex(actor: string) {
+    const assets = await this.prisma.asset.findMany({
+      where: { status: { not: "ARCHIVED" }, kind: { in: ["IMAGE", "VIDEO"] } },
+      select: { id: true, kind: true, analysisVersion: true },
+      orderBy: { updatedAt: "desc" },
+      take: 1000,
+    });
+    for (const asset of assets) {
+      await this.assetAi.enqueue(asset.id, asset.kind || "IMAGE", asset.analysisVersion + 1);
+    }
+    await this.audit(actor, "ASSET_INDEX_REBUILD", "Asset", "ALL", { count: assets.length, indexVersion: 2 });
+    return { queued: assets.length, indexVersion: 2 };
   }
 
   async analysisJobs(query: Record<string, string | undefined>) {
