@@ -552,7 +552,16 @@ export class ViralCollectorService {
         where: { platform: "DOUYIN" },
         orderBy: { discoveredAt: "desc" },
       });
-      if (!video) throw new Error("暂无抖音参考视频可用于测试自建解析");
+      if (!video) {
+        if (!feed.selfHostedBaseUrl) throw new Error("自建解析地址未配置");
+        await this.fetchProviderJson(
+          new URL(`${feed.selfHostedBaseUrl}/openapi.json`),
+          feed.selfHostedToken,
+          "自建解析服务",
+        );
+        await this.updateProviderCapability("selfHosted", "HEALTHY", "自建解析服务连接成功，等待视频链接验证");
+        return { provider, state: "HEALTHY", count: 0 };
+      }
       const item = await this.resolveViaSelfHosted(feed, video.externalContentId);
       await this.updateProviderCapability("selfHosted", "HEALTHY", "自建媒体解析连接成功");
       return { provider, state: "HEALTHY", count: item.downloadUrl ? 1 : 0 };
