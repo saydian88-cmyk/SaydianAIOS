@@ -118,7 +118,7 @@ export class DouyinIntegrationService {
     const url = new URL("https://open.douyin.com/platform/oauth/connect/");
     url.searchParams.set("client_key", clientKey);
     url.searchParams.set("response_type", "code");
-    url.searchParams.set("scope", "user_info");
+    url.searchParams.set("scope", "user_info,trial.whitelist");
     url.searchParams.set("redirect_uri", config.redirectUri);
     url.searchParams.set("state", state);
     return { url: url.toString(), expiresAt: nextDouyin.oauthStateExpiresAt };
