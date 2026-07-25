@@ -15,6 +15,18 @@ import { localDateKey, makeIdempotencyKey, startOfShanghaiDay } from "./utils";
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
 
+export function resolveVideoShotAssets(
+  shot: { matchedAssetIds: string[]; matchedVideoAssetIds: string[]; auxiliaryImageAssetIds: string[] },
+  allowedAssetIds: Set<string>,
+  assetKindById: Map<string, string>,
+) {
+  const videoAssetIds = Array.from(new Set([...shot.matchedVideoAssetIds, ...shot.matchedAssetIds]))
+    .filter((assetId) => allowedAssetIds.has(assetId) && assetKindById.get(assetId) === "VIDEO");
+  const imageAssetIds = Array.from(new Set([...shot.auxiliaryImageAssetIds, ...shot.matchedAssetIds]))
+    .filter((assetId) => allowedAssetIds.has(assetId) && assetKindById.get(assetId) === "IMAGE");
+  return { videoAssetIds, imageAssetIds, assetIds: [...videoAssetIds, ...imageAssetIds] };
+}
+
 @Injectable()
 export class ContentService {
   constructor(
@@ -59,7 +71,9 @@ export class ContentService {
         : "优先复用素材库已有素材，尽量减少补拍",
     };
     const candidates = await this.aiContent.generateVideoCandidates(context);
-    const allowedAssetIds = new Set((context.assets as Array<{ id: string }>).map((item) => item.id));
+    const assetRows = context.assets as Array<{ id: string; kind?: string }>;
+    const allowedAssetIds = new Set(assetRows.map((item) => item.id));
+    const assetKindById = new Map(assetRows.map((item) => [item.id, String(item.kind || "").toUpperCase()]));
     const coverages = await Promise.all(candidates.map((candidate) => this.aiContent.analyzeVideoAssetCoverage({
       productModel: context.productModel,
       script: { topic: candidate.topic, hook: candidate.hook, outline: candidate.outline, scripts: candidate.scripts },
@@ -68,8 +82,8 @@ export class ContentService {
     const ranked = candidates.map((candidate, index) => {
       const coverage = coverages[index];
       const missingCount = coverage.shots.filter((shot) => {
-        const matched = shot.matchedAssetIds.some((assetId) => allowedAssetIds.has(assetId));
-        return shot.coverage !== "EXISTING" || !matched;
+        const resolved = resolveVideoShotAssets(shot, allowedAssetIds, assetKindById);
+        return shot.coverage !== "EXISTING" || resolved.videoAssetIds.length === 0;
       }).length;
       return { candidate, coverage, missingCount };
     }).sort((left, right) => left.missingCount - right.missingCount || right.candidate.score - left.candidate.score);
@@ -90,18 +104,20 @@ export class ContentService {
         productModel: String(context.productModel || ""),
         evidenceIds: (context.product as { evidenceIds?: string[] }).evidenceIds || [],
       });
-      const coverageAssetIds = coverage.shots.flatMap((shot) => shot.matchedAssetIds);
+      const coverageAssetIds = coverage.shots.flatMap((shot) => [...shot.matchedVideoAssetIds, ...shot.auxiliaryImageAssetIds, ...shot.matchedAssetIds]);
       const assetIds = Array.from(new Set([...candidate.assetIds, ...coverageAssetIds].filter((id) => allowedAssetIds.has(id))));
       const shootRequirements = coverage.shots.map((shot, shotIndex) => {
-        const matchedAssetIds = Array.from(new Set(shot.matchedAssetIds.filter((id) => allowedAssetIds.has(id))));
-        const existing = shot.coverage === "EXISTING" && matchedAssetIds.length > 0;
+        const { videoAssetIds, imageAssetIds, assetIds: matchedAssetIds } = resolveVideoShotAssets(shot, allowedAssetIds, assetKindById);
+        const existing = shot.coverage === "EXISTING" && videoAssetIds.length > 0;
         return {
           id: `shot-${shotIndex + 1}`,
           description: shot.description,
           status: existing ? "DONE" : "OPEN",
           coverage: existing ? "EXISTING" : "MISSING",
           assetIds: matchedAssetIds,
-          reason: shot.reason,
+          videoAssetIds,
+          imageAssetIds,
+          reason: !existing && imageAssetIds.length && !videoAssetIds.length ? `${shot.reason ? `${shot.reason}；` : ""}当前只有静态图片，可作为辅助画面，仍需补拍视频主画面` : shot.reason,
         };
       });
       const plan = await this.prisma.contentPlan.create({
@@ -482,6 +498,8 @@ export class ContentService {
         status: ["OPEN", "IN_PROGRESS", "DONE"].includes(String(row.status)) ? String(row.status) : "OPEN",
         coverage: String(row.coverage) === "EXISTING" ? "EXISTING" : "MISSING",
         assetIds: Array.isArray(row.assetIds) ? row.assetIds.map(String).filter(Boolean) : [],
+        videoAssetIds: Array.isArray(row.videoAssetIds) ? row.videoAssetIds.map(String).filter(Boolean) : [],
+        imageAssetIds: Array.isArray(row.imageAssetIds) ? row.imageAssetIds.map(String).filter(Boolean) : [],
         reason: String(row.reason || ""),
         note: String(row.note || ""),
       };
@@ -502,7 +520,9 @@ export class ContentService {
     if (!plan || plan.kind !== "VIDEO") throw new NotFoundException("视频生产单不存在");
     if (!["APPROVED", "SCHEDULED"].includes(plan.status)) throw new BadRequestException("请先通过脚本审核，再分析素材覆盖");
     const context = await this.generationContext(plan.productModel || undefined);
-    const allowedAssetIds = new Set((context.assets as Array<{ id: string }>).map((item) => item.id));
+    const assetRows = context.assets as Array<{ id: string; kind?: string }>;
+    const allowedAssetIds = new Set(assetRows.map((item) => item.id));
+    const assetKindById = new Map(assetRows.map((item) => [item.id, String(item.kind || "").toUpperCase()]));
     const coverage = await this.aiContent.analyzeVideoAssetCoverage({
       productModel: plan.productModel,
       script: {
@@ -515,15 +535,17 @@ export class ContentService {
     });
     if (!coverage.shots.length) throw new BadRequestException("AI未能形成逐镜头素材清单，请重试");
     const requirements = coverage.shots.map((shot, index) => {
-      const assetIds = Array.from(new Set(shot.matchedAssetIds.filter((assetId) => allowedAssetIds.has(assetId))));
-      const existing = shot.coverage === "EXISTING" && assetIds.length > 0;
+      const { videoAssetIds, imageAssetIds, assetIds } = resolveVideoShotAssets(shot, allowedAssetIds, assetKindById);
+      const existing = shot.coverage === "EXISTING" && videoAssetIds.length > 0;
       return {
         id: `shot-${index + 1}`,
         description: shot.description,
         status: existing ? "DONE" : "OPEN",
         coverage: existing ? "EXISTING" : "MISSING",
         assetIds,
-        reason: shot.reason,
+        videoAssetIds,
+        imageAssetIds,
+        reason: !existing && imageAssetIds.length && !videoAssetIds.length ? `${shot.reason ? `${shot.reason}；` : ""}当前只有静态图片，可作为辅助画面，仍需补拍视频主画面` : shot.reason,
       };
     });
     const matchedAssetIds = Array.from(new Set(requirements.flatMap((item) => item.assetIds)));
@@ -549,7 +571,7 @@ export class ContentService {
     if (!target) throw new NotFoundException("镜头素材项不存在");
     const removedAssetIds = Array.isArray(target.assetIds) ? target.assetIds.map(String) : [];
     const next = requirements.map((item) => String(item.id) === requirementId
-      ? { ...item, status: "OPEN", coverage: "MISSING", assetIds: [], note: "用户选择重新拍摄替换已有素材" }
+      ? { ...item, status: "OPEN", coverage: "MISSING", assetIds: [], videoAssetIds: [], imageAssetIds: [], note: "用户选择重新拍摄替换已有素材" }
       : item);
     const stillUsed = new Set(next.flatMap((item) => Array.isArray(item.assetIds) ? item.assetIds.map(String) : []));
     const removableAssetIds = removedAssetIds.filter((assetId) => !stillUsed.has(assetId));

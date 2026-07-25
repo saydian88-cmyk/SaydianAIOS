@@ -1,8 +1,18 @@
 import { BadRequestException } from "@nestjs/common";
 import { describe, expect, it, vi } from "vitest";
-import { ContentService } from "./content.service";
+import { ContentService, resolveVideoShotAssets } from "./content.service";
 
 describe("ContentService production workflow", () => {
+  it("does not treat an image-only match as a covered timed video shot", () => {
+    const resolved = resolveVideoShotAssets(
+      { matchedAssetIds: ["image-1"], matchedVideoAssetIds: [], auxiliaryImageAssetIds: ["image-1"] },
+      new Set(["image-1"]),
+      new Map([["image-1", "IMAGE"]]),
+    );
+    expect(resolved.videoAssetIds).toEqual([]);
+    expect(resolved.imageAssetIds).toEqual(["image-1"]);
+  });
+
   function serviceWithFindUnique(result: unknown) {
     const prisma = {
       contentPlan: { findUnique: vi.fn().mockResolvedValue(result) },
