@@ -77,6 +77,41 @@ export class OssStorageService {
     }
   }
 
+  async deleteAssetObjects(assetIds: string[], objectKeys: string[]): Promise<{ deleted: number }> {
+    const client = this.client();
+    const prefix = `${opsConfig.oss.prefix}/`;
+    const keys = new Set(objectKeys.filter((key) => key.startsWith(prefix) && !key.includes("../")));
+    const assetIdSet = new Set(assetIds);
+    const prefixes = assetIds.length > 50
+      ? [`${prefix}derived/`, `${prefix}preview/`, `${prefix}analysis/`]
+      : assetIds.flatMap((assetId) => [
+        `${prefix}derived/${assetId}/`,
+        `${prefix}preview/${assetId}/`,
+        `${prefix}analysis/${assetId}/`,
+      ]);
+    for (const assetPrefix of prefixes) {
+        let marker: string | undefined;
+        do {
+          const result = await client.list({ prefix: assetPrefix, marker, "max-keys": 1000 }, {});
+          for (const item of result.objects || []) {
+            if (!item.name.startsWith(assetPrefix)) continue;
+            if (assetIds.length <= 50) keys.add(item.name);
+            else {
+              const relative = item.name.slice(assetPrefix.length);
+              const assetId = relative.split("/", 1)[0];
+              if (assetIdSet.has(assetId)) keys.add(item.name);
+            }
+          }
+          marker = result.isTruncated ? result.nextMarker : undefined;
+        } while (marker);
+    }
+    const rows = [...keys];
+    for (let index = 0; index < rows.length; index += 1000) {
+      await client.deleteMulti(rows.slice(index, index + 1000), { quiet: true });
+    }
+    return { deleted: rows.length };
+  }
+
   async uploadOriginal(input: {
     path: string;
     sha256: string;
