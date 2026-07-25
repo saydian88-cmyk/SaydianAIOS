@@ -68,6 +68,15 @@ export type AiViralKeyword = {
   reason: string;
 };
 
+export type AiAssetGap = {
+  category: string;
+  assetKind: "IMAGE" | "VIDEO" | "AUDIO";
+  description: string;
+  reason: string;
+  priority: "HIGH" | "NORMAL" | "LOW";
+  suggestedTags: string[];
+};
+
 type JsonRecord = Record<string, unknown>;
 
 function text(value: unknown): string {
@@ -102,9 +111,14 @@ export class AiContentService {
   }
 
   async generateVideoCandidates(context: JsonRecord): Promise<AiVideoCandidate[]> {
+    const assetOnly = context.generationMode === "ASSET_ONLY";
+    const assetPolicy = assetOnly
+      ? "本次为快速成片模式：每一个镜头都必须能由输入中的已有素材覆盖，只能引用真实assetId；严禁设计任何需要补拍的新镜头，missingAssets必须为空。"
+      : "优先围绕输入中的已有素材设计镜头，在内容质量相近时选择现有素材覆盖率更高、需要补拍更少的方案；只有确实无法表达核心内容时才列出缺失素材。";
     const result = await this.callJson(
       `根据已审核的赛电产品知识、FAQ、高分自有素材和外部参考，生成3个短视频候选方向。第1个为今日主执行包。
 只使用输入中的assetId、referenceId、产品事实和证据；缺素材写入missingAssets，不得虚构。
+${assetPolicy}
 每个候选必须含15秒和30秒中英文脚本、Hook、节奏化镜头大纲、字幕/CTA思路、标题、封面文案和标签。
 返回JSON：{"candidates":[{"topic":"","audience":"","objective":"","hook":"","outline":[],"score":0,"scoreBreakdown":{},"assetIds":[],"referenceIds":[],"missingAssets":[],"titleZh":"","titleEn":"","coverTextZh":"","coverTextEn":"","hashtags":[],"scripts":{"zh15":"","en15":"","zh30":"","en30":""}}]}。
 输入：${JSON.stringify(context)}`,
@@ -155,6 +169,24 @@ export class AiContentService {
         reason: text(item.reason),
       })).filter((item) => item.description),
     };
+  }
+
+  async analyzeProductAssetGaps(context: JsonRecord): Promise<AiAssetGap[]> {
+    const result = await this.callJson(
+      `你是短视频素材库规划师。根据产品资料和当前真实可用素材的结构化索引，分析为了持续生成产品短视频还缺少哪些可复用素材。
+只列当前素材无法覆盖的具体画面，不得把已有素材重复列为缺口。描述必须具体到主体、动作、功能、场景或景别，禁止使用“补充更多素材”等笼统表达。
+优先分析功能演示、使用场景、人物动作、痛点、证据/结果、转场、HOOK和CTA等剪辑模块。最多返回12项。
+返回JSON：{"gaps":[{"category":"","assetKind":"IMAGE|VIDEO|AUDIO","description":"","reason":"","priority":"HIGH|NORMAL|LOW","suggestedTags":[]}]}。
+输入：${JSON.stringify(context)}`,
+    );
+    return (Array.isArray(result.gaps) ? result.gaps : []).map(object).map((item) => ({
+      category: text(item.category),
+      assetKind: ["IMAGE", "VIDEO", "AUDIO"].includes(text(item.assetKind).toUpperCase()) ? text(item.assetKind).toUpperCase() as AiAssetGap["assetKind"] : "VIDEO",
+      description: text(item.description),
+      reason: text(item.reason),
+      priority: ["HIGH", "NORMAL", "LOW"].includes(text(item.priority).toUpperCase()) ? text(item.priority).toUpperCase() as AiAssetGap["priority"] : "NORMAL",
+      suggestedTags: strings(item.suggestedTags),
+    })).filter((item) => item.category && item.description);
   }
 
   async generateArticle(context: JsonRecord): Promise<AiArticlePackage> {

@@ -51,6 +51,7 @@ const dashboard = ref<Dashboard>();
 const integrations = ref<Integration[]>([]);
 const content = ref<ContentPlan[]>([]);
 const contentFilter = ref<"ALL" | "PENDING_APPROVAL" | "APPROVED" | "PUBLISHED">("ALL");
+const assetOnlyProductModel = ref("");
 const brandDataCenter = ref<{ reload: () => Promise<void> }>();
 const operationAnalysis = ref<{ reload: () => Promise<void> }>();
 const comments = ref<AnyRow[]>([]);
@@ -221,6 +222,15 @@ async function generateContent() {
   }, "今日选题已生成");
 }
 
+async function generateAssetOnlyVideo() {
+  if (!assetOnlyProductModel.value) return ElMessage.warning("请先选择需要快速成片的产品型号");
+  await withLoading(async () => {
+    await post("/api/v1/content/asset-only-video/generate", { productModel: assetOnlyProductModel.value });
+    contentFilter.value = "PENDING_APPROVAL";
+    await loadActive();
+  }, "无需补拍脚本已生成，审核通过后可直接启动AI剪辑");
+}
+
 async function checkIntegrations() {
   await withLoading(async () => {
     await post("/api/v1/integrations/check");
@@ -372,7 +382,9 @@ async function submitProductionUpload() {
     content.value = await api("/api/v1/content");
     productionUploadDialog.value = false;
     const updated = content.value.find((item) => item.id === target.plan.id);
-    ElMessage.success(updated?.productionStage === "READY_TO_EDIT" ? "素材已自动分类归档，可以继续AI剪辑" : "素材已归档到对应补拍项");
+    ElMessage.success(updated?.productionStage === "READY_TO_EDIT"
+      ? "素材已入库并进入AI分类、索引和标签分析，可以继续AI剪辑"
+      : "素材已关联补拍项，并进入与素材库相同的AI分类、索引和标签分析");
   } catch (uploadError) {
     ElMessage.error(uploadError instanceof Error ? uploadError.message : "素材上传失败");
   } finally {
@@ -760,7 +772,14 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
       </section>
 
       <section v-else-if="active === 'content'" class="page">
-        <div class="section-heading"><div><span class="eyebrow">CONTENT COMMAND</span><h2>今日内容审核台</h2><p>系统保留3个候选，自动选出最高分内容进入审核。</p></div><el-button type="primary" :icon="DocumentChecked" @click="generateContent">生成今日候选</el-button></div>
+        <div class="section-heading">
+          <div><span class="eyebrow">CONTENT COMMAND</span><h2>今日内容审核台</h2><p>普通生成优先复用已有素材；快速成片模式只生成无需补拍的脚本。</p></div>
+          <div class="content-generate-actions">
+            <el-select v-model="assetOnlyProductModel" clearable filterable placeholder="快速成片产品型号"><el-option v-for="product in ledger.products.filter(product => product.status === 'READY')" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" /></el-select>
+            <el-button @click="generateAssetOnlyVideo">生成无需补拍脚本</el-button>
+            <el-button type="primary" :icon="DocumentChecked" @click="generateContent">生成今日候选</el-button>
+          </div>
+        </div>
         <div class="summary-strip content-filters" role="tablist" aria-label="内容状态筛选">
           <button type="button" :class="{ active: contentFilter === 'ALL' }" @click="contentFilter = 'ALL'">全部 <b>{{ content.length }}</b></button>
           <button type="button" :class="{ active: contentFilter === 'PENDING_APPROVAL' }" @click="contentFilter = 'PENDING_APPROVAL'">待审核 <b>{{ pendingContent.length }}</b></button>

@@ -37,13 +37,27 @@ export class ContentService {
     };
   }
 
-  async generateDailyVideo(date = new Date(), actor = "系统内容引擎", productModel?: string): Promise<{ created: number; selected: string[] }> {
+  async generateDailyVideo(
+    date = new Date(),
+    actor = "系统内容引擎",
+    productModel?: string,
+    options: { assetOnly?: boolean } = {},
+  ): Promise<{ created: number; selected: string[] }> {
     const planDate = startOfShanghaiDay(date);
-    const existing = await this.prisma.contentPlan.count({
-      where: { kind: "VIDEO", planDate: { gte: planDate, lt: new Date(planDate.getTime() + 24 * 60 * 60 * 1000) } },
-    });
-    if (existing) return { created: 0, selected: [] };
-    const context = await this.generationContext(productModel);
+    if (!options.assetOnly) {
+      const existing = await this.prisma.contentPlan.count({
+        where: { kind: "VIDEO", planDate: { gte: planDate, lt: new Date(planDate.getTime() + 24 * 60 * 60 * 1000) } },
+      });
+      if (existing) return { created: 0, selected: [] };
+    }
+    const baseContext = await this.generationContext(productModel);
+    const context: Record<string, unknown> = {
+      ...baseContext,
+      generationMode: options.assetOnly ? "ASSET_ONLY" : "ASSET_FIRST",
+      generationGoal: options.assetOnly
+        ? "只使用素材库已有素材，审核通过后直接进入AI剪辑"
+        : "优先复用素材库已有素材，尽量减少补拍",
+    };
     const candidates = await this.aiContent.generateVideoCandidates(context);
     const allowedAssetIds = new Set((context.assets as Array<{ id: string }>).map((item) => item.id));
     const coverages = await Promise.all(candidates.map((candidate) => this.aiContent.analyzeVideoAssetCoverage({
@@ -51,11 +65,24 @@ export class ContentService {
       script: { topic: candidate.topic, hook: candidate.hook, outline: candidate.outline, scripts: candidate.scripts },
       assets: context.assets,
     })));
+    const ranked = candidates.map((candidate, index) => {
+      const coverage = coverages[index];
+      const missingCount = coverage.shots.filter((shot) => {
+        const matched = shot.matchedAssetIds.some((assetId) => allowedAssetIds.has(assetId));
+        return shot.coverage !== "EXISTING" || !matched;
+      }).length;
+      return { candidate, coverage, missingCount };
+    }).sort((left, right) => left.missingCount - right.missingCount || right.candidate.score - left.candidate.score);
+    const generationRows = options.assetOnly
+      ? ranked.filter((item) => item.coverage.shots.length > 0 && item.missingCount === 0).slice(0, 1)
+      : ranked;
+    if (options.assetOnly && !generationRows.length) {
+      throw new BadRequestException(`当前${String(context.productModel || "产品")}素材不足，未找到可完全由已有素材覆盖的脚本`);
+    }
     const selected: string[] = [];
     let created = 0;
-    for (let index = 0; index < candidates.length; index += 1) {
-      const candidate = candidates[index];
-      const coverage = coverages[index];
+    for (let index = 0; index < generationRows.length; index += 1) {
+      const { candidate, coverage, missingCount } = generationRows[index];
       const body = this.videoExecutionBody(candidate);
       const guard = await this.guard.evaluate({
         title: candidate.topic,
@@ -92,14 +119,14 @@ export class ContentService {
           scoreBreakdown: candidate.scoreBreakdown,
           hook: candidate.hook,
           outline: candidate.outline,
-          sourceSignals: [{ externalVideoIds: candidate.referenceIds, missingAssets: shootRequirements.filter((item) => item.coverage === "MISSING").map((item) => item.description), capturedAt: new Date().toISOString() }],
+          sourceSignals: [{ externalVideoIds: candidate.referenceIds, missingAssets: shootRequirements.filter((item) => item.coverage === "MISSING").map((item) => item.description), generationMode: options.assetOnly ? "ASSET_ONLY" : "ASSET_FIRST", existingAssetCount: assetIds.length, missingShotCount: missingCount, capturedAt: new Date().toISOString() }],
           evidenceIds: guard.evidenceIds,
           riskReasons: guard.reasons,
           createdBy: actor,
           actorType: "AI",
           aiProvider: "ALIYUN_BAILIAN",
           aiModel: opsConfig.bailian.textModel,
-          promptVersion: "brand-content-v2",
+          promptVersion: options.assetOnly ? "brand-content-asset-only-v1" : "brand-content-asset-first-v3",
           status: index === 0 && guard.allowed ? "PENDING_APPROVAL" : "DRAFT",
           variants: { create: this.videoVariants(candidate) },
           contentAssets: { create: assetIds.map((assetId) => ({ assetId, role: "SCRIPT_MATCH" })) },
@@ -405,6 +432,9 @@ export class ContentService {
     const shootRequirements = plan.kind === "VIDEO" && existingRequirements.length === 0
       ? [{ id: "shot-main", description: "本脚本所需拍摄素材", status: "OPEN", assetIds: [] }]
       : existingRequirements;
+    const assetsReady = plan.kind === "VIDEO"
+      && shootRequirements.length > 0
+      && shootRequirements.every((item) => item && typeof item === "object" && !Array.isArray(item) && String((item as Record<string, unknown>).status) === "DONE");
     const guard = await this.guard.evaluate({ title: plan.topic, body, productModel: plan.productModel ?? undefined, evidenceIds: plan.evidenceIds });
     if (!guard.allowed) throw new BadRequestException(guard.reasons.join("；"));
     return this.prisma.$transaction(async (tx) => {
@@ -418,7 +448,7 @@ export class ContentService {
           shootRequirements,
           owner: options.owner || actor,
           targetPlatforms: options.targetPlatforms?.length ? options.targetPlatforms : plan.variants.map((variant) => variant.platform),
-          productionStage: plan.kind === "VIDEO" ? "AWAITING_ASSETS" : "PACKAGING_REVIEW",
+          productionStage: plan.kind === "VIDEO" ? (assetsReady ? "READY_TO_EDIT" : "AWAITING_ASSETS") : "PACKAGING_REVIEW",
         },
       });
       if (plan.kind !== "VIDEO") await tx.contentVariant.updateMany({ where: { contentPlanId: id }, data: { status: "APPROVED" } });
