@@ -21,6 +21,14 @@ const knowledge = ref<Row[]>([]);
 const assets = ref<Row[]>([]);
 const jobs = ref<Row[]>([]);
 const gaps = ref<Row[]>([]);
+const gapProductModel = ref("");
+const selectedGaps = ref<Row[]>([]);
+const gapTasks = ref<Row[]>([]);
+const gapTaskUploadDialog = ref(false);
+const gapTaskUploadTarget = ref<Row>();
+const gapTaskUploadFiles = ref<UploadUserFile[]>([]);
+const gapTaskUploading = ref(false);
+const gapTaskUploadProgress = ref(0);
 const dailyReport = ref<Row>();
 const growthLoop = ref<Row>();
 const externalVideos = ref<Row[]>([]);
@@ -172,6 +180,53 @@ async function loadAssets(reset = true) {
 async function loadJobs() { jobs.value = await api<Row[]>("/api/v1/brand-data/analysis-jobs"); }
 async function loadAiCapabilities() { aiCapabilities.value = await api<Row>("/api/v1/brand-data/ai-capabilities"); }
 async function loadGaps(refresh = false) { gaps.value = await api<Row[]>(`/api/v1/brand-data/asset-gaps${refresh ? "?refresh=1" : ""}`); }
+async function loadGapTasks() {
+  const suffix = gapProductModel.value ? `?productModel=${encodeURIComponent(gapProductModel.value)}` : "";
+  gapTasks.value = await api<Row[]>(`/api/v1/brand-data/asset-gaps/tasks${suffix}`);
+}
+async function analyzeSelectedProductGaps() {
+  if (!gapProductModel.value) return ElMessage.warning("请先选择产品型号");
+  await run(async () => {
+    gaps.value = await post<Row[]>("/api/v1/brand-data/asset-gaps/analyze", { productModel: gapProductModel.value });
+    selectedGaps.value = [];
+    await loadGapTasks();
+  }, "AI已根据当前素材索引列出缺失素材");
+}
+async function createGapTasks() {
+  if (!selectedGaps.value.length) return ElMessage.warning("请勾选需要安排补拍的缺失素材");
+  await run(async () => {
+    const result = await post<Row>("/api/v1/brand-data/asset-gaps/tasks", { ids: selectedGaps.value.map((item) => item.id) });
+    selectedGaps.value = [];
+    await loadGapTasks();
+    ElMessage.success(`已生成 ${result.created || 0} 个补拍任务`);
+  });
+}
+function openGapTaskUpload(task: Row) {
+  gapTaskUploadTarget.value = task;
+  gapTaskUploadFiles.value = [];
+  gapTaskUploadProgress.value = 0;
+  gapTaskUploadDialog.value = true;
+}
+async function uploadGapTaskMaterials() {
+  const task = gapTaskUploadTarget.value;
+  const files = gapTaskUploadFiles.value.map((item) => item.raw).filter(Boolean) as File[];
+  if (!task || !files.length) return ElMessage.warning("请选择补拍完成的素材");
+  gapTaskUploading.value = true;
+  try {
+    const form = new FormData();
+    files.forEach((file) => form.append("files", file));
+    await uploadWithProgress<Row>(`/api/v1/brand-data/asset-gaps/tasks/${task.id}/files`, form, (loaded, total) => {
+      gapTaskUploadProgress.value = total ? Math.round(loaded / total * 100) : 0;
+    });
+    gapTaskUploadDialog.value = false;
+    await Promise.all([loadGapTasks(), loadAssets(), loadJobs(), refreshOverview()]);
+    ElMessage.success("补拍素材已入库，并进入AI分类、索引和标签分析");
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "任务素材上传失败");
+  } finally {
+    gapTaskUploading.value = false;
+  }
+}
 async function loadReport() { dailyReport.value = await api<Row>("/api/v1/brand-data/reports/daily"); }
 async function loadGrowthLoop() { growthLoop.value = await api<Row>("/api/v1/brand-data/growth-loop"); }
 async function loadViralWorkspace() {
@@ -610,6 +665,7 @@ async function quickFilter(kind = "", reviewStatus = "") {
   await run(() => loadAssets());
 }
 async function handleAssetViewChange(value: string) {
+  if (value === "gaps") await run(async () => { await Promise.all([loadGaps(), loadGapTasks()]); });
   if (value === "review") {
     assetFilter.kind = "";
     assetFilter.reviewStatus = "PENDING";
@@ -737,8 +793,11 @@ onMounted(reload);
       </template>
 
       <template v-else-if="assetView === 'gaps'">
-        <div class="workspace-heading compact"><div><h3>素材缺口</h3><p>V2基础覆盖线按型号计算；缺口不会被“未获取”当作零表现数据。</p></div><el-button :icon="Refresh" @click="run(() => loadGaps(true), '缺口已重新计算')">重新计算</el-button></div>
-        <div class="data-panel"><el-table :data="gaps" stripe height="545"><el-table-column prop="productModel" label="型号" width="130" /><el-table-column prop="assetKind" label="素材类型" width="110" /><el-table-column prop="category" label="覆盖项" min-width="180" /><el-table-column prop="requiredCount" label="基线" width="80" /><el-table-column prop="activeCount" label="可调用" width="90" /><el-table-column prop="gapCount" label="缺口" width="80" /><el-table-column label="级别" width="90"><template #default="scope"><el-tag :type="scope.row.gapCount ? 'danger' : 'success'">{{ scope.row.severity }}</el-tag></template></el-table-column><el-table-column prop="recommendation" label="补拍建议" min-width="300" /></el-table></div>
+        <div class="workspace-heading compact"><div><h3>AI缺失素材分析</h3><p>选择产品型号，AI读取该型号当前可用素材索引，列出真正缺少的具体画面。</p></div><div class="gap-analysis-actions"><el-select v-model="gapProductModel" filterable placeholder="选择产品型号" @change="loadGapTasks"><el-option v-for="item in controls.products.filter(item => item.status === 'READY')" :key="item.id" :label="`${item.modelCode} · ${item.name}`" :value="item.modelCode" /></el-select><el-button type="primary" :icon="Search" @click="analyzeSelectedProductGaps">分析缺失素材</el-button></div></div>
+        <div class="gap-task-toolbar"><span>已选择 {{ selectedGaps.length }} 项缺失素材</span><el-button type="primary" :disabled="!selectedGaps.length" @click="createGapTasks">生成补拍任务</el-button></div>
+        <div class="data-panel"><el-table :data="gaps" stripe height="360" @selection-change="selectedGaps = $event"><el-table-column type="selection" width="46" :selectable="(row: Row) => row.gapCount > 0" /><el-table-column prop="productModel" label="型号" width="120" /><el-table-column prop="assetKind" label="类型" width="90" /><el-table-column prop="category" label="缺失类别" min-width="170" /><el-table-column label="优先级" width="90"><template #default="scope"><el-tag :type="scope.row.severity === 'HIGH' ? 'danger' : 'warning'">{{ scope.row.severity }}</el-tag></template></el-table-column><el-table-column prop="recommendation" label="需要补拍的具体素材" min-width="430" /><el-table-column prop="generatedBy" label="分析方式" width="140" /></el-table></div>
+        <div class="workspace-heading compact"><div><h3>补拍任务</h3><p>拍摄完成后直接从任务上传，系统自动入素材库并建立AI索引。</p></div><el-button :icon="Refresh" @click="run(loadGapTasks)">刷新任务</el-button></div>
+        <div class="data-panel"><el-table :data="gapTasks" stripe height="300"><el-table-column prop="title" label="任务" min-width="230" /><el-table-column prop="description" label="拍摄要求" min-width="330" /><el-table-column prop="priority" label="优先级" width="90" /><el-table-column label="截止" width="135"><template #default="scope">{{ dateTime(scope.row.dueAt) }}</template></el-table-column><el-table-column label="状态" width="105"><template #default="scope"><el-tag :type="scope.row.status === 'DONE' ? 'success' : 'warning'">{{ scope.row.status === 'DONE' ? '已完成' : '待补拍' }}</el-tag></template></el-table-column><el-table-column label="操作" width="130"><template #default="scope"><el-button v-if="scope.row.status !== 'DONE'" link type="primary" @click="openGapTaskUpload(scope.row)">上传补拍素材</el-button><span v-else>已入素材库</span></template></el-table-column></el-table></div>
       </template>
 
       <template v-else>
@@ -873,6 +932,13 @@ onMounted(reload);
       <template #footer><el-button @click="collectorLinkDialog = false">取消</el-button><el-button type="primary" @click="submitCollectorLink">保存并分析</el-button></template>
     </el-dialog>
 
+    <el-dialog v-model="gapTaskUploadDialog" title="上传补拍任务素材" width="680px" destroy-on-close>
+      <div class="gap-upload-context"><strong>{{ gapTaskUploadTarget?.title }}</strong><span>{{ gapTaskUploadTarget?.description }}</span><small>上传后自动归入对应产品素材库，并执行与普通素材上传相同的AI分类、索引和标签分析。</small></div>
+      <el-upload v-model:file-list="gapTaskUploadFiles" drag multiple :auto-upload="false" :limit="20" :disabled="gapTaskUploading"><el-icon class="el-icon--upload"><UploadFilled /></el-icon><div class="el-upload__text">拖入补拍素材，或<em>点击选择</em></div></el-upload>
+      <el-progress v-if="gapTaskUploading || gapTaskUploadProgress" :percentage="gapTaskUploadProgress" />
+      <template #footer><el-button :disabled="gapTaskUploading" @click="gapTaskUploadDialog = false">取消</el-button><el-button type="primary" :loading="gapTaskUploading" @click="uploadGapTaskMaterials">上传并完成任务</el-button></template>
+    </el-dialog>
+
     <el-dialog v-model="uploadDialog" title="上传素材" width="760px" destroy-on-close>
       <el-upload v-model:file-list="batchFiles" drag multiple :auto-upload="false" :limit="20" class="asset-upload" :disabled="uploading" @change="inspectBatchFiles" @remove="inspectBatchFiles">
         <el-icon class="el-icon--upload"><UploadFilled /></el-icon><div class="el-upload__text">拖入文件，或<em>点击选择</em></div>
@@ -967,6 +1033,8 @@ onMounted(reload);
 .asset-structured-index { margin: 0 0 16px; border: 1px solid #e4e9f1; border-radius: 12px; overflow: hidden; }.asset-structured-index h4 { margin: 0; padding: 11px 14px; background: #f7f9fc; }
 .detail-index-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 13px 14px 7px; }.detail-index-head strong { color: #263850; }.detail-index-head span { color: #8490a2; font-size: 12px; }
 .structured-index { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; padding: 7px 14px 14px; }.structured-index > div { display: grid; grid-template-columns: 58px 1fr; gap: 8px; padding: 7px 9px; border-radius: 8px; background: #f7f9fc; }.structured-index b { color: #637086; font-size: 12px; }.structured-index span { color: #293b55; font-size: 12px; line-height: 1.45; }
+.gap-analysis-actions, .gap-task-toolbar { display: flex; align-items: center; gap: 9px; }.gap-analysis-actions .el-select { width: 260px; }.gap-task-toolbar { justify-content: flex-end; }.gap-task-toolbar span { margin-right: auto; color: #758196; font-size: 13px; }
+.gap-upload-context { display: grid; gap: 6px; margin-bottom: 15px; padding: 12px 14px; border: 1px solid #dce7f5; border-radius: 12px; background: #f6f9fd; }.gap-upload-context span { color: #334155; }.gap-upload-context small { color: #718096; line-height: 1.55; }
 .field-tip { display: block; margin-top: 6px; color: #8791a1; line-height: 1.45; }
 .preview-link { max-width: 100%; padding: 0; border: 0; background: transparent; cursor: pointer; text-align: left; }.preview-link:hover { color: #2f83e5; text-decoration: underline; }
 .asset-thumb { display: block; width: 96px; height: 72px; border-radius: 8px; background: #f1f4f8; object-fit: cover; cursor: pointer; }.asset-placeholder { width: 96px; height: 72px; color: #778398; border: 1px dashed #d8dee8; border-radius: 8px; background: #f7f9fc; cursor: pointer; }

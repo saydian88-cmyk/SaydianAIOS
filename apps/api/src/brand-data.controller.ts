@@ -167,6 +167,33 @@ export class BrandDataController {
     return this.brandData.assetGaps(refresh === "1" || refresh === "true");
   }
 
+  @Post("asset-gaps/analyze")
+  analyzeAssetGaps(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Body() body: Record<string, unknown>) {
+    return this.brandData.analyzeProductAssetGaps(String(body.productModel || ""), this.actor(authorization, requestedActor));
+  }
+
+  @Post("asset-gaps/tasks")
+  createAssetGapTasks(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Body() body: Record<string, unknown>) {
+    return this.brandData.createSelectedGapTasks(Array.isArray(body.ids) ? body.ids.map(String) : [], this.actor(authorization, requestedActor));
+  }
+
+  @Get("asset-gaps/tasks")
+  assetGapTasks(@Headers("authorization") authorization: string | undefined, @Query("productModel") productModel?: string) {
+    this.actor(authorization);
+    return this.brandData.gapTasks(productModel);
+  }
+
+  @Post("asset-gaps/tasks/:id/files")
+  @UseInterceptors(FilesInterceptor("files", 20, { storage: batchUploadStorage, limits: { fileSize: 200 * 1024 * 1024, files: 20 } }))
+  uploadAssetGapTaskFiles(
+    @Headers("authorization") authorization: string | undefined,
+    @Headers("x-ops-actor") requestedActor: string | undefined,
+    @Param("id") id: string,
+    @UploadedFiles() files: DiskFile[],
+  ) {
+    return this.brandData.uploadGapTaskFiles(id, files, this.actor(authorization, requestedActor));
+  }
+
   @Get("growth-loop")
   growthLoop(@Headers("authorization") authorization: string | undefined) {
     this.actor(authorization);

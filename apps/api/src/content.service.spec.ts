@@ -53,4 +53,34 @@ describe("ContentService production workflow", () => {
       new BadRequestException("请回填作品链接或作品ID"),
     );
   });
+
+  it("moves an asset-covered script directly to ready to edit after approval", async () => {
+    const update = vi.fn().mockResolvedValue({ id: "plan-1", productionStage: "READY_TO_EDIT" });
+    const tx = {
+      contentPlan: { update },
+      contentVariant: { updateMany: vi.fn() },
+      approval: { create: vi.fn() },
+      auditLog: { create: vi.fn() },
+    };
+    const prisma = {
+      contentPlan: { findUnique: vi.fn().mockResolvedValue({
+        id: "plan-1",
+        kind: "VIDEO",
+        topic: "素材复用脚本",
+        productModel: "W9S",
+        evidenceIds: [],
+        variants: [{ platform: "DOUYIN", title: "标题", body: "正文" }],
+        shootRequirements: [{ id: "shot-1", description: "心电图测量", status: "DONE", coverage: "EXISTING", assetIds: ["asset-1"] }],
+      }) },
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const guard = { evaluate: vi.fn().mockResolvedValue({ allowed: true, reasons: [], evidenceIds: [] }) };
+    const service = new ContentService(prisma as never, guard as never, {} as never, {} as never);
+
+    await service.approve("plan-1", "审核员");
+
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ productionStage: "READY_TO_EDIT" }),
+    }));
+  });
 });

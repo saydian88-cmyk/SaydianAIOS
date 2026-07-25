@@ -162,3 +162,5 @@ nav { display: grid; gap: 7px; margin-top: 22px; }
 .content-filters button.active { background: #edf5ff; color: #2377d5; }
 .content-filters button b { margin-left: 5px; color: #111827; }
 .content-filters button.active b { color: #2377d5; }
+.content-generate-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.content-generate-actions .el-select { width: 230px; }

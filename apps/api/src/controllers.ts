@@ -146,6 +146,10 @@ export class OpsController {
     if (Number.isNaN(requestedDate.getTime())) throw new BadRequestException("日期格式必须为 YYYY-MM-DD");
     return this.contentService.generateDailyVideo(requestedDate, actor, body.productModel ? String(body.productModel) : undefined);
   }
+  @Post("content/asset-only-video/generate") generateAssetOnlyVideo(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Body() body: Record<string, unknown>) {
+    const actor = this.actor(authorization, requestedActor);
+    return this.contentService.generateDailyVideo(new Date(), actor, body.productModel ? String(body.productModel) : undefined, { assetOnly: true });
+  }
   @Post("content/daily-article/generate") generateDailyArticle(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Body() body: Record<string, unknown>) {
     const actor = this.actor(authorization, requestedActor);
     const requestedDate = body.date ? new Date(`${String(body.date)}T00:00:00+08:00`) : new Date();
