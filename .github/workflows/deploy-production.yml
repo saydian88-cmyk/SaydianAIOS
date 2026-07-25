@@ -84,12 +84,25 @@ jobs:
       - name: Upload deployment files
         shell: bash
         run: |
-          git archive --format=tar.gz --output=/tmp/saydian-ops-source.tar.gz HEAD
+          mkdir -p release-images
+          docker pull "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-api:${{ github.sha }}"
+          docker pull "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-admin:${{ github.sha }}"
+          docker save \
+            "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-api:${{ github.sha }}" \
+            "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-admin:${{ github.sha }}" \
+            | gzip -1 > release-images/saydian-ops-images.tar.gz
+          split -b 20m -d -a 3 release-images/saydian-ops-images.tar.gz \
+            release-images/saydian-ops-images.part-
           scp -P "${{ secrets.TENCENT_PORT || '22' }}" deploy/docker-compose.prod.yml deploy/gateway-nginx.conf deploy/deploy-ops.sh \
-            /tmp/saydian-ops-source.tar.gz \
             "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}:/tmp/"
           ssh -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}" \
-            "sudo GHCR_REPOSITORY='${{ github.repository_owner }}/saydianaios' RELEASE_SHA='${{ github.sha }}' bash -lc 'set -euo pipefail; build_dir=/opt/saydian/build/\$RELEASE_SHA; mkdir -p \"\$build_dir\"; tar -xzf /tmp/saydian-ops-source.tar.gz -C \"\$build_dir\"; docker build -f \"\$build_dir/Dockerfile.api\" -t \"ghcr.io/\$GHCR_REPOSITORY/ops-api:\$RELEASE_SHA\" \"\$build_dir\"; docker build -f \"\$build_dir/Dockerfile.admin\" -t \"ghcr.io/\$GHCR_REPOSITORY/ops-admin:\$RELEASE_SHA\" \"\$build_dir\"; install -m 644 /tmp/docker-compose.prod.yml /opt/saydian/config/docker-compose.prod.yml; install -m 644 /tmp/gateway-nginx.conf /opt/saydian/config/gateway-nginx.conf; install -m 755 /tmp/deploy-ops.sh /opt/saydian/bin/deploy-ops.sh; rm -f /tmp/saydian-ops-source.tar.gz'"
+            "rm -rf /tmp/saydian-image-parts && mkdir -p /tmp/saydian-image-parts"
+          export TENCENT_PORT="${{ secrets.TENCENT_PORT || '22' }}"
+          export TENCENT_TARGET="${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}"
+          find release-images -type f -name 'saydian-ops-images.part-*' -print0 \
+            | xargs -0 -P 4 -I '{}' scp -P "$TENCENT_PORT" '{}' "$TENCENT_TARGET:/tmp/saydian-image-parts/"
+          ssh -p "$TENCENT_PORT" "$TENCENT_TARGET" \
+            "sudo bash -lc 'set -euo pipefail; cat /tmp/saydian-image-parts/saydian-ops-images.part-* > /tmp/saydian-ops-images.tar.gz; install -m 644 /tmp/docker-compose.prod.yml /opt/saydian/config/docker-compose.prod.yml; install -m 644 /tmp/gateway-nginx.conf /opt/saydian/config/gateway-nginx.conf; install -m 755 /tmp/deploy-ops.sh /opt/saydian/bin/deploy-ops.sh; docker load -i /tmp/saydian-ops-images.tar.gz; rm -rf /tmp/saydian-image-parts /tmp/saydian-ops-images.tar.gz'"
       - name: Deploy and verify
         shell: bash
         run: |
