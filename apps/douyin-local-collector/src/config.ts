@@ -1,6 +1,9 @@
-import "dotenv/config";
+import { config as loadEnv } from "dotenv";
 import { hostname } from "node:os";
 import { join, resolve } from "node:path";
+
+loadEnv({ path: resolve(process.cwd(), "../../.env") });
+loadEnv();
 
 const localAppData = process.env.LOCALAPPDATA || resolve(process.cwd(), ".local-data");
 
