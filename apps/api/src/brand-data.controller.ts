@@ -9,6 +9,7 @@ import { BrandDataService } from "./brand-data.service";
 import { CloudMediaService } from "./cloud-media.service";
 import { SourceSyncService } from "./source-sync.service";
 import { ViralCollectorService } from "./viral-collector.service";
+import { ViralTrendService } from "./viral-trend.service";
 
 const uploadInbox = resolve(process.cwd(), "data", "upload-inbox");
 mkdirSync(uploadInbox, { recursive: true });
@@ -28,6 +29,7 @@ export class BrandDataController {
     private readonly cloudMedia: CloudMediaService,
     private readonly sourceSync: SourceSyncService,
     private readonly viralCollector: ViralCollectorService,
+    private readonly viralTrend: ViralTrendService,
   ) {}
 
   private actor(authorization?: string, requestedActor?: string) {
@@ -331,6 +333,79 @@ export class BrandDataController {
   ) {
     this.actor(authorization);
     return this.viralCollector.retryResolveJob(id);
+  }
+
+  @Get("viral-keywords/today")
+  viralKeywordsToday(
+    @Headers("authorization") authorization: string | undefined,
+    @Query("platform") platform?: string,
+  ) {
+    this.actor(authorization);
+    return this.viralTrend.todayKeywords(platform || "DOUYIN");
+  }
+
+  @Post("viral-keywords/generate")
+  generateViralKeywords(
+    @Headers("authorization") authorization: string | undefined,
+    @Body() body: Record<string, unknown>,
+  ) {
+    this.actor(authorization);
+    return this.viralTrend.generateKeywords(Boolean(body.force));
+  }
+
+  @Patch("viral-keywords/:id")
+  updateViralKeyword(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    this.actor(authorization);
+    return this.viralTrend.updateKeyword(id, body);
+  }
+
+  @Post("viral-collector/local/heartbeat")
+  localCollectorHeartbeat(
+    @Headers("authorization") authorization: string | undefined,
+    @Body() body: Record<string, unknown>,
+  ) {
+    this.actor(authorization);
+    return this.viralTrend.heartbeat(body);
+  }
+
+  @Post("viral-collector/local/batches")
+  localCollectorBatch(
+    @Headers("authorization") authorization: string | undefined,
+    @Headers("x-ops-actor") requestedActor: string | undefined,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.viralTrend.ingestBatch(body, this.actor(authorization, requestedActor));
+  }
+
+  @Get("viral-trends")
+  viralTrends(
+    @Headers("authorization") authorization: string | undefined,
+    @Query() query: Record<string, string | undefined>,
+  ) {
+    this.actor(authorization);
+    return this.viralTrend.trends(query);
+  }
+
+  @Get("viral-videos/:id/timeline")
+  viralVideoTimeline(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+  ) {
+    this.actor(authorization);
+    return this.viralTrend.timeline(id);
+  }
+
+  @Post("viral-videos/:id/analyze")
+  analyzeViralVideo(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+  ) {
+    this.actor(authorization);
+    return this.viralTrend.analyze(id);
   }
 
   @Post("assets/upload")

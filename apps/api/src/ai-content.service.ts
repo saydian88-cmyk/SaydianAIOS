@@ -60,6 +60,14 @@ export type AiAssetCoverage = {
   }>;
 };
 
+export type AiViralKeyword = {
+  keyword: string;
+  type: "PRODUCT" | "PAIN" | "COMPETITOR" | "SCENE";
+  priority: "A" | "B" | "C";
+  productModel?: string;
+  reason: string;
+};
+
 type JsonRecord = Record<string, unknown>;
 
 function text(value: unknown): string {
@@ -195,6 +203,26 @@ export class AiContentService {
       coverText: text(result.coverText),
       coverSpec: object(result.coverSpec),
     };
+  }
+
+  async generateViralKeywords(context: JsonRecord): Promise<AiViralKeyword[]> {
+    const result = await this.callJson(
+      `根据赛电已审核产品、FAQ、用户痛点、竞品观察、最近7天关键词表现和素材缺口，生成抖音爆款研究关键词。
+最多50个，配额：PRODUCT产品词15、PAIN痛点词15、COMPETITOR竞品词10、SCENE场景词10。
+优先级A最多10个、B最多20个，其余为C；关键词适合直接在抖音搜索，避免重复和过长句子。
+返回JSON：{"keywords":[{"keyword":"","type":"PRODUCT|PAIN|COMPETITOR|SCENE","priority":"A|B|C","productModel":"","reason":""}]}。
+输入：${JSON.stringify(context)}`,
+    );
+    const allowedTypes = new Set(["PRODUCT", "PAIN", "COMPETITOR", "SCENE"]);
+    const allowedPriorities = new Set(["A", "B", "C"]);
+    const rows = Array.isArray(result.keywords) ? result.keywords.map(object) : [];
+    return rows.map((row) => ({
+      keyword: text(row.keyword),
+      type: (allowedTypes.has(text(row.type)) ? text(row.type) : "PRODUCT") as AiViralKeyword["type"],
+      priority: (allowedPriorities.has(text(row.priority)) ? text(row.priority) : "C") as AiViralKeyword["priority"],
+      productModel: text(row.productModel) || undefined,
+      reason: text(row.reason),
+    })).filter((row) => row.keyword);
   }
 
   private async callJson(prompt: string): Promise<JsonRecord> {

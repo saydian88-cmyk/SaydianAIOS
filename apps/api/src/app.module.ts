@@ -24,6 +24,7 @@ import { PrismaService } from "./prisma.service";
 import { ReportService } from "./report.service";
 import { SourceSyncService } from "./source-sync.service";
 import { ViralCollectorService } from "./viral-collector.service";
+import { ViralTrendService } from "./viral-trend.service";
 
 @Module({
   imports: [ScheduleModule.forRoot()],
@@ -35,7 +36,7 @@ import { ViralCollectorService } from "./viral-collector.service";
     PrismaService, AuthService, PlatformRegistry, ContentGuardService, OssStorageService, SourceSyncService,
     AiContentService, ContentService, MonitoringService, ReportService, OperationsService, LedgerService, AutomationService,
     AliyunImsProvider, BailianVideoAiProvider, CloudMediaService, ViralCollectorService, AssetAiService, BrandDataService,
-    OperationAnalysisService, DouyinIntegrationService,
+    OperationAnalysisService, DouyinIntegrationService, ViralTrendService,
   ],
 })
 export class AppModule {}

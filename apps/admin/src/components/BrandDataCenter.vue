@@ -28,6 +28,8 @@ const remakeTasks = ref<Row[]>([]);
 const cloudJobs = ref<Row[]>([]);
 const aiCapabilities = ref<Row>();
 const viralCapabilities = ref<Row[]>([]);
+const viralTrend = ref<Row>({ summary: {}, devices: [], items: [] });
+const viralKeywordPlan = ref<Row>({ keywords: [] });
 const controls = ref<{ claims: Row[]; mappings: Row[]; phraseRules: Row[]; brandProfiles: Row[]; products: Row[]; faqs: Row[]; employees: Row[]; categories: string[] }>({ claims: [], mappings: [], phraseRules: [], brandProfiles: [], products: [], faqs: [], employees: [], categories: [] });
 const knowledgeDialog = ref(false);
 const productDialog = ref(false);
@@ -149,10 +151,13 @@ function list(value: unknown) { return Array.isArray(value) && value.length ? va
 function editableList(value: unknown) { return Array.isArray(value) ? value.map(String).join("、") : ""; }
 function fileSize(value: unknown) { const size = Number(value || 0); if (size >= 1024 ** 3) return `${(size / 1024 ** 3).toFixed(2)} GB`; if (size >= 1024 ** 2) return `${(size / 1024 ** 2).toFixed(1)} MB`; if (size >= 1024) return `${(size / 1024).toFixed(1)} KB`; return `${size} B`; }
 function durationLabel(value: unknown) { const seconds = Math.max(0, Number(value || 0)); if (!seconds) return "—"; const minutes = Math.floor(seconds / 60); const remain = Math.round(seconds % 60); return minutes ? `${minutes}分${remain}秒` : `${remain}秒`; }
-function statusType(value: string) { if (["READY", "APPROVED", "ACTIVE", "SUCCEEDED", "AVAILABLE", "CONFIGURED", "HEALTHY", "COMMERCIAL"].includes(value)) return "success"; if (["FAILED", "REJECTED", "SUSPENDED", "PROHIBITED", "ERROR"].includes(value)) return "danger"; if (["PENDING", "RETURNED", "RETRY", "UNCONFIGURED", "AUTH_REQUIRED", "ANALYZING", "WAITING_PERMISSION"].includes(value)) return "warning"; return "info"; }
-function statusLabel(value: string) { return ({ DRAFT: "草稿", PENDING: "待审核", READY: "可用", BLOCKED: "禁用", ARCHIVED: "归档", APPROVED: "已通过", RETURNED: "已退回", REJECTED: "已拒绝", ACTIVE: "可调用", INACTIVE: "未启用", SUSPENDED: "暂停", RECEIVED: "已接收", HASHED: "已计算哈希", STORED: "已存OSS", ANALYZING: "AI处理中", READY_FOR_REVIEW: "待人工审核", DISCOVERED: "已发现", QUEUED: "待处理", PROCESSING: "处理中", CONFIGURED: "已配置", AVAILABLE: "可用", FAILED: "失败", SUCCEEDED: "已完成", RETRY: "待重试", UNCONFIGURED: "未配置", WAITING_PERMISSION: "等待官方审批", COMMERCIAL: "可商用", INTERNAL: "仅内部", EDIT_ONLY: "修改后可用", AUTH_REQUIRED: "待授权", EXPIRED: "已过期", PROHIBITED: "禁止使用" } as Record<string, string>)[value] || value; }
+function statusType(value: string) { if (["READY", "APPROVED", "ACTIVE", "SUCCEEDED", "AVAILABLE", "CONFIGURED", "HEALTHY", "COMMERCIAL", "ONLINE", "LOGGED_IN"].includes(value)) return "success"; if (["FAILED", "REJECTED", "SUSPENDED", "PROHIBITED", "ERROR", "OFFLINE"].includes(value)) return "danger"; if (["PENDING", "RETURNED", "RETRY", "UNCONFIGURED", "AUTH_REQUIRED", "ANALYZING", "WAITING_PERMISSION", "LOGIN_REQUIRED", "NEEDS_LOGIN", "CAPTCHA"].includes(value)) return "warning"; return "info"; }
+function statusLabel(value: string) { return ({ DRAFT: "草稿", PENDING: "待审核", READY: "可用", BLOCKED: "禁用", ARCHIVED: "归档", APPROVED: "已通过", RETURNED: "已退回", REJECTED: "已拒绝", ACTIVE: "可调用", INACTIVE: "未启用", SUSPENDED: "暂停", RECEIVED: "已接收", HASHED: "已计算哈希", STORED: "已存OSS", ANALYZING: "AI处理中", READY_FOR_REVIEW: "待人工审核", DISCOVERED: "已发现", QUEUED: "待处理", PROCESSING: "处理中", CONFIGURED: "已配置", AVAILABLE: "可用", FAILED: "失败", SUCCEEDED: "已完成", RETRY: "待重试", UNCONFIGURED: "未配置", WAITING_PERMISSION: "等待官方审批", COMMERCIAL: "可商用", INTERNAL: "仅内部", EDIT_ONLY: "修改后可用", AUTH_REQUIRED: "待授权", EXPIRED: "已过期", PROHIBITED: "禁止使用", ONLINE: "在线", OFFLINE: "离线", LOGGED_IN: "已登录", NEEDS_LOGIN: "需要扫码", LOGIN_REQUIRED: "需要扫码", CAPTCHA: "需要验证" } as Record<string, string>)[value] || value; }
 function kindLabel(value: string) { return ({ IMAGE: "图片", VIDEO: "视频", AUDIO: "音频", DOCUMENT: "文档" } as Record<string, string>)[value] || value; }
 function queryString(values: Record<string, string>) { const params = new URLSearchParams(); Object.entries(values).forEach(([key, value]) => { if (String(value).trim()) params.set(key, String(value).trim()); }); return params.toString(); }
+function compactNumber(value: unknown) { const number = Number(value || 0); if (number >= 10000) return `${(number / 10000).toFixed(number >= 100000 ? 0 : 1)}万`; return new Intl.NumberFormat("zh-CN").format(number); }
+function percent(value: unknown) { return `${(Number(value || 0) * 100).toFixed(2)}%`; }
+function viralGradeType(value: string) { return value === "S" ? "danger" : value === "A" ? "warning" : value === "B" ? "success" : "info"; }
 
 async function run(task: () => Promise<void>, success?: string) {
   loading.value = true;
@@ -175,15 +180,20 @@ async function loadGaps(refresh = false) { gaps.value = await api<Row[]>(`/api/v
 async function loadReport() { dailyReport.value = await api<Row>("/api/v1/brand-data/reports/daily"); }
 async function loadGrowthLoop() { growthLoop.value = await api<Row>("/api/v1/brand-data/growth-loop"); }
 async function loadViralWorkspace() {
-  const [videos, tasks, queue, capabilities] = await Promise.all([
+  const [videos, tasks, queue, capabilities, trend, keywordPlan] = await Promise.all([
     api<Row[]>("/api/v1/brand-data/external-videos?take=100"),
     api<Row[]>("/api/v1/brand-data/remake-tasks?take=100"),
     api<Row[]>("/api/v1/brand-data/cloud/jobs?take=100"),
     api<Row[]>("/api/v1/brand-data/viral-collector/capabilities"),
+    api<Row>("/api/v1/brand-data/viral-trends?take=100"),
+    api<Row>("/api/v1/brand-data/viral-keywords/today?platform=DOUYIN"),
   ]);
-  externalVideos.value = videos; remakeTasks.value = tasks; cloudJobs.value = queue; viralCapabilities.value = capabilities;
+  externalVideos.value = videos; remakeTasks.value = tasks; cloudJobs.value = queue; viralCapabilities.value = capabilities; viralTrend.value = trend; viralKeywordPlan.value = keywordPlan;
 }
 async function runViralCollector() { await run(async () => { await post("/api/v1/brand-data/viral-collector/run", { platform: "DOUYIN" }); await loadViralWorkspace(); }, "抖音采集任务已执行"); }
+async function generateViralKeywords() { await run(async () => { viralKeywordPlan.value = await post<Row>("/api/v1/brand-data/viral-keywords/generate", { force: true }); }, "今日关键词已重新生成"); }
+async function toggleViralKeyword(row: Row) { await run(async () => { await patch(`/api/v1/brand-data/viral-keywords/${row.id}`, { locked: !row.locked }); await loadViralWorkspace(); }, row.locked ? "关键词已取消锁定" : "关键词已锁定"); }
+async function analyzeViralTrend(row: Row) { await run(async () => { await post(`/api/v1/brand-data/viral-videos/${row.id}/analyze`, {}); await loadViralWorkspace(); }, "已提交IMS与百炼深度分析"); }
 function openCollectorConfig(row: Row) {
   clearObject(collectorForm, {
     platform: row.platform,
@@ -749,11 +759,43 @@ onMounted(reload);
 
     <template v-else>
       <div class="workspace-heading">
-        <div><h3>抖音爆款研究</h3><p>官方搜索优先，自建渠道与TikHub兜底；TOP5解析入库，TOP3进入IMS与百炼分析。</p></div>
+        <div><h3>抖音爆款趋势研究</h3><p>本地专用Chrome发现12小时内视频；官方、自建与TikHub保留为备用渠道。</p></div>
         <div class="collector-actions">
+          <el-button @click="generateViralKeywords">生成今日关键词</el-button>
           <el-button @click="openCollectorImport()">导入CSV</el-button>
           <el-button @click="openCollectorLink()">补录链接</el-button>
           <el-button type="primary" :icon="Refresh" @click="runViralCollector">立即采集抖音</el-button>
+        </div>
+      </div>
+      <div class="viral-trend-summary">
+        <article><span>12小时视频</span><strong>{{ viralTrend.summary?.total || 0 }}</strong><small>最后同步 {{ dateTime(viralTrend.summary?.lastSyncAt) }}</small></article>
+        <article><span>速度达标</span><strong>{{ viralTrend.summary?.candidates || 0 }}</strong><small>播放速度 &gt; 1万/小时</small></article>
+        <article><span>S级趋势</span><strong>{{ viralTrend.summary?.sGrade || 0 }}</strong><small>自动进入深度分析</small></article>
+        <article><span>A级观察</span><strong>{{ viralTrend.summary?.aGrade || 0 }}</strong><small>运营人员选择分析</small></article>
+      </div>
+      <div class="local-collector-panel">
+        <div>
+          <strong>本地Chrome采集器</strong>
+          <span v-if="viralTrend.devices?.length">共 {{ viralTrend.devices.length }} 台设备</span>
+          <span v-else>尚未收到设备心跳</span>
+        </div>
+        <article v-for="device in viralTrend.devices || []" :key="device.id">
+          <el-tag :type="statusType(device.state)">{{ statusLabel(device.state) }}</el-tag>
+          <strong>{{ device.name || device.deviceId }}</strong>
+          <span>Chrome：{{ statusLabel(device.chromeLoginState || 'OFFLINE') }}</span>
+          <span>心跳 {{ dateTime(device.lastHeartbeatAt) }} · 同步 {{ dateTime(device.lastSyncAt) }}</span>
+          <small v-if="device.lastError" class="danger">{{ device.lastError }}</small>
+        </article>
+      </div>
+      <div class="viral-keyword-panel">
+        <div class="panel-title">
+          <div><h4>今日智能关键词</h4><small>{{ viralKeywordPlan.keywords?.length || 0 }}/50 · 产品、痛点、竞品、场景</small></div>
+          <el-tag v-if="viralKeywordPlan.source">{{ viralKeywordPlan.source }}</el-tag>
+        </div>
+        <div class="viral-keywords">
+          <button v-for="keyword in viralKeywordPlan.keywords || []" :key="keyword.id" :class="[`priority-${String(keyword.priority).toLowerCase()}`, { locked: keyword.locked }]" :title="keyword.reason" @click="toggleViralKeyword(keyword)">
+            <b>{{ keyword.priority }}</b>{{ keyword.keyword }}<small>{{ ({ PRODUCT: '产品', PAIN: '痛点', COMPETITOR: '竞品', SCENE: '场景' } as Record<string, string>)[keyword.type] || keyword.type }} · 命中{{ keyword.hitCount || 0 }}</small>
+          </button>
         </div>
       </div>
       <div class="collector-capabilities">
@@ -773,6 +815,28 @@ onMounted(reload);
           <el-button link @click="openCollectorImport(item.platform)">导入</el-button>
           <el-button link @click="openCollectorLink(item.platform)">补录</el-button>
         </article>
+      </div>
+      <div class="data-panel viral-trend-table">
+        <h4>12小时爆款趋势</h4>
+        <el-table :data="viralTrend.items || []" stripe height="540">
+          <el-table-column type="expand" width="42">
+            <template #default="scope">
+              <div class="viral-expand">
+                <div><strong>命中关键词</strong><span>{{ scope.row.keywordHits?.map((hit: Row) => hit.keyword?.keyword).filter(Boolean).join('、') || '—' }}</span></div>
+                <div><strong>爆款指数分项</strong><span>速度 {{ Number(scope.row.latestMetric?.velocityScore || 0).toFixed(1) }} · 互动 {{ Number(scope.row.latestMetric?.engagementScore || 0).toFixed(1) }} · 收藏分享 {{ Number(scope.row.latestMetric?.saveShareScore || 0).toFixed(1) }} · 账号 {{ Number(scope.row.latestMetric?.accountQualityScore || 0).toFixed(1) }}</span></div>
+                <div class="timeline"><strong>指标时间线</strong><span v-for="metric in scope.row.metrics || []" :key="metric.id">{{ dateTime(metric.capturedAt) }}：播放{{ compactNumber(metric.views) }} / 指数{{ Number(metric.viralIndex || 0).toFixed(1) }}</span></div>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column label="视频/作者" min-width="235"><template #default="scope"><strong>{{ scope.row.title || scope.row.externalContentId }}</strong><small class="cell-note">{{ scope.row.author?.nickname || scope.row.accountName || '未记录作者' }} · 粉丝 {{ compactNumber(scope.row.author?.followerCount) }}</small></template></el-table-column>
+          <el-table-column label="时间" width="145"><template #default="scope">{{ dateTime(scope.row.publishedAt) }}<small class="cell-note">采集 {{ dateTime(scope.row.latestMetric?.capturedAt) }}</small></template></el-table-column>
+          <el-table-column label="播放/速度" width="135"><template #default="scope"><strong>{{ compactNumber(scope.row.latestMetric?.views) }}</strong><small class="cell-note">{{ compactNumber(scope.row.latestMetric?.playVelocity) }}/小时</small></template></el-table-column>
+          <el-table-column label="互动" width="125"><template #default="scope">{{ percent(scope.row.latestMetric?.engagementRate) }}<small class="cell-note">藏享 {{ percent(scope.row.latestMetric?.saveShareRate) }}</small></template></el-table-column>
+          <el-table-column label="赞/评/藏/享" width="160"><template #default="scope">{{ compactNumber(scope.row.latestMetric?.likes) }} / {{ compactNumber(scope.row.latestMetric?.comments) }}<small class="cell-note">{{ compactNumber(scope.row.latestMetric?.saves) }} / {{ compactNumber(scope.row.latestMetric?.shares) }}</small></template></el-table-column>
+          <el-table-column label="作者涨粉" width="105"><template #default="scope">{{ Number(scope.row.latestMetric?.authorFollowerDelta || 0) > 0 ? '+' : '' }}{{ compactNumber(scope.row.latestMetric?.authorFollowerDelta) }}</template></el-table-column>
+          <el-table-column label="爆款指数" width="110"><template #default="scope"><strong>{{ Number(scope.row.latestMetric?.viralIndex || 0).toFixed(1) }}</strong><el-tag size="small" :type="viralGradeType(scope.row.latestMetric?.viralGrade)">{{ scope.row.latestMetric?.viralGrade || 'C' }}</el-tag></template></el-table-column>
+          <el-table-column label="操作" width="145" fixed="right"><template #default="scope"><el-button link type="primary" @click="openExternal(scope.row.sourceUrl)">预览</el-button><el-button link type="warning" @click="analyzeViralTrend(scope.row)">深度分析</el-button></template></el-table-column>
+        </el-table>
       </div>
       <div class="two-panels viral-panels">
         <div class="data-panel">
@@ -973,9 +1037,10 @@ onMounted(reload);
 .asset-preview-panel { display: grid; place-items: center; min-height: 260px; margin-bottom: 18px; padding: 14px; border: 1px solid #e5eaf1; border-radius: 14px; background: #f7f9fc; overflow: hidden; }.asset-preview-panel img, .asset-preview-panel video, .asset-preview-panel iframe { display: block; width: 100%; max-height: 560px; border: 0; border-radius: 10px; background: #10151e; object-fit: contain; }.asset-preview-panel iframe { min-height: 520px; background: #fff; }.asset-preview-panel audio { width: min(680px, 100%); }.preview-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; margin-top: 12px; }.preview-actions span { color: #8791a1; font-size: 12px; }.preview-actions > div { display: flex; gap: 8px; flex-wrap: wrap; }
 .growth-loop { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }.growth-stage { position: relative; display: flex; align-items: center; gap: 12px; min-height: 82px; padding: 14px; border: 1px solid #e6eaf1; border-radius: 14px; background: #fff; }.growth-stage:not(:last-child)::after { position: absolute; right: -10px; z-index: 2; content: "→"; color: #9aa4b3; }.stage-index { display: grid; place-items: center; flex: 0 0 34px; width: 34px; height: 34px; color: #fff; font-size: 12px; font-weight: 800; border-radius: 50%; background: #7d8798; }.growth-stage strong, .growth-stage span { display: block; }.growth-stage strong { color: #17243b; line-height: 1.35; }.growth-stage span { margin-top: 5px; color: #818b9b; font-size: 12px; }.growth-stage.state-active .stage-index, .growth-stage.state-ready .stage-index { background: #2f8f64; }.growth-stage.state-running .stage-index, .growth-stage.state-tracking .stage-index { background: #3978c5; }.growth-stage.state-action_required { border-color: #f0b8bd; background: #fff8f8; }.growth-stage.state-action_required .stage-index { background: #c53943; }
 .collector-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }.collector-capabilities { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }.collector-capabilities article { display: grid; grid-template-columns: 1fr auto auto; gap: 7px 8px; padding: 14px 16px; border: 1px solid #e7ebf2; border-radius: 13px; background: #fff; }.collector-capabilities article > strong { grid-column: 1 / 3; }.collector-capabilities span, .collector-capabilities small { grid-column: 1 / -1; color: #818b9b; font-size: 12px; }.collector-capabilities article > .el-button { margin: 0; justify-content: flex-start; }.collector-provider-status { grid-column: 1 / -1; display: grid; gap: 6px; padding: 8px; border-radius: 8px; background: #f7f9fc; }.collector-provider-status small { display: flex; align-items: center; gap: 6px; }.collector-form { margin-top: 16px; }.collector-switch-row { display: flex; align-items: center; gap: 12px; }.template-download { margin-top: 8px; }.viral-panels { grid-template-columns: 1.2fr 1fr; }
+.viral-trend-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }.viral-trend-summary article { padding: 16px 18px; border: 1px solid #e7ebf2; border-radius: 14px; background: #fff; }.viral-trend-summary span, .viral-trend-summary small { display: block; color: #7d8798; }.viral-trend-summary strong { display: block; margin: 5px 0 2px; color: #17243b; font-size: 26px; }.local-collector-panel, .viral-keyword-panel { padding: 15px 17px; border: 1px solid #e7ebf2; border-radius: 14px; background: #fff; }.local-collector-panel { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }.local-collector-panel > div { margin-right: auto; }.local-collector-panel > div strong, .local-collector-panel > div span { display: block; }.local-collector-panel > div span, .local-collector-panel article span, .local-collector-panel article small { color: #818b9b; font-size: 12px; }.local-collector-panel article { display: grid; grid-template-columns: auto 1fr; gap: 5px 8px; min-width: 250px; padding: 10px 12px; border-radius: 10px; background: #f7f9fc; }.local-collector-panel article span, .local-collector-panel article small { grid-column: 1 / -1; }.panel-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }.panel-title h4 { margin: 0 0 3px; color: #1b2941; }.panel-title small { color: #818b9b; }.viral-keywords { display: flex; gap: 8px; flex-wrap: wrap; }.viral-keywords button { display: inline-flex; align-items: center; gap: 5px; padding: 7px 9px; color: #526077; border: 1px solid #e0e5ed; border-radius: 9px; background: #f9fafc; cursor: pointer; }.viral-keywords button b { color: #9a6d1f; }.viral-keywords button small { color: #9099a8; }.viral-keywords button.priority-a { border-color: #eab9bd; background: #fff7f7; }.viral-keywords button.priority-a b { color: #b12a35; }.viral-keywords button.locked { box-shadow: inset 0 0 0 1px #3978c5; }.viral-trend-table { min-height: 330px; }.viral-expand { display: grid; gap: 9px; padding: 8px 20px 14px 52px; }.viral-expand div { display: grid; grid-template-columns: 115px 1fr; gap: 12px; color: #657187; }.viral-expand .timeline span { display: block; margin-bottom: 4px; }
 .ai-capability-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }.ai-capability-grid article { display: grid; grid-template-columns: 1fr auto; gap: 7px 10px; padding: 13px 15px; border: 1px solid #e7ebf2; border-radius: 12px; background: #fff; }.ai-capability-grid small, .ai-capability-grid span { display: block; color: #818b9b; font-size: 12px; }.ai-capability-grid article > span { grid-column: 1 / -1; }.ai-capability-grid .danger { color: #c53943; }
-@media (max-width: 1400px) { .asset-filter { grid-template-columns: minmax(220px, 1fr) repeat(3, minmax(130px, .65fr)) auto; }.report-summary { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 1400px) { .asset-filter { grid-template-columns: minmax(220px, 1fr) repeat(3, minmax(130px, .65fr)) auto; }.report-summary { grid-template-columns: repeat(3, 1fr); }.viral-trend-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 1400px) { .growth-loop { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 @media (max-width: 1100px) { .brand-metrics { grid-template-columns: repeat(2, 1fr); }.knowledge-filter { grid-template-columns: repeat(3, 1fr); }.two-panels { grid-template-columns: 1fr; }.growth-loop, .editing-index-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 760px) { .brand-hero, .workspace-heading { align-items: flex-start; flex-direction: column; }.brand-metrics, .report-summary, .growth-loop, .editing-index-strip, .structured-index { grid-template-columns: 1fr; }.growth-stage::after { display: none; }.main-tabs { width: 100%; }.main-tabs button { min-width: 0; flex: 1; }.filter-bar, .form-grid, .advanced-filter-grid { grid-template-columns: 1fr; }.advanced-filter { grid-column: auto; }.form-grid .full { grid-column: auto; }.video-toolbar, .ai-assist { align-items: flex-start; flex-direction: column; }.video-toolbar .el-select { width: 100%; } }
+@media (max-width: 760px) { .brand-hero, .workspace-heading { align-items: flex-start; flex-direction: column; }.brand-metrics, .report-summary, .growth-loop, .editing-index-strip, .structured-index, .viral-trend-summary { grid-template-columns: 1fr; }.growth-stage::after { display: none; }.main-tabs { width: 100%; }.main-tabs button { min-width: 0; flex: 1; }.filter-bar, .form-grid, .advanced-filter-grid { grid-template-columns: 1fr; }.advanced-filter { grid-column: auto; }.form-grid .full { grid-column: auto; }.video-toolbar, .ai-assist { align-items: flex-start; flex-direction: column; }.video-toolbar .el-select { width: 100%; } }
 </style>
