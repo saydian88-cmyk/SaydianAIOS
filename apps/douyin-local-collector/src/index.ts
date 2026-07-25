@@ -11,10 +11,35 @@ const store = new CollectorStore(collectorConfig.databasePath);
 const logPath = collectorConfig.databasePath.replace(/queue\.sqlite$/u, "collector.log");
 mkdirSync(dirname(logPath), { recursive: true });
 
+class RiskGateError extends Error {}
+
 function log(message: string) {
   const line = `${new Date().toISOString()} ${message}`;
   console.log(line);
   appendFileSync(logPath, `${line}\n`, "utf8");
+}
+
+function randomBetween(left: number, right: number) {
+  const min = Math.min(left, right);
+  const max = Math.max(left, right);
+  return Math.floor(min + Math.random() * (max - min + 1));
+}
+
+function wait(milliseconds: number) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function shanghaiHour(now = new Date()) {
+  return Number(new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Shanghai",
+    hour: "2-digit",
+    hourCycle: "h23",
+  }).format(now));
+}
+
+function withinActiveHours() {
+  const hour = shanghaiHour();
+  return hour >= collectorConfig.activeHourStart && hour < collectorConfig.activeHourEnd;
 }
 
 function headers() {
@@ -38,7 +63,7 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 async function heartbeat(
-  chromeLoginState: "LOGGED_IN" | "NEEDS_LOGIN" | "ERROR",
+  chromeLoginState: "LOGGED_IN" | "NEEDS_LOGIN" | "CAPTCHA" | "ERROR",
   state = "ONLINE",
   extra: Record<string, unknown> = {},
 ) {
@@ -86,10 +111,19 @@ async function collectFromPage(
   page.on("response", listener);
   try {
     await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 45_000 });
-    await page.waitForTimeout(4_000);
-    for (let index = 0; index < 3 && collected.size < maxResults; index += 1) {
-      await page.mouse.wheel(0, 1_500);
-      await page.waitForTimeout(1_500);
+    await page.waitForTimeout(randomBetween(
+      collectorConfig.pageDwellMinMs,
+      collectorConfig.pageDwellMaxMs,
+    ));
+    if (await riskGateVisible(page)) throw new RiskGateError("抖音出现安全验证或访问频繁提示");
+    const scrollCount = randomBetween(1, 2);
+    for (let index = 0; index < scrollCount && collected.size < maxResults; index += 1) {
+      await page.mouse.move(randomBetween(350, 1_050), randomBetween(260, 720), {
+        steps: randomBetween(8, 18),
+      });
+      await page.mouse.wheel(0, randomBetween(650, 1_250));
+      await page.waitForTimeout(randomBetween(2_500, 5_500));
+      if (await riskGateVisible(page)) throw new RiskGateError("抖音出现安全验证或访问频繁提示");
     }
     await Promise.allSettled([...pending]);
     if (collected.size < maxResults) {
@@ -136,6 +170,11 @@ async function needsLogin(page: Page) {
   return loginButton.isVisible().catch(() => false);
 }
 
+async function riskGateVisible(page: Page) {
+  const riskText = page.getByText(/验证码|安全验证|访问频繁|操作频繁|请完成下列验证|拖动滑块/iu).first();
+  return riskText.isVisible().catch(() => false);
+}
+
 async function syncQueue() {
   for (const queued of store.dueQueue()) {
     try {
@@ -166,7 +205,11 @@ function createBatch(keyword: string, startedAt: Date, items: CollectedVideo[]):
 }
 
 async function collectDueTracked(page: Page) {
-  for (const tracked of store.dueTracked(5)) {
+  for (const tracked of store.dueTracked(1)) {
+    await wait(randomBetween(
+      collectorConfig.actionDelayMinMs,
+      collectorConfig.actionDelayMaxMs,
+    ));
     const rows = await collectFromPage(page, tracked.sourceUrl, "", 1);
     const exact = rows.find((item) => item.videoId === tracked.videoId);
     if (exact) {
@@ -181,28 +224,47 @@ async function collectDueTracked(page: Page) {
 async function runCycle(page: Page) {
   await syncQueue();
   const plan = await api<{ keywords: KeywordRow[] }>("/viral-keywords/today?platform=DOUYIN");
-  const intervals = { A: 30, B: 120, C: 360 };
-  const due = plan.keywords.filter((keyword) => store.keywordDue(keyword.id, intervals[keyword.priority]));
-  for (const keyword of due) {
+  const intervals = { A: 90, B: 240, C: 720 };
+  const remaining = store.remainingDailySearches(collectorConfig.dailySearchLimit);
+  const due = plan.keywords
+    .filter((keyword) => store.keywordDue(keyword.id, intervals[keyword.priority]))
+    .slice(0, Math.min(collectorConfig.maxKeywordsPerCycle, remaining));
+  log(`本轮计划采集${due.length}个关键词，今日剩余额度${remaining}`);
+  for (const [index, keyword] of due.entries()) {
     const startedAt = new Date();
     const target = `https://www.douyin.com/search/${encodeURIComponent(keyword.keyword)}?type=video&publish_time=1&sort_type=2`;
     const items = await collectFromPage(page, target, keyword.keyword, collectorConfig.maxResultsPerKeyword);
+    store.recordSearch();
     store.markKeywordRun(keyword.id);
     if (!items.length) {
       log(`关键词无12小时内结果 ${keyword.keyword}`);
-      continue;
+    } else {
+      store.enqueue(createBatch(keyword.keyword, startedAt, items));
+      store.trackVideos(items);
+      log(`关键词采集完成 ${keyword.keyword} ${items.length}条`);
+      await syncQueue();
     }
-    store.enqueue(createBatch(keyword.keyword, startedAt, items));
-    store.trackVideos(items);
-    log(`关键词采集完成 ${keyword.keyword} ${items.length}条`);
-    await syncQueue();
+    if (index < due.length - 1) {
+      const delay = randomBetween(
+        collectorConfig.actionDelayMinMs,
+        collectorConfig.actionDelayMaxMs,
+      );
+      log(`自然停留${Math.ceil(delay / 1_000)}秒后继续`);
+      await wait(delay);
+    }
   }
-  await collectDueTracked(page);
+  if (due.length && store.remainingDailySearches(collectorConfig.dailySearchLimit) > 0) {
+    await collectDueTracked(page);
+  }
   await syncQueue();
   await heartbeat("LOGGED_IN", "ONLINE", {
     lastCollectionAt: new Date().toISOString(),
     lastSyncAt: new Date().toISOString(),
-    metadata: { dueKeywordCount: due.length },
+    metadata: {
+      dueKeywordCount: due.length,
+      dailySearchesRemaining: store.remainingDailySearches(collectorConfig.dailySearchLimit),
+      pacingMode: "CONSERVATIVE",
+    },
   });
 }
 
@@ -216,7 +278,7 @@ async function main() {
     executablePath: collectorConfig.chromeExecutable,
     headless: false,
     viewport: { width: 1440, height: 900 },
-    args: ["--disable-blink-features=AutomationControlled", "--no-default-browser-check"],
+    args: ["--no-default-browser-check"],
   });
   const page = context.pages()[0] || await context.newPage();
   let stopping = false;
@@ -232,22 +294,42 @@ async function main() {
   process.once("SIGTERM", stop);
 
   while (!stopping) {
+    let restMinutes = randomBetween(
+      collectorConfig.cycleRestMinMinutes,
+      collectorConfig.cycleRestMaxMinutes,
+    );
     try {
+      if (!withinActiveHours()) {
+        await heartbeat("LOGGED_IN", "PAUSED", {
+          metadata: { reason: "OUTSIDE_ACTIVE_HOURS", pacingMode: "CONSERVATIVE" },
+        });
+        log(`当前为休息时段，${collectorConfig.activeHourStart}:00后恢复`);
+        restMinutes = 60;
+        await wait(restMinutes * 60_000);
+        continue;
+      }
       await page.goto("https://www.douyin.com/", { waitUntil: "domcontentloaded", timeout: 45_000 });
-      await page.waitForTimeout(2_000);
+      await page.waitForTimeout(randomBetween(3_000, 6_000));
       if (await needsLogin(page)) {
         await heartbeat("NEEDS_LOGIN", "ONLINE");
         log("抖音需要扫码登录，已保留登录窗口");
+      } else if (await riskGateVisible(page)) {
+        throw new RiskGateError("抖音出现安全验证或访问频繁提示");
       } else {
         await runCycle(page);
       }
     } catch (error) {
-      await heartbeat("ERROR", "DEGRADED", {
+      const riskPaused = error instanceof RiskGateError;
+      if (riskPaused) restMinutes = collectorConfig.riskPauseMinutes;
+      await heartbeat(riskPaused ? "CAPTCHA" : "ERROR", riskPaused ? "PAUSED" : "DEGRADED", {
         metadata: { error: error instanceof Error ? error.message : "未知错误" },
       }).catch(() => undefined);
-      log(`采集循环失败 ${error instanceof Error ? error.message : "未知错误"}`);
+      log(riskPaused
+        ? `触发风控提示，自动暂停${restMinutes}分钟`
+        : `采集循环失败 ${error instanceof Error ? error.message : "未知错误"}`);
     }
-    await new Promise((resolve) => setTimeout(resolve, collectorConfig.loopMinutes * 60_000));
+    log(`本轮结束，休息${restMinutes}分钟`);
+    await wait(restMinutes * 60_000);
   }
 }
 

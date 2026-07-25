@@ -32,6 +32,10 @@ export class CollectorStore {
         nextStage INTEGER NOT NULL,
         nextDueAt TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS daily_search_usage (
+        day TEXT PRIMARY KEY,
+        searchCount INTEGER NOT NULL DEFAULT 0
+      );
     `);
   }
 
@@ -75,6 +79,24 @@ export class CollectorStore {
       INSERT INTO keyword_runs (keywordId, lastRunAt) VALUES (?, ?)
       ON CONFLICT(keywordId) DO UPDATE SET lastRunAt = excluded.lastRunAt
     `).run(keywordId, new Date().toISOString());
+  }
+
+  remainingDailySearches(limit: number, now = new Date()) {
+    const day = now.toLocaleDateString("en-CA", { timeZone: "Asia/Shanghai" });
+    const row = this.database.prepare("SELECT searchCount FROM daily_search_usage WHERE day = ?")
+      .get(day) as { searchCount?: number } | undefined;
+    return Math.max(0, limit - (row?.searchCount || 0));
+  }
+
+  recordSearch(now = new Date()) {
+    const day = now.toLocaleDateString("en-CA", { timeZone: "Asia/Shanghai" });
+    this.database.prepare(`
+      INSERT INTO daily_search_usage (day, searchCount) VALUES (?, 1)
+      ON CONFLICT(day) DO UPDATE SET searchCount = searchCount + 1
+    `).run(day);
+    this.database.prepare("DELETE FROM daily_search_usage WHERE day < ?").run(
+      new Date(now.getTime() - 7 * 86_400_000).toLocaleDateString("en-CA", { timeZone: "Asia/Shanghai" }),
+    );
   }
 
   trackVideos(videos: CollectedVideo[]) {
