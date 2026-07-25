@@ -28,7 +28,7 @@ export type ContentPlan = {
   productionStage: string;
   owner?: string;
   targetPlatforms: string[];
-  shootRequirements: Array<{ id: string; description: string; status: string; coverage?: "EXISTING" | "MISSING"; assetIds?: string[]; reason?: string; note?: string }>;
+  shootRequirements: Array<{ id: string; description: string; status: string; coverage?: "EXISTING" | "MISSING"; assetIds?: string[]; videoAssetIds?: string[]; imageAssetIds?: string[]; reason?: string; note?: string }>;
   masterVideoPath?: string;
   masterVideoStatus: string;
   kind: "VIDEO" | "ARTICLE" | "SHORT_POST" | "WECHAT_MOMENT";

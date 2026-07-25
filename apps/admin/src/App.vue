@@ -809,7 +809,7 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
                       <span>{{ requirement.description }}</span>
                       <small v-if="requirement.reason">{{ requirement.reason }}</small>
                       <div v-if="requirement.assetIds?.length" class="matched-assets">
-                        <el-button v-for="assetId in requirement.assetIds" :key="assetId" size="small" text type="primary" @click.stop="previewProductionAsset(item, assetId)">预览 · {{ productionAsset(item, assetId)?.displayName || productionAsset(item, assetId)?.assetNo || assetId }}</el-button>
+                        <el-button v-for="assetId in requirement.assetIds" :key="assetId" size="small" text type="primary" @click.stop="previewProductionAsset(item, assetId)">{{ productionAsset(item, assetId)?.kind === 'VIDEO' ? '视频主画面' : productionAsset(item, assetId)?.kind === 'IMAGE' ? '图片辅助' : '素材' }} · {{ productionAsset(item, assetId)?.displayName || productionAsset(item, assetId)?.assetNo || assetId }}</el-button>
                       </div>
                     </div>
                     <div class="shoot-actions"><el-button size="small" @click="replaceShotAsset(item, requirement)">拍摄替换</el-button></div>

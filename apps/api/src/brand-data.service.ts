@@ -1028,16 +1028,26 @@ export class BrandDataService {
       include: { contentAssets: { include: { asset: true } } },
     });
     if (!plan || plan.kind !== "VIDEO") return;
-    const eligible = new Set(plan.contentAssets.filter(({ asset }) =>
+    const eligible = new Map(plan.contentAssets.filter(({ asset }) =>
       asset.reviewStatus === "APPROVED"
       && asset.availabilityStatus === "ACTIVE"
       && ["COMMERCIAL", "EDIT_ONLY"].includes(asset.rightsStatus),
-    ).map(({ assetId }) => assetId));
+    ).map(({ assetId, asset }) => [assetId, String(asset.kind || "").toUpperCase()]));
     const requirements = Array.isArray(plan.shootRequirements) ? plan.shootRequirements as JsonRecord[] : [];
     const next = requirements.map((item) => {
       const assetIds = textArray(item.assetIds);
-      const covered = assetIds.some((assetId) => eligible.has(assetId));
-      return { ...item, assetIds, coverage: covered ? "EXISTING" : "MISSING", status: covered ? "DONE" : assetIds.length ? "IN_PROGRESS" : "OPEN" };
+      const videoAssetIds = Array.from(new Set([...textArray(item.videoAssetIds), ...assetIds])).filter((assetId) => eligible.get(assetId) === "VIDEO");
+      const imageAssetIds = Array.from(new Set([...textArray(item.imageAssetIds), ...assetIds])).filter((assetId) => eligible.get(assetId) === "IMAGE");
+      const covered = videoAssetIds.length > 0;
+      return {
+        ...item,
+        assetIds: [...videoAssetIds, ...imageAssetIds],
+        videoAssetIds,
+        imageAssetIds,
+        coverage: covered ? "EXISTING" : "MISSING",
+        status: covered ? "DONE" : assetIds.length ? "IN_PROGRESS" : "OPEN",
+        ...(!covered && imageAssetIds.length ? { reason: "当前只有静态图片，可作为辅助画面，仍需补拍视频主画面" } : {}),
+      };
     });
     const productionStage = next.length === 0 || next.every((item) => text(item.status) === "DONE") ? "READY_TO_EDIT" : "AWAITING_ASSETS";
     await this.prisma.contentPlan.update({ where: { id: contentPlanId }, data: { shootRequirements: json(next), productionStage } });
