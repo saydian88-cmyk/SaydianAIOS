@@ -51,6 +51,15 @@ export type AiPlatformPackaging = {
   coverSpec: Record<string, unknown>;
 };
 
+export type AiAssetCoverage = {
+  shots: Array<{
+    description: string;
+    matchedAssetIds: string[];
+    coverage: "EXISTING" | "MISSING";
+    reason: string;
+  }>;
+};
+
 type JsonRecord = Record<string, unknown>;
 
 function text(value: unknown): string {
@@ -120,6 +129,24 @@ export class AiContentService {
         },
       };
     });
+  }
+
+  async analyzeVideoAssetCoverage(context: JsonRecord): Promise<AiAssetCoverage> {
+    const result = await this.callJson(
+      `你是短视频素材统筹。请把脚本拆成逐镜头素材清单，并逐项检查公司现有素材库。
+只能引用输入中真实存在的assetId。能够由已有素材或其片段覆盖的镜头标记EXISTING并填写matchedAssetIds；无法覆盖的标记MISSING。
+不得因为某个镜头缺失就要求重拍整条脚本。镜头描述必须具体到主体、动作、景别或场景，禁止写“本脚本所需素材”“全部素材”等笼统内容。
+返回JSON：{"shots":[{"description":"","matchedAssetIds":[],"coverage":"EXISTING|MISSING","reason":""}]}
+输入：${JSON.stringify(context)}`,
+    );
+    return {
+      shots: (Array.isArray(result.shots) ? result.shots : []).map(object).map((item) => ({
+        description: text(item.description),
+        matchedAssetIds: strings(item.matchedAssetIds),
+        coverage: text(item.coverage).toUpperCase() === "EXISTING" ? "EXISTING" as const : "MISSING" as const,
+        reason: text(item.reason),
+      })).filter((item) => item.description),
+    };
   }
 
   async generateArticle(context: JsonRecord): Promise<AiArticlePackage> {

@@ -46,10 +46,16 @@ export class ContentService {
     const context = await this.generationContext(productModel);
     const candidates = await this.aiContent.generateVideoCandidates(context);
     const allowedAssetIds = new Set((context.assets as Array<{ id: string }>).map((item) => item.id));
+    const coverages = await Promise.all(candidates.map((candidate) => this.aiContent.analyzeVideoAssetCoverage({
+      productModel: context.productModel,
+      script: { topic: candidate.topic, hook: candidate.hook, outline: candidate.outline, scripts: candidate.scripts },
+      assets: context.assets,
+    })));
     const selected: string[] = [];
     let created = 0;
     for (let index = 0; index < candidates.length; index += 1) {
       const candidate = candidates[index];
+      const coverage = coverages[index];
       const body = this.videoExecutionBody(candidate);
       const guard = await this.guard.evaluate({
         title: candidate.topic,
@@ -57,16 +63,25 @@ export class ContentService {
         productModel: String(context.productModel || ""),
         evidenceIds: (context.product as { evidenceIds?: string[] }).evidenceIds || [],
       });
-      const assetIds = Array.from(new Set(candidate.assetIds.filter((id) => allowedAssetIds.has(id))));
+      const coverageAssetIds = coverage.shots.flatMap((shot) => shot.matchedAssetIds);
+      const assetIds = Array.from(new Set([...candidate.assetIds, ...coverageAssetIds].filter((id) => allowedAssetIds.has(id))));
+      const shootRequirements = coverage.shots.map((shot, shotIndex) => {
+        const matchedAssetIds = Array.from(new Set(shot.matchedAssetIds.filter((id) => allowedAssetIds.has(id))));
+        const existing = shot.coverage === "EXISTING" && matchedAssetIds.length > 0;
+        return {
+          id: `shot-${shotIndex + 1}`,
+          description: shot.description,
+          status: existing ? "DONE" : "OPEN",
+          coverage: existing ? "EXISTING" : "MISSING",
+          assetIds: matchedAssetIds,
+          reason: shot.reason,
+        };
+      });
       const plan = await this.prisma.contentPlan.create({
         data: {
           productionNo: this.productionNo(date),
           productionStage: "SCRIPT_REVIEW",
-          shootRequirements: candidate.missingAssets.map((description, requirementIndex) => ({
-            id: `shot-${requirementIndex + 1}`,
-            description,
-            status: "OPEN",
-          })),
+          shootRequirements,
           planDate,
           kind: "VIDEO",
           topic: candidate.topic,
@@ -77,7 +92,7 @@ export class ContentService {
           scoreBreakdown: candidate.scoreBreakdown,
           hook: candidate.hook,
           outline: candidate.outline,
-          sourceSignals: [{ externalVideoIds: candidate.referenceIds, missingAssets: candidate.missingAssets, capturedAt: new Date().toISOString() }],
+          sourceSignals: [{ externalVideoIds: candidate.referenceIds, missingAssets: shootRequirements.filter((item) => item.coverage === "MISSING").map((item) => item.description), capturedAt: new Date().toISOString() }],
           evidenceIds: guard.evidenceIds,
           riskReasons: guard.reasons,
           createdBy: actor,
@@ -87,7 +102,7 @@ export class ContentService {
           promptVersion: "brand-content-v2",
           status: index === 0 && guard.allowed ? "PENDING_APPROVAL" : "DRAFT",
           variants: { create: this.videoVariants(candidate) },
-          contentAssets: { create: assetIds.map((assetId, assetIndex) => ({ assetId, role: assetIndex === 0 ? "PRIMARY" : "RECOMMENDED" })) },
+          contentAssets: { create: assetIds.map((assetId) => ({ assetId, role: "SCRIPT_MATCH" })) },
         },
       });
       if (index === 0) {
@@ -251,10 +266,10 @@ export class ContentService {
           contentDescription: true,
           scene: true,
           tags: { select: { tag: { select: { namespace: true, code: true, label: true } } } },
-          segments: { select: { moduleType: true, startSeconds: true, endSeconds: true, transcript: true, confidence: true }, orderBy: { startSeconds: "asc" } },
+          segments: { select: { moduleType: true, startSeconds: true, endSeconds: true, transcript: true, confidence: true }, orderBy: { startSeconds: "asc" }, take: 12 },
         },
         orderBy: [{ qualityScore: "desc" }, { useCount: "desc" }],
-        take: 20,
+        take: 60,
       }),
       this.prisma.externalVideo.findMany({
         where: { status: "READY", rightsStatus: "INTERNAL", level: "REFERENCE", availabilityStatus: "INACTIVE" },
@@ -432,7 +447,9 @@ export class ContentService {
         id: String(row.id || `shot-${index + 1}`),
         description,
         status: ["OPEN", "IN_PROGRESS", "DONE"].includes(String(row.status)) ? String(row.status) : "OPEN",
+        coverage: String(row.coverage) === "EXISTING" ? "EXISTING" : "MISSING",
         assetIds: Array.isArray(row.assetIds) ? row.assetIds.map(String).filter(Boolean) : [],
+        reason: String(row.reason || ""),
         note: String(row.note || ""),
       };
     });
@@ -445,6 +462,70 @@ export class ContentService {
     });
     await this.prisma.auditLog.create({ data: { actor, action: "SHOOT_REQUIREMENTS_UPDATE", entityType: "ContentPlan", entityId: id, after: { requirements: rows } } });
     return updated;
+  }
+
+  async refreshAssetCoverage(id: string, actor: string) {
+    const plan = await this.prisma.contentPlan.findUnique({ where: { id }, include: { variants: true } });
+    if (!plan || plan.kind !== "VIDEO") throw new NotFoundException("视频生产单不存在");
+    if (!["APPROVED", "SCHEDULED"].includes(plan.status)) throw new BadRequestException("请先通过脚本审核，再分析素材覆盖");
+    const context = await this.generationContext(plan.productModel || undefined);
+    const allowedAssetIds = new Set((context.assets as Array<{ id: string }>).map((item) => item.id));
+    const coverage = await this.aiContent.analyzeVideoAssetCoverage({
+      productModel: plan.productModel,
+      script: {
+        topic: plan.topic,
+        hook: plan.hook,
+        outline: plan.outline,
+        variants: plan.variants.map((variant) => ({ platform: variant.platform, title: variant.title, body: variant.body })),
+      },
+      assets: context.assets,
+    });
+    if (!coverage.shots.length) throw new BadRequestException("AI未能形成逐镜头素材清单，请重试");
+    const requirements = coverage.shots.map((shot, index) => {
+      const assetIds = Array.from(new Set(shot.matchedAssetIds.filter((assetId) => allowedAssetIds.has(assetId))));
+      const existing = shot.coverage === "EXISTING" && assetIds.length > 0;
+      return {
+        id: `shot-${index + 1}`,
+        description: shot.description,
+        status: existing ? "DONE" : "OPEN",
+        coverage: existing ? "EXISTING" : "MISSING",
+        assetIds,
+        reason: shot.reason,
+      };
+    });
+    const matchedAssetIds = Array.from(new Set(requirements.flatMap((item) => item.assetIds)));
+    const productionStage = requirements.every((item) => item.status === "DONE") ? "READY_TO_EDIT" : "AWAITING_ASSETS";
+    await this.prisma.$transaction(async (tx) => {
+      if (matchedAssetIds.length) {
+        await tx.contentAsset.createMany({
+          data: matchedAssetIds.map((assetId) => ({ contentPlanId: id, assetId, role: "SCRIPT_MATCH" })),
+          skipDuplicates: true,
+        });
+      }
+      await tx.contentPlan.update({ where: { id }, data: { shootRequirements: requirements, productionStage } });
+      await tx.auditLog.create({ data: { actor, action: "SCRIPT_ASSET_COVERAGE_REFRESH", entityType: "ContentPlan", entityId: id, after: { requirements, productionStage } } });
+    });
+    return this.workflow(id);
+  }
+
+  async replaceShotAsset(id: string, requirementId: string, actor: string) {
+    const plan = await this.prisma.contentPlan.findUnique({ where: { id } });
+    if (!plan || plan.kind !== "VIDEO") throw new NotFoundException("视频生产单不存在");
+    const requirements = Array.isArray(plan.shootRequirements) ? plan.shootRequirements as Array<Record<string, unknown>> : [];
+    const target = requirements.find((item) => String(item.id) === requirementId);
+    if (!target) throw new NotFoundException("镜头素材项不存在");
+    const removedAssetIds = Array.isArray(target.assetIds) ? target.assetIds.map(String) : [];
+    const next = requirements.map((item) => String(item.id) === requirementId
+      ? { ...item, status: "OPEN", coverage: "MISSING", assetIds: [], note: "用户选择重新拍摄替换已有素材" }
+      : item);
+    const stillUsed = new Set(next.flatMap((item) => Array.isArray(item.assetIds) ? item.assetIds.map(String) : []));
+    const removableAssetIds = removedAssetIds.filter((assetId) => !stillUsed.has(assetId));
+    await this.prisma.$transaction(async (tx) => {
+      if (removableAssetIds.length) await tx.contentAsset.deleteMany({ where: { contentPlanId: id, assetId: { in: removableAssetIds } } });
+      await tx.contentPlan.update({ where: { id }, data: { shootRequirements: JSON.parse(JSON.stringify(next)) as Prisma.InputJsonValue, productionStage: "AWAITING_ASSETS" } });
+      await tx.auditLog.create({ data: { actor, action: "SHOT_ASSET_REPLACE_REQUEST", entityType: "ContentPlan", entityId: id, after: { requirementId, removedAssetIds } } });
+    });
+    return this.workflow(id);
   }
 
   async startEditing(id: string, actor: string) {
@@ -817,6 +898,7 @@ export class ContentService {
       include: {
         variants: { include: { publishJobs: { orderBy: { createdAt: "desc" }, take: 1 } } },
         approvals: { orderBy: { createdAt: "desc" }, take: 10 },
+        contentAssets: { include: { asset: { select: { id: true, assetNo: true, displayName: true, fileName: true, kind: true } } } },
         optimizations: { orderBy: { checkpointHours: "asc" } },
       },
       orderBy: [{ planDate: "desc" }, { score: "desc" }],

@@ -1033,7 +1033,8 @@ export class BrandDataService {
     const requirements = Array.isArray(plan.shootRequirements) ? plan.shootRequirements as JsonRecord[] : [];
     const next = requirements.map((item) => {
       const assetIds = textArray(item.assetIds);
-      return { ...item, assetIds, status: assetIds.some((assetId) => eligible.has(assetId)) ? "DONE" : assetIds.length ? "IN_PROGRESS" : "OPEN" };
+      const covered = assetIds.some((assetId) => eligible.has(assetId));
+      return { ...item, assetIds, coverage: covered ? "EXISTING" : "MISSING", status: covered ? "DONE" : assetIds.length ? "IN_PROGRESS" : "OPEN" };
     });
     const productionStage = next.length === 0 || next.every((item) => text(item.status) === "DONE") ? "READY_TO_EDIT" : "AWAITING_ASSETS";
     await this.prisma.contentPlan.update({ where: { id: contentPlanId }, data: { shootRequirements: json(next), productionStage } });
