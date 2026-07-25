@@ -518,6 +518,13 @@ model Asset {
   perceptualHash      String?
   analysisVersion     Int                     @default(0)
   lastAnalysisAt      DateTime?
+  aiIndex             Json                    @default("{}")
+  searchText          String?
+  indexVersion        Int                     @default(0)
+  indexConfidence     Float                   @default(0)
+  indexNeedsReview    Boolean                 @default(true)
+  indexReviewedAt     DateTime?
+  indexReviewCount    Int                     @default(0)
   createdByEmployeeId String?
 
   contentAssets     ContentAsset[]
@@ -543,6 +550,7 @@ model Asset {
   @@index([reviewStatus, availabilityStatus, rightsStatus])
   @@index([createdByEmployeeId, createdAt])
   @@index([perceptualHash])
+  @@index([indexVersion, processingStatus])
 }
 
 model AssetVersion {

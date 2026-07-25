@@ -398,6 +398,11 @@ export class BrandDataController {
     return this.brandData.reanalyzeAsset(id, this.actor(authorization, requestedActor));
   }
 
+  @Post("assets/rebuild-index")
+  rebuildAssetIndex(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined) {
+    return this.brandData.rebuildAssetIndex(this.actor(authorization, requestedActor));
+  }
+
   @Post("assets/:id/usages")
   recordAssetUsage(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("id") id: string, @Body() body: Record<string, unknown>) {
     return this.brandData.recordAssetUsage(id, body, this.actor(authorization, requestedActor));

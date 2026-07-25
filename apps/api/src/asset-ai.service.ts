@@ -511,7 +511,11 @@ export class AssetAiService {
     if (!objectKey) throw new Error("素材缺少OSS对象");
     const prompt = type === "OCR"
       ? "识别图片中的全部文字。返回JSON：{text,language,blocks:[{text,position}]}. 不要添加解释。"
-      : "分析赛电品牌素材。返回JSON：{suggestedName,summary,products,people,scenes,features,painPoints,audiences,platforms,moduleSuggestion,tags,riskWords}。suggestedName必须是30字内、便于搜索的中文素材名，格式优先为“型号-模块-核心内容”，不能使用原文件编号或无意义名称。只返回JSON。";
+      : `分析赛电品牌图片或视频素材，为后续AI剪辑建立一次性结构化检索索引。
+返回JSON：{"suggestedName":"","summary":"","products":[],"purposes":[],"features":[],"scenes":[],"actions":[],"shotTypes":[],"people":[],"objects":[],"audiences":[],"platforms":[],"visualStyles":[],"orientations":[],"speechTopics":[],"painPoints":[],"moduleSuggestion":"","tags":[],"riskWords":[],"indexConfidence":0.0,"uncertainFields":[]}。
+purposes描述素材用途，如功能展示、佩戴演示、生活场景、产品外观、开场钩子；features写具体功能，如心电图测量、血压测量、SOS。
+actions写画面动作；shotTypes写特写、中景、全景、俯拍等；scenes写具体环境；orientations写横屏或竖屏。
+suggestedName必须使用“型号-用途-核心功能或画面”的格式，例如“W9S-功能展示-心电图测量”，不能使用原文件编号或无意义名称。只返回JSON。`;
     const response = await fetch(`${opsConfig.bailian.baseUrl}/chat/completions`, {
       method: "POST",
       headers: { authorization: `Bearer ${opsConfig.bailian.apiKey}`, "content-type": "application/json" },
@@ -521,35 +525,68 @@ export class AssetAiService {
     const payload = await response.json() as JsonRecord;
     const rawContent = text(((payload.choices as Array<JsonRecord> | undefined)?.[0]?.message as JsonRecord | undefined)?.content);
     const result = rawContent ? JSON.parse(rawContent) as JsonRecord : payload;
-    if (type === "CONTENT_UNDERSTANDING" || type === "TAGGING") await this.applyAiResult(text(asset.id), result);
+    if (type === "CONTENT_UNDERSTANDING" || type === "TAGGING") await this.applyAiResult(text(asset.id), result, type);
     return result;
   }
 
-  private async applyAiResult(assetId: string, result: JsonRecord) {
+  private async applyAiResult(assetId: string, result: JsonRecord, jobType: AssetJobType) {
     const asset = await this.prisma.asset.findUnique({
       where: { id: assetId },
       include: { products: { include: { product: { select: { modelCode: true } } } } },
     });
-    const tags = ["scenes", "features", "painPoints", "audiences", "platforms", "tags"].flatMap((namespace) => {
-      const values = Array.isArray(result[namespace]) ? result[namespace] as unknown[] : [];
-      return values.map((value) => ({ namespace, label: text(value) })).filter((item) => item.label);
+    const indexFields: Array<[string, string]> = [
+      ["product_model", "products"], ["purpose", "purposes"], ["feature", "features"],
+      ["scene", "scenes"], ["action", "actions"], ["shot_type", "shotTypes"],
+      ["person", "people"], ["object", "objects"], ["audience", "audiences"],
+      ["platform", "platforms"], ["visual_style", "visualStyles"], ["orientation", "orientations"],
+      ["speech_topic", "speechTopics"], ["pain_point", "painPoints"], ["keyword", "tags"],
+    ];
+    const labels = (value: unknown): string[] => (Array.isArray(value) ? value : []).map((item) => {
+      if (item && typeof item === "object" && !Array.isArray(item)) {
+        const row = item as JsonRecord;
+        return text(row.modelCode || row.model || row.name || row.label || row.value);
+      }
+      return text(item);
+    }).filter(Boolean);
+    const tags = indexFields.flatMap(([namespace, field]) => {
+      return labels(result[field]).map((label) => ({ namespace, label }));
     });
+    const indexConfidence = Math.max(0, Math.min(1, Number(result.indexConfidence) || 0));
     for (const item of tags) {
       const code = item.label.toLowerCase().replace(/\s+/gu, "-").slice(0, 80);
       const tag = await this.prisma.tagDefinition.upsert({ where: { namespace_code: { namespace: item.namespace, code } }, update: { label: item.label }, create: { namespace: item.namespace, code, label: item.label } });
       const existing = await this.prisma.assetTag.findUnique({ where: { assetId_tagId: { assetId, tagId: tag.id } } });
-      if (!existing?.locked) await this.prisma.assetTag.upsert({ where: { assetId_tagId: { assetId, tagId: tag.id } }, update: { source: "AI", confidence: 0.8, modelVersion: opsConfig.bailian.visionModel }, create: { assetId, tagId: tag.id, source: "AI", confidence: 0.8, modelVersion: opsConfig.bailian.visionModel, createdBy: "阿里云百炼" } });
+      if (!existing?.locked) await this.prisma.assetTag.upsert({ where: { assetId_tagId: { assetId, tagId: tag.id } }, update: { source: "AI", confidence: indexConfidence, modelVersion: opsConfig.bailian.visionModel }, create: { assetId, tagId: tag.id, source: "AI", confidence: indexConfidence, modelVersion: opsConfig.bailian.visionModel, createdBy: "阿里云百炼" } });
     }
+    const productCodes = asset?.products.map((item) => item.product.modelCode) || [];
     const displayName = asset && isIrregularAssetName(asset.displayName || asset.fileName)
-      ? buildAiAssetName(result, asset.products.map((item) => item.product.modelCode))
+      ? buildAiAssetName(result, productCodes)
       : undefined;
+    const aiIndex = Object.fromEntries(indexFields.map(([namespace, field]) => [namespace, labels(result[field])]));
+    const searchText = Array.from(new Set([
+      ...productCodes,
+      displayName || asset?.displayName || asset?.fileName || "",
+      text(result.summary),
+      text(result.moduleSuggestion),
+      ...Object.values(aiIndex).flatMap((value) => value),
+    ].filter(Boolean))).join(" ");
     await this.prisma.asset.update({
       where: { id: assetId },
       data: {
         contentDescription: text(result.summary) || undefined,
         ...(displayName ? { displayName } : {}),
+        aiIndex: json(aiIndex),
+        searchText,
+        indexVersion: 2,
+        indexConfidence,
+        indexNeedsReview: indexConfidence < 0.75,
+        indexReviewedAt: new Date(),
       },
     });
+    if (jobType === "TAGGING" && indexConfidence < 0.75 && asset && asset.indexReviewCount < 1 && asset.kind) {
+      await this.prisma.asset.update({ where: { id: assetId }, data: { indexReviewCount: { increment: 1 } } });
+      await this.enqueue(assetId, asset.kind, asset.analysisVersion + 1);
+    }
   }
 
   private async transcription(asset: JsonRecord) {
