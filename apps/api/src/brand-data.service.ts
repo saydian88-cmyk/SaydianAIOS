@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import { Cron } from "@nestjs/schedule";
 import {
   AssetAvailabilityStatus,
   AssetKind,
@@ -162,23 +163,24 @@ export class BrandDataService {
   async overview() {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const [knowledgeTotal, knowledgeReady, knowledgePending, assetTotal, assetReady, assetPending, assetAiFailed, assetToday, highQuality, ossStored, gapCount, ossHealth] = await Promise.all([
+    const [knowledgeTotal, knowledgeReady, knowledgePending, assetTotal, assetReady, assetPending, assetAiFailed, assetToday, highQuality, ossStored, gapCount, assetTrash, ossHealth] = await Promise.all([
       this.prisma.knowledgeEntry.count(),
       this.prisma.knowledgeEntry.count({ where: { status: "READY", externallyUsable: true } }),
       this.prisma.knowledgeEntry.count({ where: { status: { in: ["DRAFT", "PENDING"] } } }),
-      this.prisma.asset.count(),
-      this.prisma.asset.count({ where: { reviewStatus: "APPROVED", availabilityStatus: "ACTIVE" } }),
-      this.prisma.asset.count({ where: { reviewStatus: "PENDING" } }),
-      this.prisma.asset.count({ where: { processingStatus: "FAILED" } }),
-      this.prisma.asset.count({ where: { createdAt: { gte: today } } }),
-      this.prisma.asset.count({ where: { qualityScore: { gte: 80 }, reviewStatus: "APPROVED" } }),
-      this.prisma.asset.count({ where: { storageProvider: "ALIYUN_OSS", objectKey: { not: null } } }),
+      this.prisma.asset.count({ where: { deletedAt: null } }),
+      this.prisma.asset.count({ where: { deletedAt: null, reviewStatus: "APPROVED", availabilityStatus: "ACTIVE" } }),
+      this.prisma.asset.count({ where: { deletedAt: null, reviewStatus: "PENDING" } }),
+      this.prisma.asset.count({ where: { deletedAt: null, processingStatus: "FAILED" } }),
+      this.prisma.asset.count({ where: { deletedAt: null, createdAt: { gte: today } } }),
+      this.prisma.asset.count({ where: { deletedAt: null, qualityScore: { gte: 80 }, reviewStatus: "APPROVED" } }),
+      this.prisma.asset.count({ where: { deletedAt: null, storageProvider: "ALIYUN_OSS", objectKey: { not: null } } }),
       this.prisma.assetGapSnapshot.count({ where: { snapshotDate: { gte: today }, gapCount: { gt: 0 } } }),
+      this.prisma.asset.count({ where: { deletedAt: { not: null } } }),
       this.oss.healthCheck(),
     ]);
     return {
       knowledge: { total: knowledgeTotal, ready: knowledgeReady, pending: knowledgePending },
-      assets: { total: assetTotal, ready: assetReady, pending: assetPending, aiFailed: assetAiFailed, today: assetToday, highQuality, ossStored, gapCount },
+      assets: { total: assetTotal, ready: assetReady, pending: assetPending, aiFailed: assetAiFailed, today: assetToday, highQuality, ossStored, gapCount, trash: assetTrash },
       oss: ossHealth,
       ai: this.assetAi.capabilities(),
       generatedAt: new Date().toISOString(),
@@ -756,7 +758,7 @@ export class BrandDataService {
     const rightsStatus = text(query.rightsStatus).toUpperCase();
     const minimumScore = Number(query.minimumScore || 0);
     const where: Prisma.AssetWhereInput = {
-      status: { not: "ARCHIVED" },
+      ...(reviewScope === "TRASH" ? { deletedAt: { not: null } } : { deletedAt: null, status: { not: "ARCHIVED" } }),
       ...(assetKinds.includes(kind as AssetKind) ? { kind: kind as AssetKind } : {}),
       ...(assetLevels.includes(level as AssetLevel) ? { level: level as AssetLevel } : {}),
       ...(reviewStatuses.includes(reviewStatus as AssetReviewStatus)
@@ -902,14 +904,29 @@ export class BrandDataService {
 
   async bulkAssets(body: JsonRecord, actor: string) {
     const action = text(body.action).toUpperCase();
-    const ids = action === "PURGE_ALL"
-      ? (await this.prisma.asset.findMany({ select: { id: true } })).map((item) => item.id)
+    const ids = action === "TRASH_ALL"
+      ? (await this.prisma.asset.findMany({ where: { deletedAt: null }, select: { id: true } })).map((item) => item.id)
       : Array.from(new Set(textArray(body.ids))).slice(0, 200);
-    if (!ids.length) throw new BadRequestException(action === "PURGE_ALL" ? "素材库已经为空" : "请选择素材");
-    if (!["UPDATE", "APPROVE", "RETURN", "REANALYZE", "ARCHIVE", "PURGE", "PURGE_ALL"].includes(action)) throw new BadRequestException("不支持的批量操作");
-    if (["PURGE", "PURGE_ALL"].includes(action)) {
-      if (text(body.confirmation) !== "永久删除") throw new BadRequestException("永久删除确认文字不正确");
-      return this.permanentlyDeleteAssets(ids, actor, action);
+    if (!ids.length) throw new BadRequestException(action === "TRASH_ALL" ? "素材库已经为空" : "请选择素材");
+    if (!["UPDATE", "APPROVE", "RETURN", "REANALYZE", "ARCHIVE", "TRASH", "TRASH_ALL", "RESTORE"].includes(action)) throw new BadRequestException("不支持的批量操作");
+    if (["TRASH", "TRASH_ALL"].includes(action)) {
+      if (text(body.confirmation) !== "移入回收站") throw new BadRequestException("删除确认文字不正确");
+      const deletedAt = new Date();
+      const purgeAfter = new Date(deletedAt.getTime() + 3 * 24 * 60 * 60 * 1000);
+      const result = await this.prisma.asset.updateMany({
+        where: { id: { in: ids }, deletedAt: null },
+        data: { deletedAt, purgeAfter, status: "ARCHIVED", availabilityStatus: "ARCHIVED" },
+      });
+      await this.audit(actor, `ASSET_BULK_${action}`, "Asset", ids.join(","), { ids, count: result.count, deletedAt, purgeAfter });
+      return { action, count: result.count, purgeAfter };
+    }
+    if (action === "RESTORE") {
+      const result = await this.prisma.asset.updateMany({
+        where: { id: { in: ids }, deletedAt: { not: null } },
+        data: { deletedAt: null, purgeAfter: null, status: "PENDING", availabilityStatus: "INACTIVE" },
+      });
+      await this.audit(actor, "ASSET_BULK_RESTORE", "Asset", ids.join(","), { ids, count: result.count });
+      return { action, count: result.count };
     }
     let count = 0;
     for (const id of ids) {
@@ -969,6 +986,17 @@ export class BrandDataService {
       deletedOssObjects: ossResult.deleted,
     });
     return { action, count: assets.length, deletedOssObjects: ossResult.deleted };
+  }
+
+  @Cron("0 20 3 * * *", { timeZone: "Asia/Shanghai" })
+  async purgeExpiredTrash() {
+    const expired = await this.prisma.asset.findMany({
+      where: { deletedAt: { not: null }, purgeAfter: { lte: new Date() } },
+      select: { id: true },
+      take: 5000,
+    });
+    if (!expired.length) return { count: 0, deletedOssObjects: 0 };
+    return this.permanentlyDeleteAssets(expired.map((item) => item.id), "系统素材回收站", "PURGE_EXPIRED");
   }
 
   async replaceAssetVersion(id: string, file: MemoryFile | undefined, actor: string) {

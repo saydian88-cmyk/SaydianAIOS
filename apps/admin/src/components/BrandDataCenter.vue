@@ -7,7 +7,7 @@ import { api, patch, post, remove, upload, uploadWithProgress } from "../api";
 type Row = Record<string, any>;
 type Overview = {
   knowledge: { total: number; ready: number; pending: number };
-  assets: { total: number; ready: number; pending: number; aiFailed: number; today: number; highQuality: number; ossStored: number; gapCount: number };
+  assets: { total: number; ready: number; pending: number; aiFailed: number; today: number; highQuality: number; ossStored: number; gapCount: number; trash: number };
   oss: { ok: boolean; message: string };
   ai: { state: string; message: string };
 };
@@ -693,23 +693,33 @@ async function quickFilter(kind = "", reviewStatus = "") {
   await run(() => loadAssets());
 }
 
-async function permanentlyDeleteAssets(all = false) {
+async function trashAssets(all = false) {
   if (!all && !selectedAssets.value.length) return ElMessage.warning("请先勾选素材");
-  const target = all ? `素材库全部 ${assetTotal.value} 个素材` : `已选择的 ${selectedAssets.value.length} 个素材`;
+  const target = all ? `素材库全部 ${overview.value?.assets.total || assetTotal.value} 个素材` : `已选择的 ${selectedAssets.value.length} 个素材`;
   const result = await ElMessageBox.prompt(
-    `将永久删除${target}的数据库记录、OSS原文件、历史版本和衍生文件，无法恢复。请输入“永久删除”继续。`,
-    all ? "永久清空素材库" : "永久删除所选素材",
-    { confirmButtonText: "永久删除", cancelButtonText: "取消", inputPlaceholder: "请输入：永久删除", inputValidator: (value) => value === "永久删除" || "确认文字不正确", type: "error" },
+    `将${target}移入回收站，3天内可以恢复，之后系统会自动永久删除数据库记录和OSS文件。请输入“移入回收站”继续。`,
+    all ? "清空素材库" : "删除所选素材",
+    { confirmButtonText: "移入回收站", cancelButtonText: "取消", inputPlaceholder: "请输入：移入回收站", inputValidator: (value) => value === "移入回收站" || "确认文字不正确", type: "warning" },
   );
   await run(async () => {
     const response = await post<Row>("/api/v1/brand-data/assets/bulk", {
       ids: all ? [] : selectedAssets.value.map((item) => item.id),
-      action: all ? "PURGE_ALL" : "PURGE",
+      action: all ? "TRASH_ALL" : "TRASH",
       confirmation: result.value,
     });
     selectedAssets.value = [];
     await Promise.all([loadAssets(), loadJobs(), refreshOverview()]);
-    ElMessage.success(`已永久删除${response.count || 0}个素材及${response.deletedOssObjects || 0}个OSS文件`);
+    ElMessage.success(`已将${response.count || 0}个素材移入回收站，3天内可恢复`);
+  });
+}
+
+async function restoreAssets(ids = selectedAssets.value.map((item) => item.id)) {
+  if (!ids.length) return ElMessage.warning("请先勾选需要恢复的素材");
+  await run(async () => {
+    const response = await post<Row>("/api/v1/brand-data/assets/bulk", { ids, action: "RESTORE" });
+    selectedAssets.value = [];
+    await Promise.all([loadAssets(), refreshOverview()]);
+    ElMessage.success(`已恢复${response.count || 0}个素材，需重新审核后才可使用`);
   });
 }
 
@@ -732,12 +742,16 @@ async function filterByAssetTag(label: string) {
 }
 async function handleAssetViewChange(value: string) {
   if (value === "gaps") await run(async () => { await Promise.all([loadGaps(), loadGapTasks()]); });
-  if (value === "review") {
+  if (value === "trash") {
+    assetFilter.reviewStatus = "";
+    assetFilter.reviewScope = "TRASH";
+    await run(() => loadAssets());
+  } else if (value === "review") {
     assetFilter.kind = "";
     assetFilter.reviewStatus = "PENDING";
     assetFilter.reviewScope = "PENDING";
     await run(() => loadAssets());
-  } else if (value === "list" && assetFilter.reviewScope === "PENDING") {
+  } else if (value === "list" && ["PENDING", "TRASH"].includes(assetFilter.reviewScope)) {
     assetFilter.reviewStatus = "";
     assetFilter.reviewScope = "NORMAL";
     await run(() => loadAssets());
@@ -793,8 +807,8 @@ onMounted(reload);
     </template>
 
     <template v-else-if="activeTab === 'assets'">
-      <div class="workspace-heading"><div><h3>素材库</h3><p>按型号、用途、功能、场景、动作和景别建立AI剪辑索引。</p></div><div><el-button type="danger" plain @click="permanentlyDeleteAssets(true)">永久清空素材库</el-button><el-button @click="rebuildAssetIndex">重建AI索引</el-button><el-button :icon="Refresh" @click="syncAssets">扫描同步</el-button><el-button type="primary" :icon="Plus" @click="openBatchUpload">上传素材</el-button></div></div>
-      <el-segmented v-model="assetView" :options="[{ label: `素材 ${assetTotal}`, value: 'list' }, { label: `待审核 ${overview?.assets.pending || 0}`, value: 'review' }, { label: '视频切片', value: 'video' }, { label: `AI处理 ${jobs.length}`, value: 'jobs' }, { label: `缺口 ${gaps.filter(item => item.gapCount > 0).length}`, value: 'gaps' }, { label: '日报', value: 'report' }, { label: '增长闭环', value: 'loop' }]" @change="handleAssetViewChange" />
+      <div class="workspace-heading"><div><h3>素材库</h3><p>按型号、用途、功能、场景、动作和景别建立AI剪辑索引。</p></div><div><el-button type="danger" plain @click="trashAssets(true)">清空素材库</el-button><el-button @click="rebuildAssetIndex">重建AI索引</el-button><el-button :icon="Refresh" @click="syncAssets">扫描同步</el-button><el-button type="primary" :icon="Plus" @click="openBatchUpload">上传素材</el-button></div></div>
+      <el-segmented v-model="assetView" :options="[{ label: `素材 ${assetTotal}`, value: 'list' }, { label: `待审核 ${overview?.assets.pending || 0}`, value: 'review' }, { label: `回收站 ${overview?.assets.trash || 0}`, value: 'trash' }, { label: '视频切片', value: 'video' }, { label: `AI处理 ${jobs.length}`, value: 'jobs' }, { label: `缺口 ${gaps.filter(item => item.gapCount > 0).length}`, value: 'gaps' }, { label: '日报', value: 'report' }, { label: '增长闭环', value: 'loop' }]" @change="handleAssetViewChange" />
 
       <template v-if="assetView === 'loop'">
         <div class="workspace-heading compact"><div><h3>素材增长闭环</h3><p>上传、处理、审核、调用、效果回流、评分和下一轮任务在同一条链路中追踪。</p></div><el-button type="primary" :icon="Refresh" @click="refreshGrowthLoop">更新闭环</el-button></div>
@@ -810,7 +824,7 @@ onMounted(reload);
         </div>
       </template>
 
-      <template v-else-if="assetView === 'list' || assetView === 'review'">
+      <template v-else-if="assetView === 'list' || assetView === 'review' || assetView === 'trash'">
         <div class="asset-index">
           <button :class="{ active: !assetFilter.kind && !assetFilter.reviewStatus }" @click="quickFilter()">全部素材 <b>{{ overview?.assets.total || 0 }}</b></button>
           <button :class="{ active: assetFilter.kind === 'IMAGE' }" @click="quickFilter('IMAGE')">图片</button>
@@ -839,8 +853,9 @@ onMounted(reload);
             <el-tag size="small" :type="row.indexNeedsReview ? 'warning' : 'success'">{{ row.indexVersion ? `${Math.round(Number(row.indexConfidence || 0) * 100)}%` : '待建立' }}</el-tag>
           </button>
         </div>
-        <div class="bulk-toolbar"><span>已选 {{ selectedAssets.length }} 条</span><el-button size="small" type="primary" :disabled="!selectedAssets.length" @click="openAssetBulk">批量修改</el-button><el-button size="small" type="success" :disabled="!selectedAssets.length" @click="bulkAssets('APPROVE')">批量通过</el-button><el-button size="small" :disabled="!selectedAssets.length" @click="bulkAssets('REANALYZE')">批量重分析</el-button><el-button size="small" type="warning" plain :disabled="!selectedAssets.length" @click="bulkAssets('ARCHIVE')">归档所选</el-button><el-button size="small" type="danger" :disabled="!selectedAssets.length" @click="permanentlyDeleteAssets(false)">永久删除所选</el-button></div>
-        <div class="data-panel"><el-table :data="assets" stripe height="540" @selection-change="selectedAssets = $event"><el-table-column type="selection" width="46" /><el-table-column label="预览" width="112"><template #default="scope"><img v-if="scope.row.kind === 'IMAGE' && scope.row.thumbnailUrl" class="asset-thumb" :src="scope.row.thumbnailUrl" loading="lazy" @click="openDetail(scope.row)" /><button v-else class="asset-placeholder" type="button" @click="openDetail(scope.row)">{{ kindLabel(scope.row.kind) }}</button></template></el-table-column><el-table-column label="素材" min-width="290"><template #default="scope"><strong>{{ scope.row.displayName }}</strong><button class="cell-note preview-link" type="button" title="点击预览素材" @click="openDetail(scope.row)">{{ scope.row.assetNo }} · {{ fileSize(scope.row.sizeBytes) }}</button></template></el-table-column><el-table-column label="类型" width="105"><template #default="scope">{{ kindLabel(scope.row.kind) }}<small class="cell-note">{{ scope.row.level }}</small></template></el-table-column><el-table-column label="型号" width="150"><template #default="scope">{{ scope.row.products?.length ? scope.row.products.map((item: Row) => item.modelCode).join('、') : (scope.row.model || '待确认') }}</template></el-table-column><el-table-column label="AI索引" width="145"><template #default="scope"><el-tag :type="scope.row.indexNeedsReview ? 'warning' : 'success'">{{ scope.row.indexVersion ? `${Math.round(Number(scope.row.indexConfidence || 0) * 100)}%` : '待建立' }}</el-tag><small class="cell-note">V{{ scope.row.indexVersion || 0 }} · {{ scope.row.tags?.length || 0 }}个标签</small></template></el-table-column><el-table-column label="上传员工" width="135"><template #default="scope">{{ scope.row.createdByEmployee?.name || scope.row.actor }}</template></el-table-column><el-table-column label="状态" width="150"><template #default="scope"><el-tag :type="statusType(scope.row.reviewStatus)">{{ statusLabel(scope.row.reviewStatus) }}</el-tag><small class="cell-note">{{ statusLabel(scope.row.processingStatus) }} · {{ statusLabel(scope.row.availabilityStatus) }}</small></template></el-table-column><el-table-column label="操作" width="340" fixed="right"><template #default="scope"><el-button link :icon="View" @click="openDetail(scope.row)">详情</el-button><el-button link type="primary" @click="openMetadata(scope.row)">编辑</el-button><el-button link @click="openReplace(scope.row)">替换</el-button><el-button v-if="scope.row.objectKey" link :icon="Download" @click="downloadAsset(scope.row)">下载</el-button><el-button v-if="scope.row.reviewStatus === 'PENDING'" link type="success" @click="reviewAsset(scope.row, 'APPROVE')">通过</el-button><el-dropdown v-if="scope.row.reviewStatus === 'PENDING'" trigger="click" @command="(action: string) => reviewAsset(scope.row, action)"><el-button link type="warning">其他处理</el-button><template #dropdown><el-dropdown-menu><el-dropdown-item command="RETURN">退回修改</el-dropdown-item><el-dropdown-item command="INTERNAL_ONLY">仅内部</el-dropdown-item><el-dropdown-item command="REJECT" divided>拒绝</el-dropdown-item></el-dropdown-menu></template></el-dropdown><el-button link @click="reanalyze(scope.row)">重分析</el-button></template></el-table-column></el-table></div>
+        <div v-if="assetView === 'trash'" class="bulk-toolbar"><span>已选 {{ selectedAssets.length }} 条 · 删除后保留3天</span><el-button size="small" type="success" :disabled="!selectedAssets.length" @click="restoreAssets()">恢复所选</el-button></div>
+        <div v-else class="bulk-toolbar"><span>已选 {{ selectedAssets.length }} 条</span><el-button size="small" type="primary" :disabled="!selectedAssets.length" @click="openAssetBulk">批量修改</el-button><el-button size="small" type="success" :disabled="!selectedAssets.length" @click="bulkAssets('APPROVE')">批量通过</el-button><el-button size="small" :disabled="!selectedAssets.length" @click="bulkAssets('REANALYZE')">批量重分析</el-button><el-button size="small" type="warning" plain :disabled="!selectedAssets.length" @click="bulkAssets('ARCHIVE')">归档所选</el-button><el-button size="small" type="danger" :disabled="!selectedAssets.length" @click="trashAssets(false)">删除所选</el-button></div>
+        <div class="data-panel"><el-table :data="assets" stripe height="540" @selection-change="selectedAssets = $event"><el-table-column type="selection" width="46" /><el-table-column label="预览" width="112"><template #default="scope"><img v-if="scope.row.kind === 'IMAGE' && scope.row.thumbnailUrl" class="asset-thumb" :src="scope.row.thumbnailUrl" loading="lazy" @click="openDetail(scope.row)" /><button v-else class="asset-placeholder" type="button" @click="openDetail(scope.row)">{{ kindLabel(scope.row.kind) }}</button></template></el-table-column><el-table-column label="素材" min-width="290"><template #default="scope"><strong>{{ scope.row.displayName }}</strong><button class="cell-note preview-link" type="button" title="点击预览素材" @click="openDetail(scope.row)">{{ scope.row.assetNo }} · {{ fileSize(scope.row.sizeBytes) }}</button></template></el-table-column><el-table-column label="类型" width="105"><template #default="scope">{{ kindLabel(scope.row.kind) }}<small class="cell-note">{{ scope.row.level }}</small></template></el-table-column><el-table-column label="型号" width="150"><template #default="scope">{{ scope.row.products?.length ? scope.row.products.map((item: Row) => item.modelCode).join('、') : (scope.row.model || '待确认') }}</template></el-table-column><el-table-column label="AI索引" width="145"><template #default="scope"><el-tag :type="scope.row.indexNeedsReview ? 'warning' : 'success'">{{ scope.row.indexVersion ? `${Math.round(Number(scope.row.indexConfidence || 0) * 100)}%` : '待建立' }}</el-tag><small class="cell-note">V{{ scope.row.indexVersion || 0 }} · {{ scope.row.tags?.length || 0 }}个标签</small></template></el-table-column><el-table-column label="上传员工" width="135"><template #default="scope">{{ scope.row.createdByEmployee?.name || scope.row.actor }}</template></el-table-column><el-table-column v-if="assetView === 'trash'" label="彻底删除时间" width="175"><template #default="scope">{{ dateTime(scope.row.purgeAfter) }}</template></el-table-column><el-table-column v-else label="状态" width="150"><template #default="scope"><el-tag :type="statusType(scope.row.reviewStatus)">{{ statusLabel(scope.row.reviewStatus) }}</el-tag><small class="cell-note">{{ statusLabel(scope.row.processingStatus) }} · {{ statusLabel(scope.row.availabilityStatus) }}</small></template></el-table-column><el-table-column v-if="assetView === 'trash'" label="操作" width="130" fixed="right"><template #default="scope"><el-button link :icon="View" @click="openDetail(scope.row)">详情</el-button><el-button link type="success" @click="restoreAssets([scope.row.id])">恢复</el-button></template></el-table-column><el-table-column v-else label="操作" width="340" fixed="right"><template #default="scope"><el-button link :icon="View" @click="openDetail(scope.row)">详情</el-button><el-button link type="primary" @click="openMetadata(scope.row)">编辑</el-button><el-button link @click="openReplace(scope.row)">替换</el-button><el-button v-if="scope.row.objectKey" link :icon="Download" @click="downloadAsset(scope.row)">下载</el-button><el-button v-if="scope.row.reviewStatus === 'PENDING'" link type="success" @click="reviewAsset(scope.row, 'APPROVE')">通过</el-button><el-dropdown v-if="scope.row.reviewStatus === 'PENDING'" trigger="click" @command="(action: string) => reviewAsset(scope.row, action)"><el-button link type="warning">其他处理</el-button><template #dropdown><el-dropdown-menu><el-dropdown-item command="RETURN">退回修改</el-dropdown-item><el-dropdown-item command="INTERNAL_ONLY">仅内部</el-dropdown-item><el-dropdown-item command="REJECT" divided>拒绝</el-dropdown-item></el-dropdown-menu></template></el-dropdown><el-button link @click="reanalyze(scope.row)">重分析</el-button></template></el-table-column></el-table></div>
         <div v-if="nextCursor && assetView === 'list'" class="load-more"><el-button @click="run(() => loadAssets(false))">加载更多</el-button></div>
       </template>
 
