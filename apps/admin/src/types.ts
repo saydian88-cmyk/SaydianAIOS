@@ -24,6 +24,13 @@ export type Integration = {
 
 export type ContentPlan = {
   id: string;
+  productionNo?: string;
+  productionStage: string;
+  owner?: string;
+  targetPlatforms: string[];
+  shootRequirements: Array<{ id: string; description: string; status: string; assetIds?: string[]; note?: string }>;
+  masterVideoPath?: string;
+  masterVideoStatus: string;
   kind: "VIDEO" | "ARTICLE" | "SHORT_POST" | "WECHAT_MOMENT";
   topic: string;
   audience: string;
@@ -36,7 +43,8 @@ export type ContentPlan = {
   planDate: string;
   createdBy: string;
   approvedBy?: string;
-  variants: Array<{ id: string; platform: string; title: string; body: string; mediaPath?: string; targetAccountId?: string; metadata: Record<string, unknown>; status: string }>;
+  variants: Array<{ id: string; platform: string; title: string; body: string; mediaPath?: string; coverPath?: string; coverSpec: Record<string, unknown>; packagingStatus: string; targetAccountId?: string; metadata: Record<string, unknown>; status: string; manualPublishUrl?: string; manualExternalId?: string }>;
+  optimizations?: Array<{ id: string; checkpointHours: number; status: string; summary: string; recommendations: string[] }>;
 };
 
 export type Asset = {

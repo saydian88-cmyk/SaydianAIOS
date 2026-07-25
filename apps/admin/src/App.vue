@@ -5,7 +5,7 @@ import {
   Bell, Connection, DataAnalysis, DocumentChecked, Files, House, Monitor, Promotion,
   Refresh, Search, Setting, Shop, VideoCamera,
 } from "@element-plus/icons-vue";
-import { api, clearToken, getActor, getToken, patch, post, remove, setActor, setToken } from "./api";
+import { api, clearToken, download, getActor, getToken, patch, post, remove, setActor, setToken } from "./api";
 import BrandDataCenter from "./components/BrandDataCenter.vue";
 import OperationAnalysis from "./components/OperationAnalysis.vue";
 import type { ContentPlan, Dashboard, Integration } from "./types";
@@ -94,7 +94,11 @@ function statusLabel(value: string) {
     DRAFT: "候选", PENDING_APPROVAL: "待审核", APPROVED: "已审核", REJECTED: "已退回", SCHEDULED: "待发布",
     PUBLISHED: "已发布", FAILED: "失败", PENDING: "待处理", READY: "可用", BLOCKED: "禁用", ARCHIVED: "归档",
     RUNNING: "执行中", RETRY: "重试中", SUCCEEDED: "已完成", LIVE: "直播中", OPEN: "待处理", RESOLVED: "已解决",
-    PARTIAL: "部分成功", ACTIVE: "在职",
+    PARTIAL: "部分成功", ACTIVE: "在职", SCRIPT_REVIEW: "脚本审核", AWAITING_ASSETS: "等待拍摄素材",
+    READY_TO_EDIT: "素材已齐套", EDITING: "AI剪辑中", VIDEO_REVIEW: "成片审核", PLATFORM_PACKAGING: "生成平台包装",
+    PACKAGING_REVIEW: "平台包装审核", READY_TO_PUBLISH: "可以发布", PUBLISHING: "发布中", TRACKING: "数据跟踪",
+    WAITING_ASSETS: "等待素材", WAITING_RENDER_PROVIDER: "剪辑能力未配置", READY_FOR_REVIEW: "待成片审核",
+    RETURNED: "已退回", WAITING_COVER_PROVIDER: "等待封面成品", PENDING_CONFIRMATION: "待确认", CONFIRMED: "已确认",
   };
   return labels[value] || value || "未获取";
 }
@@ -231,9 +235,10 @@ async function authorizeDouyin() {
 
 async function approve(item: ContentPlan) {
   await withLoading(async () => {
-    await post(`/api/v1/content/${item.id}/approve`, { note: "运营中台审核通过" });
+    const targetPlatforms = item.targetPlatforms?.length ? item.targetPlatforms : item.variants.map((variant) => variant.platform);
+    await post(`/api/v1/content/${item.id}/approve`, { note: "脚本与补拍清单审核通过", owner: getActor(), targetPlatforms });
     content.value = await api("/api/v1/content");
-  }, "内容已通过审核");
+  }, "脚本与补拍清单已通过审核");
 }
 
 async function reject(item: ContentPlan) {
@@ -251,6 +256,78 @@ async function assignVariantAccount(variantId: string, value: unknown) {
     await patch(`/api/v1/content/variants/${variantId}/target-account`, { platformAccountId });
     content.value = await api("/api/v1/content");
   }, "发布账号已指定");
+}
+
+async function setShootRequirement(item: ContentPlan, requirementId: string, done: boolean) {
+  const requirements = item.shootRequirements.map((requirement) => requirement.id === requirementId ? { ...requirement, status: done ? "DONE" : "OPEN" } : requirement);
+  await withLoading(async () => {
+    await patch(`/api/v1/content/${item.id}/shoot-requirements`, { requirements });
+    content.value = await api("/api/v1/content");
+  }, done ? "补拍项已完成" : "补拍项已重新打开");
+}
+
+async function startVideoEditing(item: ContentPlan) {
+  await withLoading(async () => {
+    await post(`/api/v1/content/${item.id}/edit`);
+    content.value = await api("/api/v1/content");
+  }, "AI剪辑任务已执行");
+}
+
+async function reviewMasterVideo(item: ContentPlan, approved: boolean) {
+  const result = await ElMessageBox.prompt(approved ? "填写成片审核意见（可选）" : "填写成片退回原因", approved ? "通过主成片" : "退回主成片", { confirmButtonText: "确认", cancelButtonText: "取消" });
+  await withLoading(async () => {
+    await post(`/api/v1/content/${item.id}/video-review`, { approved, note: result.value });
+    content.value = await api("/api/v1/content");
+  }, approved ? "主成片已通过" : "主成片已退回剪辑");
+}
+
+async function generatePlatformPackaging(item: ContentPlan) {
+  await withLoading(async () => {
+    await post(`/api/v1/content/${item.id}/platform-packaging`);
+    content.value = await api("/api/v1/content");
+  }, "平台标题与封面方案已生成");
+}
+
+async function reviewPackaging(variant: ContentPlan["variants"][number], approved: boolean) {
+  const result = await ElMessageBox.prompt(
+    approved ? "填写封面成品地址；接入封面渲染器后将自动带入" : "填写平台包装退回原因",
+    approved ? `通过${platformName(variant.platform)}包装` : `退回${platformName(variant.platform)}包装`,
+    { inputValue: approved ? (variant.coverPath || "") : "", confirmButtonText: "确认", cancelButtonText: "取消" },
+  );
+  await withLoading(async () => {
+    await post(`/api/v1/content/variants/${variant.id}/packaging-review`, approved ? { approved, coverPath: result.value } : { approved, note: result.value });
+    content.value = await api("/api/v1/content");
+  }, approved ? "平台包装已通过" : "平台包装已退回");
+}
+
+async function recordManualPublish(variant: ContentPlan["variants"][number]) {
+  const result = await ElMessageBox.prompt("填写已发布作品链接或作品ID", `回填${platformName(variant.platform)}发布结果`, { inputPlaceholder: "https://... 或平台作品ID", confirmButtonText: "确认", cancelButtonText: "取消" });
+  const value = String(result.value || "").trim();
+  await withLoading(async () => {
+    await post(`/api/v1/content/variants/${variant.id}/manual-publish`, /^https?:\/\//i.test(value) ? { remoteUrl: value } : { remoteId: value });
+    content.value = await api("/api/v1/content");
+  }, "人工发布结果已登记，数据跟踪任务已建立");
+}
+
+async function downloadDelivery(variant: ContentPlan["variants"][number], type: "video" | "cover") {
+  await withLoading(
+    () => download(`/api/v1/content/variants/${variant.id}/delivery/${type}`, `${platformName(variant.platform)}-${type}`),
+    type === "video" ? "成片下载已开始" : "封面下载已开始",
+  );
+}
+
+async function generateOptimization(item: ContentPlan, checkpointHours: 168 | 720) {
+  await withLoading(async () => {
+    await post(`/api/v1/content/${item.id}/optimizations/${checkpointHours}`);
+    content.value = await api("/api/v1/content");
+  }, checkpointHours === 168 ? "7日初评已生成" : "30日终评已生成");
+}
+
+async function decideOptimization(id: string, confirmed: boolean) {
+  await withLoading(async () => {
+    await post(`/api/v1/content/optimizations/${id}/decision`, { confirmed, note: confirmed ? "运营负责人确认进入下一轮脚本规则" : "本轮不采用" });
+    content.value = await api("/api/v1/content");
+  }, confirmed ? "优化建议已确认" : "优化建议已拒绝");
 }
 
 async function resolveAlert(id: string) {
@@ -574,13 +651,25 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
         <div class="content-grid">
           <article v-for="item in content" :key="item.id" class="content-card">
             <div class="content-card-head"><div><el-tag :type="item.kind === 'VIDEO' ? 'danger' : 'warning'" effect="dark">{{ item.kind === 'VIDEO' ? '视频' : '软文' }}</el-tag><el-tag :type="statusType(item.status)" effect="plain">{{ statusLabel(item.status) }}</el-tag></div><div class="score"><b>{{ item.score }}</b><span>选题分</span></div></div>
-            <h3>{{ item.topic }}</h3><p class="hook">“{{ item.hook }}”</p>
+            <h3>{{ item.topic }}</h3>
+            <div v-if="item.kind === 'VIDEO'" class="production-meta"><span>{{ item.productionNo || '历史内容' }}</span><el-tag type="primary">{{ statusLabel(item.productionStage) }}</el-tag><span>负责人：{{ item.owner || '待脚本审核时确定' }}</span></div>
+            <p class="hook">“{{ item.hook }}”</p>
             <dl><div><dt>目标人群</dt><dd>{{ item.audience }}</dd></div><div><dt>传播目标</dt><dd>{{ item.objective }}</dd></div></dl>
             <ol><li v-for="line in item.outline" :key="line">{{ line }}</li></ol>
             <el-alert v-if="item.riskReasons.length" :title="item.riskReasons.join('；')" type="warning" :closable="false" show-icon />
-            <div class="platform-tags"><span v-for="variant in item.variants" :key="variant.id">{{ platformName(variant.platform) }}</span></div>
+            <div v-if="item.kind === 'VIDEO' && item.status === 'PENDING_APPROVAL'" class="workflow-block"><strong>脚本审核通过后生产的平台</strong><el-checkbox-group v-model="item.targetPlatforms"><el-checkbox v-for="variant in item.variants" :key="variant.id" :value="variant.platform">{{ platformName(variant.platform) }}</el-checkbox></el-checkbox-group></div>
+            <div v-if="item.kind === 'VIDEO' && item.shootRequirements?.length" class="workflow-block"><strong>补拍清单</strong><div v-for="requirement in item.shootRequirements" :key="requirement.id" class="shoot-row"><el-checkbox :model-value="requirement.status === 'DONE'" @change="setShootRequirement(item, requirement.id, Boolean($event))">{{ requirement.description }}</el-checkbox><el-tag size="small" :type="requirement.status === 'DONE' ? 'success' : 'warning'">{{ statusLabel(requirement.status) }}</el-tag></div></div>
+            <div class="platform-tags"><span v-for="variant in item.variants.filter(v => !item.targetPlatforms?.length || item.targetPlatforms.includes(v.platform))" :key="variant.id">{{ platformName(variant.platform) }}</span></div>
             <div class="variant-account-list"><div v-for="variant in item.variants" :key="`${variant.id}-account`"><small>{{ platformName(variant.platform) }}发布账号</small><el-select :model-value="variant.targetAccountId" placeholder="未指定，不会进入发布队列" clearable @change="assignVariantAccount(variant.id, $event)"><el-option v-for="account in ledger.accounts.filter(account => account.integration?.kind === variant.platform)" :key="account.id" :label="`${account.accountName}（${account.region}）`" :value="account.id" /></el-select></div></div>
             <div class="card-actions" v-if="item.status === 'PENDING_APPROVAL'"><el-button @click="reject(item)">退回修改</el-button><el-button type="primary" @click="approve(item)">审核通过</el-button></div>
+            <div v-if="item.kind === 'VIDEO'" class="card-actions workflow-actions">
+              <el-button v-if="item.productionStage === 'READY_TO_EDIT'" type="primary" @click="startVideoEditing(item)">启动AI剪辑</el-button>
+              <template v-if="item.productionStage === 'VIDEO_REVIEW'"><el-button @click="reviewMasterVideo(item, false)">退回剪辑</el-button><el-button type="primary" @click="reviewMasterVideo(item, true)">成片审核通过</el-button></template>
+              <el-button v-if="item.productionStage === 'PLATFORM_PACKAGING'" type="primary" @click="generatePlatformPackaging(item)">生成平台标题与封面</el-button>
+              <template v-if="item.productionStage === 'TRACKING' || item.status === 'PUBLISHED'"><el-button @click="generateOptimization(item, 168)">生成7日初评</el-button><el-button @click="generateOptimization(item, 720)">生成30日终评</el-button></template>
+            </div>
+            <div v-if="item.kind === 'VIDEO' && ['PACKAGING_REVIEW','READY_TO_PUBLISH','PUBLISHING','TRACKING'].includes(item.productionStage)" class="workflow-block"><strong>平台包装与发布</strong><article v-for="variant in item.variants.filter(v => item.targetPlatforms.includes(v.platform))" :key="`${variant.id}-package`" class="package-row"><div><b>{{ platformName(variant.platform) }}</b><span>{{ statusLabel(variant.packagingStatus) }}</span><small>{{ variant.title }}</small></div><div><el-button v-if="variant.packagingStatus !== 'APPROVED'" size="small" @click="reviewPackaging(variant, false)">退回</el-button><el-button v-if="variant.packagingStatus !== 'APPROVED'" size="small" type="primary" @click="reviewPackaging(variant, true)">审核包装</el-button><el-button v-if="variant.packagingStatus === 'APPROVED'" size="small" @click="downloadDelivery(variant, 'video')">下载成片</el-button><el-button v-if="variant.packagingStatus === 'APPROVED' && variant.coverPath" size="small" @click="downloadDelivery(variant, 'cover')">下载封面</el-button><el-button v-if="variant.packagingStatus === 'APPROVED' && variant.status !== 'PUBLISHED'" size="small" @click="recordManualPublish(variant)">回填自行发布</el-button></div></article></div>
+            <div v-if="item.optimizations?.length" class="workflow-block"><strong>数据优化建议</strong><article v-for="suggestion in item.optimizations" :key="suggestion.id" class="optimization-row"><div><b>{{ suggestion.checkpointHours === 168 ? '7日初评' : '30日终评' }} · {{ statusLabel(suggestion.status) }}</b><p>{{ suggestion.summary }}</p><small>{{ suggestion.recommendations?.join('；') || '当前数据未形成明确调整建议' }}</small></div><div v-if="suggestion.status === 'PENDING_CONFIRMATION'"><el-button size="small" @click="decideOptimization(suggestion.id, false)">不采用</el-button><el-button size="small" type="primary" @click="decideOptimization(suggestion.id, true)">确认进入下一轮</el-button></div></article></div>
           </article>
         </div>
         <el-empty v-if="!content.length" description="今日内容尚未生成" />
