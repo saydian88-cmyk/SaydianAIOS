@@ -242,6 +242,7 @@ ${assetPolicy}
       `根据赛电已审核产品、FAQ、用户痛点、竞品观察、最近7天关键词表现和素材缺口，生成抖音爆款研究关键词。
 最多50个，配额：PRODUCT产品词15、PAIN痛点词15、COMPETITOR竞品词10、SCENE场景词10。
 优先级A最多10个、B最多20个，其余为C；关键词适合直接在抖音搜索，避免重复和过长句子。
+关键词必须模拟普通用户的自然搜索：不得出现“赛电”或“SAYDIAN”，不得使用完整赛电产品名称；产品词使用通用品类、功能需求或简短口语，不使用品牌加型号组合。
 返回JSON：{"keywords":[{"keyword":"","type":"PRODUCT|PAIN|COMPETITOR|SCENE","priority":"A|B|C","productModel":"","reason":""}]}。
 输入：${JSON.stringify(context)}`,
     );

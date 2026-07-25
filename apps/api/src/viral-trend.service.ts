@@ -5,6 +5,7 @@ import { AiContentService, type AiViralKeyword } from "./ai-content.service";
 import { opsConfig } from "./config";
 import { PrismaService } from "./prisma.service";
 import { ViralCollectorService } from "./viral-collector.service";
+import { allowedViralKeyword } from "./viral-keyword";
 import {
   VIRAL_FORMULA_VERSION,
   calculateViralComponents,
@@ -199,7 +200,7 @@ export class ViralTrendService {
       ...locked,
       ...generated.map((item) => ({ ...item, locked: false })),
       ...fallback.map((item) => ({ ...item, locked: false })),
-    ]);
+    ], products.map((product) => product.name));
     const productByModel = new Map(products.map((product) => [product.modelCode.toUpperCase(), product]));
 
     const plan = await this.prisma.$transaction(async (tx) => {
@@ -432,11 +433,11 @@ export class ViralTrendService {
     const result: AiViralKeyword[] = [];
     for (const product of products) {
       result.push({
-        keyword: `${product.modelCode} ${product.category}`.trim(),
+        keyword: product.category,
         type: "PRODUCT",
         priority: result.length < 10 ? "A" : "B",
         productModel: product.modelCode,
-        reason: "已审核产品型号与品类",
+        reason: "已审核产品通用品类",
       });
       const metadata = object(product.metadata);
       for (const scene of strings(metadata.scenes).slice(0, 2)) {
@@ -466,6 +467,7 @@ export class ViralTrendService {
 
   private selectKeywords(
     source: Array<AiViralKeyword & { locked: boolean }>,
+    productNames: string[],
   ) {
     const counts: Record<AiViralKeyword["type"], number> = { PRODUCT: 0, PAIN: 0, COMPETITOR: 0, SCENE: 0 };
     const priorities: Record<AiViralKeyword["priority"], number> = { A: 0, B: 0, C: 0 };
@@ -476,7 +478,13 @@ export class ViralTrendService {
       const type = keywordType(entry.type);
       let priority = keywordPriority(entry.priority);
       const key = keyword.toLowerCase();
-      if (!keyword || seen.has(key) || counts[type] >= keywordQuotas[type] || result.length >= 50) continue;
+      if (
+        !keyword
+        || !allowedViralKeyword(keyword, productNames)
+        || seen.has(key)
+        || counts[type] >= keywordQuotas[type]
+        || result.length >= 50
+      ) continue;
       if (priority === "A" && priorities.A >= 10) priority = "B";
       if (priority === "B" && priorities.B >= 20) priority = "C";
       seen.add(key);
