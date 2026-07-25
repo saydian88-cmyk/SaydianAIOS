@@ -51,4 +51,4 @@ if [[ "$healthy" != "1" ]]; then
 fi
 
 printf '%s\n' "$sha" > "$base/releases/current-ops-sha"
-docker image prune -f --filter "until=168h" >/dev/null
+docker image prune -af --filter "until=24h" >/dev/null
