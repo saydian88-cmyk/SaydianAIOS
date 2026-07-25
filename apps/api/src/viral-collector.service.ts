@@ -18,6 +18,9 @@ const collectorPlatforms = [
   "WECHAT_CHANNELS",
 ] as const satisfies readonly IntegrationKind[];
 
+const douyinSearchEndpoint = "https://open.douyin.com/dy_open_api/v2/search/video/";
+const douyinDefaultKeywords = ["智能手表", "血压手表", "健康手表", "智能戒指", "老人手表"];
+
 type CollectorPlatform = (typeof collectorPlatforms)[number];
 type FeedItem = {
   externalContentId: string;
@@ -46,14 +49,14 @@ type FeedConfig = CollectorPublicConfig & {
 };
 
 const defaultProviders: Record<CollectorPlatform, string> = {
-  DOUYIN: "飞瓜数据 / 抖音开放平台",
+  DOUYIN: "抖音开放平台视频搜索",
   TIKTOK: "FastMoss / TikTok Display API",
   XIAOHONGSHU: "第三方企业数据 / Marketing API",
   WECHAT_CHANNELS: "友望数据 / 视频号助手",
 };
 
 const defaultEndpoints: Record<CollectorPlatform, string> = {
-  DOUYIN: opsConfig.viralCollector.douyinUrl,
+  DOUYIN: opsConfig.viralCollector.douyinUrl || douyinSearchEndpoint,
   TIKTOK: opsConfig.viralCollector.tiktokUrl,
   XIAOHONGSHU: opsConfig.viralCollector.xiaohongshuUrl,
   WECHAT_CHANNELS: opsConfig.viralCollector.wechatChannelsUrl,
@@ -131,6 +134,41 @@ export function parseCollectorCsv(source: string): Array<Record<string, string>>
   return rows.slice(1).map((values) => Object.fromEntries(
     headers.map((header, index) => [header, values[index] ?? ""]),
   ));
+}
+
+function object(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+export function parseDouyinSearchItems(body: unknown, keyword: string): FeedItem[] {
+  const root = object(body);
+  const payload = object(object(root.data).data);
+  const videos = Array.isArray(payload.video_list) ? payload.video_list : [];
+  return videos.flatMap((value): FeedItem[] => {
+    const video = object(value);
+    const statistics = object(video.statistics);
+    const itemId = text(video.item_id);
+    const sourceUrl = text(video.link) || (itemId ? `https://www.douyin.com/video/${itemId}` : "");
+    const createdAt = integer(video.create_time);
+    if (!itemId || !sourceUrl) return [];
+    return [{
+      externalContentId: itemId,
+      sourceUrl,
+      accountName: optionalText(video.nickname),
+      title: optionalText(video.title),
+      description: optionalText(video.title),
+      publishedAt: createdAt ? new Date(createdAt * 1000).toISOString() : undefined,
+      metrics: {
+        likes: integer(statistics.digg_count),
+        cover: optionalText(video.cover),
+        avatar: optionalText(video.avatar),
+        keyword,
+        searchId: optionalText(payload.search_id),
+      },
+    }];
+  });
 }
 
 function normalizeFeedItem(row: Record<string, unknown>): FeedItem | null {
@@ -427,6 +465,9 @@ export class ViralCollectorService {
   }
 
   private async fetchFeed(feed: FeedConfig): Promise<FeedItem[]> {
+    if (feed.platform === "DOUYIN" && feed.endpoint === douyinSearchEndpoint) {
+      return this.fetchDouyinSearch(feed);
+    }
     const url = new URL(feed.endpoint);
     if (feed.keywords.length && !url.searchParams.has("keywords")) url.searchParams.set("keywords", feed.keywords.join(","));
     if (feed.competitorAccounts.length && !url.searchParams.has("accounts")) url.searchParams.set("accounts", feed.competitorAccounts.join(","));
@@ -444,6 +485,66 @@ export class ViralCollectorService {
     return source
       .map((item) => normalizeFeedItem(item as Record<string, unknown>))
       .filter((item): item is FeedItem => Boolean(item));
+  }
+
+  private async fetchDouyinSearch(feed: FeedConfig): Promise<FeedItem[]> {
+    const integration = await this.prisma.integration.findUnique({ where: { kind: "DOUYIN" } });
+    const publicConfig = object(integration?.publicConfig);
+    const oauth = object(publicConfig.douyinOAuth);
+    const secrets = readIntegrationSecret(integration?.secretRef);
+    const clientKey = text(oauth.clientKey) || opsConfig.douyin.clientKey;
+    const clientSecret = text(secrets.douyin?.clientSecret) || opsConfig.douyin.clientSecret;
+    if (!clientKey || !clientSecret) throw new Error("抖音开放平台应用密钥未配置");
+
+    const tokenResponse = await fetch("https://open.douyin.com/oauth/client_token/", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        grant_type: "client_credential",
+        client_key: clientKey,
+        client_secret: clientSecret,
+      }),
+    });
+    const tokenBody = await tokenResponse.json() as unknown;
+    const tokenData = object(object(tokenBody).data);
+    const tokenErrorCode = integer(tokenData.error_code) || 0;
+    const clientToken = text(tokenData.access_token);
+    if (!tokenResponse.ok || tokenErrorCode || !clientToken) {
+      throw new Error(text(tokenData.description) || `抖音应用凭证获取失败 ${tokenResponse.status}`);
+    }
+
+    const keywords = feed.keywords.length ? feed.keywords : douyinDefaultKeywords;
+    const count = Math.min(20, Math.max(5, Math.ceil(feed.dailyLimit / keywords.length) + 2));
+    const deviceId = (BigInt(`0x${createHash("sha256").update(clientKey).digest("hex").slice(0, 15)}`)
+      % 900_000_000_000_000n + 100_000_000_000_000n).toString();
+    const collected = new Map<string, FeedItem>();
+    for (const keyword of keywords) {
+      const url = new URL(douyinSearchEndpoint);
+      url.searchParams.set("keyword", keyword);
+      url.searchParams.set("count", String(count));
+      url.searchParams.set("cursor", "0");
+      url.searchParams.set("device_id", deviceId);
+      url.searchParams.set("publish_time", "7");
+      url.searchParams.set("sort_type", "1");
+      const response = await fetch(url, {
+        headers: {
+          "access-token": clientToken,
+          "content-type": "application/json",
+        },
+      });
+      const body = await response.json() as unknown;
+      const root = object(body);
+      const errorCode = integer(root.err_no) || 0;
+      if (!response.ok || errorCode) {
+        throw new Error(text(root.err_msg) || `抖音视频搜索返回 ${response.status}`);
+      }
+      for (const item of parseDouyinSearchItems(body, keyword)) {
+        if (!collected.has(item.externalContentId)) collected.set(item.externalContentId, item);
+      }
+    }
+    return [...collected.values()]
+      .sort((left, right) => (integer(right.metrics?.likes) || 0) - (integer(left.metrics?.likes) || 0))
+      .slice(0, feed.dailyLimit);
   }
 
   private async importVideo(platform: IntegrationKind, item: FeedItem): Promise<string> {
