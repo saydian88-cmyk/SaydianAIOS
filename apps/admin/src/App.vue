@@ -278,6 +278,34 @@ function openProductionUpload(item: ContentPlan, requirement: ContentPlan["shoot
   productionUploadDialog.value = true;
 }
 
+function productionAsset(item: ContentPlan, assetId: string) {
+  return item.contentAssets?.find((contentAsset) => contentAsset.asset.id === assetId)?.asset;
+}
+
+async function previewProductionAsset(item: ContentPlan, assetId: string) {
+  const result = await api<{ url: string }>(`/api/v1/brand-data/assets/${assetId}/download-url`);
+  window.open(result.url, "_blank", "noopener,noreferrer");
+}
+
+async function refreshAssetCoverage(item: ContentPlan) {
+  await withLoading(async () => {
+    await post(`/api/v1/content/${item.id}/asset-coverage`);
+    content.value = await api("/api/v1/content");
+  }, "已按当前素材库重新生成逐镜头素材清单");
+}
+
+async function replaceShotAsset(item: ContentPlan, requirement: ContentPlan["shootRequirements"][number]) {
+  await ElMessageBox.confirm(`确认不使用已有素材，重新拍摄“${requirement.description}”？`, "拍摄替换", {
+    confirmButtonText: "确认重新拍摄",
+    cancelButtonText: "继续使用已有素材",
+    type: "warning",
+  });
+  await withLoading(async () => {
+    await post(`/api/v1/content/${item.id}/shoot-requirements/${requirement.id}/replace`);
+    content.value = await api("/api/v1/content");
+  }, "该镜头已转为需要补拍");
+}
+
 async function submitProductionUpload() {
   const target = productionUploadTarget.value;
   const files = productionUploadFiles.value.map((item) => item.raw).filter(Boolean) as File[];
@@ -716,7 +744,24 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
             <ol><li v-for="line in item.outline" :key="line">{{ line }}</li></ol>
             <el-alert v-if="item.riskReasons.length" :title="item.riskReasons.join('；')" type="warning" :closable="false" show-icon />
             <div v-if="item.kind === 'VIDEO' && item.status === 'PENDING_APPROVAL'" class="workflow-block"><strong>脚本审核通过后生产的平台</strong><el-checkbox-group v-model="item.targetPlatforms"><el-checkbox v-for="variant in item.variants" :key="variant.id" :value="variant.platform">{{ platformName(variant.platform) }}</el-checkbox></el-checkbox-group></div>
-            <div v-if="item.kind === 'VIDEO' && item.shootRequirements?.length" class="workflow-block"><strong>补拍清单</strong><div v-for="requirement in item.shootRequirements" :key="requirement.id" class="shoot-row"><div class="shoot-copy"><el-checkbox :model-value="requirement.status === 'DONE'" disabled>{{ requirement.description }}</el-checkbox><small v-if="requirement.assetIds?.length">已归档 {{ requirement.assetIds.length }} 项素材</small></div><div class="shoot-actions"><el-tag size="small" :type="requirement.status === 'DONE' ? 'success' : 'warning'">{{ statusLabel(requirement.status) }}</el-tag><el-button v-if="item.productionStage === 'AWAITING_ASSETS'" size="small" type="primary" plain @click="openProductionUpload(item, requirement)">{{ requirement.assetIds?.length ? '补充素材' : '上传对应素材' }}</el-button></div></div></div>
+            <div v-if="item.kind === 'VIDEO' && item.status === 'APPROVED'" class="workflow-block shot-library-block">
+              <div class="workflow-block-head"><strong>镜头素材清单</strong><el-button size="small" @click="refreshAssetCoverage(item)">按当前素材库重新分析</el-button></div>
+              <div v-for="requirement in item.shootRequirements" :key="requirement.id" class="shoot-row">
+                <div class="shoot-copy">
+                  <span>{{ requirement.description }}</span>
+                  <small v-if="requirement.reason">{{ requirement.reason }}</small>
+                  <div v-if="requirement.assetIds?.length" class="matched-assets">
+                    <el-button v-for="assetId in requirement.assetIds" :key="assetId" size="small" text type="primary" @click="previewProductionAsset(item, assetId)">预览 · {{ productionAsset(item, assetId)?.displayName || productionAsset(item, assetId)?.assetNo || assetId }}</el-button>
+                  </div>
+                </div>
+                <div class="shoot-actions">
+                  <el-tag size="small" :type="requirement.coverage === 'EXISTING' && requirement.status === 'DONE' ? 'success' : 'warning'">{{ requirement.coverage === 'EXISTING' && requirement.status === 'DONE' ? '素材库已有' : '需要补拍' }}</el-tag>
+                  <el-button v-if="requirement.coverage === 'EXISTING' && requirement.status === 'DONE'" size="small" @click="replaceShotAsset(item, requirement)">拍摄替换</el-button>
+                  <el-button v-else-if="item.productionStage === 'AWAITING_ASSETS'" size="small" type="primary" plain @click="openProductionUpload(item, requirement)">上传对应素材</el-button>
+                </div>
+              </div>
+              <el-empty v-if="!item.shootRequirements?.length" description="尚未分析镜头素材覆盖情况" :image-size="50" />
+            </div>
             <div class="platform-tags"><span v-for="variant in item.variants.filter(v => !item.targetPlatforms?.length || item.targetPlatforms.includes(v.platform))" :key="variant.id">{{ platformName(variant.platform) }}</span></div>
             <div class="variant-account-list"><div v-for="variant in item.variants" :key="`${variant.id}-account`"><small>{{ platformName(variant.platform) }}发布账号</small><el-select :model-value="variant.targetAccountId" placeholder="未指定，不会进入发布队列" clearable @change="assignVariantAccount(variant.id, $event)"><el-option v-for="account in ledger.accounts.filter(account => account.integration?.kind === variant.platform)" :key="account.id" :label="`${account.accountName}（${account.region}）`" :value="account.id" /></el-select></div></div>
             <div class="card-actions" v-if="item.status === 'PENDING_APPROVAL'"><el-button @click="reject(item)">退回修改</el-button><el-button type="primary" @click="approve(item)">审核通过</el-button></div>

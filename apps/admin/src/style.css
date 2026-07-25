@@ -134,6 +134,11 @@ nav { display: grid; gap: 7px; margin-top: 22px; }
 .production-upload-context { display: grid; gap: 6px; margin-bottom: 16px; padding: 12px 14px; border: 1px solid #dce7f5; border-radius: 12px; background: #f6f9fd; }
 .production-upload-context span { color: #334155; }
 .production-upload-context small { color: #718096; line-height: 1.6; }
+.workflow-block-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.shot-library-block .shoot-row { padding: 10px 0; border-top: 1px solid #e7edf5; align-items: flex-start; }
+.shot-library-block .shoot-row:first-of-type { border-top: 0; }
+.matched-assets { display: flex; flex-wrap: wrap; gap: 4px; padding-left: 0; }
+.matched-assets .el-button { max-width: 260px; margin: 0; justify-content: flex-start; overflow: hidden; text-overflow: ellipsis; }
 .package-row, .optimization-row { padding-top: 9px; border-top: 1px solid #e4e9f1; }
 .package-row > div:first-child, .optimization-row > div:first-child { display: grid; gap: 3px; }
 .package-row span, .package-row small, .optimization-row small { color: #7b8697; }

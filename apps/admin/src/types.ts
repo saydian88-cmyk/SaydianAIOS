@@ -28,7 +28,7 @@ export type ContentPlan = {
   productionStage: string;
   owner?: string;
   targetPlatforms: string[];
-  shootRequirements: Array<{ id: string; description: string; status: string; assetIds?: string[]; note?: string }>;
+  shootRequirements: Array<{ id: string; description: string; status: string; coverage?: "EXISTING" | "MISSING"; assetIds?: string[]; reason?: string; note?: string }>;
   masterVideoPath?: string;
   masterVideoStatus: string;
   kind: "VIDEO" | "ARTICLE" | "SHORT_POST" | "WECHAT_MOMENT";
@@ -44,6 +44,7 @@ export type ContentPlan = {
   createdBy: string;
   approvedBy?: string;
   variants: Array<{ id: string; platform: string; title: string; body: string; mediaPath?: string; coverPath?: string; coverSpec: Record<string, unknown>; packagingStatus: string; targetAccountId?: string; metadata: Record<string, unknown>; status: string; manualPublishUrl?: string; manualExternalId?: string }>;
+  contentAssets?: Array<{ role: string; asset: { id: string; assetNo?: string; displayName?: string; fileName?: string; kind?: string } }>;
   optimizations?: Array<{ id: string; checkpointHours: number; status: string; summary: string; recommendations: string[] }>;
 };
 

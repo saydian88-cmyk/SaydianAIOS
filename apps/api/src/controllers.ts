@@ -177,6 +177,12 @@ export class OpsController {
   @Patch("content/:id/shoot-requirements") updateShootRequirements(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("id") id: string, @Body() body: Record<string, unknown>) {
     return this.contentService.updateShootRequirements(id, Array.isArray(body.requirements) ? body.requirements : [], this.actor(authorization, requestedActor));
   }
+  @Post("content/:id/asset-coverage") refreshContentAssetCoverage(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("id") id: string) {
+    return this.contentService.refreshAssetCoverage(id, this.actor(authorization, requestedActor));
+  }
+  @Post("content/:id/shoot-requirements/:requirementId/replace") replaceShotAsset(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("id") id: string, @Param("requirementId") requirementId: string) {
+    return this.contentService.replaceShotAsset(id, requirementId, this.actor(authorization, requestedActor));
+  }
   @Post("content/:id/edit") startContentEditing(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("id") id: string) {
     return this.contentService.startEditing(id, this.actor(authorization, requestedActor));
   }
