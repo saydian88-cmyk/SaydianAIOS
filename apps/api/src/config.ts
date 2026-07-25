@@ -32,6 +32,11 @@ export const opsConfig = {
     username: process.env.MALL_ADMIN_USERNAME || "",
     password: process.env.MALL_ADMIN_PASSWORD || "",
   },
+  jushuitan: {
+    operationDataUrl: process.env.JUSHUITAN_OPERATION_DATA_URL || "",
+    operationDataToken: process.env.JUSHUITAN_OPERATION_DATA_TOKEN || "",
+    operationDataMethod: (process.env.JUSHUITAN_OPERATION_DATA_METHOD || "POST").toUpperCase(),
+  },
   wecomWebhookUrl: process.env.WECOM_WEBHOOK_URL || "",
   oss: {
     region: process.env.OSS_REGION || "oss-cn-shenzhen",

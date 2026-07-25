@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { DataAnalysis, Refresh, UploadFilled } from "@element-plus/icons-vue";
+import { Connection, DataAnalysis, Refresh } from "@element-plus/icons-vue";
 import { api, patch, post } from "../api";
 
 type Row = Record<string, any>;
@@ -15,8 +15,7 @@ const competitors = ref<Row>({ watchlist: [], snapshots: [] });
 const findings = ref<Row[]>([]);
 const tasks = ref<Row[]>([]);
 const runs = ref<Row[]>([]);
-const importDialog = ref(false);
-const importForm = ref({ sourceName: "", periodStart: "", periodEnd: "", fileName: "", content: "", format: "CSV" });
+const jushuitan = ref<Row>({ configured: false, state: "UNCONFIGURED", schedule: "每天05:15" });
 
 const activeTasks = computed(() => tasks.value.filter((item) => item.status !== "DONE"));
 const completedTasks = computed(() => tasks.value.filter((item) => item.status === "DONE"));
@@ -57,7 +56,7 @@ function dateTime(value?: string) {
 async function reload() {
   loading.value = true;
   try {
-    [overview.value, products.value, stores.value, competitors.value, findings.value, tasks.value, runs.value] = await Promise.all([
+    [overview.value, products.value, stores.value, competitors.value, findings.value, tasks.value, runs.value, jushuitan.value] = await Promise.all([
       api<Row>("/api/v1/operation-analysis/overview"),
       api<Row>("/api/v1/operation-analysis/products"),
       api<Row[]>("/api/v1/operation-analysis/stores"),
@@ -65,6 +64,7 @@ async function reload() {
       api<Row[]>("/api/v1/operation-analysis/findings"),
       api<Row[]>("/api/v1/operation-analysis/tasks"),
       api<Row[]>("/api/v1/operation-analysis/runs"),
+      api<Row>("/api/v1/operation-analysis/jushuitan/status"),
     ]);
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : "运营分析加载失败");
@@ -84,46 +84,17 @@ async function runAnalysis() {
   }
 }
 
-function openImport() {
-  importForm.value = {
-    sourceName: `聚水潭经营报表-${new Date().toISOString().slice(0, 10)}`,
-    periodStart: "", periodEnd: "", fileName: "", content: "", format: "CSV",
-  };
-  importDialog.value = true;
-}
-
-async function selectFile(event: Event) {
-  const file = (event.target as HTMLInputElement).files?.[0];
-  if (!file) return;
-  const lower = file.name.toLowerCase();
-  if (!lower.endsWith(".csv") && !lower.endsWith(".json")) {
-    ElMessage.warning("后台直接接收CSV/JSON；Excel由办公电脑采集器自动转换");
-    return;
+async function syncJushuitan() {
+  if (!jushuitan.value.configured) {
+    return ElMessage.warning("请先在服务器配置聚水潭ERP经营数据接口");
   }
-  importForm.value.fileName = file.name;
-  importForm.value.sourceName = file.name;
-  importForm.value.format = lower.endsWith(".json") ? "JSON" : "CSV";
-  importForm.value.content = await file.text();
-}
-
-async function submitImport() {
-  if (!importForm.value.content) return ElMessage.warning("请选择报表文件");
   loading.value = true;
   try {
-    const payload: Row = {
-      sourceName: importForm.value.sourceName,
-      format: importForm.value.format,
-      periodStart: importForm.value.periodStart || undefined,
-      periodEnd: importForm.value.periodEnd || undefined,
-    };
-    if (importForm.value.format === "JSON") payload.records = JSON.parse(importForm.value.content);
-    else payload.csv = importForm.value.content;
-    const result = await post<Row>("/api/v1/operation-analysis/imports", payload);
-    ElMessage.success(result.duplicate ? "同一报表已存在，未重复导入" : `已导入${result.run?.importedCount || 0}条记录`);
-    importDialog.value = false;
+    const result = await post<Row>("/api/v1/operation-analysis/jushuitan/sync", {});
+    ElMessage.success(result.duplicate ? "今日聚水潭数据已同步" : `已从聚水潭同步${result.run?.importedCount || 0}条经营记录`);
     await reload();
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : "导入失败");
+    ElMessage.error(error instanceof Error ? error.message : "聚水潭同步失败");
   } finally {
     loading.value = false;
   }
@@ -183,11 +154,17 @@ onMounted(reload);
     <div class="analysis-heading">
       <div>
         <span>OPERATION INTELLIGENCE</span>
-        <h2>三平台运营分析</h2>
-        <p>聚水潭经营数据、天猫/京东/抖音店铺和竞品问题统一进入任务闭环。</p>
+        <h2>平台运营分析</h2>
+        <p>聚水潭ERP经营数据每日通过接口自动同步，店铺和竞品问题统一进入任务闭环。</p>
+        <div class="sync-status">
+          <el-tag :type="jushuitan.configured ? (jushuitan.state === 'ERROR' ? 'danger' : 'success') : 'info'">
+            {{ jushuitan.configured ? '聚水潭接口已配置' : '聚水潭接口未配置' }}
+          </el-tag>
+          <small>{{ jushuitan.schedule }}自动同步 · 上次成功 {{ dateTime(jushuitan.lastSuccessAt) }}</small>
+        </div>
       </div>
       <div class="heading-actions">
-        <el-button :icon="UploadFilled" @click="openImport">导入聚水潭报表</el-button>
+        <el-button :icon="Connection" :disabled="!jushuitan.configured" @click="syncJushuitan">立即同步聚水潭</el-button>
         <el-button :icon="DataAnalysis" type="primary" @click="runAnalysis">立即分析</el-button>
         <el-button :icon="Refresh" circle @click="reload" />
       </div>
@@ -205,7 +182,7 @@ onMounted(reload);
 
     <template v-if="activeTab === 'overview'">
       <div class="metric-grid">
-        <article><small>本期销售额</small><strong>{{ money(overview.metrics?.salesAmount) }}</strong><span>三平台自有店铺</span></article>
+        <article><small>本期销售额</small><strong>{{ money(overview.metrics?.salesAmount) }}</strong><span>已接入平台店铺</span></article>
         <article><small>净销售额</small><strong>{{ money(overview.metrics?.netSalesAmount) }}</strong><span>退款后统计口径</span></article>
         <article><small>销售订单</small><strong>{{ overview.metrics?.salesOrders || 0 }}</strong><span>客单价 {{ money(overview.metrics?.averageOrderValue) }}</span></article>
         <article><small>待确认/待办</small><strong>{{ overview.metrics?.openTasks || 0 }}</strong><span>逾期 {{ overview.metrics?.overdueTasks || 0 }}</span></article>
@@ -323,20 +300,9 @@ onMounted(reload);
       </section>
     </div>
 
-    <el-dialog v-model="importDialog" title="导入聚水潭经营报表" width="560px">
-      <el-form label-position="top">
-        <el-form-item label="数据文件"><input class="file-input" type="file" accept=".csv,.json" @change="selectFile" /><small>{{ importForm.fileName || '支持CSV/JSON；办公电脑采集器负责Excel自动转换' }}</small></el-form-item>
-        <el-form-item label="来源名称"><el-input v-model="importForm.sourceName" /></el-form-item>
-        <div class="date-row">
-          <el-form-item label="周期开始"><el-date-picker v-model="importForm.periodStart" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-          <el-form-item label="周期结束"><el-date-picker v-model="importForm.periodEnd" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-        </div>
-      </el-form>
-      <template #footer><el-button @click="importDialog = false">取消</el-button><el-button type="primary" @click="submitImport">导入并分析</el-button></template>
-    </el-dialog>
   </section>
 </template>
 
 <style scoped>
-.operation-analysis{display:grid;gap:20px}.analysis-heading{display:flex;justify-content:space-between;gap:20px;align-items:flex-end}.analysis-heading span{font-size:12px;letter-spacing:.18em;color:#c92d2d;font-weight:800}.analysis-heading h2{margin:7px 0 6px;font-size:27px}.analysis-heading p{margin:0;color:#6f7681}.heading-actions{display:flex;gap:10px;flex-wrap:wrap}.metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.metric-grid article{padding:20px;background:#fff;border:1px solid #ebe6df;border-radius:16px;display:grid;gap:8px}.metric-grid small,.metric-grid span{color:#7b818b}.metric-grid strong{font-size:27px;color:#18222f}.analysis-note{display:grid;grid-template-columns:1fr 1fr;gap:14px}.analysis-note>div{padding:18px 20px;border-radius:14px;background:#f3f6fa;border:1px solid #e5eaf0}.analysis-note p{margin:7px 0 0;color:#727985}.analysis-table{background:#fff;border:1px solid #ece7df;border-radius:16px;overflow:hidden;padding:4px}.competitor-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.competitor-grid article{background:#fff;border:1px solid #ebe6df;border-radius:14px;padding:18px}.competitor-grid article>div{display:flex;gap:10px;align-items:center}.competitor-grid p{color:#808692}.competitor-grid small{color:#9a846d}.archive-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.archive-grid section{background:#fff;border:1px solid #ebe6df;border-radius:16px;padding:16px}.archive-grid h3{margin:0 0 14px}.file-input{display:block;width:100%;padding:12px;border:1px dashed #b9c1cc;border-radius:10px;margin-bottom:8px}.date-row{display:grid;grid-template-columns:1fr 1fr;gap:14px}@media(max-width:1000px){.metric-grid{grid-template-columns:repeat(2,1fr)}.analysis-heading{align-items:flex-start;flex-direction:column}.competitor-grid{grid-template-columns:repeat(2,1fr)}.archive-grid{grid-template-columns:1fr}}@media(max-width:650px){.metric-grid,.analysis-note,.competitor-grid,.date-row{grid-template-columns:1fr}}
+.operation-analysis{display:grid;gap:20px}.analysis-heading{display:flex;justify-content:space-between;gap:20px;align-items:flex-end}.analysis-heading span{font-size:12px;letter-spacing:.18em;color:#c92d2d;font-weight:800}.analysis-heading h2{margin:7px 0 6px;font-size:27px}.analysis-heading p{margin:0;color:#6f7681}.sync-status{display:flex;align-items:center;gap:8px;margin-top:10px}.sync-status small{color:#7b818b}.heading-actions{display:flex;gap:10px;flex-wrap:wrap}.metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.metric-grid article{padding:20px;background:#fff;border:1px solid #ebe6df;border-radius:16px;display:grid;gap:8px}.metric-grid small,.metric-grid span{color:#7b818b}.metric-grid strong{font-size:27px;color:#18222f}.analysis-note{display:grid;grid-template-columns:1fr 1fr;gap:14px}.analysis-note>div{padding:18px 20px;border-radius:14px;background:#f3f6fa;border:1px solid #e5eaf0}.analysis-note p{margin:7px 0 0;color:#727985}.analysis-table{background:#fff;border:1px solid #ece7df;border-radius:16px;overflow:hidden;padding:4px}.competitor-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.competitor-grid article{background:#fff;border:1px solid #ebe6df;border-radius:14px;padding:18px}.competitor-grid article>div{display:flex;gap:10px;align-items:center}.competitor-grid p{color:#808692}.competitor-grid small{color:#9a846d}.archive-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.archive-grid section{background:#fff;border:1px solid #ebe6df;border-radius:16px;padding:16px}.archive-grid h3{margin:0 0 14px}@media(max-width:1000px){.metric-grid{grid-template-columns:repeat(2,1fr)}.analysis-heading{align-items:flex-start;flex-direction:column}.competitor-grid{grid-template-columns:repeat(2,1fr)}.archive-grid{grid-template-columns:1fr}}@media(max-width:650px){.metric-grid,.analysis-note,.competitor-grid{grid-template-columns:1fr}.sync-status{align-items:flex-start;flex-direction:column}}
 </style>

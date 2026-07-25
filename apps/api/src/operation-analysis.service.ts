@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException, OnModuleInit } from "@nestjs/common";
 import { createHash } from "node:crypto";
 import { Prisma } from "@prisma/client";
+import { opsConfig } from "./config";
 import { PrismaService } from "./prisma.service";
 
 type InputRow = Record<string, unknown>;
@@ -208,6 +209,129 @@ export class OperationAnalysisService implements OnModuleInit {
 
   analysisRuns() {
     return this.prisma.operationAnalysisRun.findMany({ orderBy: { createdAt: "desc" }, take: 100 });
+  }
+
+  async jushuitanStatus() {
+    const [integration, latestRun] = await Promise.all([
+      this.prisma.integration.findUnique({ where: { kind: "JUSHUITAN" } }),
+      this.prisma.operationAnalysisRun.findFirst({
+        where: { source: "JUSHUITAN_API" },
+        orderBy: { periodEnd: "desc" },
+      }),
+    ]);
+    const configured = Boolean(opsConfig.jushuitan.operationDataUrl);
+    return {
+      configured,
+      mode: "API",
+      state: configured ? integration?.state || "CONFIGURED" : "UNCONFIGURED",
+      schedule: "每天05:15",
+      timeZone: opsConfig.timeZone,
+      lastSuccessAt: integration?.lastSuccessAt || null,
+      latestDataAt: latestRun?.periodEnd || null,
+      message: configured
+        ? integration?.message || "聚水潭ERP经营数据接口已配置，等待首次同步"
+        : "聚水潭ERP经营数据接口未配置",
+    };
+  }
+
+  async syncJushuitan(actor: string) {
+    const endpoint = opsConfig.jushuitan.operationDataUrl.trim();
+    if (!endpoint) throw new BadRequestException("聚水潭ERP经营数据接口未配置");
+    const now = new Date();
+    const periodEnd = now.toISOString().slice(0, 10);
+    const periodStart = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const method = opsConfig.jushuitan.operationDataMethod === "GET" ? "GET" : "POST";
+    const url = new URL(endpoint);
+    if (method === "GET") {
+      url.searchParams.set("periodStart", periodStart);
+      url.searchParams.set("periodEnd", periodEnd);
+    }
+    try {
+      const response = await fetch(url, {
+        method,
+        headers: {
+          accept: "application/json",
+          ...(method === "POST" ? { "content-type": "application/json" } : {}),
+          ...(opsConfig.jushuitan.operationDataToken
+            ? { authorization: `Bearer ${opsConfig.jushuitan.operationDataToken}` }
+            : {}),
+        },
+        body: method === "POST" ? JSON.stringify({ periodStart, periodEnd }) : undefined,
+        signal: AbortSignal.timeout(90_000),
+      });
+      const payload = await response.json() as unknown;
+      if (!response.ok) throw new Error(`聚水潭ERP接口返回HTTP ${response.status}`);
+      const root = payload && typeof payload === "object" && !Array.isArray(payload) ? payload as InputRow : {};
+      const nested = root.data && typeof root.data === "object" && !Array.isArray(root.data) ? root.data as InputRow : {};
+      const records = Array.isArray(payload)
+        ? payload
+        : Array.isArray(root.records)
+          ? root.records
+          : Array.isArray(root.items)
+            ? root.items
+            : Array.isArray(root.data)
+              ? root.data
+              : Array.isArray(nested.records)
+                ? nested.records
+                : Array.isArray(nested.items)
+                  ? nested.items
+                  : [];
+      if (!records.length) throw new Error("聚水潭ERP接口未返回经营数据");
+      const imported = await this.importData({
+        source: "JUSHUITAN_API",
+        sourceName: `聚水潭ERP接口-${periodEnd}`,
+        format: "JSON",
+        records,
+        periodStart: String(root.periodStart || nested.periodStart || periodStart),
+        periodEnd: String(root.periodEnd || nested.periodEnd || periodEnd),
+      }, actor);
+      if (!imported.duplicate) await this.runAnalysis({ runId: imported.run.id }, actor);
+      await this.prisma.integration.upsert({
+        where: { kind: "JUSHUITAN" },
+        create: {
+          kind: "JUSHUITAN",
+          displayName: "聚水潭ERP",
+          state: "HEALTHY",
+          capabilities: ["operation_data"],
+          capabilityStatus: { operation_data: "HEALTHY" },
+          publicConfig: { operationDataMode: "API", schedule: "05:15" },
+          lastCheckedAt: new Date(),
+          lastSuccessAt: new Date(),
+          message: imported.duplicate ? "今日经营数据已同步" : `已同步${imported.run.importedCount}条经营记录`,
+        },
+        update: {
+          state: "HEALTHY",
+          capabilities: ["operation_data"],
+          capabilityStatus: { operation_data: "HEALTHY" },
+          lastCheckedAt: new Date(),
+          lastSuccessAt: new Date(),
+          message: imported.duplicate ? "今日经营数据已同步" : `已同步${imported.run.importedCount}条经营记录`,
+        },
+      });
+      return imported;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "聚水潭ERP同步失败";
+      await this.prisma.integration.upsert({
+        where: { kind: "JUSHUITAN" },
+        create: {
+          kind: "JUSHUITAN",
+          displayName: "聚水潭ERP",
+          state: "ERROR",
+          capabilities: ["operation_data"],
+          capabilityStatus: { operation_data: "ERROR" },
+          publicConfig: { operationDataMode: "API", schedule: "05:15" },
+          lastCheckedAt: new Date(),
+          message,
+        },
+        update: {
+          state: "ERROR",
+          capabilityStatus: { operation_data: "ERROR" },
+          lastCheckedAt: new Date(),
+          message,
+        },
+      });
+      throw error;
+    }
   }
 
   async importData(body: Record<string, unknown>, actor: string) {

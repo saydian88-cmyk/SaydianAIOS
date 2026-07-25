@@ -4,6 +4,7 @@ import { JobStatus, Prisma } from "@prisma/client";
 import { hostname } from "node:os";
 import { ContentService } from "./content.service";
 import { MonitoringService } from "./monitoring.service";
+import { OperationAnalysisService } from "./operation-analysis.service";
 import { PrismaService } from "./prisma.service";
 import { ReportService } from "./report.service";
 import { SourceSyncService } from "./source-sync.service";
@@ -12,7 +13,7 @@ import { localDateKey, makeIdempotencyKey } from "./utils";
 export const jobKinds = [
   "IMPORT_BOOTSTRAP", "SYNC_ASSETS", "SYNC_KNOWLEDGE", "CHECK_INTEGRATIONS", "SYNC_SHOP", "GENERATE_CONTENT",
   "SEND_REVIEW_NOTICE", "QUEUE_PUBLISH", "PROCESS_PUBLISH", "SYNC_COMMENTS", "SYNC_LIVE", "SYNC_METRICS",
-  "DAILY_REPORT", "WEEKLY_REPORT",
+  "SYNC_JUSHUITAN", "DAILY_REPORT", "WEEKLY_REPORT",
 ] as const;
 export type AutomationKind = (typeof jobKinds)[number];
 
@@ -26,6 +27,7 @@ export class AutomationService {
     private readonly sources: SourceSyncService,
     private readonly content: ContentService,
     private readonly monitoring: MonitoringService,
+    private readonly operationAnalysis: OperationAnalysisService,
     private readonly reports: ReportService,
   ) {}
 
@@ -42,7 +44,7 @@ export class AutomationService {
     const key = localDateKey(now);
     const kinds: AutomationKind[] = [
       "IMPORT_BOOTSTRAP", "SYNC_ASSETS", "SYNC_KNOWLEDGE", "CHECK_INTEGRATIONS", "SYNC_SHOP",
-      "GENERATE_CONTENT", "SEND_REVIEW_NOTICE", "SYNC_COMMENTS", "SYNC_LIVE", "SYNC_METRICS", "DAILY_REPORT",
+      "SYNC_JUSHUITAN", "GENERATE_CONTENT", "SEND_REVIEW_NOTICE", "SYNC_COMMENTS", "SYNC_LIVE", "SYNC_METRICS", "DAILY_REPORT",
     ];
     for (const kind of kinds) await this.enqueue(kind, now, `${key}:${kind}`, { triggeredBy });
     return { queued: kinds.length };
@@ -58,6 +60,11 @@ export class AutomationService {
   async scheduleMorningChecks() {
     const key = localDateKey();
     for (const kind of ["CHECK_INTEGRATIONS", "SYNC_SHOP", "SYNC_METRICS"] as AutomationKind[]) await this.enqueue(kind, new Date(), `${key}:${kind}`);
+  }
+
+  @Cron("0 15 5 * * *", { timeZone: "Asia/Shanghai" })
+  async scheduleJushuitanSync() {
+    await this.enqueue("SYNC_JUSHUITAN", new Date(), localDateKey());
   }
 
   @Cron("0 0 7 * * *", { timeZone: "Asia/Shanghai" })
@@ -168,6 +175,12 @@ export class AutomationService {
       case "SYNC_COMMENTS": return this.monitoring.syncComments();
       case "SYNC_LIVE": return this.monitoring.syncLive();
       case "SYNC_METRICS": return this.monitoring.syncMetrics();
+      case "SYNC_JUSHUITAN": {
+        const status = await this.operationAnalysis.jushuitanStatus();
+        return status.configured
+          ? this.operationAnalysis.syncJushuitan(actor)
+          : { skipped: true, message: status.message };
+      }
       case "DAILY_REPORT": return this.reports.generateDaily();
       case "WEEKLY_REPORT": return this.reports.generateWeekly();
     }

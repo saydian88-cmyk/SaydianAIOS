@@ -28,6 +28,20 @@ export class OperationAnalysisController {
     return this.service.overview();
   }
 
+  @Get("jushuitan/status")
+  jushuitanStatus(@Headers("authorization") authorization?: string) {
+    this.actor(authorization);
+    return this.service.jushuitanStatus();
+  }
+
+  @Post("jushuitan/sync")
+  syncJushuitan(
+    @Headers("authorization") authorization: string | undefined,
+    @Headers("x-ops-actor") requestedActor: string | undefined,
+  ) {
+    return this.service.syncJushuitan(this.actor(authorization, requestedActor));
+  }
+
   @Get("products")
   products(@Headers("authorization") authorization: string | undefined, @Query() query: Record<string, string>) {
     this.actor(authorization);
