@@ -36,6 +36,37 @@ describe("ContentService production workflow", () => {
     );
   });
 
+  it("does not start editing when a legacy completed requirement only has an image", async () => {
+    const service = serviceWithFindUnique({
+      id: "plan-image-only",
+      kind: "VIDEO",
+      status: "APPROVED",
+      productionStage: "READY_TO_EDIT",
+      shootRequirements: [{
+        id: "shot-image-only",
+        description: "产品功能展示",
+        status: "DONE",
+        coverage: "EXISTING",
+        assetIds: ["image-1"],
+      }],
+      variants: [],
+      contentAssets: [{
+        assetId: "image-1",
+        asset: {
+          id: "image-1",
+          kind: "IMAGE",
+          reviewStatus: "APPROVED",
+          availabilityStatus: "ACTIVE",
+          rightsStatus: "COMMERCIAL",
+        },
+      }],
+    });
+
+    await expect(service.startEditing("plan-image-only", "测试员工")).rejects.toThrow(
+      new BadRequestException("补拍素材尚未全部完成"),
+    );
+  });
+
   it("does not approve platform packaging without a finished cover", async () => {
     const service = serviceWithFindUnique({
       id: "variant-1",

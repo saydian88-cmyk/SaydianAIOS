@@ -40,6 +40,43 @@ export class ContentService {
     return `VP-${localDateKey(date).replaceAll("-", "")}-${randomUUID().slice(0, 6).toUpperCase()}`;
   }
 
+  private normalizeVideoAssetCoverage<T extends {
+    kind: string;
+    status: string;
+    productionStage: string;
+    shootRequirements: unknown;
+    contentAssets?: Array<{ asset: { id: string; kind?: string | null } }>;
+  }>(plan: T): T {
+    if (plan.kind !== "VIDEO" || !["SCRIPT_REVIEW", "AWAITING_ASSETS", "READY_TO_EDIT"].includes(plan.productionStage)) return plan;
+    const kindById = new Map((plan.contentAssets || []).map(({ asset }) => [asset.id, String(asset.kind || "").toUpperCase()]));
+    const requirements = Array.isArray(plan.shootRequirements) ? plan.shootRequirements as Array<Record<string, unknown>> : [];
+    const normalized = requirements.map((item) => {
+      const assetIds = Array.isArray(item.assetIds) ? item.assetIds.map(String).filter(Boolean) : [];
+      const videoAssetIds = Array.from(new Set([
+        ...(Array.isArray(item.videoAssetIds) ? item.videoAssetIds.map(String) : []),
+        ...assetIds,
+      ])).filter((assetId) => kindById.get(assetId) === "VIDEO");
+      const imageAssetIds = Array.from(new Set([
+        ...(Array.isArray(item.imageAssetIds) ? item.imageAssetIds.map(String) : []),
+        ...assetIds,
+      ])).filter((assetId) => kindById.get(assetId) === "IMAGE");
+      const covered = videoAssetIds.length > 0;
+      return {
+        ...item,
+        assetIds: [...videoAssetIds, ...imageAssetIds],
+        videoAssetIds,
+        imageAssetIds,
+        coverage: covered ? "EXISTING" : "MISSING",
+        status: covered ? "DONE" : imageAssetIds.length ? "IN_PROGRESS" : "OPEN",
+        ...(!covered && imageAssetIds.length ? { reason: "当前只有静态图片，可作为辅助画面，仍需补拍视频主画面" } : {}),
+      };
+    });
+    const productionStage = plan.status === "APPROVED" && normalized.length > 0 && normalized.every((item) => item.status === "DONE")
+      ? "READY_TO_EDIT"
+      : plan.status === "APPROVED" ? "AWAITING_ASSETS" : plan.productionStage;
+    return { ...plan, shootRequirements: normalized, productionStage };
+  }
+
   async generateDaily(date = new Date(), actor = "系统内容引擎"): Promise<{ created: number; selected: string[] }> {
     const video = await this.generateDailyVideo(date, actor);
     const article = await this.generateDailyArticle(date, actor);
@@ -590,7 +627,8 @@ export class ContentService {
     });
     if (!plan || plan.kind !== "VIDEO") throw new NotFoundException("视频生产单不存在");
     if (!["APPROVED", "SCHEDULED"].includes(plan.status)) throw new BadRequestException("脚本尚未审核通过");
-    const requirements = Array.isArray(plan.shootRequirements) ? plan.shootRequirements as Array<Record<string, unknown>> : [];
+    const normalizedPlan = this.normalizeVideoAssetCoverage(plan);
+    const requirements = Array.isArray(normalizedPlan.shootRequirements) ? normalizedPlan.shootRequirements as Array<Record<string, unknown>> : [];
     if (requirements.some((item) => String(item.status) !== "DONE")) throw new BadRequestException("补拍素材尚未全部完成");
     const unavailable = plan.contentAssets.filter(({ asset }) =>
       asset.reviewStatus !== "APPROVED"
@@ -801,8 +839,8 @@ export class ContentService {
     return updated;
   }
 
-  workflow(id: string) {
-    return this.prisma.contentPlan.findUnique({
+  async workflow(id: string) {
+    const plan = await this.prisma.contentPlan.findUnique({
       where: { id },
       include: {
         variants: { include: { publishJobs: { include: { metrics: { orderBy: { capturedAt: "desc" } } } } } },
@@ -811,6 +849,7 @@ export class ContentService {
         optimizations: { orderBy: { checkpointHours: "asc" } },
       },
     });
+    return plan ? this.normalizeVideoAssetCoverage(plan) : plan;
   }
 
   async assignVariantAccount(variantId: string, platformAccountId: string, actor: string) {
@@ -948,7 +987,7 @@ export class ContentService {
   }
 
   async list(status?: ContentStatus) {
-    return this.prisma.contentPlan.findMany({
+    const plans = await this.prisma.contentPlan.findMany({
       where: status ? { status } : {},
       include: {
         variants: { include: { publishJobs: { orderBy: { createdAt: "desc" }, take: 1 } } },
@@ -959,5 +998,6 @@ export class ContentService {
       orderBy: [{ planDate: "desc" }, { score: "desc" }],
       take: 100,
     });
+    return plans.map((plan) => this.normalizeVideoAssetCoverage(plan));
   }
 }
