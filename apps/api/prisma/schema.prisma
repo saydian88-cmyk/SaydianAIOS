@@ -718,6 +718,8 @@ model UploadBatch {
   originalStatus       Boolean           @default(false)
   rightsStatus         AssetRightsStatus @default(AUTH_REQUIRED)
   acquiredAt           DateTime?
+  contentPlanId        String?
+  shootRequirementId   String?
   uploadedByEmployeeId String?
   uploadedBy           String
   receivedCount        Int               @default(0)
@@ -733,6 +735,7 @@ model UploadBatch {
 
   @@index([status, createdAt])
   @@index([uploadedByEmployeeId, createdAt])
+  @@index([contentPlanId, shootRequirementId])
 }
 
 model UploadEvent {

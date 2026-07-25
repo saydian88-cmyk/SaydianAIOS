@@ -599,6 +599,15 @@ export class BrandDataService {
       select: { id: true },
     }))?.id;
     const productIds = await this.validProductIds(textArray(body.productIds));
+    const contentPlanId = text(body.contentPlanId);
+    const shootRequirementId = text(body.shootRequirementId);
+    if (contentPlanId || shootRequirementId) {
+      if (!contentPlanId || !shootRequirementId) throw new BadRequestException("生产单和补拍项必须同时选择");
+      const plan = await this.prisma.contentPlan.findUnique({ where: { id: contentPlanId } });
+      if (!plan || plan.kind !== "VIDEO" || plan.productionStage !== "AWAITING_ASSETS") throw new BadRequestException("所选生产单当前不在等待素材阶段");
+      const requirements = Array.isArray(plan.shootRequirements) ? plan.shootRequirements as JsonRecord[] : [];
+      if (!requirements.some((item) => text(item.id) === shootRequirementId)) throw new BadRequestException("所选补拍项不属于该生产单");
+    }
     const batch = await this.prisma.uploadBatch.create({
       data: {
         batchNo: batchNo(), sourceType: text(body.sourceType) || "WEB_UPLOAD",
@@ -606,6 +615,7 @@ export class BrandDataService {
         assetKind: text(body.assetKind) ? enumValue(body.assetKind, assetKinds, "DOCUMENT") : undefined,
         contentDescription: text(body.contentDescription) || undefined, originalStatus: Boolean(body.originalStatus),
         rightsStatus: enumValue(body.rightsStatus, rightsStatuses, "AUTH_REQUIRED"), acquiredAt: parseDate(body.acquiredAt),
+        contentPlanId: contentPlanId || undefined, shootRequirementId: shootRequirementId || undefined,
         uploadedByEmployeeId: employeeId, uploadedBy: actor,
       },
     });
@@ -641,10 +651,13 @@ export class BrandDataService {
       try {
         const result = await this.ingestDiskFile(batch, file, actor, technicalInfo.find((item) => text(item.name) === file.originalname));
         results.push(result);
+        const assetId = text((result.asset as JsonRecord | undefined)?.id);
+        if (assetId && batch.contentPlanId && batch.shootRequirementId) {
+          await this.linkAssetToShootRequirement(batch.contentPlanId, batch.shootRequirementId, assetId, actor);
+        }
         if (result.duplicate) duplicates += 1;
         else {
           created += 1;
-          const assetId = text((result.asset as JsonRecord | undefined)?.id);
           if (assetId && classificationTags.length) {
             const labels: Record<string, string> = { HOOK: "HOOK", PAIN: "痛点", FEATURE: "功能", TUTORIAL: "教程", REVIEW: "测评", STORY: "故事", HARD_AD: "硬广", LIVE_PREVIEW: "直播预告", DEMO: "演示", TRAFFIC: "引流", CTA: "CTA" };
             await this.replaceHumanTags(assetId, classificationTags.map((code) => ({ namespace: "content_classification", code, label: labels[code] || code })), actor);
@@ -966,7 +979,52 @@ export class BrandDataService {
       return updated;
     });
     await this.audit(actor, `ASSET_REVIEW_${action}`, "Asset", id, { reviewStatus, availabilityStatus, rightsStatus, note: text(body.note) });
+    const linkedPlans = await this.prisma.contentAsset.findMany({ where: { assetId: id, role: { startsWith: "SHOOT:" } }, select: { contentPlanId: true } });
+    for (const contentPlanId of new Set(linkedPlans.map((item) => item.contentPlanId))) {
+      await this.reconcileShootRequirements(contentPlanId, actor);
+    }
     return this.assetView(asset);
+  }
+
+  private async linkAssetToShootRequirement(contentPlanId: string, requirementId: string, assetId: string, actor: string) {
+    const plan = await this.prisma.contentPlan.findUnique({ where: { id: contentPlanId } });
+    if (!plan) return;
+    const requirements = Array.isArray(plan.shootRequirements) ? plan.shootRequirements as JsonRecord[] : [];
+    const next = requirements.map((item) => {
+      if (text(item.id) !== requirementId) return item;
+      const assetIds = Array.from(new Set([...textArray(item.assetIds), assetId]));
+      return { ...item, assetIds, status: "IN_PROGRESS" };
+    });
+    await this.prisma.$transaction([
+      this.prisma.contentAsset.upsert({
+        where: { contentPlanId_assetId_role: { contentPlanId, assetId, role: `SHOOT:${requirementId}` } },
+        create: { contentPlanId, assetId, role: `SHOOT:${requirementId}` },
+        update: {},
+      }),
+      this.prisma.contentPlan.update({ where: { id: contentPlanId }, data: { shootRequirements: json(next), productionStage: "AWAITING_ASSETS" } }),
+    ]);
+    await this.audit(actor, "SHOOT_ASSET_LINK", "ContentPlan", contentPlanId, { requirementId, assetId });
+  }
+
+  private async reconcileShootRequirements(contentPlanId: string, actor: string) {
+    const plan = await this.prisma.contentPlan.findUnique({
+      where: { id: contentPlanId },
+      include: { contentAssets: { include: { asset: true } } },
+    });
+    if (!plan || plan.kind !== "VIDEO") return;
+    const eligible = new Set(plan.contentAssets.filter(({ asset }) =>
+      asset.reviewStatus === "APPROVED"
+      && asset.availabilityStatus === "ACTIVE"
+      && ["COMMERCIAL", "EDIT_ONLY"].includes(asset.rightsStatus),
+    ).map(({ assetId }) => assetId));
+    const requirements = Array.isArray(plan.shootRequirements) ? plan.shootRequirements as JsonRecord[] : [];
+    const next = requirements.map((item) => {
+      const assetIds = textArray(item.assetIds);
+      return { ...item, assetIds, status: assetIds.some((assetId) => eligible.has(assetId)) ? "DONE" : assetIds.length ? "IN_PROGRESS" : "OPEN" };
+    });
+    const productionStage = next.length === 0 || next.every((item) => text(item.status) === "DONE") ? "READY_TO_EDIT" : "AWAITING_ASSETS";
+    await this.prisma.contentPlan.update({ where: { id: contentPlanId }, data: { shootRequirements: json(next), productionStage } });
+    await this.audit(actor, "SHOOT_REQUIREMENTS_RECONCILE", "ContentPlan", contentPlanId, { productionStage, requirements: next });
   }
 
   async reviewAsset(id: string, approved: boolean, actor: string, note?: string) {

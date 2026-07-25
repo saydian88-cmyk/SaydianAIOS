@@ -64,6 +64,7 @@ const uploading = ref(false);
 const uploadProgress = ref(0);
 const uploadEta = ref("");
 const uploadStage = ref("");
+const productionPlans = ref<Row[]>([]);
 const replacementFiles = ref<UploadUserFile[]>([]);
 const replacementUploading = ref(false);
 const documentContent = ref("");
@@ -74,7 +75,7 @@ const knowledgeFilter = reactive({ query: "", type: "", status: "", model: "" })
 const assetFilter = reactive({ query: "", kind: "", level: "", model: "", moduleType: "", employeeId: "", reviewStatus: "", reviewScope: "NORMAL", availabilityStatus: "", rightsStatus: "", minimumScore: "" });
 const knowledgeForm = reactive({ type: "FAQ", title: "", category: "", model: "", reply: "", body: "", source: "运营后台录入", sourceRefs: "", sourceLevel: "B", keywords: "", scenarios: "", audience: "customer" });
 const productForm = reactive({ modelCode: "", name: "", category: "", status: "READY", aliases: "", functions: "", customerValues: "", audiences: "", scenes: "", contentDirections: "" });
-const batchForm = reactive({ sourceType: "EMPLOYEE_CAPTURE", productScope: "UNKNOWN", productIds: [] as string[], assetKind: "", contentDescription: "", classificationTags: [] as string[], originalStatus: true, rightsStatus: "COMMERCIAL", acquiredAt: "" });
+const batchForm = reactive({ sourceType: "EMPLOYEE_CAPTURE", productScope: "UNKNOWN", productIds: [] as string[], assetKind: "", contentDescription: "", classificationTags: [] as string[], originalStatus: true, rightsStatus: "COMMERCIAL", acquiredAt: "", contentPlanId: "", shootRequirementId: "" });
 const metadataForm = reactive({ displayName: "", level: "ORIGINAL", productScope: "UNKNOWN", productIds: [] as string[], rightsStatus: "AUTH_REQUIRED", contentDescription: "", acquiredAt: "", restriction: "", evidenceIds: "" });
 const assetBulkForm = reactive({ level: "", productScope: "", productIds: [] as string[], rightsStatus: "", acquiredAt: "", restriction: "", contentDescription: "", tags: [] as string[], tagMode: "APPEND" });
 const controlForm = reactive<Record<string, any>>({});
@@ -323,7 +324,7 @@ async function archiveControl(resource: string, row: Row) {
   }, "记录已归档");
 }
 
-function openBatchUpload() {
+async function openBatchUpload() {
   batchFiles.value = [];
   uploadTechnicalInfo.value = [];
   assistState.value = "";
@@ -331,8 +332,14 @@ function openBatchUpload() {
   uploadProgress.value = 0;
   uploadEta.value = "";
   uploadStage.value = "";
-  clearObject(batchForm, { sourceType: "EMPLOYEE_CAPTURE", productScope: "UNKNOWN", productIds: [], assetKind: "", contentDescription: "", classificationTags: [], originalStatus: true, rightsStatus: "COMMERCIAL", acquiredAt: "" });
+  clearObject(batchForm, { sourceType: "EMPLOYEE_CAPTURE", productScope: "UNKNOWN", productIds: [], assetKind: "", contentDescription: "", classificationTags: [], originalStatus: true, rightsStatus: "COMMERCIAL", acquiredAt: "", contentPlanId: "", shootRequirementId: "" });
+  const plans = await api<Row[]>("/api/v1/content");
+  productionPlans.value = plans.filter((item) => item.kind === "VIDEO" && item.productionStage === "AWAITING_ASSETS");
   uploadDialog.value = true;
+}
+const selectedProductionPlan = computed(() => productionPlans.value.find((item) => item.id === batchForm.contentPlanId));
+function selectProductionPlan() {
+  batchForm.shootRequirementId = "";
 }
 async function inspectBatchFiles() {
   await Promise.resolve();
@@ -770,6 +777,8 @@ onMounted(reload);
         <el-button :loading="assistState === 'RUNNING'" @click="assistUpload">AI帮我填写</el-button>
       </div>
       <el-form label-position="top" class="form-grid simple-upload-form">
+        <el-form-item label="关联视频生产单"><el-select v-model="batchForm.contentPlanId" clearable filterable placeholder="补拍素材请选择对应生产单" @change="selectProductionPlan"><el-option v-for="item in productionPlans" :key="item.id" :label="`${item.productionNo || '历史内容'} · ${item.topic}`" :value="item.id" /></el-select></el-form-item>
+        <el-form-item label="对应补拍项"><el-select v-model="batchForm.shootRequirementId" clearable :disabled="!batchForm.contentPlanId" placeholder="选择这批素材完成的拍摄要求"><el-option v-for="item in (selectedProductionPlan?.shootRequirements || []).filter((row: Row) => row.status !== 'DONE')" :key="item.id" :label="item.description" :value="item.id" /></el-select></el-form-item>
         <el-form-item label="产品型号（可不选）"><el-select v-model="batchForm.productIds" multiple filterable placeholder="AI识别后请确认"><el-option v-for="item in controls.products" :key="item.id" :label="`${item.modelCode} · ${item.name}`" :value="item.id" /></el-select></el-form-item>
         <el-form-item label="素材来源"><el-select v-model="batchForm.sourceType"><el-option label="员工拍摄/制作" value="EMPLOYEE_CAPTURE" /><el-option label="网页上传" value="WEB_UPLOAD" /><el-option label="供应商" value="SUPPLIER" /><el-option label="UGC授权" value="UGC" /></el-select></el-form-item>
         <el-form-item label="内容说明" class="full"><el-input v-model="batchForm.contentDescription" type="textarea" :rows="2" placeholder="可留空，由AI辅助填写" /></el-form-item>
