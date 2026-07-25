@@ -184,6 +184,34 @@ export class AssetAiService {
     };
   }
 
+  async renameIrregularAssetFromExistingAnalysis(assetId: string) {
+    const asset = await this.prisma.asset.findUnique({
+      where: { id: assetId },
+      include: {
+        products: { include: { product: { select: { modelCode: true } } } },
+        analysisJobs: {
+          where: { status: "SUCCEEDED", type: { in: ["CONTENT_UNDERSTANDING", "TAGGING"] } },
+          orderBy: { finishedAt: "desc" },
+          take: 2,
+        },
+        cloudMediaJobs: {
+          where: { status: "SUCCEEDED", type: "VIDEO_UNDERSTANDING" },
+          orderBy: { completedAt: "desc" },
+          take: 1,
+        },
+      },
+    });
+    if (!asset || !isIrregularAssetName(asset.displayName || asset.fileName)) return undefined;
+    const result = (asset.cloudMediaJobs[0]?.resultPayload
+      || asset.analysisJobs.find((job) => job.type === "CONTENT_UNDERSTANDING")?.result
+      || asset.analysisJobs[0]?.result) as JsonRecord | null | undefined;
+    if (!result || typeof result !== "object" || Array.isArray(result)) return undefined;
+    const displayName = buildAiAssetName(result, asset.products.map((item) => item.product.modelCode));
+    if (!displayName) return undefined;
+    await this.prisma.asset.update({ where: { id: assetId }, data: { displayName } });
+    return displayName;
+  }
+
   async materializeSegment(assetId: string, segmentId: string, actor: string, employeeId?: string) {
     const segment = await this.prisma.assetSegment.findFirst({
       where: { id: segmentId, assetId },

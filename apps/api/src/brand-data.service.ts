@@ -20,6 +20,7 @@ import { tmpdir } from "node:os";
 import { basename, extname, join } from "node:path";
 import sharp from "sharp";
 import { AssetAiService } from "./asset-ai.service";
+import { isIrregularAssetName } from "./asset-naming";
 import { OssStorageService } from "./oss-storage.service";
 import { PrismaService } from "./prisma.service";
 
@@ -830,6 +831,16 @@ export class BrandDataService {
     });
     if (body.tags !== undefined) await this.replaceHumanTags(id, body.tags, actor);
     await this.audit(actor, "ASSET_METADATA_UPDATE", "Asset", id, { displayName: asset.displayName, productIds, rightsStatus: asset.rightsStatus });
+    const nameChanged = body.name !== undefined || body.displayName !== undefined;
+    if (nameChanged && isIrregularAssetName(asset.displayName || asset.fileName)) {
+      const renamed = await this.assetAi.renameIrregularAssetFromExistingAnalysis(id);
+      if (renamed) {
+        await this.audit(actor, "ASSET_AI_RENAME", "Asset", id, { before: asset.displayName, after: renamed, source: "EXISTING_ANALYSIS" });
+      } else if (asset.kind && ["IMAGE", "VIDEO"].includes(asset.kind)) {
+        await this.assetAi.enqueue(id, asset.kind, asset.analysisVersion + 1);
+        await this.audit(actor, "ASSET_AI_RENAME_QUEUED", "Asset", id, { displayName: asset.displayName, analysisVersion: asset.analysisVersion + 1 });
+      }
+    }
     return this.asset(id);
   }
 

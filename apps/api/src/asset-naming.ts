@@ -1,6 +1,8 @@
 type AnalysisRecord = Record<string, unknown>;
 
-const genericName = /^(?:\d+|(?:img|vid|dsc|pxl|dji|mvimg|screenshot|screenrecording)[-_ ]*\d*|微信(?:图片|视频)[-_ ]*\d*|未命名\d*|新建(?:文件|视频|图片)?\d*|素材\d*|视频\d*|图片\d*|[a-f0-9]{12,})$/iu;
+const genericName = /^(?:\d+|[a-z0-9]{1,12}|(?:img|vid|dsc|pxl|dji|mvimg|screenshot|screenrecording)[-_ ]*\d*|微信(?:图片|视频)[-_ ]*\d*|未命名\d*|新建(?:文件|视频|图片)?\d*|素材\d*|视频\d*|图片\d*|[a-f0-9]{12,})$/iu;
+const generatedIdentifier = /^(?:[a-z0-9]{2,}[-_ ]){2,}[a-z0-9]{2,}$/iu;
+const repeatedCharacters = /^([a-z0-9])\1{2,}$/iu;
 
 const moduleNames: Record<string, string> = {
   HOOK: "钩子",
@@ -45,7 +47,11 @@ function firstValue(value: unknown): string {
 
 export function isIrregularAssetName(value: unknown): boolean {
   const name = clean(value, 120);
-  return !name || genericName.test(name.replace(/\s+/gu, ""));
+  const compact = name.replace(/\s+/gu, "");
+  return !name
+    || genericName.test(compact)
+    || generatedIdentifier.test(name)
+    || repeatedCharacters.test(compact);
 }
 
 export function buildAiAssetName(result: AnalysisRecord, productCodes: string[] = []): string | undefined {

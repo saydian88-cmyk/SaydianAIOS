@@ -18,8 +18,11 @@ describe("AssetAiService capabilities", () => {
 });
 
 describe("AI asset naming", () => {
-  it("recognizes numeric and camera-generated names as irregular", () => {
+  it("recognizes numeric, meaningless Latin and camera-generated names as irregular", () => {
     expect(isIrregularAssetName("18")).toBe(true);
+    expect(isIrregularAssetName("abc")).toBe(true);
+    expect(isIrregularAssetName("a8b7c6")).toBe(true);
+    expect(isIrregularAssetName("aa-bb-cc")).toBe(true);
     expect(isIrregularAssetName("IMG_0018.jpg")).toBe(true);
     expect(isIrregularAssetName("W9父母健康场景")).toBe(false);
   });
