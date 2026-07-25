@@ -263,6 +263,16 @@ export class BrandDataController {
     return this.viralCollector.updateConfig(platform, body);
   }
 
+  @Post("viral-collector/providers/:platform/test")
+  testViralCollectorProvider(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("platform") platform: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    this.actor(authorization);
+    return this.viralCollector.testProvider(platform, String(body.provider || ""));
+  }
+
   @Post("viral-collector/import")
   @UseInterceptors(FileInterceptor("file", { limits: { fileSize: 10 * 1024 * 1024, files: 1 } }))
   importViralCollectorCsv(
@@ -293,6 +303,34 @@ export class BrandDataController {
   runViralCollector(@Headers("authorization") authorization: string | undefined, @Body() body: Record<string, unknown>) {
     this.actor(authorization);
     return this.viralCollector.collect(body.platform as never);
+  }
+
+  @Post("viral-collector/references/:id/resolve")
+  resolveViralReference(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    this.actor(authorization);
+    return this.viralCollector.resolveReference(id, body.analyze === undefined ? true : Boolean(body.analyze));
+  }
+
+  @Get("viral-collector/resolve-jobs")
+  listViralResolveJobs(
+    @Headers("authorization") authorization: string | undefined,
+    @Query("take") take?: string,
+  ) {
+    this.actor(authorization);
+    return this.viralCollector.listResolveJobs(Number(take) || 50);
+  }
+
+  @Post("viral-collector/resolve-jobs/:id/retry")
+  retryViralResolveJob(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+  ) {
+    this.actor(authorization);
+    return this.viralCollector.retryResolveJob(id);
   }
 
   @Post("assets/upload")

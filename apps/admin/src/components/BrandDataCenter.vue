@@ -79,7 +79,26 @@ const batchForm = reactive({ sourceType: "EMPLOYEE_CAPTURE", productScope: "UNKN
 const metadataForm = reactive({ displayName: "", level: "ORIGINAL", productScope: "UNKNOWN", productIds: [] as string[], rightsStatus: "AUTH_REQUIRED", contentDescription: "", acquiredAt: "", restriction: "", evidenceIds: "" });
 const assetBulkForm = reactive({ level: "", productScope: "", productIds: [] as string[], rightsStatus: "", acquiredAt: "", restriction: "", contentDescription: "", tags: [] as string[], tagMode: "APPEND" });
 const controlForm = reactive<Record<string, any>>({});
-const collectorForm = reactive({ platform: "DOUYIN", providerName: "", mode: "API", endpoint: "", token: "", keywords: "", competitorAccounts: "", dailyLimit: 20, enabled: true });
+const collectorForm = reactive({
+  platform: "DOUYIN",
+  providerName: "",
+  mode: "API",
+  endpoint: "",
+  token: "",
+  keywords: "",
+  competitorAccounts: "",
+  dailyLimit: 20,
+  resolveLimit: 5,
+  analysisLimit: 3,
+  enabled: true,
+  officialEnabled: true,
+  tikHubEnabled: true,
+  tikHubApiKey: "",
+  selfHostedEnabled: true,
+  selfHostedBaseUrl: "",
+  selfHostedSearchUrl: "",
+  selfHostedToken: "",
+});
 const collectorImportForm = reactive({ platform: "DOUYIN" });
 const collectorLinkForm = reactive({ platform: "DOUYIN", sourceUrl: "", downloadUrl: "", accountName: "", title: "", publishedAt: "", views: "", likes: "", comments: "", shares: "", saves: "" });
 
@@ -130,8 +149,8 @@ function list(value: unknown) { return Array.isArray(value) && value.length ? va
 function editableList(value: unknown) { return Array.isArray(value) ? value.map(String).join("、") : ""; }
 function fileSize(value: unknown) { const size = Number(value || 0); if (size >= 1024 ** 3) return `${(size / 1024 ** 3).toFixed(2)} GB`; if (size >= 1024 ** 2) return `${(size / 1024 ** 2).toFixed(1)} MB`; if (size >= 1024) return `${(size / 1024).toFixed(1)} KB`; return `${size} B`; }
 function durationLabel(value: unknown) { const seconds = Math.max(0, Number(value || 0)); if (!seconds) return "—"; const minutes = Math.floor(seconds / 60); const remain = Math.round(seconds % 60); return minutes ? `${minutes}分${remain}秒` : `${remain}秒`; }
-function statusType(value: string) { if (["READY", "APPROVED", "ACTIVE", "SUCCEEDED", "AVAILABLE", "CONFIGURED", "HEALTHY", "COMMERCIAL"].includes(value)) return "success"; if (["FAILED", "REJECTED", "SUSPENDED", "PROHIBITED", "ERROR"].includes(value)) return "danger"; if (["PENDING", "RETURNED", "RETRY", "UNCONFIGURED", "AUTH_REQUIRED", "ANALYZING"].includes(value)) return "warning"; return "info"; }
-function statusLabel(value: string) { return ({ DRAFT: "草稿", PENDING: "待审核", READY: "可用", BLOCKED: "禁用", ARCHIVED: "归档", APPROVED: "已通过", RETURNED: "已退回", REJECTED: "已拒绝", ACTIVE: "可调用", INACTIVE: "未启用", SUSPENDED: "暂停", RECEIVED: "已接收", HASHED: "已计算哈希", STORED: "已存OSS", ANALYZING: "AI处理中", READY_FOR_REVIEW: "待人工审核", DISCOVERED: "已发现", QUEUED: "待处理", PROCESSING: "处理中", CONFIGURED: "已配置", AVAILABLE: "可用", FAILED: "失败", SUCCEEDED: "已完成", RETRY: "待重试", UNCONFIGURED: "未配置", COMMERCIAL: "可商用", INTERNAL: "仅内部", EDIT_ONLY: "修改后可用", AUTH_REQUIRED: "待授权", EXPIRED: "已过期", PROHIBITED: "禁止使用" } as Record<string, string>)[value] || value; }
+function statusType(value: string) { if (["READY", "APPROVED", "ACTIVE", "SUCCEEDED", "AVAILABLE", "CONFIGURED", "HEALTHY", "COMMERCIAL"].includes(value)) return "success"; if (["FAILED", "REJECTED", "SUSPENDED", "PROHIBITED", "ERROR"].includes(value)) return "danger"; if (["PENDING", "RETURNED", "RETRY", "UNCONFIGURED", "AUTH_REQUIRED", "ANALYZING", "WAITING_PERMISSION"].includes(value)) return "warning"; return "info"; }
+function statusLabel(value: string) { return ({ DRAFT: "草稿", PENDING: "待审核", READY: "可用", BLOCKED: "禁用", ARCHIVED: "归档", APPROVED: "已通过", RETURNED: "已退回", REJECTED: "已拒绝", ACTIVE: "可调用", INACTIVE: "未启用", SUSPENDED: "暂停", RECEIVED: "已接收", HASHED: "已计算哈希", STORED: "已存OSS", ANALYZING: "AI处理中", READY_FOR_REVIEW: "待人工审核", DISCOVERED: "已发现", QUEUED: "待处理", PROCESSING: "处理中", CONFIGURED: "已配置", AVAILABLE: "可用", FAILED: "失败", SUCCEEDED: "已完成", RETRY: "待重试", UNCONFIGURED: "未配置", WAITING_PERMISSION: "等待官方审批", COMMERCIAL: "可商用", INTERNAL: "仅内部", EDIT_ONLY: "修改后可用", AUTH_REQUIRED: "待授权", EXPIRED: "已过期", PROHIBITED: "禁止使用" } as Record<string, string>)[value] || value; }
 function kindLabel(value: string) { return ({ IMAGE: "图片", VIDEO: "视频", AUDIO: "音频", DOCUMENT: "文档" } as Record<string, string>)[value] || value; }
 function queryString(values: Record<string, string>) { const params = new URLSearchParams(); Object.entries(values).forEach(([key, value]) => { if (String(value).trim()) params.set(key, String(value).trim()); }); return params.toString(); }
 
@@ -164,7 +183,7 @@ async function loadViralWorkspace() {
   ]);
   externalVideos.value = videos; remakeTasks.value = tasks; cloudJobs.value = queue; viralCapabilities.value = capabilities;
 }
-async function runViralCollector() { await run(async () => { await post("/api/v1/brand-data/viral-collector/run", {}); await loadViralWorkspace(); }, "四平台采集任务已串行执行"); }
+async function runViralCollector() { await run(async () => { await post("/api/v1/brand-data/viral-collector/run", { platform: "DOUYIN" }); await loadViralWorkspace(); }, "抖音采集任务已执行"); }
 function openCollectorConfig(row: Row) {
   clearObject(collectorForm, {
     platform: row.platform,
@@ -175,7 +194,16 @@ function openCollectorConfig(row: Row) {
     keywords: list(row.keywords) === "—" ? "" : list(row.keywords),
     competitorAccounts: list(row.competitorAccounts) === "—" ? "" : list(row.competitorAccounts),
     dailyLimit: row.dailyLimit || 20,
+    resolveLimit: row.resolveLimit || 5,
+    analysisLimit: row.analysisLimit || 3,
     enabled: row.enabled !== false,
+    officialEnabled: row.officialEnabled !== false,
+    tikHubEnabled: row.tikHubEnabled !== false,
+    tikHubApiKey: "",
+    selfHostedEnabled: row.selfHostedEnabled !== false,
+    selfHostedBaseUrl: row.selfHostedBaseUrl || "",
+    selfHostedSearchUrl: row.selfHostedSearchUrl || "",
+    selfHostedToken: "",
   });
   collectorConfigDialog.value = true;
 }
@@ -185,6 +213,22 @@ async function saveCollectorConfig() {
     collectorConfigDialog.value = false;
     await loadViralWorkspace();
   }, "采集源配置已保存");
+}
+async function testCollectorProvider(provider: string) {
+  await run(async () => {
+    await post(`/api/v1/brand-data/viral-collector/providers/${collectorForm.platform}/test`, { provider });
+    await loadViralWorkspace();
+  }, `${provider === "OFFICIAL" ? "官方" : provider === "SELF_HOSTED" ? "自建" : "TikHub"}渠道连接成功`);
+}
+async function resolveExternalVideo(row: Row) {
+  await run(async () => {
+    if (row.resolveJob?.status === "FAILED") {
+      await post(`/api/v1/brand-data/viral-collector/resolve-jobs/${row.resolveJob.id}/retry`, {});
+    } else {
+      await post(`/api/v1/brand-data/viral-collector/references/${row.id}/resolve`, { analyze: true });
+    }
+    await loadViralWorkspace();
+  }, "已提交媒体解析与AI分析");
 }
 function openCollectorImport(platform = "DOUYIN") {
   collectorImportForm.platform = platform;
@@ -660,11 +704,11 @@ onMounted(reload);
 
     <template v-else>
       <div class="workspace-heading">
-        <div><h3>四平台爆款研究</h3><p>抖音、TikTok、小红书、视频号每日串行采集；高分视频自动生成待确认仿拍任务。</p></div>
+        <div><h3>抖音爆款研究</h3><p>官方搜索优先，自建渠道与TikHub兜底；TOP5解析入库，TOP3进入IMS与百炼分析。</p></div>
         <div class="collector-actions">
           <el-button @click="openCollectorImport()">导入CSV</el-button>
           <el-button @click="openCollectorLink()">补录链接</el-button>
-          <el-button type="primary" :icon="Refresh" @click="runViralCollector">立即采集</el-button>
+          <el-button type="primary" :icon="Refresh" @click="runViralCollector">立即采集抖音</el-button>
         </div>
       </div>
       <div class="collector-capabilities">
@@ -674,6 +718,12 @@ onMounted(reload);
           <span>{{ item.providerName }}</span>
           <span>{{ item.message }}</span>
           <small>方式 {{ item.mode }} · 每日上限 {{ item.dailyLimit }} · 关键词 {{ item.keywords?.length || 0 }}个</small>
+          <div v-if="item.platform === 'DOUYIN'" class="collector-provider-status">
+            <small><el-tag size="small" :type="statusType(item.providers?.officialSearch?.state)">{{ statusLabel(item.providers?.officialSearch?.state) }}</el-tag> 官方搜索：{{ item.providers?.officialSearch?.message }}</small>
+            <small><el-tag size="small" :type="statusType(item.providers?.selfHosted?.state)">{{ statusLabel(item.providers?.selfHosted?.state) }}</el-tag> 自建渠道：{{ item.providers?.selfHosted?.message }}</small>
+            <small><el-tag size="small" :type="statusType(item.providers?.tikHub?.state)">{{ statusLabel(item.providers?.tikHub?.state) }}</el-tag> TikHub：{{ item.providers?.tikHub?.message }}</small>
+            <small><el-tag size="small" :type="statusType(item.providers?.mediaResolution?.state)">{{ statusLabel(item.providers?.mediaResolution?.state) }}</el-tag> 媒体解析：{{ item.providers?.mediaResolution?.message }}</small>
+          </div>
           <el-button link type="primary" @click="openCollectorConfig(item)">配置</el-button>
           <el-button link @click="openCollectorImport(item.platform)">导入</el-button>
           <el-button link @click="openCollectorLink(item.platform)">补录</el-button>
@@ -686,8 +736,8 @@ onMounted(reload);
             <el-table-column label="来源视频" min-width="220"><template #default="scope"><strong>{{ scope.row.title || scope.row.externalContentId }}</strong><small class="cell-note">{{ scope.row.platform }} · {{ scope.row.accountName || '未记录账号' }}</small></template></el-table-column>
             <el-table-column label="最新数据" width="125"><template #default="scope">播放 {{ scope.row.metrics?.[0]?.views ?? '未获取' }}<small class="cell-note">赞 {{ scope.row.metrics?.[0]?.likes ?? '未获取' }}</small></template></el-table-column>
             <el-table-column label="AI评级" width="100"><template #default="scope"><strong>{{ scope.row.scoreSnapshots?.[0]?.score ?? '待分析' }}</strong><small class="cell-note">{{ scope.row.scoreSnapshots?.[0]?.grade || '' }}</small></template></el-table-column>
-            <el-table-column label="状态" width="105"><template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template></el-table-column>
-            <el-table-column label="操作" width="90"><template #default="scope"><el-button link type="primary" @click="openExternal(scope.row.sourceUrl)">查看</el-button></template></el-table-column>
+            <el-table-column label="状态" width="125"><template #default="scope"><el-tag :type="statusType(scope.row.resolveJob?.status || scope.row.status)">{{ statusLabel(scope.row.resolveJob?.status || scope.row.status) }}</el-tag><small v-if="scope.row.resolveJob?.failureReason" class="cell-note">{{ scope.row.resolveJob.failureReason }}</small></template></el-table-column>
+            <el-table-column label="操作" width="145"><template #default="scope"><el-button link type="primary" @click="openExternal(scope.row.sourceUrl)">查看</el-button><el-button v-if="!scope.row.sourceObjectKey || scope.row.resolveJob?.status === 'FAILED'" link type="warning" @click="resolveExternalVideo(scope.row)">{{ scope.row.resolveJob?.status === 'FAILED' ? '重试' : '解析' }}</el-button></template></el-table-column>
           </el-table>
         </div>
         <div class="data-panel">
@@ -720,15 +770,26 @@ onMounted(reload);
 
     <el-dialog v-model="productDialog" title="编辑产品信息" width="760px" destroy-on-close><el-form label-position="top" class="form-grid"><el-form-item label="产品型号"><el-input v-model="productForm.modelCode" disabled /></el-form-item><el-form-item label="产品名称" required><el-input v-model="productForm.name" maxlength="120" /></el-form-item><el-form-item label="系列" required><el-input v-model="productForm.category" maxlength="60" /></el-form-item><el-form-item label="状态"><el-select v-model="productForm.status"><el-option label="可用" value="READY" /><el-option label="待审核" value="PENDING" /><el-option label="禁用" value="BLOCKED" /></el-select></el-form-item><el-form-item label="型号别名" class="full"><el-input v-model="productForm.aliases" placeholder="多个别名用逗号分隔" /></el-form-item><el-form-item label="核心功能" class="full"><el-input v-model="productForm.functions" type="textarea" :rows="2" placeholder="多个功能用逗号分隔" /></el-form-item><el-form-item label="用户价值" class="full"><el-input v-model="productForm.customerValues" type="textarea" :rows="2" placeholder="多个价值点用逗号分隔" /></el-form-item><el-form-item label="目标人群"><el-input v-model="productForm.audiences" placeholder="逗号分隔" /></el-form-item><el-form-item label="适用场景"><el-input v-model="productForm.scenes" placeholder="逗号分隔" /></el-form-item><el-form-item label="内容方向" class="full"><el-input v-model="productForm.contentDirections" type="textarea" :rows="2" placeholder="多个方向用逗号分隔" /></el-form-item></el-form><template #footer><el-button @click="productDialog = false">取消</el-button><el-button type="primary" @click="saveProduct">保存</el-button></template></el-dialog>
 
-    <el-dialog v-model="collectorConfigDialog" title="爆款采集源配置" width="720px" destroy-on-close>
-      <el-alert title="接口未开通时仍可使用CSV导入和链接补录；密钥留空会保留原配置。" type="info" :closable="false" />
+    <el-dialog v-model="collectorConfigDialog" title="爆款采集源配置" width="820px" destroy-on-close>
+      <el-alert title="抖音按“官方搜索 → 自建搜索 → TikHub”发现视频，按“自建解析 → TikHub”获取媒体；密钥留空保留原配置。" type="info" :closable="false" />
       <el-form label-position="top" class="form-grid collector-form">
         <el-form-item label="平台"><el-input :model-value="collectorForm.platform" disabled /></el-form-item>
         <el-form-item label="数据提供方"><el-input v-model="collectorForm.providerName" /></el-form-item>
         <el-form-item label="默认接入方式"><el-select v-model="collectorForm.mode"><el-option label="API自动采集" value="API" /><el-option label="CSV表格导入" value="CSV" /><el-option label="链接补录" value="URL" /></el-select></el-form-item>
         <el-form-item label="每日采集上限"><el-input-number v-model="collectorForm.dailyLimit" :min="1" :max="200" /></el-form-item>
+        <el-form-item v-if="collectorForm.platform === 'DOUYIN'" label="每日媒体解析量"><el-input-number v-model="collectorForm.resolveLimit" :min="1" :max="50" /></el-form-item>
+        <el-form-item v-if="collectorForm.platform === 'DOUYIN'" label="每日深度分析量"><el-input-number v-model="collectorForm.analysisLimit" :min="1" :max="20" /></el-form-item>
         <el-form-item label="Feed接口地址" class="full"><el-input v-model="collectorForm.endpoint" placeholder="未开通可留空" /></el-form-item>
         <el-form-item label="接口Token" class="full"><el-input v-model="collectorForm.token" type="password" show-password placeholder="留空保留原密钥" /></el-form-item>
+        <template v-if="collectorForm.platform === 'DOUYIN'">
+          <el-form-item label="官方搜索"><div class="collector-switch-row"><el-switch v-model="collectorForm.officialEnabled" /><el-button size="small" @click="testCollectorProvider('OFFICIAL')">测试官方</el-button></div></el-form-item>
+          <el-form-item label="TikHub兜底"><div class="collector-switch-row"><el-switch v-model="collectorForm.tikHubEnabled" /><el-button size="small" @click="testCollectorProvider('TIKHUB')">测试TikHub</el-button></div></el-form-item>
+          <el-form-item label="TikHub API Key" class="full"><el-input v-model="collectorForm.tikHubApiKey" type="password" show-password placeholder="留空保留原Key" /></el-form-item>
+          <el-form-item label="启用自建渠道"><div class="collector-switch-row"><el-switch v-model="collectorForm.selfHostedEnabled" /><el-button size="small" @click="testCollectorProvider('SELF_HOSTED')">测试自建</el-button></div></el-form-item>
+          <el-form-item label="自建服务地址" class="full"><el-input v-model="collectorForm.selfHostedBaseUrl" placeholder="例如 https://douyin-api.example.com" /></el-form-item>
+          <el-form-item label="自建搜索接口" class="full"><el-input v-model="collectorForm.selfHostedSearchUrl" placeholder="可选，支持 {keyword} 占位符；不填时仅做媒体解析" /></el-form-item>
+          <el-form-item label="自建服务Token" class="full"><el-input v-model="collectorForm.selfHostedToken" type="password" show-password placeholder="可选；留空保留原Token" /></el-form-item>
+        </template>
         <el-form-item label="监控关键词" class="full"><el-input v-model="collectorForm.keywords" type="textarea" :rows="2" placeholder="智能手表、血压手表、智能戒指；逗号分隔" /></el-form-item>
         <el-form-item label="竞品账号白名单" class="full"><el-input v-model="collectorForm.competitorAccounts" type="textarea" :rows="2" placeholder="账号名或账号ID；逗号分隔" /></el-form-item>
         <el-form-item label="启用每日任务"><el-switch v-model="collectorForm.enabled" /></el-form-item>
@@ -843,7 +904,7 @@ onMounted(reload);
 .asset-thumb { display: block; width: 96px; height: 72px; border-radius: 8px; background: #f1f4f8; object-fit: cover; cursor: pointer; }.asset-placeholder { width: 96px; height: 72px; color: #778398; border: 1px dashed #d8dee8; border-radius: 8px; background: #f7f9fc; cursor: pointer; }
 .asset-preview-panel { display: grid; place-items: center; min-height: 260px; margin-bottom: 18px; padding: 14px; border: 1px solid #e5eaf1; border-radius: 14px; background: #f7f9fc; overflow: hidden; }.asset-preview-panel img, .asset-preview-panel video, .asset-preview-panel iframe { display: block; width: 100%; max-height: 560px; border: 0; border-radius: 10px; background: #10151e; object-fit: contain; }.asset-preview-panel iframe { min-height: 520px; background: #fff; }.asset-preview-panel audio { width: min(680px, 100%); }.preview-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; margin-top: 12px; }.preview-actions span { color: #8791a1; font-size: 12px; }.preview-actions > div { display: flex; gap: 8px; flex-wrap: wrap; }
 .growth-loop { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }.growth-stage { position: relative; display: flex; align-items: center; gap: 12px; min-height: 82px; padding: 14px; border: 1px solid #e6eaf1; border-radius: 14px; background: #fff; }.growth-stage:not(:last-child)::after { position: absolute; right: -10px; z-index: 2; content: "→"; color: #9aa4b3; }.stage-index { display: grid; place-items: center; flex: 0 0 34px; width: 34px; height: 34px; color: #fff; font-size: 12px; font-weight: 800; border-radius: 50%; background: #7d8798; }.growth-stage strong, .growth-stage span { display: block; }.growth-stage strong { color: #17243b; line-height: 1.35; }.growth-stage span { margin-top: 5px; color: #818b9b; font-size: 12px; }.growth-stage.state-active .stage-index, .growth-stage.state-ready .stage-index { background: #2f8f64; }.growth-stage.state-running .stage-index, .growth-stage.state-tracking .stage-index { background: #3978c5; }.growth-stage.state-action_required { border-color: #f0b8bd; background: #fff8f8; }.growth-stage.state-action_required .stage-index { background: #c53943; }
-.collector-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }.collector-capabilities { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }.collector-capabilities article { display: grid; grid-template-columns: 1fr auto auto; gap: 7px 8px; padding: 14px 16px; border: 1px solid #e7ebf2; border-radius: 13px; background: #fff; }.collector-capabilities article > strong { grid-column: 1 / 3; }.collector-capabilities span, .collector-capabilities small { grid-column: 1 / -1; color: #818b9b; font-size: 12px; }.collector-capabilities article > .el-button { margin: 0; justify-content: flex-start; }.collector-form { margin-top: 16px; }.template-download { margin-top: 8px; }.viral-panels { grid-template-columns: 1.2fr 1fr; }
+.collector-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }.collector-capabilities { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }.collector-capabilities article { display: grid; grid-template-columns: 1fr auto auto; gap: 7px 8px; padding: 14px 16px; border: 1px solid #e7ebf2; border-radius: 13px; background: #fff; }.collector-capabilities article > strong { grid-column: 1 / 3; }.collector-capabilities span, .collector-capabilities small { grid-column: 1 / -1; color: #818b9b; font-size: 12px; }.collector-capabilities article > .el-button { margin: 0; justify-content: flex-start; }.collector-provider-status { grid-column: 1 / -1; display: grid; gap: 6px; padding: 8px; border-radius: 8px; background: #f7f9fc; }.collector-provider-status small { display: flex; align-items: center; gap: 6px; }.collector-form { margin-top: 16px; }.collector-switch-row { display: flex; align-items: center; gap: 12px; }.template-download { margin-top: 8px; }.viral-panels { grid-template-columns: 1.2fr 1fr; }
 .ai-capability-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }.ai-capability-grid article { display: grid; grid-template-columns: 1fr auto; gap: 7px 10px; padding: 13px 15px; border: 1px solid #e7ebf2; border-radius: 12px; background: #fff; }.ai-capability-grid small, .ai-capability-grid span { display: block; color: #818b9b; font-size: 12px; }.ai-capability-grid article > span { grid-column: 1 / -1; }.ai-capability-grid .danger { color: #c53943; }
 @media (max-width: 1400px) { .asset-filter { grid-template-columns: minmax(220px, 1fr) repeat(3, minmax(130px, .65fr)) auto; }.report-summary { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 1400px) { .growth-loop { grid-template-columns: repeat(4, minmax(0, 1fr)); } }

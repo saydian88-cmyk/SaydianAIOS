@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { parseCollectorCsv, parseDouyinSearchItems } from "./viral-collector.service";
+import {
+  parseCollectorCsv,
+  parseDouyinProviderItems,
+  parseDouyinSearchItems,
+} from "./viral-collector.service";
 
 describe("parseCollectorCsv", () => {
   it("parses Chinese headers and quoted commas", () => {
@@ -45,6 +49,46 @@ describe("parseDouyinSearchItems", () => {
       sourceUrl: "https://www.douyin.com/video/7471252140422401337",
       accountName: "测试账号",
       metrics: expect.objectContaining({ likes: 9254, keyword: "智能手表" }),
+    })]);
+  });
+});
+
+describe("parseDouyinProviderItems", () => {
+  it("maps self-hosted and TikHub aweme payloads", () => {
+    const items = parseDouyinProviderItems({
+      data: {
+        aweme_detail: {
+          aweme_id: "759900112233",
+          desc: "父母健康手表",
+          create_time: 1753400000,
+          author: { nickname: "健康观察" },
+          statistics: {
+            play_count: 123456,
+            digg_count: 9876,
+            comment_count: 432,
+            share_count: 123,
+          },
+          video: {
+            play_addr: {
+              url_list: ["https://video.example.com/high.mp4"],
+            },
+          },
+        },
+      },
+    }, "血压手表");
+
+    expect(items).toEqual([expect.objectContaining({
+      externalContentId: "759900112233",
+      sourceUrl: "https://www.douyin.com/video/759900112233",
+      downloadUrl: "https://video.example.com/high.mp4",
+      accountName: "健康观察",
+      metrics: expect.objectContaining({
+        views: 123456,
+        likes: 9876,
+        comments: 432,
+        shares: 123,
+        keyword: "血压手表",
+      }),
     })]);
   });
 });

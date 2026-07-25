@@ -990,12 +990,33 @@ model ExternalVideo {
 
   metrics        ExternalMetricSnapshot[]
   cloudMediaJobs CloudMediaJob[]
+  resolveJob     ViralMediaResolveJob?
   scoreSnapshots AssetScoreSnapshot[]
   remakeTasks    RemakeTask[]
 
   @@unique([platform, externalContentId])
   @@index([platform, status, discoveredAt])
   @@index([publishedAt])
+}
+
+model ViralMediaResolveJob {
+  id              String              @id @default(cuid())
+  externalVideoId String              @unique
+  status          CloudMediaJobStatus @default(PENDING)
+  provider        String?
+  analyze         Boolean             @default(false)
+  idempotencyKey  String              @unique
+  attempts        Int                 @default(0)
+  maxAttempts     Int                 @default(4)
+  nextAttemptAt   DateTime?
+  completedAt     DateTime?
+  failureReason   String?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  externalVideo ExternalVideo @relation(fields: [externalVideoId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextAttemptAt, createdAt])
 }
 
 model ExternalMetricSnapshot {

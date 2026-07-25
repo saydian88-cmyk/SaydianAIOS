@@ -1071,6 +1071,7 @@ export class CloudMediaService {
       where: { platform: params.platform, status: params.status as never },
       include: {
         metrics: { orderBy: { capturedAt: "desc" }, take: 1 },
+        resolveJob: true,
         scoreSnapshots: { orderBy: { createdAt: "desc" }, take: 1 },
         remakeTasks: { where: { status: { notIn: ["REJECTED", "CANCELLED"] } }, orderBy: { createdAt: "desc" }, take: 1 },
       },

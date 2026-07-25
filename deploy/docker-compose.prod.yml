@@ -30,6 +30,7 @@ services:
       OPS_HOST: 0.0.0.0
       DATABASE_URL: postgresql://${POSTGRES_USER:-saidian_ops}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-saidian_ops}?schema=public
       MEDIA_PROCESSING_MODE: cloud
+      DOUYIN_SELF_HOSTED_BASE_URL: http://douyin-resolver
     depends_on:
       postgres:
         condition: service_healthy
@@ -42,6 +43,12 @@ services:
       retries: 12
     mem_limit: 768m
     cpus: 0.8
+
+  douyin-resolver:
+    image: evil0ctal/douyin_tiktok_download_api:latest
+    restart: unless-stopped
+    mem_limit: 384m
+    cpus: 0.4
 
   ops-admin:
     image: ${OPS_ADMIN_IMAGE}

@@ -20,6 +20,8 @@ export type DouyinSecret = {
 
 export type IntegrationSecretBundle = {
   viralCollectorToken?: string;
+  tikhubApiKey?: string;
+  selfHostedCollectorToken?: string;
   douyin?: DouyinSecret;
 };
 
