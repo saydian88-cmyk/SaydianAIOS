@@ -38,6 +38,20 @@ const aiCapabilities = ref<Row>();
 const viralCapabilities = ref<Row[]>([]);
 const viralTrend = ref<Row>({ summary: {}, devices: [], items: [] });
 const viralKeywordPlan = ref<Row>({ keywords: [] });
+const keywordView = ref("overview");
+const keywordPlatform = ref("");
+const smartKeywordResult = ref<Row>({ items: [], total: 0, summary: [] });
+const keywordClusters = ref<Row[]>([]);
+const keywordDirections = ref<Row[]>([]);
+const keywordSourceStatus = ref<Row[]>([]);
+const keywordAnalysis = ref<Row>();
+const keywordDialog = ref(false);
+const keywordBatchDialog = ref(false);
+const keywordDirectionDialog = ref(false);
+const keywordAnalysisDrawer = ref(false);
+const editingKeywordId = ref("");
+const editingDirectionId = ref("");
+const keywordImportFiles = ref<UploadUserFile[]>([]);
 const controls = ref<{ claims: Row[]; mappings: Row[]; phraseRules: Row[]; brandProfiles: Row[]; products: Row[]; faqs: Row[]; employees: Row[]; categories: string[] }>({ claims: [], mappings: [], phraseRules: [], brandProfiles: [], products: [], faqs: [], employees: [], categories: [] });
 const knowledgeDialog = ref(false);
 const productDialog = ref(false);
@@ -113,6 +127,43 @@ const collectorForm = reactive({
 });
 const collectorImportForm = reactive({ platform: "DOUYIN" });
 const collectorLinkForm = reactive({ platform: "DOUYIN", sourceUrl: "", downloadUrl: "", accountName: "", title: "", publishedAt: "", views: "", likes: "", comments: "", shares: "", saves: "" });
+const smartKeywordFilter = reactive({ search: "", type: "", grade: "", status: "ACTIVE" });
+const smartKeywordForm = reactive({
+  platform: "DOUYIN",
+  keyword: "",
+  type: "PRODUCT",
+  productId: "",
+  audience: "",
+  pain: "",
+  scene: "",
+  language: "zh-CN",
+  market: "CN",
+  priority: "B",
+  collectionEnabled: true,
+  contentEnabled: true,
+  pinned: false,
+  locked: false,
+  notes: "",
+});
+const smartKeywordBatchForm = reactive({ platform: "DOUYIN", text: "", type: "PRODUCT", priority: "B", collectionEnabled: true, contentEnabled: true });
+const keywordDirectionForm = reactive({
+  name: "",
+  platform: "DOUYIN",
+  startAt: "",
+  endAt: "",
+  productIds: [] as string[],
+  productSeries: "",
+  audienceTerms: "",
+  painTerms: "",
+  sceneTerms: "",
+  competitorTerms: "",
+  objective: "",
+  boostTerms: "",
+  excludeTerms: "",
+  explorationRatio: 0.3,
+  priority: "B",
+  active: true,
+});
 
 const knowledgeTypes = [
   { label: "品牌信息", value: "BRAND" }, { label: "产品卖点", value: "PRODUCT" }, { label: "产品参数", value: "PARAMETER" },
@@ -122,6 +173,17 @@ const knowledgeTypes = [
 const kindOptions = ["IMAGE", "VIDEO", "AUDIO", "DOCUMENT"];
 const levelOptions = ["ORIGINAL", "MODULE", "FINISHED", "REFERENCE", "AI_GENERATED"];
 const moduleOptions = ["HOOK", "PAIN", "SCENE", "FEATURE", "BENEFIT", "PROOF", "DEMO", "COMPARE", "UGC", "STORY", "TRANSITION", "TRAFFIC", "OFFER", "CTA", "ENDING"];
+const smartKeywordTypes = [
+  { value: "PRODUCT", label: "产品与品类" },
+  { value: "AUDIENCE", label: "用户人群" },
+  { value: "PAIN", label: "用户痛点" },
+  { value: "VALUE", label: "功能与价值" },
+  { value: "SCENE", label: "使用场景" },
+  { value: "HOOK", label: "开场表达" },
+  { value: "CONVERSION", label: "测评与决策" },
+  { value: "TREND", label: "节日及趋势" },
+  { value: "COMPETITOR", label: "竞品研究" },
+];
 const classificationOptions = [
   { label: "HOOK", value: "HOOK" }, { label: "痛点", value: "PAIN" }, { label: "功能", value: "FEATURE" },
   { label: "教程", value: "TUTORIAL" }, { label: "测评", value: "REVIEW" }, { label: "故事", value: "STORY" },
@@ -168,6 +230,7 @@ function queryString(values: Record<string, string>) { const params = new URLSea
 function compactNumber(value: unknown) { const number = Number(value || 0); if (number >= 10000) return `${(number / 10000).toFixed(number >= 100000 ? 0 : 1)}万`; return new Intl.NumberFormat("zh-CN").format(number); }
 function percent(value: unknown) { return `${(Number(value || 0) * 100).toFixed(2)}%`; }
 function viralGradeType(value: string) { return value === "S" ? "danger" : value === "A" ? "warning" : value === "B" ? "success" : "info"; }
+function smartKeywordTypeLabel(value: string) { return smartKeywordTypes.find((item) => item.value === value)?.label || value; }
 
 async function run(task: () => Promise<void>, success?: string) {
   loading.value = true;
@@ -246,6 +309,155 @@ async function loadViralWorkspace() {
     api<Row>("/api/v1/brand-data/viral-keywords/today?platform=DOUYIN"),
   ]);
   externalVideos.value = videos; remakeTasks.value = tasks; cloudJobs.value = queue; viralCapabilities.value = capabilities; viralTrend.value = trend; viralKeywordPlan.value = keywordPlan;
+}
+async function loadSmartKeywordWorkspace() {
+  const query = new URLSearchParams();
+  if (keywordPlatform.value) query.set("platform", keywordPlatform.value);
+  if (smartKeywordFilter.search) query.set("search", smartKeywordFilter.search);
+  if (smartKeywordFilter.type) query.set("type", smartKeywordFilter.type);
+  if (smartKeywordFilter.grade) query.set("grade", smartKeywordFilter.grade);
+  if (smartKeywordFilter.status) query.set("status", smartKeywordFilter.status);
+  const [keywords, clusters, directions, sources] = await Promise.all([
+    api<Row>(`/api/v1/brand-data/smart-keywords?${query.toString()}`),
+    api<Row[]>(`/api/v1/brand-data/keyword-clusters${keywordPlatform.value ? `?platform=${keywordPlatform.value}` : ""}`),
+    api<Row[]>(`/api/v1/brand-data/keyword-directions${keywordPlatform.value ? `?platform=${keywordPlatform.value}` : ""}`),
+    api<Row[]>("/api/v1/brand-data/smart-keywords/source-status"),
+  ]);
+  smartKeywordResult.value = keywords;
+  keywordClusters.value = clusters;
+  keywordDirections.value = directions;
+  keywordSourceStatus.value = sources;
+}
+async function handleKeywordViewChange(value: string | number | boolean) {
+  keywordPlatform.value = value === "douyin" ? "DOUYIN" : value === "tiktok" ? "TIKTOK" : "";
+  await run(loadSmartKeywordWorkspace);
+}
+async function generateSmartKeywordPlan(target = keywordPlatform.value || "DOUYIN") {
+  await run(async () => {
+    await post("/api/v1/brand-data/smart-keywords/generate", { platform: target, force: true });
+    await Promise.all([loadSmartKeywordWorkspace(), loadViralWorkspace()]);
+  }, `${target === "TIKTOK" ? "TikTok" : "抖音"}今日关键词已生成`);
+}
+function openSmartKeyword(row?: Row, target = keywordPlatform.value || "DOUYIN") {
+  editingKeywordId.value = row?.id || "";
+  clearObject(smartKeywordForm, {
+    platform: row?.platform || target,
+    keyword: row?.keyword || "",
+    type: row?.type || "PRODUCT",
+    productId: row?.productId || "",
+    audience: row?.audience || "",
+    pain: row?.pain || "",
+    scene: row?.scene || "",
+    language: row?.language || (target === "TIKTOK" ? "en" : "zh-CN"),
+    market: row?.market || (target === "TIKTOK" ? "US" : "CN"),
+    priority: row?.priority || "B",
+    collectionEnabled: row?.collectionEnabled !== false,
+    contentEnabled: row?.contentEnabled !== false,
+    pinned: Boolean(row?.pinned),
+    locked: Boolean(row?.locked),
+    notes: row?.notes || "",
+  });
+  keywordDialog.value = true;
+}
+async function saveSmartKeyword() {
+  if (!smartKeywordForm.keyword.trim()) return ElMessage.warning("请填写关键词");
+  await run(async () => {
+    if (editingKeywordId.value) await patch(`/api/v1/brand-data/smart-keywords/${editingKeywordId.value}`, smartKeywordForm);
+    else await post("/api/v1/brand-data/smart-keywords", smartKeywordForm);
+    keywordDialog.value = false;
+    await Promise.all([loadSmartKeywordWorkspace(), loadViralWorkspace()]);
+  }, editingKeywordId.value ? "关键词已更新" : "关键词已加入主库");
+}
+async function updateSmartKeywordFlag(row: Row, field: string, value: unknown) {
+  await run(async () => {
+    await patch(`/api/v1/brand-data/smart-keywords/${row.id}`, { [field]: value });
+    await Promise.all([loadSmartKeywordWorkspace(), loadViralWorkspace()]);
+  }, "关键词状态已更新");
+}
+function openSmartKeywordBatch(target = keywordPlatform.value || "DOUYIN") {
+  clearObject(smartKeywordBatchForm, { platform: target, text: "", type: "PRODUCT", priority: "B", collectionEnabled: true, contentEnabled: true });
+  keywordImportFiles.value = [];
+  keywordBatchDialog.value = true;
+}
+async function submitSmartKeywordBatch() {
+  let items: Row[] | undefined;
+  const file = keywordImportFiles.value[0]?.raw as File | undefined;
+  if (file) {
+    const XLSX = await import("xlsx");
+    const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json<Row>(sheet, { defval: "" });
+    items = rows.map((row) => ({
+      platform: ["抖音", "DOUYIN"].includes(String(row.platform || row["平台"]).toUpperCase()) ? "DOUYIN"
+        : ["TIKTOK", "TK"].includes(String(row.platform || row["平台"]).toUpperCase()) ? "TIKTOK"
+          : smartKeywordBatchForm.platform,
+      keyword: row.keyword || row["关键词"],
+      type: row.type || row["关键词类型"] || smartKeywordBatchForm.type,
+      productModel: row.productModel || row["产品型号"],
+      audience: row.audience || row["目标人群"],
+      pain: row.pain || row["痛点"],
+      scene: row.scene || row["场景"],
+      priority: row.priority || row["优先级"] || smartKeywordBatchForm.priority,
+      collectionEnabled: row.collectionEnabled === "" ? smartKeywordBatchForm.collectionEnabled : row.collectionEnabled !== false,
+      contentEnabled: row.contentEnabled === "" ? smartKeywordBatchForm.contentEnabled : row.contentEnabled !== false,
+      notes: row.notes || row["备注"],
+    })).filter((row) => String(row.keyword || "").trim());
+  }
+  if (!items?.length && !smartKeywordBatchForm.text.trim()) return ElMessage.warning("请粘贴关键词或选择Excel/CSV文件");
+  await run(async () => {
+    const result = await post<Row>("/api/v1/brand-data/smart-keywords/batch", { ...smartKeywordBatchForm, items, text: smartKeywordBatchForm.text });
+    keywordBatchDialog.value = false;
+    await loadSmartKeywordWorkspace();
+    if (result.skipped) ElMessage.warning(`成功${result.created || 0}条，跳过${result.skipped}条`);
+  }, "关键词批量导入完成");
+}
+async function openSmartKeywordAnalysis(row: Row) {
+  await run(async () => {
+    keywordAnalysis.value = await api<Row>(`/api/v1/brand-data/smart-keywords/${row.id}/analysis`);
+    keywordAnalysisDrawer.value = true;
+  });
+}
+async function generateVideoFromKeyword(row: Row) {
+  await run(async () => {
+    const result = await post<Row>("/api/v1/content/daily-video/generate", {
+      platform: row.platform,
+      productModel: row.product?.modelCode,
+      keywordIds: [row.id],
+      force: true,
+    });
+    if (!result.created) throw new Error("未生成新候选，请检查已审核产品、素材与AI文本能力");
+  }, "已生成3个相关视频候选，第1个为主执行包");
+}
+function openKeywordDirection(row?: Row, target = keywordPlatform.value || "DOUYIN") {
+  editingDirectionId.value = row?.id || "";
+  clearObject(keywordDirectionForm, {
+    name: row?.name || "",
+    platform: row?.platform || target,
+    startAt: row?.startAt ? String(row.startAt).slice(0, 10) : new Date().toISOString().slice(0, 10),
+    endAt: row?.endAt ? String(row.endAt).slice(0, 10) : "",
+    productIds: row?.productIds || [],
+    productSeries: editableList(row?.productSeries),
+    audienceTerms: editableList(row?.audienceTerms),
+    painTerms: editableList(row?.painTerms),
+    sceneTerms: editableList(row?.sceneTerms),
+    competitorTerms: editableList(row?.competitorTerms),
+    objective: row?.objective || "",
+    boostTerms: editableList(row?.boostTerms),
+    excludeTerms: editableList(row?.excludeTerms),
+    explorationRatio: row?.explorationRatio ?? 0.3,
+    priority: row?.priority || "B",
+    active: row?.active !== false,
+  });
+  keywordDirectionDialog.value = true;
+}
+async function saveKeywordDirection() {
+  if (!keywordDirectionForm.name.trim()) return ElMessage.warning("请填写方向名称");
+  await run(async () => {
+    if (editingDirectionId.value) await patch(`/api/v1/brand-data/keyword-directions/${editingDirectionId.value}`, keywordDirectionForm);
+    else await post("/api/v1/brand-data/keyword-directions", keywordDirectionForm);
+    keywordDirectionDialog.value = false;
+    await loadSmartKeywordWorkspace();
+  }, editingDirectionId.value ? "运营方向已更新并保留版本" : "运营方向已创建");
 }
 async function runViralCollector() { await run(async () => { await post("/api/v1/brand-data/viral-collector/run", { platform: "DOUYIN" }); await loadViralWorkspace(); }, "抖音采集任务已执行"); }
 async function generateViralKeywords() { await run(async () => { viralKeywordPlan.value = await post<Row>("/api/v1/brand-data/viral-keywords/generate", { force: true }); }, "今日关键词已重新生成"); }
@@ -344,7 +556,7 @@ async function reload() {
   await run(async () => {
     const [summary, knowledgeRows, controlsRows] = await Promise.all([api<Overview>("/api/v1/brand-data/overview"), api<Row[]>("/api/v1/brand-data/knowledge"), api<typeof controls.value>("/api/v1/brand-data/knowledge-controls")]);
     overview.value = summary; knowledge.value = knowledgeRows; controls.value = controlsRows;
-    await Promise.all([loadAssets(), loadJobs(), loadAiCapabilities(), loadGaps(), loadReport(), loadGrowthLoop(), loadViralWorkspace()]);
+    await Promise.all([loadAssets(), loadJobs(), loadAiCapabilities(), loadGaps(), loadReport(), loadGrowthLoop(), loadViralWorkspace(), loadSmartKeywordWorkspace()]);
   });
 }
 
@@ -783,6 +995,7 @@ onMounted(reload);
     <div class="main-tabs">
       <button :class="{ active: activeTab === 'knowledge' }" @click="activeTab = 'knowledge'"><el-icon><Collection /></el-icon><span>品牌知识库</span><b>{{ overview?.knowledge.total ?? 0 }}</b></button>
       <button :class="{ active: activeTab === 'assets' }" @click="activeTab = 'assets'"><el-icon><UploadFilled /></el-icon><span>素材库</span><b>{{ overview?.assets.total ?? 0 }}</b></button>
+      <button :class="{ active: activeTab === 'keywords' }" @click="activeTab = 'keywords'"><el-icon><Search /></el-icon><span>智能关键词</span><b>{{ smartKeywordResult.total || 0 }}</b></button>
       <button :class="{ active: activeTab === 'viral' }" @click="activeTab = 'viral'"><el-icon><View /></el-icon><span>爆款研究</span><b>{{ remakeTasks.length }}</b></button>
     </div>
 
@@ -804,6 +1017,94 @@ onMounted(reload);
       <div v-else-if="knowledgeView === 'claims'" class="data-panel"><el-table :data="controls.claims" stripe height="545"><el-table-column prop="name" label="证书名称" min-width="210" /><el-table-column prop="coveredObject" label="适用范围" min-width="230" show-overflow-tooltip /><el-table-column prop="publicWording" label="允许表述" min-width="320" show-overflow-tooltip /><el-table-column prop="internalRestriction" label="使用限制" min-width="250" show-overflow-tooltip /><el-table-column label="状态" width="100"><template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template></el-table-column><el-table-column label="操作" width="130" fixed="right"><template #default="scope"><el-button link type="primary" @click="openControl('claims', scope.row)">编辑</el-button><el-button link type="danger" @click="archiveControl('claims', scope.row)">删除</el-button></template></el-table-column></el-table></div>
       <div v-else-if="knowledgeView === 'mappings'" class="data-panel"><el-table :data="controls.mappings" stripe height="545"><el-table-column prop="commercialName" label="商品名称" min-width="180" /><el-table-column prop="nameplateModel" label="包装/铭牌型号" min-width="190" /><el-table-column prop="registeredModel" label="注册型号" min-width="190" /><el-table-column prop="registrationNumber" label="注册编号" min-width="200" /><el-table-column prop="requiredAction" label="发布前动作" min-width="300" show-overflow-tooltip /><el-table-column label="操作" width="130" fixed="right"><template #default="scope"><el-button link type="primary" @click="openControl('mappings', scope.row)">编辑</el-button><el-button link type="danger" @click="archiveControl('mappings', scope.row)">删除</el-button></template></el-table-column></el-table></div>
       <div v-else><div class="bulk-toolbar"><span>受限脚本会同时检查文案和素材画面标签</span><el-button type="primary" :icon="Plus" @click="restrictedRulesDialog = true">批量添加受限规则</el-button></div><div class="data-panel"><el-table :data="controls.phraseRules" stripe height="500"><el-table-column label="规则类别" width="160"><template #default="scope">{{ scope.row.category === 'HEALTH_RESTRICTED_WORD' ? '受限脚本风险词' : scope.row.category === 'HEALTH_RESTRICTED_VISUAL' ? '受限脚本风险画面' : scope.row.category }}</template></el-table-column><el-table-column prop="blockedText" label="禁用内容" min-width="260" /><el-table-column prop="replacement" label="建议替代表述" min-width="260" /><el-table-column prop="condition" label="使用条件" min-width="240" /><el-table-column label="操作" width="130" fixed="right"><template #default="scope"><el-button link type="primary" @click="openControl('rules', scope.row)">编辑</el-button><el-button link type="danger" @click="archiveControl('rules', scope.row)">删除</el-button></template></el-table-column></el-table></div></div>
+    </template>
+
+    <template v-else-if="activeTab === 'keywords'">
+      <div class="workspace-heading">
+        <div><h3>智能关键词</h3><p>抖音与TikTok独立计算，人工关键词和运营方向优先；每日每个平台最多进入50个采集词。</p></div>
+        <div class="collector-actions">
+          <el-button @click="generateSmartKeywordPlan('DOUYIN')">生成抖音关键词</el-button>
+          <el-button @click="generateSmartKeywordPlan('TIKTOK')">生成TikTok关键词</el-button>
+          <el-button @click="openSmartKeywordBatch()">批量导入</el-button>
+          <el-button @click="openKeywordDirection()">新增方向</el-button>
+          <el-button type="primary" :icon="Plus" @click="openSmartKeyword()">人工新增</el-button>
+        </div>
+      </div>
+      <el-segmented v-model="keywordView" :options="[
+        { label: `关键词总览 ${smartKeywordResult.total || 0}`, value: 'overview' },
+        { label: '抖音关键词', value: 'douyin' },
+        { label: 'TikTok关键词', value: 'tiktok' },
+        { label: `关键词簇 ${keywordClusters.length}`, value: 'clusters' },
+        { label: `运营方向 ${keywordDirections.length}`, value: 'directions' },
+        { label: '效果复盘', value: 'review' },
+        { label: '数据源状态', value: 'sources' },
+      ]" @change="handleKeywordViewChange" />
+
+      <template v-if="['overview','douyin','tiktok','review'].includes(keywordView)">
+        <div class="report-summary keyword-summary">
+          <article><span>关键词主库</span><strong>{{ smartKeywordResult.total || 0 }}</strong><small>数量不限，按平台独立管理</small></article>
+          <article><span>S/A级</span><strong>{{ (smartKeywordResult.items || []).filter((item: Row) => ['S','A'].includes(item.grade)).length }}</strong><small>智能视频可直接调用</small></article>
+          <article><span>人工置顶</span><strong>{{ (smartKeywordResult.items || []).filter((item: Row) => item.pinned).length }}</strong><small>优先占用每日50个名额</small></article>
+          <article><span>命中视频</span><strong>{{ (smartKeywordResult.items || []).reduce((sum: number, item: Row) => sum + Number(item.hitCount || 0), 0) }}</strong><small>发布与采集效果持续回流</small></article>
+        </div>
+        <div class="filter-bar keyword-filter">
+          <el-input v-model="smartKeywordFilter.search" clearable placeholder="搜索关键词、用户表达或场景" :prefix-icon="Search" @keyup.enter="run(loadSmartKeywordWorkspace)" />
+          <el-select v-model="smartKeywordFilter.type" clearable placeholder="关键词类型"><el-option v-for="item in smartKeywordTypes" :key="item.value" :label="item.label" :value="item.value" /></el-select>
+          <el-select v-model="smartKeywordFilter.grade" clearable placeholder="机会等级"><el-option v-for="item in ['S','A','B','C']" :key="item" :label="item" :value="item" /></el-select>
+          <el-select v-model="smartKeywordFilter.status" clearable placeholder="状态"><el-option label="启用" value="ACTIVE" /><el-option label="暂停" value="PAUSED" /><el-option label="归档" value="ARCHIVED" /></el-select>
+          <el-button type="primary" :icon="Search" @click="run(loadSmartKeywordWorkspace)">查询</el-button>
+        </div>
+        <div class="data-panel">
+          <el-table :data="smartKeywordResult.items || []" stripe height="535">
+            <el-table-column label="平台" width="92"><template #default="scope"><el-tag>{{ scope.row.platform === 'TIKTOK' ? 'TikTok' : '抖音' }}</el-tag></template></el-table-column>
+            <el-table-column label="关键词" min-width="230"><template #default="scope"><strong>{{ scope.row.keyword }}</strong><small class="cell-note">{{ scope.row.reason || '待补充生成原因' }}</small></template></el-table-column>
+            <el-table-column label="类型/产品" width="150"><template #default="scope">{{ smartKeywordTypeLabel(scope.row.type) }}<small class="cell-note">{{ scope.row.product?.modelCode || '通用' }}</small></template></el-table-column>
+            <el-table-column label="词簇" min-width="165"><template #default="scope">{{ scope.row.cluster?.name || '待聚类' }}</template></el-table-column>
+            <el-table-column label="来源" width="105"><template #default="scope"><el-tag size="small" :type="scope.row.source === 'MANUAL' ? 'warning' : scope.row.source === 'DIRECTION' ? 'success' : 'info'">{{ scope.row.source }}</el-tag></template></el-table-column>
+            <el-table-column label="机会" width="100"><template #default="scope"><el-tag :type="viralGradeType(scope.row.grade)">{{ scope.row.grade }}</el-tag><small class="cell-note">{{ Number(scope.row.opportunityScore || 0).toFixed(1) }}分</small></template></el-table-column>
+            <el-table-column label="采集" width="82"><template #default="scope"><el-switch :model-value="scope.row.collectionEnabled" @change="(value: boolean) => updateSmartKeywordFlag(scope.row, 'collectionEnabled', value)" /></template></el-table-column>
+            <el-table-column label="视频" width="82"><template #default="scope"><el-switch :model-value="scope.row.contentEnabled" @change="(value: boolean) => updateSmartKeywordFlag(scope.row, 'contentEnabled', value)" /></template></el-table-column>
+            <el-table-column label="置顶/锁定" width="130"><template #default="scope"><el-button link :type="scope.row.pinned ? 'warning' : 'info'" @click="updateSmartKeywordFlag(scope.row, 'pinned', !scope.row.pinned)">{{ scope.row.pinned ? '已置顶' : '置顶' }}</el-button><el-button link :type="scope.row.locked ? 'danger' : 'info'" @click="updateSmartKeywordFlag(scope.row, 'locked', !scope.row.locked)">{{ scope.row.locked ? '已锁定' : '锁定' }}</el-button></template></el-table-column>
+            <el-table-column label="命中/更新" width="120"><template #default="scope">{{ scope.row.hitCount || 0 }}<small class="cell-note">{{ dateTime(scope.row.lastSeenAt) }}</small></template></el-table-column>
+            <el-table-column label="操作" width="235" fixed="right"><template #default="scope"><el-button link type="primary" @click="openSmartKeyword(scope.row)">编辑</el-button><el-button link @click="openSmartKeywordAnalysis(scope.row)">分析</el-button><el-button link type="success" :disabled="!['S','A'].includes(scope.row.grade) || !scope.row.contentEnabled" @click="generateVideoFromKeyword(scope.row)">生成视频</el-button><el-dropdown trigger="click" @command="(status: string) => updateSmartKeywordFlag(scope.row, 'status', status)"><el-button link>状态</el-button><template #dropdown><el-dropdown-menu><el-dropdown-item command="ACTIVE">恢复</el-dropdown-item><el-dropdown-item command="PAUSED">暂停</el-dropdown-item><el-dropdown-item command="ARCHIVED">归档</el-dropdown-item></el-dropdown-menu></template></el-dropdown></template></el-table-column>
+          </el-table>
+        </div>
+      </template>
+
+      <div v-else-if="keywordView === 'clusters'" class="data-panel">
+        <el-table :data="keywordClusters" stripe height="585">
+          <el-table-column prop="name" label="关键词簇" min-width="220" />
+          <el-table-column prop="canonicalKey" label="跨语言标识" min-width="220" />
+          <el-table-column label="抖音主词/同义词" min-width="260"><template #default="scope">{{ scope.row.keywords?.filter((item: Row) => item.platform === 'DOUYIN').map((item: Row) => item.keyword).join('、') || '—' }}</template></el-table-column>
+          <el-table-column label="TikTok主词/同义词" min-width="270"><template #default="scope">{{ scope.row.keywords?.filter((item: Row) => item.platform === 'TIKTOK').map((item: Row) => item.keyword).join('、') || '—' }}</template></el-table-column>
+          <el-table-column label="人群/痛点/场景" min-width="300"><template #default="scope">{{ [...(scope.row.audienceTerms || []), ...(scope.row.painTerms || []), ...(scope.row.sceneTerms || [])].join('、') || '—' }}</template></el-table-column>
+        </el-table>
+      </div>
+
+      <div v-else-if="keywordView === 'directions'" class="data-panel">
+        <div class="bulk-toolbar"><span>方向优先于AI自动判断，所有修改保留版本和操作人。</span><el-button type="primary" :icon="Plus" @click="openKeywordDirection()">新增运营方向</el-button></div>
+        <el-table :data="keywordDirections" stripe height="530">
+          <el-table-column label="方向" min-width="190"><template #default="scope"><strong>{{ scope.row.name }}</strong><small class="cell-note">V{{ scope.row.version }} · {{ scope.row.platform === 'TIKTOK' ? 'TikTok' : '抖音' }}</small></template></el-table-column>
+          <el-table-column label="产品/人群" min-width="220"><template #default="scope">{{ list(scope.row.productSeries) }}<small class="cell-note">{{ list(scope.row.audienceTerms) }}</small></template></el-table-column>
+          <el-table-column label="痛点/场景" min-width="260"><template #default="scope">{{ list(scope.row.painTerms) }}<small class="cell-note">{{ list(scope.row.sceneTerms) }}</small></template></el-table-column>
+          <el-table-column label="加强/排除" min-width="260"><template #default="scope">加强：{{ list(scope.row.boostTerms) }}<small class="cell-note">排除：{{ list(scope.row.excludeTerms) }}</small></template></el-table-column>
+          <el-table-column label="效果回流" width="145"><template #default="scope">{{ scope.row.performance?.averageScore || 0 }}分 · 命中{{ scope.row.performance?.hitCount || 0 }}<small class="cell-note">S/A {{ scope.row.performance?.highOpportunityCount || 0 }} · 视频调用{{ scope.row.performance?.contentUsages || 0 }}</small></template></el-table-column>
+          <el-table-column label="探索" width="90"><template #default="scope">{{ Math.round(Number(scope.row.explorationRatio || 0) * 100) }}%</template></el-table-column>
+          <el-table-column label="有效期" width="175"><template #default="scope">{{ dateTime(scope.row.startAt) }}<small class="cell-note">至 {{ dateTime(scope.row.endAt) }}</small></template></el-table-column>
+          <el-table-column label="状态" width="90"><template #default="scope"><el-tag :type="scope.row.active ? 'success' : 'info'">{{ scope.row.active ? '启用' : '停用' }}</el-tag></template></el-table-column>
+          <el-table-column label="操作" width="150" fixed="right"><template #default="scope"><el-button link type="primary" @click="openKeywordDirection(scope.row)">编辑</el-button><el-button link :type="scope.row.active ? 'warning' : 'success'" @click="run(async () => { await patch(`/api/v1/brand-data/keyword-directions/${scope.row.id}`, { active: !scope.row.active }); await loadSmartKeywordWorkspace(); }, scope.row.active ? '方向已停用' : '方向已启用')">{{ scope.row.active ? '停用' : '启用' }}</el-button></template></el-table-column>
+        </el-table>
+      </div>
+
+      <div v-else class="collector-capabilities">
+        <article v-for="item in keywordSourceStatus" :key="item.platform">
+          <strong>{{ item.platform === 'TIKTOK' ? 'TikTok关键词源' : '抖音关键词源' }}</strong>
+          <el-tag :type="statusType(item.state)">{{ statusLabel(item.state) }}</el-tag>
+          <span>{{ item.message }}</span>
+          <small v-if="item.platform === 'DOUYIN'">本地Chrome：{{ item.localCollector ? statusLabel(item.localCollector.state) : '未配置' }} · 一方知识：已接入</small>
+          <small v-else>Creator Search Insights：未配置 · Keyword Insights：未配置 · Top Ads：未配置 · 一方知识：已接入</small>
+        </article>
+      </div>
     </template>
 
     <template v-else-if="activeTab === 'assets'">
@@ -886,7 +1187,7 @@ onMounted(reload);
       </template>
 
       <template v-else>
-        <div class="report-summary" v-if="dailyReport"><article><span>员工上传</span><strong>{{ dailyReport.summary.uploaded }}</strong></article><article><span>正式新增</span><strong>{{ dailyReport.summary.created }}</strong></article><article><span>重复上传</span><strong>{{ dailyReport.summary.duplicates }}</strong></article><article><span>审核通过</span><strong>{{ dailyReport.summary.approved }}</strong></article><article><span>AI派生模块</span><strong>{{ dailyReport.summary.aiDerivedModules }}</strong></article><article><span>实际调用</span><strong>{{ dailyReport.summary.actualUsages }}</strong></article><article><span>效果回流</span><strong>{{ dailyReport.summary.metricSnapshots || 0 }}</strong></article><article><span>下一轮任务</span><strong>{{ dailyReport.summary.generatedTasks || 0 }}</strong></article></div>
+        <div class="report-summary" v-if="dailyReport"><article><span>员工上传</span><strong>{{ dailyReport.summary.uploaded }}</strong></article><article><span>正式新增</span><strong>{{ dailyReport.summary.created }}</strong></article><article><span>重复上传</span><strong>{{ dailyReport.summary.duplicates }}</strong></article><article><span>审核通过</span><strong>{{ dailyReport.summary.approved }}</strong></article><article><span>AI派生模块</span><strong>{{ dailyReport.summary.aiDerivedModules }}</strong></article><article><span>实际调用</span><strong>{{ dailyReport.summary.actualUsages }}</strong></article><article><span>效果回流</span><strong>{{ dailyReport.summary.metricSnapshots || 0 }}</strong></article><article><span>关键词计划</span><strong>{{ dailyReport.summary.keywordPlanCount || 0 }}</strong></article><article><span>S/A关键词</span><strong>{{ dailyReport.summary.highOpportunityKeywords || 0 }}</strong></article><article><span>下一轮任务</span><strong>{{ dailyReport.summary.generatedTasks || 0 }}</strong></article></div>
         <div class="two-panels" v-if="dailyReport"><div class="data-panel"><h4>员工增量</h4><el-table :data="dailyReport.employees" stripe height="420"><el-table-column prop="employee" label="员工" min-width="130" /><el-table-column prop="uploaded" label="上传" width="75" /><el-table-column prop="created" label="新增" width="75" /><el-table-column prop="duplicates" label="重复" width="75" /><el-table-column prop="failed" label="失败" width="75" /></el-table></div><div class="data-panel"><h4>当日素材记录</h4><el-table :data="dailyReport.uploads" stripe height="420"><el-table-column prop="asset.assetNo" label="素材编号" width="180" /><el-table-column prop="originalFileName" label="文件" min-width="180" show-overflow-tooltip /><el-table-column prop="batch.uploadedBy" label="员工/主体" width="140" /><el-table-column label="结果" width="120"><template #default="scope"><el-tag :type="scope.row.result === 'CREATED' ? 'success' : scope.row.result === 'FAILED' ? 'danger' : 'warning'">{{ scope.row.result }}</el-tag></template></el-table-column><el-table-column label="时间" width="135"><template #default="scope">{{ dateTime(scope.row.occurredAt) }}</template></el-table-column></el-table></div></div>
       </template>
     </template>
@@ -928,7 +1229,7 @@ onMounted(reload);
         </div>
         <div class="viral-keywords">
           <button v-for="keyword in viralKeywordPlan.keywords || []" :key="keyword.id" :class="[`priority-${String(keyword.priority).toLowerCase()}`, { locked: keyword.locked }]" :title="keyword.reason" @click="toggleViralKeyword(keyword)">
-            <b>{{ keyword.priority }}</b>{{ keyword.keyword }}<small>{{ ({ PRODUCT: '产品', PAIN: '痛点', COMPETITOR: '竞品', SCENE: '场景' } as Record<string, string>)[keyword.type] || keyword.type }} · 命中{{ keyword.hitCount || 0 }}</small>
+            <b>{{ keyword.priority }}</b>{{ keyword.keyword }}<small>{{ smartKeywordTypeLabel(keyword.type) }} · 命中{{ keyword.hitCount || 0 }}</small>
           </button>
         </div>
       </div>
@@ -1012,6 +1313,70 @@ onMounted(reload);
     <el-dialog v-model="knowledgeDialog" :title="editingKnowledgeId ? '编辑品牌知识' : '新建品牌知识'" width="780px" destroy-on-close><el-form label-position="top" class="form-grid"><el-form-item label="知识类型" required><el-select v-model="knowledgeForm.type"><el-option v-for="item in knowledgeTypes" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item><el-form-item label="知识标题" required><el-input v-model="knowledgeForm.title" maxlength="100" /></el-form-item><el-form-item label="知识分类" required><el-select v-model="knowledgeForm.category" filterable placeholder="选择已有分类"><el-option v-for="item in controls.categories" :key="item" :label="item" :value="item" /></el-select></el-form-item><el-form-item label="适用型号"><el-select v-model="knowledgeForm.model" clearable filterable><el-option v-for="item in controls.products" :key="item.id" :label="`${item.modelCode} · ${item.name}`" :value="item.modelCode" /></el-select></el-form-item><el-form-item label="标准回复/允许话术" class="full"><el-input v-model="knowledgeForm.reply" type="textarea" :rows="3" /></el-form-item><el-form-item label="完整正文" class="full"><el-input v-model="knowledgeForm.body" type="textarea" :rows="5" /></el-form-item><el-form-item label="关键词"><el-input v-model="knowledgeForm.keywords" placeholder="逗号分隔" /></el-form-item><el-form-item label="适用场景"><el-input v-model="knowledgeForm.scenarios" placeholder="逗号分隔" /></el-form-item><el-form-item label="来源等级"><el-select v-model="knowledgeForm.sourceLevel"><el-option v-for="item in ['A','B','C','D','E']" :key="item" :label="item" :value="item" /></el-select></el-form-item><el-form-item label="资料来源"><el-input v-model="knowledgeForm.source" /></el-form-item><el-form-item label="来源链接/文件" class="full"><el-input v-model="knowledgeForm.sourceRefs" /></el-form-item></el-form><template #footer><el-button @click="knowledgeDialog = false">取消</el-button><el-button @click="saveKnowledge('PENDING')">保存为待审核</el-button><el-button type="primary" @click="saveKnowledge('READY')">保存并直接入库</el-button></template></el-dialog>
 
     <el-dialog v-model="productDialog" title="编辑产品信息" width="760px" destroy-on-close><el-form label-position="top" class="form-grid"><el-form-item label="产品型号"><el-input v-model="productForm.modelCode" disabled /></el-form-item><el-form-item label="产品名称" required><el-input v-model="productForm.name" maxlength="120" /></el-form-item><el-form-item label="系列" required><el-input v-model="productForm.category" maxlength="60" /></el-form-item><el-form-item label="状态"><el-select v-model="productForm.status"><el-option label="可用" value="READY" /><el-option label="待审核" value="PENDING" /><el-option label="禁用" value="BLOCKED" /></el-select></el-form-item><el-form-item label="型号别名" class="full"><el-input v-model="productForm.aliases" placeholder="多个别名用逗号分隔" /></el-form-item><el-form-item label="核心功能" class="full"><el-input v-model="productForm.functions" type="textarea" :rows="2" placeholder="多个功能用逗号分隔" /></el-form-item><el-form-item label="用户价值" class="full"><el-input v-model="productForm.customerValues" type="textarea" :rows="2" placeholder="多个价值点用逗号分隔" /></el-form-item><el-form-item label="目标人群"><el-input v-model="productForm.audiences" placeholder="逗号分隔" /></el-form-item><el-form-item label="适用场景"><el-input v-model="productForm.scenes" placeholder="逗号分隔" /></el-form-item><el-form-item label="内容方向" class="full"><el-input v-model="productForm.contentDirections" type="textarea" :rows="2" placeholder="多个方向用逗号分隔" /></el-form-item></el-form><template #footer><el-button @click="productDialog = false">取消</el-button><el-button type="primary" @click="saveProduct">保存</el-button></template></el-dialog>
+
+    <el-dialog v-model="keywordDialog" :title="editingKeywordId ? '编辑智能关键词' : '人工新增关键词'" width="820px" destroy-on-close>
+      <el-form label-position="top" class="form-grid">
+        <el-form-item label="平台" required><el-select v-model="smartKeywordForm.platform"><el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" /></el-select></el-form-item>
+        <el-form-item label="关键词" required><el-input v-model="smartKeywordForm.keyword" maxlength="120" /></el-form-item>
+        <el-form-item label="关键词类型"><el-select v-model="smartKeywordForm.type"><el-option v-for="item in smartKeywordTypes" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item>
+        <el-form-item label="关联产品"><el-select v-model="smartKeywordForm.productId" clearable filterable><el-option v-for="item in controls.products" :key="item.id" :label="`${item.modelCode} · ${item.name}`" :value="item.id" /></el-select></el-form-item>
+        <el-form-item label="目标人群"><el-input v-model="smartKeywordForm.audience" /></el-form-item>
+        <el-form-item label="痛点"><el-input v-model="smartKeywordForm.pain" /></el-form-item>
+        <el-form-item label="场景"><el-input v-model="smartKeywordForm.scene" /></el-form-item>
+        <el-form-item label="优先级"><el-select v-model="smartKeywordForm.priority"><el-option v-for="item in ['A','B','C']" :key="item" :label="item" :value="item" /></el-select></el-form-item>
+        <el-form-item label="语言"><el-input v-model="smartKeywordForm.language" /></el-form-item>
+        <el-form-item label="市场"><el-input v-model="smartKeywordForm.market" /></el-form-item>
+        <el-form-item label="调用开关" class="full"><el-switch v-model="smartKeywordForm.collectionEnabled" active-text="用于爆款采集" /><el-switch v-model="smartKeywordForm.contentEnabled" active-text="用于智能视频" /><el-switch v-model="smartKeywordForm.pinned" active-text="加入每日计划/置顶" /><el-switch v-model="smartKeywordForm.locked" active-text="锁定，禁止AI修改" /></el-form-item>
+        <el-form-item label="备注" class="full"><el-input v-model="smartKeywordForm.notes" type="textarea" :rows="3" /></el-form-item>
+      </el-form>
+      <template #footer><el-button @click="keywordDialog = false">取消</el-button><el-button type="primary" @click="saveSmartKeyword">保存关键词</el-button></template>
+    </el-dialog>
+
+    <el-dialog v-model="keywordBatchDialog" title="批量导入智能关键词" width="760px" destroy-on-close>
+      <el-form label-position="top" class="form-grid">
+        <el-form-item label="平台"><el-select v-model="smartKeywordBatchForm.platform"><el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" /></el-select></el-form-item>
+        <el-form-item label="默认类型"><el-select v-model="smartKeywordBatchForm.type"><el-option v-for="item in smartKeywordTypes" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item>
+        <el-form-item label="默认优先级"><el-select v-model="smartKeywordBatchForm.priority"><el-option v-for="item in ['A','B','C']" :key="item" :label="item" :value="item" /></el-select></el-form-item>
+        <el-form-item label="默认用途"><el-switch v-model="smartKeywordBatchForm.collectionEnabled" active-text="爆款采集" /><el-switch v-model="smartKeywordBatchForm.contentEnabled" active-text="智能视频" /></el-form-item>
+        <el-form-item label="Excel/CSV文件" class="full"><el-upload v-model:file-list="keywordImportFiles" :auto-upload="false" :limit="1" accept=".xlsx,.xls,.csv"><el-button>选择文件</el-button><template #tip><div class="el-upload__tip">表头支持：平台、关键词、关键词类型、产品型号、目标人群、痛点、场景、优先级、备注。</div></template></el-upload></el-form-item>
+        <el-form-item label="或粘贴文本" class="full"><el-input v-model="smartKeywordBatchForm.text" type="textarea" :rows="8" placeholder="每行一个关键词；也可用CSV顺序：关键词,类型,产品型号,目标人群,痛点,场景,优先级" /></el-form-item>
+      </el-form>
+      <template #footer><el-button @click="keywordBatchDialog = false">取消</el-button><el-button type="primary" @click="submitSmartKeywordBatch">开始导入</el-button></template>
+    </el-dialog>
+
+    <el-dialog v-model="keywordDirectionDialog" :title="editingDirectionId ? '编辑运营方向' : '新增运营方向'" width="900px" destroy-on-close>
+      <el-form label-position="top" class="form-grid">
+        <el-form-item label="方向名称" required><el-input v-model="keywordDirectionForm.name" /></el-form-item>
+        <el-form-item label="适用平台"><el-select v-model="keywordDirectionForm.platform"><el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" /></el-select></el-form-item>
+        <el-form-item label="开始日期"><el-date-picker v-model="keywordDirectionForm.startAt" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+        <el-form-item label="结束日期"><el-date-picker v-model="keywordDirectionForm.endAt" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+        <el-form-item label="关联产品" class="full"><el-select v-model="keywordDirectionForm.productIds" multiple filterable><el-option v-for="item in controls.products" :key="item.id" :label="`${item.modelCode} · ${item.name}`" :value="item.id" /></el-select></el-form-item>
+        <el-form-item label="产品系列"><el-input v-model="keywordDirectionForm.productSeries" placeholder="逗号分隔" /></el-form-item>
+        <el-form-item label="目标人群"><el-input v-model="keywordDirectionForm.audienceTerms" placeholder="逗号分隔" /></el-form-item>
+        <el-form-item label="重点痛点"><el-input v-model="keywordDirectionForm.painTerms" placeholder="逗号分隔" /></el-form-item>
+        <el-form-item label="重点场景"><el-input v-model="keywordDirectionForm.sceneTerms" placeholder="逗号分隔" /></el-form-item>
+        <el-form-item label="重点竞品"><el-input v-model="keywordDirectionForm.competitorTerms" placeholder="逗号分隔" /></el-form-item>
+        <el-form-item label="内容目标"><el-input v-model="keywordDirectionForm.objective" /></el-form-item>
+        <el-form-item label="需要加强的词"><el-input v-model="keywordDirectionForm.boostTerms" placeholder="逗号分隔" /></el-form-item>
+        <el-form-item label="需要排除的词"><el-input v-model="keywordDirectionForm.excludeTerms" placeholder="逗号分隔" /></el-form-item>
+        <el-form-item label="探索比例"><el-slider v-model="keywordDirectionForm.explorationRatio" :min="0" :max="1" :step="0.05" show-input /></el-form-item>
+        <el-form-item label="优先级"><el-select v-model="keywordDirectionForm.priority"><el-option v-for="item in ['A','B','C']" :key="item" :label="item" :value="item" /></el-select></el-form-item>
+        <el-form-item label="状态"><el-switch v-model="keywordDirectionForm.active" active-text="启用" /></el-form-item>
+      </el-form>
+      <template #footer><el-button @click="keywordDirectionDialog = false">取消</el-button><el-button type="primary" @click="saveKeywordDirection">保存方向</el-button></template>
+    </el-dialog>
+
+    <el-drawer v-model="keywordAnalysisDrawer" title="关键词分析与历史效果" size="60%">
+      <template v-if="keywordAnalysis">
+        <div class="detail-summary"><h3>{{ keywordAnalysis.keyword }}</h3><p>{{ keywordAnalysis.reason }}</p><el-tag :type="viralGradeType(keywordAnalysis.grade)">{{ keywordAnalysis.grade }} · {{ Number(keywordAnalysis.opportunityScore || 0).toFixed(1) }}分</el-tag></div>
+        <div class="detail-grid">
+          <section><h4>来源记录</h4><el-table :data="keywordAnalysis.sources" size="small" max-height="260"><el-table-column prop="sourceType" label="来源" width="120" /><el-table-column prop="sourceLabel" label="方向/人员" min-width="150" /><el-table-column label="时间" width="145"><template #default="scope">{{ dateTime(scope.row.observedAt) }}</template></el-table-column></el-table></section>
+          <section><h4>评分快照</h4><el-table :data="keywordAnalysis.snapshots" size="small" max-height="260"><el-table-column label="日期" width="135"><template #default="scope">{{ dateTime(scope.row.snapshotDate) }}</template></el-table-column><el-table-column prop="opportunityScore" label="机会分" width="90" /><el-table-column prop="grade" label="等级" width="70" /><el-table-column prop="historyScore" label="历史效果" width="90" /></el-table></section>
+          <section><h4>命中视频</h4><el-table :data="keywordAnalysis.planKeywords?.flatMap((item: Row) => item.videoHits || []) || []" size="small" max-height="300"><el-table-column label="视频" min-width="220"><template #default="scope">{{ scope.row.externalVideo?.title || scope.row.externalVideo?.externalContentId }}</template></el-table-column><el-table-column prop="hitCount" label="命中" width="70" /><el-table-column label="播放" width="95"><template #default="scope">{{ compactNumber(scope.row.externalVideo?.metrics?.[0]?.views) }}</template></el-table-column></el-table></section>
+          <section><h4>智能视频使用</h4><el-table :data="keywordAnalysis.contentRelations || []" size="small" max-height="300"><el-table-column label="方案" min-width="220"><template #default="scope">{{ scope.row.contentPlan?.topic || scope.row.contentPlanId }}</template></el-table-column><el-table-column prop="position" label="位置" width="90" /><el-table-column prop="usageType" label="用途" width="120" /></el-table></section>
+        </div>
+      </template>
+    </el-drawer>
 
     <el-dialog v-model="collectorConfigDialog" title="爆款采集源配置" width="820px" destroy-on-close>
       <el-alert title="抖音按“官方搜索 → 自建搜索 → TikHub”发现视频，按“自建解析 → TikHub”获取媒体；密钥留空保留原配置。" type="info" :closable="false" />
@@ -1170,7 +1535,7 @@ onMounted(reload);
 .brand-metrics, .report-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }.brand-metrics article, .report-summary article { padding: 18px 20px; border: 1px solid #e9edf4; border-radius: 16px; background: #fff; box-shadow: 0 7px 20px rgba(28, 44, 72, .05); }.brand-metrics span, .brand-metrics small, .report-summary span { display: block; color: #7a8496; }.brand-metrics strong, .report-summary strong { display: block; margin: 5px 0 2px; font-size: 27px; color: #162239; }.report-summary { grid-template-columns: repeat(6, 1fr); }
 .main-tabs { display: flex; width: fit-content; padding: 5px; border-radius: 14px; background: #e9edf4; }.main-tabs button { display: flex; align-items: center; gap: 8px; min-width: 170px; padding: 11px 17px; color: #637086; border: 0; border-radius: 10px; background: transparent; cursor: pointer; }.main-tabs button.active { color: #a2202b; background: #fff; box-shadow: 0 4px 12px rgba(32, 45, 69, .1); }.main-tabs b { margin-left: auto; padding: 2px 7px; font-size: 12px; border-radius: 999px; background: #f1f3f7; }
 .workspace-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; }.workspace-heading.compact { padding-top: 4px; }.workspace-heading h3 { margin: 0 0 4px; font-size: 21px; color: #17243b; }.workspace-heading p { margin: 0; color: #7d8798; }
-.filter-bar { display: grid; gap: 10px; padding: 14px; border: 1px solid #e7ebf2; border-radius: 14px; background: #fff; }.knowledge-filter { grid-template-columns: minmax(260px, 1.5fr) 150px 160px 130px auto; }.asset-filter { grid-template-columns: minmax(240px, 1.5fr) 140px 190px 140px auto; }.advanced-filter { grid-column: 1 / -1; }.advanced-filter-grid { display: grid; grid-template-columns: repeat(4, minmax(130px, 1fr)); gap: 10px; padding-top: 5px; }.asset-index { display: flex; gap: 8px; overflow-x: auto; padding: 2px; }.asset-index button { min-width: 105px; padding: 11px 15px; color: #5f6b7d; border: 1px solid #e2e7ef; border-radius: 11px; background: #fff; cursor: pointer; }.asset-index button.active { color: #a2202b; border-color: #e1a9ae; background: #fff7f7; }.asset-index b { margin-left: 5px; }.data-panel { overflow: hidden; border: 1px solid #e7ebf2; border-radius: 15px; background: #fff; }.data-panel h4 { margin: 0; padding: 15px 17px; color: #1b2941; border-bottom: 1px solid #edf0f5; }.cell-note { display: block; margin-top: 2px; color: #9099a8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.cell-note.danger { color: #c53943; }.form-grid { display: grid; grid-template-columns: 1fr 1fr; column-gap: 18px; }.form-grid .full { grid-column: 1 / -1; }.asset-upload { margin-bottom: 14px; }.ai-assist { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 15px; padding: 13px 15px; border: 1px solid #dce7f5; border-radius: 12px; background: #f5f9ff; }.ai-assist strong, .ai-assist span { display: block; }.ai-assist span { margin-top: 3px; color: #778398; font-size: 12px; }.upload-advanced { margin-top: 2px; }.load-more { display: flex; justify-content: center; }.video-toolbar, .capability-note { display: flex; align-items: center; gap: 16px; padding: 14px 16px; color: #6f798b; border: 1px solid #e7ebf2; border-radius: 14px; background: #fff; }.video-toolbar .el-select { width: 460px; }.time-range { display: flex; align-items: center; gap: 5px; }.time-range .el-input-number { width: 88px; }.two-panels { display: grid; grid-template-columns: .8fr 1.2fr; gap: 14px; }.detail-head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 18px; }.detail-head span { color: #8b95a5; }.detail-head h3 { margin: 4px 0 0; font-size: 23px; color: #17243b; }.detail-head > div:last-child { display: flex; gap: 7px; }.detail-grid { display: grid; gap: 16px; margin-top: 18px; }.detail-grid section { border: 1px solid #e8ecf2; border-radius: 12px; overflow: hidden; }.detail-grid h4 { margin: 0; padding: 12px 15px; background: #f7f9fc; }.tag-cloud { display: flex; flex-wrap: wrap; gap: 8px; padding: 15px; }
+.filter-bar { display: grid; gap: 10px; padding: 14px; border: 1px solid #e7ebf2; border-radius: 14px; background: #fff; }.knowledge-filter { grid-template-columns: minmax(260px, 1.5fr) 150px 160px 130px auto; }.keyword-filter { grid-template-columns: minmax(260px, 1.5fr) 170px 130px 130px auto; }.keyword-summary { grid-template-columns: repeat(4, minmax(0, 1fr)); }.asset-filter { grid-template-columns: minmax(240px, 1.5fr) 140px 190px 140px auto; }.advanced-filter { grid-column: 1 / -1; }.advanced-filter-grid { display: grid; grid-template-columns: repeat(4, minmax(130px, 1fr)); gap: 10px; padding-top: 5px; }.asset-index { display: flex; gap: 8px; overflow-x: auto; padding: 2px; }.asset-index button { min-width: 105px; padding: 11px 15px; color: #5f6b7d; border: 1px solid #e2e7ef; border-radius: 11px; background: #fff; cursor: pointer; }.asset-index button.active { color: #a2202b; border-color: #e1a9ae; background: #fff7f7; }.asset-index b { margin-left: 5px; }.data-panel { overflow: hidden; border: 1px solid #e7ebf2; border-radius: 15px; background: #fff; }.data-panel h4 { margin: 0; padding: 15px 17px; color: #1b2941; border-bottom: 1px solid #edf0f5; }.cell-note { display: block; margin-top: 2px; color: #9099a8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.cell-note.danger { color: #c53943; }.form-grid { display: grid; grid-template-columns: 1fr 1fr; column-gap: 18px; }.form-grid .full { grid-column: 1 / -1; }.form-grid .full .el-switch { margin-right: 22px; }.asset-upload { margin-bottom: 14px; }.ai-assist { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 15px; padding: 13px 15px; border: 1px solid #dce7f5; border-radius: 12px; background: #f5f9ff; }.ai-assist strong, .ai-assist span { display: block; }.ai-assist span { margin-top: 3px; color: #778398; font-size: 12px; }.upload-advanced { margin-top: 2px; }.load-more { display: flex; justify-content: center; }.video-toolbar, .capability-note { display: flex; align-items: center; gap: 16px; padding: 14px 16px; color: #6f798b; border: 1px solid #e7ebf2; border-radius: 14px; background: #fff; }.video-toolbar .el-select { width: 460px; }.time-range { display: flex; align-items: center; gap: 5px; }.time-range .el-input-number { width: 88px; }.two-panels { display: grid; grid-template-columns: .8fr 1.2fr; gap: 14px; }.detail-head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 18px; }.detail-head span { color: #8b95a5; }.detail-head h3 { margin: 4px 0 0; font-size: 23px; color: #17243b; }.detail-head > div:last-child { display: flex; gap: 7px; }.detail-grid { display: grid; gap: 16px; margin-top: 18px; }.detail-grid section { border: 1px solid #e8ecf2; border-radius: 12px; overflow: hidden; }.detail-grid h4 { margin: 0; padding: 12px 15px; background: #f7f9fc; }.tag-cloud { display: flex; flex-wrap: wrap; gap: 8px; padding: 15px; }
 .bulk-toolbar { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 4px; }.bulk-toolbar span { margin-right: 4px; color: #7c8798; font-size: 13px; }.technical-info { margin-top: 14px; padding-top: 12px; border-top: 1px solid #e7ebf2; }.technical-info > strong { display: block; margin-bottom: 8px; color: #4d5a70; font-size: 13px; }.upload-progress { margin-top: 14px; padding: 12px 14px; border: 1px solid #dce7f5; border-radius: 12px; background: #f5f9ff; }.upload-progress > div { display: flex; justify-content: space-between; margin-bottom: 7px; color: #4d5a70; }.upload-progress small { color: #8590a2; }
 .editing-index-strip { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 12px; border: 1px solid #e3e8f0; border-radius: 14px; background: #f8fafc; }
 .editing-index-strip-head { display: flex; align-items: baseline; justify-content: space-between; grid-column: 1 / -1; gap: 12px; }.editing-index-strip-head span { color: #818c9e; font-size: 12px; }

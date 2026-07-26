@@ -393,6 +393,7 @@ model Product {
   faqEntries    FaqEntry[]
   remakeTasks   RemakeTask[]
   viralKeywords ViralKeyword[]
+  smartKeywords SmartKeyword[]
 
   @@index([category, status])
 }
@@ -1122,23 +1123,27 @@ model ViralKeyword {
   id              String    @id @default(cuid())
   planId          String
   productId       String?
+  smartKeywordId  String?
   keyword         String
   type            String
   priority        String
   reason          String?
   locked          Boolean   @default(false)
+  active          Boolean   @default(true)
   hitCount        Int       @default(0)
   lastCollectedAt DateTime?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
-  plan      ViralKeywordPlan       @relation(fields: [planId], references: [id], onDelete: Cascade)
-  product   Product?               @relation(fields: [productId], references: [id], onDelete: SetNull)
-  videoHits ViralVideoKeywordHit[]
+  plan         ViralKeywordPlan       @relation(fields: [planId], references: [id], onDelete: Cascade)
+  product      Product?               @relation(fields: [productId], references: [id], onDelete: SetNull)
+  smartKeyword SmartKeyword?          @relation(fields: [smartKeywordId], references: [id], onDelete: SetNull)
+  videoHits    ViralVideoKeywordHit[]
 
   @@unique([planId, keyword])
   @@index([planId, priority, type])
   @@index([productId])
+  @@index([smartKeywordId])
 }
 
 model ViralVideoKeywordHit {
@@ -1153,6 +1158,171 @@ model ViralVideoKeywordHit {
 
   @@id([externalVideoId, keywordId])
   @@index([keywordId, lastSeenAt])
+}
+
+model SmartKeywordCluster {
+  id            String   @id @default(cuid())
+  name          String
+  canonicalKey  String   @unique
+  description   String?
+  audienceTerms String[] @default([])
+  painTerms     String[] @default([])
+  valueTerms    String[] @default([])
+  sceneTerms    String[] @default([])
+  hookTerms     String[] @default([])
+  metadata      Json     @default("{}")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  keywords SmartKeyword[]
+
+  @@index([name])
+}
+
+model SmartKeyword {
+  id                String          @id @default(cuid())
+  platform          IntegrationKind
+  productId         String?
+  clusterId         String?
+  keyword           String
+  normalizedKeyword String
+  language          String
+  market            String
+  type              String
+  source            String          @default("AI")
+  status            String          @default("ACTIVE")
+  priority          String          @default("C")
+  reason            String?
+  audience          String?
+  pain              String?
+  scene             String?
+  notes             String?
+  collectionEnabled Boolean         @default(true)
+  contentEnabled    Boolean         @default(true)
+  pinned            Boolean         @default(false)
+  locked            Boolean         @default(false)
+  opportunityScore  Float           @default(0)
+  grade              String          @default("C")
+  hitCount           Int             @default(0)
+  firstSeenAt        DateTime         @default(now())
+  lastSeenAt         DateTime         @default(now())
+  lastCollectedAt   DateTime?
+  createdBy          String           @default("系统关键词引擎")
+  updatedBy          String           @default("系统关键词引擎")
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  product          Product?                      @relation(fields: [productId], references: [id], onDelete: SetNull)
+  cluster          SmartKeywordCluster?          @relation(fields: [clusterId], references: [id], onDelete: SetNull)
+  snapshots        SmartKeywordSnapshot[]
+  sources          SmartKeywordSource[]
+  contentRelations SmartKeywordContentRelation[]
+  planKeywords     ViralKeyword[]
+
+  @@unique([platform, market, normalizedKeyword])
+  @@index([platform, status, grade, opportunityScore])
+  @@index([platform, pinned, collectionEnabled])
+  @@index([clusterId])
+  @@index([productId])
+}
+
+model SmartKeywordSnapshot {
+  id                    String   @id @default(cuid())
+  keywordId             String
+  snapshotDate          DateTime
+  relevanceScore        Float
+  demandScore           Float
+  trendScore            Float
+  contentGapScore       Float
+  commercialIntentScore Float
+  shootabilityScore     Float
+  historyScore          Float
+  opportunityScore      Float
+  grade                 String
+  trendStage            String   @default("STABLE")
+  formulaVersion        String   @default("smart-keyword-v1.1")
+  metrics               Json     @default("{}")
+  createdAt             DateTime @default(now())
+
+  keyword SmartKeyword @relation(fields: [keywordId], references: [id], onDelete: Cascade)
+
+  @@unique([keywordId, snapshotDate])
+  @@index([snapshotDate, grade])
+}
+
+model SmartKeywordSource {
+  id          String   @id @default(cuid())
+  keywordId   String
+  sourceType  String
+  sourceId    String?
+  sourceLabel String?
+  raw         Json     @default("{}")
+  observedAt  DateTime @default(now())
+
+  keyword SmartKeyword @relation(fields: [keywordId], references: [id], onDelete: Cascade)
+
+  @@index([keywordId, observedAt])
+  @@index([sourceType, observedAt])
+}
+
+model SmartKeywordDirection {
+  id               String          @id @default(cuid())
+  name             String
+  platform         IntegrationKind
+  startAt          DateTime
+  endAt            DateTime?
+  productIds       String[]        @default([])
+  productSeries    String[]        @default([])
+  audienceTerms    String[]        @default([])
+  painTerms        String[]        @default([])
+  sceneTerms       String[]        @default([])
+  competitorTerms  String[]        @default([])
+  objective        String?
+  boostTerms       String[]        @default([])
+  excludeTerms     String[]        @default([])
+  explorationRatio Float           @default(0.3)
+  priority         String          @default("B")
+  active           Boolean         @default(true)
+  version          Int             @default(1)
+  createdBy        String
+  updatedBy        String
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  versions SmartKeywordDirectionVersion[]
+
+  @@index([platform, active, startAt, endAt])
+}
+
+model SmartKeywordDirectionVersion {
+  id          String   @id @default(cuid())
+  directionId String
+  version     Int
+  snapshot    Json
+  changedBy   String
+  createdAt   DateTime @default(now())
+
+  direction SmartKeywordDirection @relation(fields: [directionId], references: [id], onDelete: Cascade)
+
+  @@unique([directionId, version])
+  @@index([directionId, createdAt])
+}
+
+model SmartKeywordContentRelation {
+  id            String   @id @default(cuid())
+  keywordId     String
+  contentPlanId String?
+  usageType     String
+  position      String?
+  metrics       Json     @default("{}")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  keyword     SmartKeyword @relation(fields: [keywordId], references: [id], onDelete: Cascade)
+  contentPlan ContentPlan? @relation(fields: [contentPlanId], references: [id], onDelete: Cascade)
+
+  @@unique([keywordId, contentPlanId, usageType])
+  @@index([contentPlanId])
 }
 
 model ViralCollectorDevice {
@@ -1344,6 +1514,7 @@ model ContentPlan {
   assignedEmployee Employee?          @relation(fields: [assignedEmployeeId], references: [id], onDelete: SetNull)
   attributions     AttributionTouch[]
   optimizations    ContentOptimizationSuggestion[]
+  keywordRelations SmartKeywordContentRelation[]
 
   @@index([planDate, kind])
   @@index([status])

@@ -145,13 +145,24 @@ export class OpsController {
     const actor = this.actor(authorization, requestedActor);
     const requestedDate = body.date ? new Date(`${String(body.date)}T00:00:00+08:00`) : new Date();
     if (Number.isNaN(requestedDate.getTime())) throw new BadRequestException("日期格式必须为 YYYY-MM-DD");
-    return this.contentService.generateDailyVideo(requestedDate, actor, body.productModel ? String(body.productModel) : undefined);
+    return this.contentService.generateDailyVideo(
+      requestedDate,
+      actor,
+      body.productModel ? String(body.productModel) : undefined,
+      {
+        platform: body.platform === "TIKTOK" ? "TIKTOK" : "DOUYIN",
+        keywordIds: Array.isArray(body.keywordIds) ? body.keywordIds.map(String) : [],
+        force: Boolean(body.force),
+      },
+    );
   }
   @Post("content/asset-only-video/generate") generateAssetOnlyVideo(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Body() body: Record<string, unknown>) {
     const actor = this.actor(authorization, requestedActor);
     return this.contentService.generateDailyVideo(new Date(), actor, body.productModel ? String(body.productModel) : undefined, {
       assetOnly: true,
       restricted: body.contentRestrictionMode === "HEALTH_RESTRICTED",
+      platform: body.platform === "TIKTOK" ? "TIKTOK" : "DOUYIN",
+      keywordIds: Array.isArray(body.keywordIds) ? body.keywordIds.map(String) : [],
     });
   }
   @Post("content/daily-article/generate") generateDailyArticle(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Body() body: Record<string, unknown>) {
