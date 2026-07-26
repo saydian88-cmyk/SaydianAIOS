@@ -300,15 +300,13 @@ async function bootstrap() {
       if (result.mallToken) localStorage.setItem("employee-token", result.mallToken);
       window.history.replaceState({}, "", "/saidian-work/");
     }
-    if (!getToken()) {
-      const mallToken = localStorage.getItem("employee-token") || "";
-      if (mallToken) {
-        try {
-          const result = await post<{ token: string; user: SessionUser }>("/api/v1/auth/wecom/session", { mallToken });
-          setToken(result.token);
-        } catch {
-          localStorage.removeItem("employee-token");
-        }
+    const mallToken = localStorage.getItem("employee-token") || "";
+    if (mallToken) {
+      try {
+        const result = await post<{ token: string; user: SessionUser }>("/api/v1/auth/wecom/session", { mallToken });
+        setToken(result.token);
+      } catch {
+        if (!getToken()) localStorage.removeItem("employee-token");
       }
     }
     if (getToken()) {
