@@ -1,8 +1,8 @@
 const apiBase = String(
   import.meta.env.VITE_API_BASE_URL || (import.meta.env.DEV ? "http://127.0.0.1:3210" : ""),
 ).replace(/\/$/, "");
-const tokenKey = "saidian-ops-token";
-const actorKey = "saidian-ops-actor";
+const tokenKey = "saidian-ops-admin-token";
+const actorKey = "saidian-admin-actor";
 
 export function getToken() {
   return localStorage.getItem(tokenKey) || (import.meta.env.DEV ? "saidian-ops-local" : "");

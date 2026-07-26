@@ -8,11 +8,12 @@ import {
 import { api, clearToken, download, getActor, getToken, patch, post, remove, setActor, setToken, uploadWithProgress } from "./api";
 import BrandDataCenter from "./components/BrandDataCenter.vue";
 import OperationAnalysis from "./components/OperationAnalysis.vue";
+import AdminTaskCenter from "./components/AdminTaskCenter.vue";
 import type { ContentPlan, Dashboard, Integration } from "./types";
 
 type AnyRow = Record<string, any>;
 type Ledger = { departments: AnyRow[]; employees: AnyRow[]; products: AnyRow[]; accounts: AnyRow[]; stores: AnyRow[]; imports: AnyRow[]; snapshots: AnyRow[]; attributions: AnyRow[]; sourceHealth: AnyRow[] };
-type AuthUser = { employeeId?: string; id?: string; name: string; wecomUserId?: string; departmentNames?: string[]; isSuperAdmin?: boolean; loginType: string };
+type AuthUser = { adminUserId?: string; id?: string; name: string; username?: string; roles?: string[]; permissions?: string[]; isSuperAdmin?: boolean; loginType: string; portal?: string };
 type DouyinStatus = {
   state: string;
   message: string;
@@ -29,6 +30,7 @@ type DouyinStatus = {
 
 const navItems = [
   { key: "dashboard", label: "今日总览", icon: House },
+  { key: "taskCommand", label: "任务指挥台", icon: DocumentChecked },
   { key: "mall", label: "赛电商城", icon: Shop },
   { key: "content", label: "内容审核", icon: DocumentChecked },
   { key: "assets", label: "品牌数据中心", icon: Files },
@@ -45,8 +47,8 @@ const error = ref("");
 const authReady = ref(false);
 const authUser = ref<AuthUser>();
 const loginMessage = ref("");
-const qrLoginUrl = ref("");
-const qrLoading = ref(false);
+const adminLogin = reactive({ username: "", password: "" });
+const adminLoginLoading = ref(false);
 const dashboard = ref<Dashboard>();
 const integrations = ref<Integration[]>([]);
 const content = ref<ContentPlan[]>([]);
@@ -55,6 +57,7 @@ const assetOnlyProductModel = ref("");
 const contentRestrictionMode = ref<"NORMAL" | "HEALTH_RESTRICTED">("NORMAL");
 const brandDataCenter = ref<{ reload: () => Promise<void> }>();
 const operationAnalysis = ref<{ reload: () => Promise<void> }>();
+const adminTaskCenter = ref<{ reload: () => Promise<void> }>();
 const comments = ref<AnyRow[]>([]);
 const live = ref<AnyRow[]>([]);
 const shopItems = ref<AnyRow[]>([]);
@@ -105,7 +108,6 @@ const filteredContent = computed(() => contentFilter.value === "ALL"
   ? content.value
   : content.value.filter((item) => item.status === contentFilter.value));
 const configuredCount = computed(() => integrations.value.filter((item) => item.state !== "UNCONFIGURED").length);
-const wecomUnconfigured = computed(() => loginMessage.value.includes("未配置"));
 
 function time(value?: string) {
   if (!value) return "未记录";
@@ -192,6 +194,7 @@ async function loadDashboard() {
 async function loadActive() {
   if (active.value === "mall") return;
   if (active.value === "dashboard") return loadDashboard();
+  if (active.value === "taskCommand") return adminTaskCenter.value?.reload();
   if (active.value === "content") [content.value, ledger.value] = await Promise.all([api<ContentPlan[]>("/api/v1/content"), api<Ledger>("/api/v1/ledger")]);
   if (active.value === "assets") await brandDataCenter.value?.reload();
   if (active.value === "operationAnalysis") await operationAnalysis.value?.reload();
@@ -575,37 +578,45 @@ async function runJob(kind: string) {
   }, "任务已加入队列");
 }
 
-async function startWecomLogin() {
-  loginMessage.value = "";
-  try {
-    const redirectUri = `${window.location.origin}/saidian-ops/`;
-    const result = await api<{ url: string }>(`/api/v1/auth/wecom/authorize-url?redirectUri=${encodeURIComponent(redirectUri)}`);
-    window.location.assign(result.url);
-  } catch (reason) {
-    loginMessage.value = reason instanceof Error ? reason.message : "企业微信登录入口暂不可用";
+async function submitAdminLogin() {
+  if (!adminLogin.username.trim() || !adminLogin.password) {
+    loginMessage.value = "请输入管理账号和密码";
+    return;
   }
-}
-
-async function loadWecomQr() {
-  qrLoading.value = true;
+  adminLoginLoading.value = true;
   loginMessage.value = "";
   try {
-    const redirectUri = `${window.location.origin}/saidian-ops/?wecom_qr=1`;
-    const result = await api<{ url: string }>(`/api/v1/auth/wecom/qr-authorize-url?redirectUri=${encodeURIComponent(redirectUri)}`);
-    qrLoginUrl.value = result.url;
+    const result = await post<{ token: string; user: AuthUser }>("/api/v1/admin-auth/login", adminLogin);
+    setToken(result.token);
+    setActor(result.user.name);
+    const mallResponse = await fetch("/api/saidian-mall/v1/admin/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: adminLogin.username, password: adminLogin.password }),
+    });
+    if (mallResponse.ok) {
+      const mallLogin = await mallResponse.json() as { token?: string; user?: Record<string, unknown> };
+      if (mallLogin.token) localStorage.setItem("saidian-admin-token", mallLogin.token);
+      if (mallLogin.user) localStorage.setItem("saidian-admin-user", JSON.stringify(mallLogin.user));
+    }
+    adminLogin.password = "";
+    authUser.value = await api<AuthUser>("/api/v1/admin-auth/me");
+    actorInput.value = authUser.value.name;
+    await loadDashboard();
   } catch (reason) {
-    qrLoginUrl.value = "";
-    loginMessage.value = reason instanceof Error ? reason.message : "企业微信扫码登录入口暂不可用";
+    clearToken();
+    loginMessage.value = reason instanceof Error ? reason.message : "管理后台登录失败";
   } finally {
-    qrLoading.value = false;
+    adminLoginLoading.value = false;
   }
 }
 
 function logout() {
   clearToken();
+  localStorage.removeItem("saidian-admin-token");
+  localStorage.removeItem("saidian-admin-user");
   authUser.value = undefined;
   actorInput.value = "";
-  void loadWecomQr();
 }
 
 function openMall(path: string) {
@@ -618,27 +629,9 @@ async function bootstrap() {
     const douyinAuthorized = parameters.get("douyin") === "authorized";
     const douyinFailed = parameters.get("douyin") === "failed";
     const douyinError = parameters.get("douyin_error");
-    const code = parameters.get("code");
-    if (code) {
-      const result = await post<{ token: string; user: AuthUser }>("/api/v1/auth/wecom/login", { code });
-      setToken(result.token);
-      setActor(result.user.name);
-      window.history.replaceState({}, "", window.location.pathname);
-    }
-    if (!getToken()) {
-      const mallEmployeeToken = localStorage.getItem("employee-token");
-      if (mallEmployeeToken) {
-        try {
-          const result = await post<{ token: string; user: AuthUser }>("/api/v1/auth/wecom/session", { mallToken: mallEmployeeToken });
-          setToken(result.token);
-          setActor(result.user.name);
-        } catch {
-          localStorage.removeItem("employee-token");
-        }
-      }
-    }
     if (!getToken()) return;
-    authUser.value = await api<AuthUser>("/api/v1/auth/me");
+    authUser.value = await api<AuthUser>("/api/v1/admin-auth/me");
+    if (authUser.value.portal && authUser.value.portal !== "ADMIN_CONSOLE") throw new Error("当前身份不能进入总管理后台");
     actorInput.value = authUser.value.name;
     setActor(authUser.value.name);
     await loadDashboard();
@@ -655,12 +648,11 @@ async function bootstrap() {
     loginMessage.value = reason instanceof Error ? reason.message : "登录失败";
   } finally {
     authReady.value = true;
-    if (!authUser.value && !getToken()) await loadWecomQr();
   }
 }
 
 function handleSharedLogin(event: StorageEvent) {
-  if (event.key === "saidian-ops-token" && event.newValue && !authUser.value) void bootstrap();
+  if (event.key === "saidian-ops-admin-token" && event.newValue && !authUser.value) void bootstrap();
 }
 
 async function promptValue(title: string, placeholder: string, value = "") {
@@ -757,20 +749,16 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
   </div>
   <div v-else-if="!authUser" class="login-shell">
     <div class="login-card">
-      <div class="login-brand"><div class="brand-mark">S</div><div><span>SAYDIAN</span><small>统一运营系统</small></div></div>
-      <h1>企业微信扫码登录</h1>
-      <p>请使用手机企业微信扫一扫。扫码后自动同步员工身份、部门和操作记录。</p>
-      <el-alert v-if="loginMessage" :title="loginMessage" :type="wecomUnconfigured ? 'warning' : 'error'" :closable="false" show-icon />
-      <el-button v-if="wecomUnconfigured" type="primary" plain @click="openMall('/saidian-mall-admin/')">打开商城接口配置</el-button>
-      <div class="wecom-qr-panel" v-loading="qrLoading">
-        <iframe v-if="qrLoginUrl" :src="qrLoginUrl" title="企业微信扫码登录二维码" />
-        <div v-else class="qr-placeholder">{{ wecomUnconfigured ? "请先在商城后台配置企业微信" : "二维码暂未加载" }}</div>
-      </div>
-      <div class="qr-actions">
-        <span>二维码失效？</span>
-        <el-button link type="primary" @click="loadWecomQr">刷新二维码</el-button>
-      </div>
-      <el-button class="wecom-direct-button" size="large" @click="startWecomLogin">已在企业微信内，直接登录</el-button>
+      <div class="login-brand"><div class="brand-mark">S</div><div><span>SAYDIAN</span><small>总管理后台</small></div></div>
+      <h1>管理账号登录</h1>
+      <p>系统配置、权限、接口、模型、任务分配、审核和经营分析统一在此管理。</p>
+      <el-alert v-if="loginMessage" :title="loginMessage" type="error" :closable="false" show-icon />
+      <el-form label-position="top" class="admin-login-form" @submit.prevent="submitAdminLogin">
+        <el-form-item label="管理账号"><el-input v-model="adminLogin.username" size="large" autocomplete="username" @keyup.enter="submitAdminLogin" /></el-form-item>
+        <el-form-item label="密码"><el-input v-model="adminLogin.password" size="large" type="password" show-password autocomplete="current-password" @keyup.enter="submitAdminLogin" /></el-form-item>
+        <el-button class="wecom-direct-button" type="primary" size="large" :loading="adminLoginLoading" @click="submitAdminLogin">登录总管理后台</el-button>
+      </el-form>
+      <el-button link type="primary" @click="openMall('/saidian-work/')">进入企业微信员工端</el-button>
     </div>
   </div>
   <div v-else class="shell">
@@ -799,7 +787,7 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
       <header class="topbar">
         <div><small>{{ todayLabel }}</small><h1>{{ pageTitle }}</h1></div>
         <div class="top-actions">
-          <span class="employee-identity"><small>企业微信员工</small><strong>{{ actorInput }}</strong></span>
+          <span class="employee-identity"><small>管理后台账号</small><strong>{{ actorInput }}</strong></span>
           <span class="connection-state"><i :class="error ? 'bad' : 'good'"></i>{{ error ? '连接异常' : '数据已连接' }}</span>
           <el-button :icon="Refresh" circle @click="withLoading(loadActive)" aria-label="刷新当前页面" />
           <el-dropdown>
@@ -810,6 +798,8 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
       </header>
 
       <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon class="page-alert" />
+
+      <section v-if="active === 'taskCommand'" class="page"><AdminTaskCenter ref="adminTaskCenter" /></section>
 
       <section v-if="active === 'dashboard'" class="page dashboard-page">
         <div class="hero-panel">
@@ -1040,7 +1030,7 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
           </div>
         </section>
         <div class="integration-grid"><article v-for="item in integrations" :key="item.id"><div class="integration-icon">{{ item.displayName.slice(0, 1) }}</div><div class="integration-copy"><div><h3>{{ item.displayName }}</h3><el-tag :type="statusType(item.state)">{{ statusLabel(item.state) }}</el-tag></div><p>{{ item.message }}</p><div class="capability-tags"><span v-for="capability in item.capabilities" :key="capability">{{ capability }}</span><span v-if="!item.capabilities.length">暂无已验证能力</span></div><small>检查时间：{{ time(item.lastCheckedAt) }}</small></div></article></div>
-        <section class="token-panel"><div><el-icon><Setting /></el-icon><div><strong>统一企业微信身份</strong><p>当前员工：{{ actorInput }}。登录、部门和员工资料由赛电商城企业微信机制统一提供。</p></div></div><el-tag type="success">已登录</el-tag></section>
+        <section class="token-panel"><div><el-icon><Setting /></el-icon><div><strong>总管理后台身份</strong><p>当前管理员：{{ actorInput }}。员工身份、岗位和权限在任务指挥台统一管理。</p></div></div><el-tag type="success">已登录</el-tag></section>
       </section>
 
       <el-dialog v-model="productionUploadDialog" title="上传对应拍摄素材" width="680px" destroy-on-close>

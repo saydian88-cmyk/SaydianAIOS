@@ -425,6 +425,31 @@ export class BailianVideoAiProvider implements VideoAiProvider {
     return this.chat(input, "生成赛电员工可执行的仿拍任务：目标、镜头表、口播、道具、产品适配、注意点，返回严格JSON");
   }
 
+  async generateStructuredText(instruction: string, input: Record<string, unknown>): Promise<JsonMap> {
+    if (!opsConfig.bailian.apiKey) throw new Error("百炼 API Key 未配置");
+    const response = await fetch(`${opsConfig.bailian.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${opsConfig.bailian.apiKey}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        model: opsConfig.bailian.textModel,
+        temperature: 0.2,
+        response_format: { type: "json_object" },
+        messages: [{
+          role: "user",
+          content: `${instruction}\n输入数据：${JSON.stringify(input).slice(0, 24000)}\n只返回JSON，不添加Markdown。`,
+        }],
+      }),
+      signal: AbortSignal.timeout(45_000),
+    });
+    const raw = map(await response.json().catch(() => ({})));
+    if (!response.ok) throw new Error(`百炼文本生成失败：${response.status} ${text(raw.message || map(raw.error).message)}`);
+    const choices = Array.isArray(raw.choices) ? raw.choices : [];
+    const parsed = parseJsonText(map(map(choices[0]).message).content);
+    parsed._usage = map(raw.usage);
+    parsed._model = text(raw.model) || opsConfig.bailian.textModel;
+    return parsed;
+  }
+
   private async chat(input: VideoUnderstandingInput, instruction: string): Promise<JsonMap> {
     if (!opsConfig.bailian.apiKey) throw new Error("百炼 API Key 未配置");
     const content: Array<Record<string, unknown>> = [];

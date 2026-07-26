@@ -23,6 +23,9 @@ button, input { font: inherit; }
 .qr-placeholder { color: #9a9ea5; }
 .qr-actions { display: flex; align-items: center; justify-content: center; color: #8a8e95; font-size: 13px; }
 .wecom-direct-button { width: 100%; }
+.admin-login-form { margin-top: 4px; }
+.admin-login-form .el-form-item { margin-bottom: 18px; text-align: left; }
+.admin-login-form .el-form-item__label { font-weight: 700; color: #33383d; }
 .shell { min-height: 100vh; display: grid; grid-template-columns: 250px minmax(0, 1fr); }
 
 .sidebar {

@@ -10,10 +10,13 @@ registry="${GHCR_REGISTRY:-ghcr.io}"
 repository="${GHCR_REPOSITORY:-saydian88-cmyk/saydianaios}"
 api_image="$registry/$repository/ops-api:$sha"
 admin_image="$registry/$repository/ops-admin:$sha"
+workbench_image="$registry/$repository/ops-workbench:$sha"
 
 mkdir -p "$base/backups" "$base/env" "$base/releases"
 previous_api="$(grep '^OPS_API_IMAGE=' "$images" 2>/dev/null | cut -d= -f2- || true)"
 previous_admin="$(grep '^OPS_ADMIN_IMAGE=' "$images" 2>/dev/null | cut -d= -f2- || true)"
+previous_workbench="$(grep '^OPS_WORKBENCH_IMAGE=' "$images" 2>/dev/null | cut -d= -f2- || true)"
+previous_workbench="${previous_workbench:-$workbench_image}"
 
 if docker compose --env-file "$production_env" --env-file "$images" -f "$compose" ps --status running -q postgres 2>/dev/null | grep -q .; then
   stamp="$(date +%Y%m%d-%H%M%S)"
@@ -22,9 +25,10 @@ if docker compose --env-file "$production_env" --env-file "$images" -f "$compose
     > "$base/backups/predeploy-$stamp.dump"
 fi
 
-printf 'OPS_API_IMAGE=%s\nOPS_ADMIN_IMAGE=%s\n' "$api_image" "$admin_image" > "$images"
+printf 'OPS_API_IMAGE=%s\nOPS_ADMIN_IMAGE=%s\nOPS_WORKBENCH_IMAGE=%s\n' "$api_image" "$admin_image" "$workbench_image" > "$images"
 docker image inspect "$api_image" >/dev/null 2>&1 || docker pull "$api_image"
 docker image inspect "$admin_image" >/dev/null 2>&1 || docker pull "$admin_image"
+docker image inspect "$workbench_image" >/dev/null 2>&1 || docker pull "$workbench_image"
 docker compose --env-file "$production_env" --env-file "$images" -f "$compose" up -d postgres
 docker compose --env-file "$production_env" --env-file "$images" -f "$compose" run --rm --user root ops-api \
   sh -c 'mkdir -p data/upload-inbox data/derived data/bootstrap && chown -R 1001:1001 data'
@@ -39,13 +43,15 @@ docker compose --env-file "$production_env" --env-file "$images" -f "$compose" r
 
 healthy=0
 for _ in $(seq 1 30); do
-  if curl -fsS http://127.0.0.1/health >/dev/null; then healthy=1; break; fi
+  if curl -fsS http://127.0.0.1/health >/dev/null \
+    && curl -fsS -H 'Host: stest.saydian.cn' https://127.0.0.1/saidian-admin/ -k >/dev/null \
+    && curl -fsS -H 'Host: stest.saydian.cn' https://127.0.0.1/saidian-work/ -k >/dev/null; then healthy=1; break; fi
   sleep 3
 done
 
 if [[ "$healthy" != "1" ]]; then
-  if [[ -n "$previous_api" && -n "$previous_admin" ]]; then
-    printf 'OPS_API_IMAGE=%s\nOPS_ADMIN_IMAGE=%s\n' "$previous_api" "$previous_admin" > "$images"
+  if [[ -n "$previous_api" && -n "$previous_admin" && -n "$previous_workbench" ]]; then
+    printf 'OPS_API_IMAGE=%s\nOPS_ADMIN_IMAGE=%s\nOPS_WORKBENCH_IMAGE=%s\n' "$previous_api" "$previous_admin" "$previous_workbench" > "$images"
     docker compose --env-file "$production_env" --env-file "$images" -f "$compose" up -d
   fi
   echo "health check failed; previous images restored" >&2

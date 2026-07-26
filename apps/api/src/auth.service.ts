@@ -1,13 +1,23 @@
 import { BadRequestException, Injectable, UnauthorizedException } from "@nestjs/common";
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
+import { promisify } from "node:util";
 import { opsConfig } from "./config";
 import { PrismaService } from "./prisma.service";
 
-type SessionPayload = {
-  employeeId: string;
+const scrypt = promisify(scryptCallback);
+
+type Portal = "ADMIN_CONSOLE" | "EMPLOYEE_WORKBENCH";
+
+export type SessionPayload = {
+  audience: Portal;
+  adminUserId?: string;
+  employeeId?: string;
   name: string;
-  wecomUserId: string;
+  wecomUserId?: string;
   isSuperAdmin: boolean;
+  roles: string[];
+  permissions: string[];
+  dataScope: string;
   exp: number;
 };
 
@@ -33,9 +43,13 @@ export class AuthService {
   constructor(private readonly prisma: PrismaService) {}
 
   requireAdmin(authorization?: string, requestedActor?: string): string {
-    const token = String(authorization ?? "").replace(/^Bearer\s+/i, "");
-    if (!token) throw new UnauthorizedException("请从企业微信进入运营中台");
-    if (token !== opsConfig.adminToken) return this.verifySession(token).name;
+    const token = this.token(authorization);
+    if (!token) throw new UnauthorizedException("请登录总管理后台");
+    if (token !== opsConfig.adminToken) {
+      const session = this.verifySession(token);
+      if (session.audience !== "ADMIN_CONSOLE") throw new UnauthorizedException("当前账号无管理后台权限");
+      return session.name;
+    }
     if (!requestedActor?.trim()) return opsConfig.defaultActor;
     try {
       return decodeURIComponent(requestedActor).trim() || opsConfig.defaultActor;
@@ -44,18 +58,87 @@ export class AuthService {
     }
   }
 
+  requireEmployee(authorization?: string): SessionPayload {
+    const session = this.verifySession(this.token(authorization));
+    if (session.audience !== "EMPLOYEE_WORKBENCH" || !session.employeeId) {
+      throw new UnauthorizedException("请从企业微信进入员工工作台");
+    }
+    return session;
+  }
+
+  requirePermission(authorization: string | undefined, permission: string) {
+    const token = this.token(authorization);
+    if (token === opsConfig.adminToken) return;
+    const session = this.verifySession(token);
+    if (
+      session.audience !== "ADMIN_CONSOLE" ||
+      (!session.isSuperAdmin && !session.permissions.includes("*") && !session.permissions.includes(permission))
+    ) {
+      throw new UnauthorizedException("当前账号缺少此操作权限");
+    }
+  }
+
   identity(authorization?: string) {
-    const token = String(authorization ?? "").replace(/^Bearer\s+/i, "");
+    const token = this.token(authorization);
     if (token === opsConfig.adminToken) {
       return {
         employeeId: null,
+        adminUserId: null,
         name: opsConfig.defaultActor,
         wecomUserId: null,
         isSuperAdmin: true,
+        roles: ["SUPER_ADMIN"],
+        permissions: ["*"],
+        dataScope: "ALL",
+        portal: "ADMIN_CONSOLE",
         loginType: "ADMIN_TOKEN",
       };
     }
-    return { ...this.verifySession(token), loginType: "WECOM" };
+    const session = this.verifySession(token);
+    return {
+      ...session,
+      portal: session.audience,
+      loginType: session.audience === "ADMIN_CONSOLE" ? "PASSWORD" : "WECOM",
+    };
+  }
+
+  async loginAdmin(username: string, password: string) {
+    if (!username.trim() || !password) throw new BadRequestException("请输入账号和密码");
+    await this.ensureBootstrapAdmin(username.trim(), password);
+    const admin = await this.prisma.adminUser.findUnique({
+      where: { username: username.trim() },
+      include: { roles: { include: { role: true } } },
+    });
+    if (!admin || admin.status !== "ACTIVE" || !(await this.verifyPassword(password, admin.passwordHash))) {
+      throw new UnauthorizedException("账号或密码不正确");
+    }
+    const activeRoles = admin.roles.map((item) => item.role).filter((role) => role.active);
+    const isSuperAdmin = activeRoles.some((role) => role.code === "SUPER_ADMIN");
+    const payload: SessionPayload = {
+      audience: "ADMIN_CONSOLE",
+      adminUserId: admin.id,
+      name: admin.displayName,
+      isSuperAdmin,
+      roles: activeRoles.map((role) => role.code),
+      permissions: [...new Set(activeRoles.flatMap((role) => role.permissions))],
+      dataScope: isSuperAdmin ? "ALL" : activeRoles.find((role) => role.dataScope === "ALL")?.dataScope || "DEPARTMENT",
+      exp: Math.floor(Date.now() / 1000) + 12 * 60 * 60,
+    };
+    await this.prisma.adminUser.update({ where: { id: admin.id }, data: { lastLoginAt: new Date() } });
+    return this.issue(payload, {
+      id: admin.id,
+      username: admin.username,
+      name: admin.displayName,
+      roles: payload.roles,
+      permissions: payload.permissions,
+      isSuperAdmin,
+    });
+  }
+
+  async hashPassword(password: string) {
+    const salt = randomBytes(16).toString("hex");
+    const hash = (await scrypt(password, salt, 64)) as Buffer;
+    return `scrypt$${salt}$${hash.toString("hex")}`;
   }
 
   async wecomAuthorizeUrl(redirectUri: string) {
@@ -134,46 +217,98 @@ export class AuthService {
         status: "ACTIVE",
       },
     });
-
-    const expiresAt = new Date(Date.now() + 12 * 60 * 60 * 1000);
+    const employeeWithRoles = await this.prisma.employee.findUniqueOrThrow({
+      where: { id: employee.id },
+      include: { roles: { include: { role: true } } },
+    });
+    const activeRoles = employeeWithRoles.roles.map((item) => item.role).filter((role) => role.active);
     const payload: SessionPayload = {
+      audience: "EMPLOYEE_WORKBENCH",
       employeeId: employee.id,
       name: employee.name,
       wecomUserId: profile.wecomUserId,
       isSuperAdmin: employee.isSuperAdmin,
-      exp: Math.floor(expiresAt.getTime() / 1000),
+      roles: activeRoles.map((role) => role.code),
+      permissions: [...new Set(activeRoles.flatMap((role) => role.permissions))],
+      dataScope: activeRoles.find((role) => role.dataScope === "DEPARTMENT")?.dataScope || "SELF",
+      exp: Math.floor(Date.now() / 1000) + 12 * 60 * 60,
     };
+    return {
+      ...this.issue(payload, {
+      id: employee.id,
+      name: employee.name,
+      wecomUserId: profile.wecomUserId,
+      departmentNames: profile.departmentNames || [],
+      roles: payload.roles,
+      permissions: payload.permissions,
+      isSuperAdmin: employee.isSuperAdmin,
+      }),
+      mallToken: mallToken.trim(),
+    };
+  }
+
+  private async ensureBootstrapAdmin(username: string, password: string) {
+    const count = await this.prisma.adminUser.count();
+    if (count > 0 || username !== opsConfig.adminUsername || !opsConfig.adminPassword || password !== opsConfig.adminPassword) {
+      return;
+    }
+    const role = await this.prisma.role.upsert({
+      where: { code: "SUPER_ADMIN" },
+      update: { active: true, permissions: ["*"], dataScope: "ALL", portal: "ADMIN" },
+      create: {
+        code: "SUPER_ADMIN",
+        name: "超级管理员",
+        portal: "ADMIN",
+        permissions: ["*"],
+        dataScope: "ALL",
+      },
+    });
+    const admin = await this.prisma.adminUser.create({
+      data: {
+        username,
+        passwordHash: await this.hashPassword(password),
+        displayName: opsConfig.defaultActor,
+      },
+    });
+    await this.prisma.adminUserRole.create({ data: { adminUserId: admin.id, roleId: role.id } });
+  }
+
+  private async verifyPassword(password: string, stored: string) {
+    const [scheme, salt, hex] = stored.split("$");
+    if (scheme !== "scrypt" || !salt || !hex) return false;
+    const candidate = (await scrypt(password, salt, 64)) as Buffer;
+    const expected = Buffer.from(hex, "hex");
+    return candidate.length === expected.length && timingSafeEqual(candidate, expected);
+  }
+
+  private issue(payload: SessionPayload, user: Record<string, unknown>) {
     const encoded = encode(payload);
     return {
       token: `${encoded}.${signature(encoded)}`,
-      expiresAt,
-      user: {
-        id: employee.id,
-        name: employee.name,
-        wecomUserId: profile.wecomUserId,
-        departmentNames: profile.departmentNames || [],
-        isSuperAdmin: employee.isSuperAdmin,
-      },
+      expiresAt: new Date(payload.exp * 1000),
+      user,
     };
+  }
+
+  private token(authorization?: string) {
+    return String(authorization ?? "").replace(/^Bearer\s+/i, "").trim();
   }
 
   private verifySession(token: string): SessionPayload {
     const [payload, providedSignature] = token.split(".");
-    if (!payload || !providedSignature) throw new UnauthorizedException("运营中台登录已失效");
+    if (!payload || !providedSignature) throw new UnauthorizedException("登录已失效");
     const expected = signature(payload);
     const left = Buffer.from(providedSignature);
     const right = Buffer.from(expected);
     if (left.length !== right.length || !timingSafeEqual(left, right)) {
-      throw new UnauthorizedException("运营中台登录已失效");
+      throw new UnauthorizedException("登录已失效");
     }
     try {
       const result = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as SessionPayload;
-      if (!result.employeeId || !result.wecomUserId || result.exp <= Math.floor(Date.now() / 1000)) {
-        throw new Error("expired");
-      }
+      if (!result.audience || !result.name || result.exp <= Math.floor(Date.now() / 1000)) throw new Error("expired");
       return result;
     } catch {
-      throw new UnauthorizedException("运营中台登录已失效");
+      throw new UnauthorizedException("登录已失效");
     }
   }
 
@@ -185,7 +320,7 @@ export class AuthService {
         throw new Error("not allowed");
       }
     } catch {
-      throw new BadRequestException("企业微信回调地址不在运营中台目录");
+      throw new BadRequestException("企业微信回调地址不在员工工作台目录");
     }
   }
 }

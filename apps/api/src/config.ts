@@ -13,9 +13,12 @@ export const opsConfig = {
   timeZone: process.env.OPS_TIME_ZONE || "Asia/Shanghai",
   adminToken: process.env.OPS_ADMIN_TOKEN || "saidian-ops-local",
   authSecret: process.env.OPS_AUTH_SECRET || process.env.OPS_ADMIN_TOKEN || "saidian-ops-local",
+  adminUsername: process.env.OPS_ADMIN_USERNAME || process.env.MALL_ADMIN_USERNAME || "admin",
+  adminPassword: process.env.OPS_ADMIN_PASSWORD || process.env.MALL_ADMIN_PASSWORD || "",
   defaultActor: process.env.OPS_DEFAULT_ACTOR || "运营负责人",
   publicBaseUrl: process.env.OPS_PUBLIC_BASE_URL || "http://127.0.0.1:3210",
-  webBaseUrl: process.env.OPS_WEB_BASE_URL || "http://127.0.0.1:5173/",
+  webBaseUrl: process.env.OPS_WEB_BASE_URL || "http://127.0.0.1:5173/saidian-work/",
+  adminWebBaseUrl: process.env.OPS_ADMIN_WEB_BASE_URL || "http://127.0.0.1:5173/saidian-admin/",
   assetRoots: list(process.env.ASSET_ROOTS || "F:\\xcodeplace\\视频创作\\赛电品牌素材库;F:\\xcodeplace\\.赛电产品图片整理_20260626"),
   wecomDriveRoot: process.env.WECOM_DRIVE_SYNC_ROOT?.trim() || "",
   derivedOutputDir: resolve(

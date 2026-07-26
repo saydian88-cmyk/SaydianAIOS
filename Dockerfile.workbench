@@ -9,11 +9,10 @@ COPY apps/admin/package.json apps/admin/package.json
 COPY apps/workbench/package.json apps/workbench/package.json
 COPY packages/contracts/package.json packages/contracts/package.json
 RUN pnpm install --frozen-lockfile
-COPY apps/admin apps/admin
-COPY packages/contracts packages/contracts
-RUN VITE_BASE_PATH=/saidian-admin/ pnpm --filter @saidian-ops/admin build
+COPY apps/workbench apps/workbench
+RUN VITE_BASE_PATH=/saidian-work/ pnpm --filter @saidian-ops/workbench build
 
 FROM nginx:1.27-alpine
-COPY deploy/admin-nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=build /app/apps/admin/dist /usr/share/nginx/html
+COPY deploy/workbench-nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /app/apps/workbench/dist /usr/share/nginx/html
 EXPOSE 80

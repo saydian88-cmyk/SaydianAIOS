@@ -29,12 +29,15 @@ import { ViralTrendService } from "./viral-trend.service";
 import { VideoFactoryController } from "./video-factory.controller";
 import { VideoFactoryService } from "./video-factory.service";
 import { VideoFactoryWorkerService } from "./video-factory-worker.service";
+import { AdminV2Controller, WorkbenchController } from "./workbench.controller";
+import { WorkbenchService } from "./workbench.service";
 
 @Module({
   imports: [ScheduleModule.forRoot()],
   controllers: [
     AppController, HealthController, OpsController, BrandDataController,
     OperationAnalysisController, DouyinIntegrationController, VideoFactoryController,
+    WorkbenchController, AdminV2Controller,
   ],
   providers: [
     PrismaService, AuthService, PlatformRegistry, ContentGuardService, OssStorageService, SourceSyncService,
@@ -42,6 +45,7 @@ import { VideoFactoryWorkerService } from "./video-factory-worker.service";
     AliyunImsProvider, BailianVideoAiProvider, CloudMediaService, ViralCollectorService, AssetAiService, BrandDataService,
     OperationAnalysisService, DouyinIntegrationService, SmartKeywordService, ViralTrendService,
     VideoFactoryService, VideoFactoryWorkerService,
+    WorkbenchService,
   ],
 })
 export class AppModule {}

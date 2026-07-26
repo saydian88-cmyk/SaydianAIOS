@@ -373,6 +373,11 @@ model Employee {
   assetUsages     AssetUsage[]
   assets          Asset[]
   remakeTasks     RemakeTask[]
+  roles           EmployeeRole[]
+  assignedTasks   OpsTask[]             @relation("TaskAssignee")
+  taskAttachments TaskAttachment[]
+  taskSubmissions TaskSubmission[]
+  notifications   TaskNotification[]
 
   @@index([departmentId, status])
   @@index([name])
@@ -532,25 +537,25 @@ model Asset {
   purgeAfter          DateTime?
   createdByEmployeeId String?
 
-  contentAssets     ContentAsset[]
-  versions          AssetVersion[]
-  createdByEmployee Employee?             @relation(fields: [createdByEmployeeId], references: [id], onDelete: SetNull)
-  products          AssetProduct[]
-  tags              AssetTag[]
-  parentRelations   AssetRelation[]       @relation("AssetRelationParent")
-  childRelations    AssetRelation[]       @relation("AssetRelationChild")
-  uploadEvents      UploadEvent[]
-  analysisJobs      AssetAnalysisJob[]
-  reviewDecisions   AssetReviewDecision[]
-  usages            AssetUsage[]
-  metricSnapshots   AssetMetricSnapshot[]
-  segments          AssetSegment[]
-  cloudMediaJobs    CloudMediaJob[]
-  scoreSnapshots    AssetScoreSnapshot[]
-  videoShotSelections VideoShot[]            @relation("VideoShotSelectedAsset")
-  videoGenerationOutputs VideoGenerationJob[] @relation("VideoGenerationOutput")
-  videoRenderOutputs VideoRenderJob[]         @relation("VideoRenderOutput")
-  videoQualityChecks VideoQualityCheck[]
+  contentAssets          ContentAsset[]
+  versions               AssetVersion[]
+  createdByEmployee      Employee?             @relation(fields: [createdByEmployeeId], references: [id], onDelete: SetNull)
+  products               AssetProduct[]
+  tags                   AssetTag[]
+  parentRelations        AssetRelation[]       @relation("AssetRelationParent")
+  childRelations         AssetRelation[]       @relation("AssetRelationChild")
+  uploadEvents           UploadEvent[]
+  analysisJobs           AssetAnalysisJob[]
+  reviewDecisions        AssetReviewDecision[]
+  usages                 AssetUsage[]
+  metricSnapshots        AssetMetricSnapshot[]
+  segments               AssetSegment[]
+  cloudMediaJobs         CloudMediaJob[]
+  scoreSnapshots         AssetScoreSnapshot[]
+  videoShotSelections    VideoShot[]           @relation("VideoShotSelectedAsset")
+  videoGenerationOutputs VideoGenerationJob[]  @relation("VideoGenerationOutput")
+  videoRenderOutputs     VideoRenderJob[]      @relation("VideoRenderOutput")
+  videoQualityChecks     VideoQualityCheck[]
 
   @@index([sha256])
   @@index([model, status])
@@ -1207,15 +1212,15 @@ model SmartKeyword {
   pinned            Boolean         @default(false)
   locked            Boolean         @default(false)
   opportunityScore  Float           @default(0)
-  grade              String          @default("C")
-  hitCount           Int             @default(0)
-  firstSeenAt        DateTime         @default(now())
-  lastSeenAt         DateTime         @default(now())
+  grade             String          @default("C")
+  hitCount          Int             @default(0)
+  firstSeenAt       DateTime        @default(now())
+  lastSeenAt        DateTime        @default(now())
   lastCollectedAt   DateTime?
-  createdBy          String           @default("系统关键词引擎")
-  updatedBy          String           @default("系统关键词引擎")
-  createdAt          DateTime         @default(now())
-  updatedAt          DateTime         @updatedAt
+  createdBy         String          @default("系统关键词引擎")
+  updatedBy         String          @default("系统关键词引擎")
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
 
   product          Product?                      @relation(fields: [productId], references: [id], onDelete: SetNull)
   cluster          SmartKeywordCluster?          @relation(fields: [clusterId], references: [id], onDelete: SetNull)
@@ -1474,56 +1479,56 @@ model KnowledgeEntry {
 }
 
 model ContentPlan {
-  id                 String        @id @default(cuid())
-  productionNo       String?       @unique
-  productionStage    String        @default("SCRIPT_REVIEW")
-  workflowVersion    Int           @default(1)
+  id                 String            @id @default(cuid())
+  productionNo       String?           @unique
+  productionStage    String            @default("SCRIPT_REVIEW")
+  workflowVersion    Int               @default(1)
   owner              String?
   targetPlatforms    IntegrationKind[] @default([])
-  shootRequirements  Json          @default("[]")
+  shootRequirements  Json              @default("[]")
   masterVideoPath    String?
-  masterVideoStatus  String        @default("PENDING")
+  masterVideoStatus  String            @default("PENDING")
   planDate           DateTime
   kind               ContentKind
   topic              String
   productModel       String?
   audience           String
   objective          String
-  score              Int           @default(0)
-  scoreBreakdown     Json          @default("{}")
+  score              Int               @default(0)
+  scoreBreakdown     Json              @default("{}")
   hook               String
-  outline            Json          @default("[]")
-  sourceSignals      Json          @default("[]")
+  outline            Json              @default("[]")
+  sourceSignals      Json              @default("[]")
   evidenceIds        String[]
-  status             ContentStatus @default(DRAFT)
+  status             ContentStatus     @default(DRAFT)
   riskReasons        String[]
   approvedBy         String?
   approvedAt         DateTime?
-  createdBy          String        @default("系统内容引擎")
+  createdBy          String            @default("系统内容引擎")
   assignedTo         String?
   assignedEmployeeId String?
-  actorType          ActorType     @default(AI)
+  actorType          ActorType         @default(AI)
   aiProvider         String?
   aiModel            String?
   promptVersion      String?
   rejectedReason     String?
   scheduledAt        DateTime?
   publishedAt        DateTime?
-  createdAt          DateTime      @default(now())
-  updatedAt          DateTime      @updatedAt
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
 
-  variants         ContentVariant[]
-  publishJobs      PublishJob[]
-  approvals        Approval[]
-  contentAssets    ContentAsset[]
-  assignedEmployee Employee?          @relation(fields: [assignedEmployeeId], references: [id], onDelete: SetNull)
-  attributions     AttributionTouch[]
-  optimizations    ContentOptimizationSuggestion[]
-  keywordRelations SmartKeywordContentRelation[]
-  videoShots       VideoShot[]
+  variants            ContentVariant[]
+  publishJobs         PublishJob[]
+  approvals           Approval[]
+  contentAssets       ContentAsset[]
+  assignedEmployee    Employee?                       @relation(fields: [assignedEmployeeId], references: [id], onDelete: SetNull)
+  attributions        AttributionTouch[]
+  optimizations       ContentOptimizationSuggestion[]
+  keywordRelations    SmartKeywordContentRelation[]
+  videoShots          VideoShot[]
   videoGenerationJobs VideoGenerationJob[]
-  videoRenderJobs  VideoRenderJob[]
-  videoQualityChecks VideoQualityCheck[]
+  videoRenderJobs     VideoRenderJob[]
+  videoQualityChecks  VideoQualityCheck[]
 
   @@index([planDate, kind])
   @@index([status])
@@ -1531,24 +1536,24 @@ model ContentPlan {
 }
 
 model VideoModelProvider {
-  id               String           @id @default(cuid())
-  code             String           @unique
-  displayName      String
-  state            IntegrationState @default(UNCONFIGURED)
-  region           String           @default("GLOBAL")
-  baseUrl          String?
-  capabilities     String[]         @default([])
-  publicConfig     Json             @default("{}")
-  secretRef        String?
-  maxConcurrency   Int              @default(2)
-  dailyBudget      Float?
-  priority         Int              @default(100)
-  enabled          Boolean          @default(false)
-  message          String           @default("未配置")
-  lastCheckedAt    DateTime?
-  lastSuccessAt    DateTime?
-  createdAt        DateTime         @default(now())
-  updatedAt        DateTime         @updatedAt
+  id             String           @id @default(cuid())
+  code           String           @unique
+  displayName    String
+  state          IntegrationState @default(UNCONFIGURED)
+  region         String           @default("GLOBAL")
+  baseUrl        String?
+  capabilities   String[]         @default([])
+  publicConfig   Json             @default("{}")
+  secretRef      String?
+  maxConcurrency Int              @default(2)
+  dailyBudget    Float?
+  priority       Int              @default(100)
+  enabled        Boolean          @default(false)
+  message        String           @default("未配置")
+  lastCheckedAt  DateTime?
+  lastSuccessAt  DateTime?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
 
   models             VideoModelConfig[]
   generationAttempts VideoGenerationAttempt[]
@@ -1557,28 +1562,28 @@ model VideoModelProvider {
 }
 
 model VideoModelConfig {
-  id                 String   @id @default(cuid())
-  providerId         String
-  code               String
-  displayName        String
-  capabilities       String[] @default([])
-  supportedRatios    String[] @default(["9:16"])
-  supportedDurations Int[]    @default([5, 10])
+  id                   String   @id @default(cuid())
+  providerId           String
+  code                 String
+  displayName          String
+  capabilities         String[] @default([])
+  supportedRatios      String[] @default(["9:16"])
+  supportedDurations   Int[]    @default([5, 10])
   supportedResolutions String[] @default(["480P"])
-  scenarioTags       String[] @default([])
-  costConfig         Json     @default("{}")
-  modelConfig        Json     @default("{}")
-  priority           Int      @default(100)
-  enabled            Boolean  @default(false)
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  scenarioTags         String[] @default([])
+  costConfig           Json     @default("{}")
+  modelConfig          Json     @default("{}")
+  priority             Int      @default(100)
+  enabled              Boolean  @default(false)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
-  provider             VideoModelProvider      @relation(fields: [providerId], references: [id], onDelete: Cascade)
-  primaryPolicies      VideoRoutingPolicy[]     @relation("VideoRoutingPrimaryModel")
-  requestedShots       VideoShot[]              @relation("VideoShotRequestedModel")
-  requestedJobs        VideoGenerationJob[]     @relation("VideoGenerationRequestedModel")
-  resolvedJobs         VideoGenerationJob[]     @relation("VideoGenerationResolvedModel")
-  generationAttempts   VideoGenerationAttempt[]
+  provider           VideoModelProvider       @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  primaryPolicies    VideoRoutingPolicy[]     @relation("VideoRoutingPrimaryModel")
+  requestedShots     VideoShot[]              @relation("VideoShotRequestedModel")
+  requestedJobs      VideoGenerationJob[]     @relation("VideoGenerationRequestedModel")
+  resolvedJobs       VideoGenerationJob[]     @relation("VideoGenerationResolvedModel")
+  generationAttempts VideoGenerationAttempt[]
 
   @@unique([providerId, code])
   @@index([enabled, priority])
@@ -1605,29 +1610,29 @@ model VideoRoutingPolicy {
 }
 
 model VideoShot {
-  id                 String   @id @default(cuid())
-  contentPlanId      String
-  requirementKey     String
-  sequence           Int      @default(0)
-  title              String
-  description        String
-  moduleType         String   @default("SCENE")
-  status             String   @default("OPEN")
-  sourcePreference   String   @default("AUTO")
-  durationSeconds    Int      @default(5)
-  prompt             String?
-  voiceover          String?
-  subtitle           String?
-  assetIds           String[] @default([])
-  selectedAssetId    String?
-  requestedModelId   String?
-  metadata           Json     @default("{}")
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  id               String   @id @default(cuid())
+  contentPlanId    String
+  requirementKey   String
+  sequence         Int      @default(0)
+  title            String
+  description      String
+  moduleType       String   @default("SCENE")
+  status           String   @default("OPEN")
+  sourcePreference String   @default("AUTO")
+  durationSeconds  Int      @default(5)
+  prompt           String?
+  voiceover        String?
+  subtitle         String?
+  assetIds         String[] @default([])
+  selectedAssetId  String?
+  requestedModelId String?
+  metadata         Json     @default("{}")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
-  contentPlan    ContentPlan       @relation(fields: [contentPlanId], references: [id], onDelete: Cascade)
-  selectedAsset  Asset?            @relation("VideoShotSelectedAsset", fields: [selectedAssetId], references: [id], onDelete: SetNull)
-  requestedModel VideoModelConfig? @relation("VideoShotRequestedModel", fields: [requestedModelId], references: [id], onDelete: SetNull)
+  contentPlan    ContentPlan          @relation(fields: [contentPlanId], references: [id], onDelete: Cascade)
+  selectedAsset  Asset?               @relation("VideoShotSelectedAsset", fields: [selectedAssetId], references: [id], onDelete: SetNull)
+  requestedModel VideoModelConfig?    @relation("VideoShotRequestedModel", fields: [requestedModelId], references: [id], onDelete: SetNull)
   generationJobs VideoGenerationJob[]
 
   @@unique([contentPlanId, requirementKey])
@@ -1636,36 +1641,36 @@ model VideoShot {
 }
 
 model VideoGenerationJob {
-  id                 String    @id @default(cuid())
-  idempotencyKey     String    @unique
-  contentPlanId      String
-  shotId             String?
-  status             JobStatus @default(PENDING)
-  routingMode        String    @default("AUTO")
-  requestedModelId   String?
-  resolvedModelId    String?
-  allowFallback      Boolean   @default(true)
-  prompt             String
-  input              Json      @default("{}")
-  output             Json      @default("{}")
-  outputAssetId      String?
-  attemptCount       Int       @default(0)
-  maxAttempts        Int       @default(3)
-  estimatedCost      Float?
-  actualCost         Float     @default(0)
-  failureReason      String?
-  nextAttemptAt      DateTime?
-  startedAt          DateTime?
-  finishedAt         DateTime?
-  createdBy          String
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
+  id               String    @id @default(cuid())
+  idempotencyKey   String    @unique
+  contentPlanId    String
+  shotId           String?
+  status           JobStatus @default(PENDING)
+  routingMode      String    @default("AUTO")
+  requestedModelId String?
+  resolvedModelId  String?
+  allowFallback    Boolean   @default(true)
+  prompt           String
+  input            Json      @default("{}")
+  output           Json      @default("{}")
+  outputAssetId    String?
+  attemptCount     Int       @default(0)
+  maxAttempts      Int       @default(3)
+  estimatedCost    Float?
+  actualCost       Float     @default(0)
+  failureReason    String?
+  nextAttemptAt    DateTime?
+  startedAt        DateTime?
+  finishedAt       DateTime?
+  createdBy        String
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
-  contentPlan    ContentPlan       @relation(fields: [contentPlanId], references: [id], onDelete: Cascade)
-  shot           VideoShot?        @relation(fields: [shotId], references: [id], onDelete: SetNull)
-  requestedModel VideoModelConfig? @relation("VideoGenerationRequestedModel", fields: [requestedModelId], references: [id], onDelete: SetNull)
-  resolvedModel  VideoModelConfig? @relation("VideoGenerationResolvedModel", fields: [resolvedModelId], references: [id], onDelete: SetNull)
-  outputAsset    Asset?            @relation("VideoGenerationOutput", fields: [outputAssetId], references: [id], onDelete: SetNull)
+  contentPlan    ContentPlan              @relation(fields: [contentPlanId], references: [id], onDelete: Cascade)
+  shot           VideoShot?               @relation(fields: [shotId], references: [id], onDelete: SetNull)
+  requestedModel VideoModelConfig?        @relation("VideoGenerationRequestedModel", fields: [requestedModelId], references: [id], onDelete: SetNull)
+  resolvedModel  VideoModelConfig?        @relation("VideoGenerationResolvedModel", fields: [resolvedModelId], references: [id], onDelete: SetNull)
+  outputAsset    Asset?                   @relation("VideoGenerationOutput", fields: [outputAssetId], references: [id], onDelete: SetNull)
   attempts       VideoGenerationAttempt[]
   qualityChecks  VideoQualityCheck[]
 
@@ -1675,21 +1680,21 @@ model VideoGenerationJob {
 }
 
 model VideoGenerationAttempt {
-  id             String    @id @default(cuid())
-  jobId          String
-  providerId     String
-  modelId        String
-  attemptNo      Int
-  status         JobStatus @default(PENDING)
-  externalJobId  String?
-  request        Json      @default("{}")
-  response       Json      @default("{}")
-  cost           Float     @default(0)
-  failureReason  String?
-  startedAt      DateTime?
-  finishedAt     DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  id            String    @id @default(cuid())
+  jobId         String
+  providerId    String
+  modelId       String
+  attemptNo     Int
+  status        JobStatus @default(PENDING)
+  externalJobId String?
+  request       Json      @default("{}")
+  response      Json      @default("{}")
+  cost          Float     @default(0)
+  failureReason String?
+  startedAt     DateTime?
+  finishedAt    DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   job      VideoGenerationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
   provider VideoModelProvider @relation(fields: [providerId], references: [id], onDelete: Restrict)
@@ -1719,8 +1724,8 @@ model VideoRenderJob {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
-  contentPlan   ContentPlan        @relation(fields: [contentPlanId], references: [id], onDelete: Cascade)
-  outputAsset   Asset?             @relation("VideoRenderOutput", fields: [outputAssetId], references: [id], onDelete: SetNull)
+  contentPlan   ContentPlan         @relation(fields: [contentPlanId], references: [id], onDelete: Cascade)
+  outputAsset   Asset?              @relation("VideoRenderOutput", fields: [outputAssetId], references: [id], onDelete: SetNull)
   qualityChecks VideoQualityCheck[]
 
   @@index([status, createdAt])
@@ -1728,52 +1733,52 @@ model VideoRenderJob {
 }
 
 model VideoQualityCheck {
-  id              String   @id @default(cuid())
+  id              String    @id @default(cuid())
   contentPlanId   String
   assetId         String?
   generationJobId String?
   renderJobId     String?
   checkType       String
-  status          String   @default("PENDING")
-  score           Int      @default(0)
-  findings        Json     @default("[]")
+  status          String    @default("PENDING")
+  score           Int       @default(0)
+  findings        Json      @default("[]")
   reviewedBy      String?
   reviewedAt      DateTime?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  contentPlan   ContentPlan        @relation(fields: [contentPlanId], references: [id], onDelete: Cascade)
-  asset         Asset?             @relation(fields: [assetId], references: [id], onDelete: SetNull)
+  contentPlan   ContentPlan         @relation(fields: [contentPlanId], references: [id], onDelete: Cascade)
+  asset         Asset?              @relation(fields: [assetId], references: [id], onDelete: SetNull)
   generationJob VideoGenerationJob? @relation(fields: [generationJobId], references: [id], onDelete: Cascade)
-  renderJob     VideoRenderJob?    @relation(fields: [renderJobId], references: [id], onDelete: Cascade)
+  renderJob     VideoRenderJob?     @relation(fields: [renderJobId], references: [id], onDelete: Cascade)
 
   @@index([contentPlanId, status])
   @@index([assetId])
 }
 
 model ContentVariant {
-  id              String          @id @default(cuid())
-  contentPlanId   String
-  platform        IntegrationKind
-  title           String
-  body            String
-  mediaType       String?
-  mediaPath       String?
-  coverPath       String?
-  packagingStatus String          @default("PENDING")
-  coverSpec       Json            @default("{}")
-  packagedAt      DateTime?
-  packagingReviewedBy String?
-  packagingReviewedAt DateTime?
+  id                      String          @id @default(cuid())
+  contentPlanId           String
+  platform                IntegrationKind
+  title                   String
+  body                    String
+  mediaType               String?
+  mediaPath               String?
+  coverPath               String?
+  packagingStatus         String          @default("PENDING")
+  coverSpec               Json            @default("{}")
+  packagedAt              DateTime?
+  packagingReviewedBy     String?
+  packagingReviewedAt     DateTime?
   packagingRejectedReason String?
-  manualPublishUrl String?
-  manualExternalId String?
-  manualPublishedAt DateTime?
-  targetAccountId String?
-  metadata        Json            @default("{}")
-  status          ContentStatus   @default(DRAFT)
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
+  manualPublishUrl        String?
+  manualExternalId        String?
+  manualPublishedAt       DateTime?
+  targetAccountId         String?
+  metadata                Json            @default("{}")
+  status                  ContentStatus   @default(DRAFT)
+  createdAt               DateTime        @default(now())
+  updatedAt               DateTime        @updatedAt
 
   contentPlan   ContentPlan      @relation(fields: [contentPlanId], references: [id], onDelete: Cascade)
   targetAccount PlatformAccount? @relation(fields: [targetAccountId], references: [id], onDelete: SetNull)
@@ -1785,22 +1790,22 @@ model ContentVariant {
 }
 
 model ContentOptimizationSuggestion {
-  id              String   @id @default(cuid())
+  id              String    @id @default(cuid())
   contentPlanId   String
   checkpointHours Int
-  status          String   @default("PENDING_CONFIRMATION")
+  status          String    @default("PENDING_CONFIRMATION")
   summary         String
-  evidence        Json     @default("{}")
-  recommendations Json     @default("[]")
-  rulePatch       Json     @default("{}")
-  generatedBy     String   @default("系统数据复盘")
+  evidence        Json      @default("{}")
+  recommendations Json      @default("[]")
+  rulePatch       Json      @default("{}")
+  generatedBy     String    @default("系统数据复盘")
   confirmedBy     String?
   confirmedAt     DateTime?
   rejectedBy      String?
   rejectedAt      DateTime?
   note            String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   contentPlan ContentPlan @relation(fields: [contentPlanId], references: [id], onDelete: Cascade)
 
@@ -2162,6 +2167,8 @@ model OpsTask {
   status             String    @default("OPEN")
   owner              String?
   assigneeEmployeeId String?
+  requiredRoleCode   String?
+  assignedBy         String?
   collaborators      Json      @default("[]")
   sourceType         String?
   sourceId           String?
@@ -2178,7 +2185,14 @@ model OpsTask {
   evidence           Json      @default("{}")
   verification       Json      @default("{}")
   dueAt              DateTime?
+  acceptedAt         DateTime?
+  startedAt          DateTime?
   submittedAt        DateTime?
+  returnedAt         DateTime?
+  returnReason       String?
+  reviewNote         String?
+  reviewedAt         DateTime?
+  reviewedBy         String?
   verifiedAt         DateTime?
   verifier           String?
   reviewAt           DateTime?
@@ -2186,14 +2200,170 @@ model OpsTask {
   completedAt        DateTime?
   result             String?
   completedBy        String?
+  taskTemplateId     String?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
-  history OperationTaskHistory[]
+  assignee      Employee?              @relation("TaskAssignee", fields: [assigneeEmployeeId], references: [id], onDelete: SetNull)
+  template      TaskTemplate?          @relation(fields: [taskTemplateId], references: [id], onDelete: SetNull)
+  history       OperationTaskHistory[]
+  attachments   TaskAttachment[]
+  submissions   TaskSubmission[]
+  reviews       TaskReview[]
+  notifications TaskNotification[]
 
   @@index([status, dueAt])
+  @@index([assigneeEmployeeId, status, dueAt])
+  @@index([requiredRoleCode, status, dueAt])
   @@index([platform, storeKey, productId])
   @@index([findingId, status])
+}
+
+model AdminUser {
+  id           String    @id @default(cuid())
+  username     String    @unique
+  passwordHash String
+  displayName  String
+  status       String    @default("ACTIVE")
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  roles AdminUserRole[]
+
+  @@index([status])
+}
+
+model Role {
+  id          String   @id @default(cuid())
+  code        String   @unique
+  name        String
+  portal      String
+  permissions String[] @default([])
+  dataScope   String   @default("SELF")
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  adminUsers AdminUserRole[]
+  employees  EmployeeRole[]
+  templates  TaskTemplate[]
+
+  @@index([portal, active])
+}
+
+model AdminUserRole {
+  adminUserId String
+  roleId      String
+  createdAt   DateTime @default(now())
+
+  adminUser AdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
+  role      Role      @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([adminUserId, roleId])
+  @@index([roleId])
+}
+
+model EmployeeRole {
+  employeeId String
+  roleId     String
+  createdAt  DateTime @default(now())
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  role     Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([employeeId, roleId])
+  @@index([roleId])
+}
+
+model TaskTemplate {
+  id               String   @id @default(cuid())
+  code             String   @unique
+  name             String
+  category         String
+  requiredRoleCode String
+  description      String?
+  checklist        Json     @default("[]")
+  submissionSchema Json     @default("{}")
+  defaultPriority  String   @default("MEDIUM")
+  defaultDueHours  Int      @default(24)
+  active           Boolean  @default(true)
+  roleId           String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  role  Role?     @relation(fields: [roleId], references: [id], onDelete: SetNull)
+  tasks OpsTask[]
+
+  @@index([requiredRoleCode, active])
+}
+
+model TaskAttachment {
+  id         String   @id @default(cuid())
+  taskId     String
+  uploaderId String?
+  name       String
+  url        String
+  mimeType   String?
+  size       Int?
+  kind       String   @default("REFERENCE")
+  metadata   Json     @default("{}")
+  createdAt  DateTime @default(now())
+
+  task     OpsTask   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  uploader Employee? @relation(fields: [uploaderId], references: [id], onDelete: SetNull)
+
+  @@index([taskId, createdAt])
+}
+
+model TaskSubmission {
+  id         String   @id @default(cuid())
+  taskId     String
+  employeeId String
+  version    Int      @default(1)
+  summary    String
+  payload    Json     @default("{}")
+  status     String   @default("SUBMITTED")
+  createdAt  DateTime @default(now())
+
+  task     OpsTask  @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+
+  @@unique([taskId, version])
+  @@index([employeeId, createdAt])
+}
+
+model TaskReview {
+  id           String   @id @default(cuid())
+  taskId       String
+  submissionId String?
+  action       String
+  reviewer     String
+  note         String?
+  createdAt    DateTime @default(now())
+
+  task OpsTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, createdAt])
+}
+
+model TaskNotification {
+  id                  String    @id @default(cuid())
+  taskId              String?
+  recipientEmployeeId String?
+  channel             String    @default("IN_APP")
+  type                String
+  title               String
+  content             String
+  readAt              DateTime?
+  sentAt              DateTime?
+  createdAt           DateTime  @default(now())
+
+  task      OpsTask?  @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  recipient Employee? @relation(fields: [recipientEmployeeId], references: [id], onDelete: Cascade)
+
+  @@index([recipientEmployeeId, readAt, createdAt])
+  @@index([taskId])
 }
 
 model OperationAnalysisRun {

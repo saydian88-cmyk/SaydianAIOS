@@ -48,6 +48,17 @@ export class OpsController {
     return this.auth.identity(authorization);
   }
 
+  @Post("admin-auth/login")
+  adminLogin(@Body() body: Record<string, unknown>) {
+    return this.auth.loginAdmin(String(body.username || ""), String(body.password || ""));
+  }
+
+  @Get("admin-auth/me")
+  adminMe(@Headers("authorization") authorization?: string) {
+    this.actor(authorization);
+    return this.auth.identity(authorization);
+  }
+
   @Get("auth/wecom/authorize-url")
   wecomAuthorizeUrl(@Query("redirectUri") redirectUri: string) {
     return this.auth.wecomAuthorizeUrl(String(redirectUri || ""));

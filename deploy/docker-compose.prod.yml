@@ -74,6 +74,12 @@ services:
     mem_limit: 96m
     cpus: 0.2
 
+  ops-workbench:
+    image: ${OPS_WORKBENCH_IMAGE}
+    restart: unless-stopped
+    mem_limit: 96m
+    cpus: 0.2
+
   gateway:
     image: nginx:1.27-alpine
     restart: unless-stopped
@@ -81,6 +87,8 @@ services:
       ops-api:
         condition: service_healthy
       ops-admin:
+        condition: service_started
+      ops-workbench:
         condition: service_started
     ports:
       - "80:80"
