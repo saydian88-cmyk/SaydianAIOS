@@ -29,6 +29,7 @@ COPY --from=build --chown=saidian:saidian /app/pnpm-workspace.yaml ./pnpm-worksp
 COPY --from=build --chown=saidian:saidian /app/apps/api/package.json ./apps/api/package.json
 COPY --from=build --chown=saidian:saidian /app/apps/api/node_modules ./apps/api/node_modules
 COPY --from=build --chown=saidian:saidian /app/apps/api/dist ./apps/api/dist
+COPY --from=build --chown=saidian:saidian /app/apps/api/src ./apps/api/src
 COPY --from=build --chown=saidian:saidian /app/apps/api/prisma ./apps/api/prisma
 COPY --from=build --chown=saidian:saidian /app/packages/contracts ./packages/contracts
 USER saidian
