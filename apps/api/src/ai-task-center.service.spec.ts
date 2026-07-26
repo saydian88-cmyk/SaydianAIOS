@@ -80,6 +80,30 @@ describe("AiTaskCenterService", () => {
     expect(create.mock.calls[0][0].data.progressMessage).toContain("店铺经营快照");
   });
 
+  it("requires confirmation when the daily budget is not configured", async () => {
+    const { service, create } = serviceWith({
+      aiTaskPolicy: {
+        upsert: vi.fn().mockResolvedValue({
+          type: "ARTICLE",
+          enabled: true,
+          autoExecute: true,
+          dailyBudget: null,
+          maxConcurrency: 1,
+          maxAttempts: 3,
+          timeoutSeconds: 1200,
+        }),
+      },
+    });
+
+    await service.createTask({
+      type: "ARTICLE",
+      idempotencyKey: "article:no-budget",
+    }, "系统自动化");
+
+    expect(create.mock.calls[0][0].data.status).toBe("WAITING_CONFIRMATION");
+    expect(create.mock.calls[0][0].data.progressMessage).toContain("每日预算未配置");
+  });
+
   it("returns the existing task for the same idempotency key", async () => {
     const existing = { id: "existing", taskNo: "AIT-EXISTING", status: "PENDING" };
     const { service, create, prisma } = serviceWith();

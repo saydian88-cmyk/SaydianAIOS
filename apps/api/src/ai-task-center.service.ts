@@ -1024,13 +1024,18 @@ export class AiTaskCenterService implements OnModuleInit {
   }
 
   private async budgetState(type: AiTaskType, dailyBudget?: number | null, estimatedCost?: number, budgetLimit?: number) {
-    if (!estimatedCost || estimatedCost <= 0) return { allowed: true, message: "预算内自动执行" };
-    if (budgetLimit !== undefined && estimatedCost > budgetLimit) return { allowed: false, message: "预计费用超过单任务预算，等待确认" };
     if (dailyBudget === null || dailyBudget === undefined) return { allowed: false, message: "该任务类型每日预算未配置，等待确认" };
+    if (dailyBudget <= 0) return { allowed: false, message: "该任务类型每日预算为0，等待确认" };
+    if (budgetLimit !== undefined && estimatedCost !== undefined && estimatedCost > budgetLimit) return { allowed: false, message: "预计费用超过单任务预算，等待确认" };
     const from = new Date();
     from.setHours(0, 0, 0, 0);
     const spent = await this.prisma.aiTask.aggregate({ where: { type, createdAt: { gte: from } }, _sum: { actualCost: true } });
     const used = spent._sum.actualCost || 0;
+    if (!estimatedCost || estimatedCost <= 0) {
+      return used < dailyBudget
+        ? { allowed: true, message: `每日预算已配置，今日已用${used}` }
+        : { allowed: false, message: `今日预算已用完，今日已用${used}` };
+    }
     return used + estimatedCost <= dailyBudget
       ? { allowed: true, message: `预计费用${estimatedCost}，今日已用${used}` }
       : { allowed: false, message: `预计费用将超过每日预算，今日已用${used}` };
