@@ -91,7 +91,7 @@ describe("VideoFactoryService model routing", () => {
       findMany: vi.fn().mockResolvedValue([{
         id: "viral-1",
         platform: "DOUYIN",
-        title: "固态电芯加持，告别充电宝安全焦虑",
+        title: "固态电芯加持，告别充电宝安全焦虑 自用一段时间，和普通充电宝差距很明显。",
         transcript: "",
         moduleSummary: null,
         analysis: null,

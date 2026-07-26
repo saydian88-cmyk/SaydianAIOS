@@ -118,6 +118,14 @@ function integrationKind(value?: string): IntegrationKind {
   return value === "TIKTOK" ? IntegrationKind.TIKTOK : IntegrationKind.DOUYIN;
 }
 
+function conciseVideoTopic(value: string): string {
+  const cleaned = value.replace(/^参考结构[：:]\s*/, "").replace(/\s+/g, " ").trim();
+  const firstSentence = cleaned.split(/[。！？!?]/)[0]?.trim() || cleaned;
+  const firstChunk = firstSentence.split(" ")[0]?.trim() || firstSentence;
+  const candidate = Array.from(firstChunk).length >= 8 ? firstChunk : firstSentence;
+  return Array.from(candidate).slice(0, 40).join("");
+}
+
 function sourceSignals(plan: { sourceSignals: unknown }) {
   return Array.isArray(plan.sourceSignals) ? plan.sourceSignals.map(object) : [];
 }
@@ -515,7 +523,7 @@ export class VideoFactoryService {
       assets,
       references,
       assetGapTask,
-      topic: String(references[0]?.title || input.topic || keywords[0]?.keyword || `${input.productModel || "赛电产品"}短视频`).trim(),
+      topic: conciseVideoTopic(String(references[0]?.title || input.topic || keywords[0]?.keyword || `${input.productModel || "赛电产品"}短视频`)),
       audience: String(input.audience || keywords.find((item) => item.audience)?.audience || "目标消费者").trim(),
       objective: String(input.objective || "内容种草与商品点击").trim(),
     };
