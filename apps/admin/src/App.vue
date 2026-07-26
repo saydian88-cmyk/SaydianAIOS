@@ -83,6 +83,12 @@ const productionUploadFiles = ref<UploadUserFile[]>([]);
 const productionUploadProgress = ref(0);
 const productionUploading = ref(false);
 const productionUploadTarget = ref<{ plan: ContentPlan; requirement: ContentPlan["shootRequirements"][number] }>();
+const productionAiDialog = ref(false);
+const productionAiTarget = ref<{ plan: ContentPlan; requirement: ContentPlan["shootRequirements"][number] }>();
+const productionAiPrompt = ref("");
+const productionAiDuration = ref(5);
+const productionAiSubmitting = ref(false);
+const productionAiPollingRequirementId = ref("");
 const assetPreviewDialog = ref(false);
 const assetPreviewLoading = ref(false);
 const assetPreviewUrl = ref("");
@@ -302,6 +308,74 @@ function openProductionUpload(item: ContentPlan, requirement: ContentPlan["shoot
   productionUploadFiles.value = [];
   productionUploadProgress.value = 0;
   productionUploadDialog.value = true;
+}
+
+function openProductionAi(item: ContentPlan, requirement: ContentPlan["shootRequirements"][number]) {
+  productionAiTarget.value = { plan: item, requirement };
+  productionAiPrompt.value = [
+    `为短视频“${item.topic}”生成一个真实自然的竖屏补拍镜头。`,
+    item.productModel ? `产品型号：${item.productModel}，保持产品外观、结构和佩戴方式一致。` : "",
+    `镜头内容：${requirement.description}。`,
+    "电商UGC实拍质感，动作清楚，主体完整，光线自然，镜头稳定，不添加字幕、Logo或水印。",
+  ].filter(Boolean).join("");
+  productionAiDuration.value = 5;
+  productionAiDialog.value = true;
+}
+
+function aiGenerationLabel(status?: string) {
+  return status === "SUCCEEDED" ? "已生成"
+    : status === "FAILED" ? "生成失败"
+      : status === "RUNNING" ? "正在生成"
+        : status === "PENDING" ? "排队中"
+          : "";
+}
+
+async function pollAiShotGeneration(item: ContentPlan, requirement: ContentPlan["shootRequirements"][number]) {
+  if (productionAiPollingRequirementId.value === requirement.id) return;
+  productionAiPollingRequirementId.value = requirement.id;
+  try {
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const result = await api<{ status: string; failureReason?: string }>(`/api/v1/content/${item.id}/shoot-requirements/${requirement.id}/ai-generation`);
+      if (result.status === "SUCCEEDED") {
+        content.value = await api("/api/v1/content");
+        ElMessage.success("AI补拍视频已生成并自动关联当前镜头");
+        return;
+      }
+      if (result.status === "FAILED") {
+        content.value = await api("/api/v1/content");
+        ElMessage.error(result.failureReason || "AI补拍视频生成失败，可调整提示词后重试");
+        return;
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 10_000));
+    }
+    ElMessage.info("AI仍在生成，可稍后点击“查看生成进度”继续查询");
+  } catch (reason) {
+    ElMessage.error(reason instanceof Error ? reason.message : "AI生成进度查询失败");
+  } finally {
+    if (productionAiPollingRequirementId.value === requirement.id) productionAiPollingRequirementId.value = "";
+  }
+}
+
+async function submitProductionAi() {
+  const target = productionAiTarget.value;
+  if (!target) return;
+  const prompt = productionAiPrompt.value.trim();
+  if (!prompt) return ElMessage.warning("请填写AI生成要求");
+  productionAiSubmitting.value = true;
+  try {
+    await post(`/api/v1/content/${target.plan.id}/shoot-requirements/${target.requirement.id}/ai-generate`, {
+      prompt,
+      duration: productionAiDuration.value,
+    });
+    content.value = await api("/api/v1/content");
+    productionAiDialog.value = false;
+    ElMessage.success("AI生成任务已提交，完成后将自动回填当前镜头");
+    void pollAiShotGeneration(target.plan, target.requirement);
+  } catch (reason) {
+    ElMessage.error(reason instanceof Error ? reason.message : "AI生成任务提交失败");
+  } finally {
+    productionAiSubmitting.value = false;
+  }
 }
 
 function productionAsset(item: ContentPlan, assetId: string) {
@@ -837,10 +911,19 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
                   <el-empty v-if="!shotRequirements(item, 'EXISTING').length" description="当前没有可直接使用的已有素材" :image-size="42" />
                 </el-collapse-item>
                 <el-collapse-item name="missing">
-                  <template #title><span class="shot-group-title"><el-tag size="small" type="warning">需要补拍</el-tag><b>{{ shotRequirements(item, 'MISSING').length }}项</b><small>点击展开上传对应素材</small></span></template>
+                  <template #title><span class="shot-group-title"><el-tag size="small" type="warning">需要补拍</el-tag><b>{{ shotRequirements(item, 'MISSING').length }}项</b><small>可上传素材或由AI智能生成</small></span></template>
                   <div v-for="requirement in shotRequirements(item, 'MISSING')" :key="requirement.id" class="shoot-row">
-                    <div class="shoot-copy"><span>{{ requirement.description }}</span><small v-if="requirement.reason">{{ requirement.reason }}</small></div>
-                    <div class="shoot-actions"><el-button v-if="item.productionStage === 'AWAITING_ASSETS'" size="small" type="primary" plain @click="openProductionUpload(item, requirement)">上传对应素材</el-button></div>
+                    <div class="shoot-copy"><span>{{ requirement.description }}</span><small v-if="requirement.reason">{{ requirement.reason }}</small><small v-if="requirement.aiGeneration" :class="{ 'ai-generation-error': requirement.aiGeneration.status === 'FAILED' }">AI生成：{{ aiGenerationLabel(requirement.aiGeneration.status) }}<template v-if="requirement.aiGeneration.failureReason"> · {{ requirement.aiGeneration.failureReason }}</template></small></div>
+                    <div class="shoot-actions">
+                      <el-button v-if="item.productionStage === 'AWAITING_ASSETS'" size="small" type="primary" plain @click="openProductionUpload(item, requirement)">上传对应素材</el-button>
+                      <el-button
+                        v-if="item.productionStage === 'AWAITING_ASSETS'"
+                        size="small"
+                        type="success"
+                        :loading="productionAiPollingRequirementId === requirement.id"
+                        @click="requirement.aiGeneration && ['PENDING','RUNNING'].includes(requirement.aiGeneration.status) ? pollAiShotGeneration(item, requirement) : openProductionAi(item, requirement)"
+                      >{{ requirement.aiGeneration && ['PENDING','RUNNING'].includes(requirement.aiGeneration.status) ? '查看生成进度' : requirement.aiGeneration?.status === 'FAILED' ? '重新AI生成' : 'AI智能生成' }}</el-button>
+                    </div>
                   </div>
                   <el-empty v-if="!shotRequirements(item, 'MISSING').length" description="素材已经齐全，无需补拍" :image-size="42" />
                 </el-collapse-item>
@@ -960,6 +1043,19 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
         </el-upload>
         <el-progress v-if="productionUploading || productionUploadProgress" :percentage="productionUploadProgress" />
         <template #footer><el-button :disabled="productionUploading" @click="productionUploadDialog = false">取消</el-button><el-button type="primary" :loading="productionUploading" @click="submitProductionUpload">{{ productionUploading ? `正在上传 ${productionUploadProgress}%` : '上传并继续' }}</el-button></template>
+      </el-dialog>
+
+      <el-dialog v-model="productionAiDialog" title="AI智能生成补拍视频" width="680px" destroy-on-close>
+        <div class="production-upload-context">
+          <strong>{{ productionAiTarget?.plan.productionNo || '历史内容' }} · {{ productionAiTarget?.plan.topic }}</strong>
+          <span>{{ productionAiTarget?.requirement.description }}</span>
+          <small>系统优先使用素材库中的对应产品图保持外观；没有合适产品图时自动使用文生视频。</small>
+        </div>
+        <el-form label-position="top">
+          <el-form-item label="生成要求"><el-input v-model="productionAiPrompt" type="textarea" :rows="6" maxlength="1500" show-word-limit /></el-form-item>
+          <el-form-item label="视频时长"><el-radio-group v-model="productionAiDuration"><el-radio-button :value="5">5秒</el-radio-button><el-radio-button :value="10">10秒</el-radio-button></el-radio-group></el-form-item>
+        </el-form>
+        <template #footer><el-button :disabled="productionAiSubmitting" @click="productionAiDialog = false">取消</el-button><el-button type="success" :loading="productionAiSubmitting" @click="submitProductionAi">开始AI生成</el-button></template>
       </el-dialog>
 
       <el-dialog v-model="assetPreviewDialog" :title="`素材预览 · ${assetPreviewName}`" width="min(900px, 92vw)" destroy-on-close @closed="assetPreviewUrl = ''">
