@@ -5,6 +5,7 @@
   "packageManager": "pnpm@11.9.0",
   "scripts": {
     "dev:api": "pnpm --filter @saidian-ops/api start:dev",
+    "dev:ai-task-runner": "pnpm --filter @saidian-ops/api exec tsx src/ai-task-runner.ts",
     "dev:video-worker": "pnpm --filter @saidian-ops/api exec tsx src/video-worker.ts",
     "dev:admin": "pnpm --filter @saidian-ops/admin dev",
     "build": "pnpm -r --if-present build",
@@ -17,6 +18,7 @@
     "verify:oss": "pnpm --filter @saidian-ops/api exec tsx ../../scripts/verify-oss.ts",
     "sync:assets-agent": "pnpm --filter @saidian-ops/api exec tsx scripts/local-asset-agent.ts",
     "collector:douyin": "pnpm --filter @saidian-ops/douyin-local-collector start",
-    "collector:douyin:install": "powershell -NoProfile -ExecutionPolicy Bypass -File apps/douyin-local-collector/scripts/install-windows-task.ps1"
+    "collector:douyin:install": "powershell -NoProfile -ExecutionPolicy Bypass -File apps/douyin-local-collector/scripts/install-windows-task.ps1",
+    "ai-task-runner:install": "powershell -NoProfile -ExecutionPolicy Bypass -File apps/api/scripts/install-ai-task-runner.ps1"
   }
 }

@@ -2,6 +2,8 @@ import { Module } from "@nestjs/common";
 import { ScheduleModule } from "@nestjs/schedule";
 import { AppController } from "./root.controller";
 import { AiContentService } from "./ai-content.service";
+import { AiTaskCenterController } from "./ai-task-center.controller";
+import { AiTaskCenterService } from "./ai-task-center.service";
 import { AssetAiService } from "./asset-ai.service";
 import { AuthService } from "./auth.service";
 import { AutomationService } from "./automation.service";
@@ -31,13 +33,14 @@ import { VideoFactoryService } from "./video-factory.service";
 import { VideoFactoryWorkerService } from "./video-factory-worker.service";
 import { AdminV2Controller, WorkbenchController } from "./workbench.controller";
 import { WorkbenchService } from "./workbench.service";
+import { WecomNotificationService } from "./wecom-notification.service";
 
 @Module({
   imports: [ScheduleModule.forRoot()],
   controllers: [
     AppController, HealthController, OpsController, BrandDataController,
     OperationAnalysisController, DouyinIntegrationController, VideoFactoryController,
-    WorkbenchController, AdminV2Controller,
+    WorkbenchController, AdminV2Controller, AiTaskCenterController,
   ],
   providers: [
     PrismaService, AuthService, PlatformRegistry, ContentGuardService, OssStorageService, SourceSyncService,
@@ -45,7 +48,7 @@ import { WorkbenchService } from "./workbench.service";
     AliyunImsProvider, BailianVideoAiProvider, CloudMediaService, ViralCollectorService, AssetAiService, BrandDataService,
     OperationAnalysisService, DouyinIntegrationService, SmartKeywordService, ViralTrendService,
     VideoFactoryService, VideoFactoryWorkerService,
-    WorkbenchService,
+    WorkbenchService, WecomNotificationService, AiTaskCenterService,
   ],
 })
 export class AppModule {}

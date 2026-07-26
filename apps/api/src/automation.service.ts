@@ -3,6 +3,7 @@ import { Cron, Interval } from "@nestjs/schedule";
 import { JobStatus, Prisma } from "@prisma/client";
 import { hostname } from "node:os";
 import { ContentService } from "./content.service";
+import { AiTaskCenterService } from "./ai-task-center.service";
 import { MonitoringService } from "./monitoring.service";
 import { OperationAnalysisService } from "./operation-analysis.service";
 import { PrismaService } from "./prisma.service";
@@ -14,6 +15,7 @@ export const jobKinds = [
   "IMPORT_BOOTSTRAP", "SYNC_ASSETS", "SYNC_KNOWLEDGE", "CHECK_INTEGRATIONS", "SYNC_SHOP", "GENERATE_CONTENT",
   "SEND_REVIEW_NOTICE", "QUEUE_PUBLISH", "PROCESS_PUBLISH", "SYNC_COMMENTS", "SYNC_LIVE", "SYNC_METRICS",
   "SYNC_JUSHUITAN", "DAILY_REPORT", "WEEKLY_REPORT",
+  "CREATE_AI_ANALYSIS_TASKS", "CREATE_AI_CONTENT_TASKS",
 ] as const;
 export type AutomationKind = (typeof jobKinds)[number];
 
@@ -29,6 +31,7 @@ export class AutomationService {
     private readonly monitoring: MonitoringService,
     private readonly operationAnalysis: OperationAnalysisService,
     private readonly reports: ReportService,
+    private readonly aiTasks: AiTaskCenterService,
   ) {}
 
   async enqueue(kind: AutomationKind, scheduledAt = new Date(), bucket?: string, payload: Prisma.InputJsonObject = {}) {
@@ -44,7 +47,8 @@ export class AutomationService {
     const key = localDateKey(now);
     const kinds: AutomationKind[] = [
       "IMPORT_BOOTSTRAP", "SYNC_ASSETS", "SYNC_KNOWLEDGE", "CHECK_INTEGRATIONS", "SYNC_SHOP",
-      "SYNC_JUSHUITAN", "GENERATE_CONTENT", "SEND_REVIEW_NOTICE", "SYNC_COMMENTS", "SYNC_LIVE", "SYNC_METRICS", "DAILY_REPORT",
+      "SYNC_JUSHUITAN", "CREATE_AI_ANALYSIS_TASKS", "CREATE_AI_CONTENT_TASKS", "SEND_REVIEW_NOTICE",
+      "SYNC_COMMENTS", "SYNC_LIVE", "SYNC_METRICS", "DAILY_REPORT",
     ];
     for (const kind of kinds) await this.enqueue(kind, now, `${key}:${kind}`, { triggeredBy });
     return { queued: kinds.length };
@@ -67,9 +71,14 @@ export class AutomationService {
     await this.enqueue("SYNC_JUSHUITAN", new Date(), localDateKey());
   }
 
+  @Cron("0 30 6 * * *", { timeZone: "Asia/Shanghai" })
+  async scheduleAiAnalysis() {
+    await this.enqueue("CREATE_AI_ANALYSIS_TASKS", new Date(), localDateKey());
+  }
+
   @Cron("0 0 7 * * *", { timeZone: "Asia/Shanghai" })
   async scheduleContent() {
-    await this.enqueue("GENERATE_CONTENT", new Date(), localDateKey());
+    await this.enqueue("CREATE_AI_CONTENT_TASKS", new Date(), localDateKey());
   }
 
   @Cron("0 30 8 * * *", { timeZone: "Asia/Shanghai" })
@@ -181,6 +190,8 @@ export class AutomationService {
           ? this.operationAnalysis.syncJushuitan(actor)
           : { skipped: true, message: status.message };
       }
+      case "CREATE_AI_ANALYSIS_TASKS": return this.aiTasks.createDailyAnalysisTasks(new Date(), actor);
+      case "CREATE_AI_CONTENT_TASKS": return this.aiTasks.createDailyContentTasks(new Date(), actor);
       case "DAILY_REPORT": return this.reports.generateDaily();
       case "WEEKLY_REPORT": return this.reports.generateWeekly();
     }

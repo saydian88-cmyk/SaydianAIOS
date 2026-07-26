@@ -6,9 +6,9 @@ const prisma = new PrismaClient();
 
 const roles = [
   { code: "SUPER_ADMIN", name: "超级管理员", portal: "ADMIN", permissions: ["*"], dataScope: "ALL" },
-  { code: "SYSTEM_ADMIN", name: "系统管理员", portal: "ADMIN", permissions: ["SYSTEM_VIEW", "SYSTEM_CONFIG", "ROLE_MANAGE", "MODEL_CONFIG", "SCHEDULE_MANAGE"], dataScope: "ALL" },
-  { code: "CONTENT_MANAGER", name: "内容负责人", portal: "ADMIN", permissions: ["SYSTEM_VIEW", "TASK_MANAGE", "TASK_REVIEW", "KNOWLEDGE_REVIEW", "ASSET_REVIEW", "CONTENT_REVIEW"], dataScope: "ALL" },
-  { code: "OPERATIONS_MANAGER", name: "运营负责人", portal: "ADMIN", permissions: ["SYSTEM_VIEW", "TASK_MANAGE", "TASK_REVIEW", "LEDGER_VIEW", "ANALYTICS_VIEW", "MALL_MANAGE"], dataScope: "ALL" },
+  { code: "SYSTEM_ADMIN", name: "系统管理员", portal: "ADMIN", permissions: ["SYSTEM_VIEW", "SYSTEM_CONFIG", "ROLE_MANAGE", "MODEL_CONFIG", "SCHEDULE_MANAGE", "AI_TASK_VIEW", "AI_TASK_MANAGE", "AI_TASK_POLICY", "AI_TASK_RUNNER"], dataScope: "ALL" },
+  { code: "CONTENT_MANAGER", name: "内容负责人", portal: "ADMIN", permissions: ["SYSTEM_VIEW", "TASK_MANAGE", "TASK_REVIEW", "KNOWLEDGE_REVIEW", "ASSET_REVIEW", "CONTENT_REVIEW", "AI_TASK_VIEW", "AI_TASK_MANAGE", "AI_TASK_REVIEW"], dataScope: "ALL" },
+  { code: "OPERATIONS_MANAGER", name: "运营负责人", portal: "ADMIN", permissions: ["SYSTEM_VIEW", "TASK_MANAGE", "TASK_REVIEW", "LEDGER_VIEW", "ANALYTICS_VIEW", "MALL_MANAGE", "AI_TASK_VIEW", "AI_TASK_MANAGE", "AI_TASK_REVIEW"], dataScope: "ALL" },
   { code: "CONTENT_OPERATOR", name: "运营", portal: "WORKBENCH", permissions: ["TASK_EXECUTE", "CONTENT_SUBMIT", "DATA_CENTER_VIEW", "ASSET_VIEW", "ASSET_UPLOAD", "KNOWLEDGE_VIEW", "KNOWLEDGE_SUBMIT", "MALL_EMPLOYEE"], dataScope: "SELF" },
   { code: "VIDEO_SPECIALIST", name: "视频专员", portal: "WORKBENCH", permissions: ["TASK_EXECUTE", "VIDEO_EXECUTE", "CONTENT_SUBMIT", "DATA_CENTER_VIEW", "ASSET_VIEW", "ASSET_UPLOAD", "KNOWLEDGE_VIEW"], dataScope: "SELF" },
   { code: "ASSET_CURATOR", name: "知识素材整理员", portal: "WORKBENCH", permissions: ["TASK_EXECUTE", "DATA_CENTER_VIEW", "ASSET_VIEW", "ASSET_UPLOAD", "ASSET_CURATE", "KNOWLEDGE_VIEW", "KNOWLEDGE_SUBMIT"], dataScope: "SELF" },

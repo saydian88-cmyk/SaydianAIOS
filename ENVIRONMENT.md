@@ -126,7 +126,17 @@ pnpm sync:assets-agent
 
 原始素材只读，不移动、不重命名、不覆盖。
 
-## 5. 生产环境
+## 5. AI任务执行器
+
+先在总管理后台“AI任务中心 → 执行节点”创建节点并复制一次性 Runner Token，再在现有 Windows 主机执行：
+
+```powershell
+pnpm ai-task-runner:install -- -RunnerToken "<一次性Token>"
+```
+
+执行器以当前 Windows 用户登录时自动运行，每 30 秒上报心跳，只通过 API 领取任务并上传结果。
+
+## 6. 生产环境
 
 ```text
 系统：Ubuntu Server 24.04 LTS
@@ -141,7 +151,7 @@ pnpm sync:assets-agent
 
 GitHub Actions 构建 API 和管理端镜像，推送 GHCR，再由腾讯云拉取指定 Git SHA 镜像。
 
-## 6. 自动部署
+## 7. 自动部署
 
 工作流：
 
@@ -177,7 +187,7 @@ gh run list --limit 5
 gh run view <run-id>
 ```
 
-## 7. 提交前检查
+## 8. 提交前检查
 
 ```powershell
 git diff --check
@@ -187,7 +197,7 @@ pnpm build
 git status --short
 ```
 
-## 8. 故障检查
+## 9. 故障检查
 
 ### API
 
@@ -223,4 +233,3 @@ Invoke-RestMethod `
 3. 确认当前镜像 SHA 和健康检查。
 4. 使用部署脚本保留的上一版本回退。
 5. 将失败原因记录到 Pull Request。
-

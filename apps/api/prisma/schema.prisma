@@ -73,6 +73,36 @@ enum JobStatus {
   CANCELLED
 }
 
+enum AiTaskType {
+  VIDEO
+  IMAGE
+  ARTICLE
+  STORE_ANALYSIS
+  COMPETITOR_ANALYSIS
+  LIVE_ANALYSIS
+}
+
+enum AiTaskStatus {
+  PENDING
+  WAITING_CONFIRMATION
+  CLAIMED
+  RUNNING
+  WAITING_INPUT
+  QUALITY_CHECK
+  UPLOADING
+  PENDING_REVIEW
+  RETURNED
+  RETRY
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum AiTaskExecutionPolicy {
+  AUTO_WITHIN_BUDGET
+  MANUAL
+}
+
 enum AlertLevel {
   INFO
   WARNING
@@ -378,6 +408,8 @@ model Employee {
   taskAttachments TaskAttachment[]
   taskSubmissions TaskSubmission[]
   notifications   TaskNotification[]
+  ownedAiTasks    AiTask[]             @relation("AiTaskOwner")
+  reviewAiTasks   AiTask[]             @relation("AiTaskReviewer")
 
   @@index([departmentId, status])
   @@index([name])
@@ -400,6 +432,7 @@ model Product {
   remakeTasks   RemakeTask[]
   viralKeywords ViralKeyword[]
   smartKeywords SmartKeyword[]
+  aiTasks       AiTask[]
 
   @@index([category, status])
 }
@@ -556,6 +589,7 @@ model Asset {
   videoGenerationOutputs VideoGenerationJob[]  @relation("VideoGenerationOutput")
   videoRenderOutputs     VideoRenderJob[]      @relation("VideoRenderOutput")
   videoQualityChecks     VideoQualityCheck[]
+  aiTaskOutputs          AiTaskOutput[]
 
   @@index([sha256])
   @@index([model, status])
@@ -1529,6 +1563,7 @@ model ContentPlan {
   videoGenerationJobs VideoGenerationJob[]
   videoRenderJobs     VideoRenderJob[]
   videoQualityChecks  VideoQualityCheck[]
+  aiTaskOutputs       AiTaskOutput[]
 
   @@index([planDate, kind])
   @@index([status])
@@ -2211,6 +2246,7 @@ model OpsTask {
   submissions   TaskSubmission[]
   reviews       TaskReview[]
   notifications TaskNotification[]
+  aiTaskOutputs  AiTaskOutput[]
 
   @@index([status, dueAt])
   @@index([assigneeEmployeeId, status, dueAt])
@@ -2350,6 +2386,7 @@ model TaskReview {
 model TaskNotification {
   id                  String    @id @default(cuid())
   taskId              String?
+  aiTaskId            String?
   recipientEmployeeId String?
   channel             String    @default("IN_APP")
   type                String
@@ -2360,10 +2397,12 @@ model TaskNotification {
   createdAt           DateTime  @default(now())
 
   task      OpsTask?  @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  aiTask    AiTask?   @relation(fields: [aiTaskId], references: [id], onDelete: Cascade)
   recipient Employee? @relation(fields: [recipientEmployeeId], references: [id], onDelete: Cascade)
 
   @@index([recipientEmployeeId, readAt, createdAt])
   @@index([taskId])
+  @@index([aiTaskId])
 }
 
 model OperationAnalysisRun {
@@ -2567,6 +2606,8 @@ model Report {
   sentAt      DateTime?
   sendReceipt Json       @default("{}")
   createdAt   DateTime   @default(now())
+
+  aiTaskOutputs AiTaskOutput[]
 }
 
 model AutomationJob {
@@ -2589,6 +2630,183 @@ model AutomationJob {
   updatedAt      DateTime  @updatedAt
 
   @@index([status, scheduledAt, nextAttemptAt])
+}
+
+model AiTask {
+  id                  String                @id @default(cuid())
+  taskNo              String                @unique
+  idempotencyKey      String                @unique
+  type                AiTaskType
+  title               String
+  instructions        String?
+  status              AiTaskStatus          @default(PENDING)
+  priority            String                @default("MEDIUM")
+  executionPolicy     AiTaskExecutionPolicy @default(AUTO_WITHIN_BUDGET)
+  sourceType          String
+  sourceId            String?
+  platform            String?
+  productId           String?
+  productModel        String?
+  ownerEmployeeId     String?
+  reviewerEmployeeId  String?
+  modelPolicy         Json                  @default("{}")
+  input               Json                  @default("{}")
+  output              Json                  @default("{}")
+  progress            Int                   @default(0)
+  progressMessage     String?
+  estimatedCost       Float?
+  actualCost          Float                 @default(0)
+  currency            String                @default("USD")
+  budgetLimit         Float?
+  retryCount          Int                   @default(0)
+  maxRetries          Int                   @default(3)
+  lockedBy            String?
+  lockedAt            DateTime?
+  heartbeatAt         DateTime?
+  dueAt               DateTime?
+  startedAt           DateTime?
+  finishedAt          DateTime?
+  reviewedAt          DateTime?
+  reviewedBy          String?
+  reviewNote          String?
+  failureReason       String?
+  createdBy           String
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+
+  product              Product?             @relation(fields: [productId], references: [id], onDelete: SetNull)
+  owner                Employee?            @relation("AiTaskOwner", fields: [ownerEmployeeId], references: [id], onDelete: SetNull)
+  reviewer             Employee?            @relation("AiTaskReviewer", fields: [reviewerEmployeeId], references: [id], onDelete: SetNull)
+  inputSnapshots       AiTaskInputSnapshot[]
+  attempts             AiTaskAttempt[]
+  outputs              AiTaskOutput[]
+  parentDependencies   AiTaskDependency[]   @relation("AiTaskDependencyParent")
+  childDependencies    AiTaskDependency[]   @relation("AiTaskDependencyChild")
+  notifications        TaskNotification[]
+
+  @@index([status, priority, createdAt])
+  @@index([type, status, createdAt])
+  @@index([sourceType, sourceId])
+  @@index([ownerEmployeeId, status])
+  @@index([reviewerEmployeeId, status])
+}
+
+model AiTaskInputSnapshot {
+  id            String   @id @default(cuid())
+  aiTaskId      String
+  kind          String
+  sourceType    String
+  sourceId      String?
+  checksum      String?
+  payload       Json     @default("{}")
+  missingFields String[] @default([])
+  capturedAt    DateTime @default(now())
+
+  aiTask AiTask @relation(fields: [aiTaskId], references: [id], onDelete: Cascade)
+
+  @@index([aiTaskId, kind])
+  @@index([sourceType, sourceId])
+}
+
+model AiWorkerNode {
+  id              String   @id @default(cuid())
+  nodeCode        String   @unique
+  displayName     String
+  tokenHash       String
+  status          String   @default("OFFLINE")
+  capabilities    String[] @default([])
+  version         String?
+  currentTaskId   String?
+  lastHeartbeatAt DateTime?
+  lastError       String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  attempts AiTaskAttempt[]
+
+  @@index([status, lastHeartbeatAt])
+}
+
+model AiTaskAttempt {
+  id              String    @id @default(cuid())
+  aiTaskId        String
+  workerNodeId    String?
+  attemptNo       Int
+  status          JobStatus @default(PENDING)
+  codexSessionId  String?
+  promptTemplate  String
+  promptVersion   String    @default("v1")
+  command         String?
+  logs            Json      @default("{}")
+  usage           Json      @default("{}")
+  exitCode        Int?
+  failureReason   String?
+  startedAt       DateTime?
+  finishedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  aiTask     AiTask       @relation(fields: [aiTaskId], references: [id], onDelete: Cascade)
+  workerNode AiWorkerNode? @relation(fields: [workerNodeId], references: [id], onDelete: SetNull)
+
+  @@unique([aiTaskId, attemptNo])
+  @@index([workerNodeId, status])
+}
+
+model AiTaskOutput {
+  id            String   @id @default(cuid())
+  aiTaskId      String
+  kind          String
+  title         String
+  mimeType      String?
+  url           String?
+  assetId       String?
+  contentPlanId String?
+  reportId      String?
+  opsTaskId     String?
+  reviewStatus  String   @default("PENDING")
+  metadata      Json     @default("{}")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  aiTask      AiTask      @relation(fields: [aiTaskId], references: [id], onDelete: Cascade)
+  asset       Asset?      @relation(fields: [assetId], references: [id], onDelete: SetNull)
+  contentPlan ContentPlan? @relation(fields: [contentPlanId], references: [id], onDelete: SetNull)
+  report      Report?     @relation(fields: [reportId], references: [id], onDelete: SetNull)
+  opsTask     OpsTask?    @relation(fields: [opsTaskId], references: [id], onDelete: SetNull)
+
+  @@index([aiTaskId, reviewStatus])
+  @@index([assetId])
+  @@index([contentPlanId])
+  @@index([reportId])
+  @@index([opsTaskId])
+}
+
+model AiTaskDependency {
+  parentTaskId String
+  childTaskId  String
+  kind         String   @default("BLOCKS")
+  createdAt    DateTime @default(now())
+
+  parentTask AiTask @relation("AiTaskDependencyParent", fields: [parentTaskId], references: [id], onDelete: Cascade)
+  childTask  AiTask @relation("AiTaskDependencyChild", fields: [childTaskId], references: [id], onDelete: Cascade)
+
+  @@id([parentTaskId, childTaskId])
+  @@index([childTaskId])
+}
+
+model AiTaskPolicy {
+  id             String     @id @default(cuid())
+  type           AiTaskType @unique
+  enabled        Boolean    @default(true)
+  autoExecute    Boolean    @default(true)
+  dailyBudget    Float?
+  maxConcurrency Int        @default(1)
+  maxAttempts    Int        @default(3)
+  timeoutSeconds Int        @default(1800)
+  config         Json       @default("{}")
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
 }
 
 model SopVersion {

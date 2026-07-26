@@ -22,6 +22,7 @@ export type IntegrationSecretBundle = {
   viralCollectorToken?: string;
   tikhubApiKey?: string;
   selfHostedCollectorToken?: string;
+  wecomAppSecret?: string;
   douyin?: DouyinSecret;
 };
 

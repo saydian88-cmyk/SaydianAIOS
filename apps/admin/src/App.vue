@@ -9,6 +9,7 @@ import { api, clearToken, download, getActor, getToken, patch, post, remove, set
 import BrandDataCenter from "./components/BrandDataCenter.vue";
 import OperationAnalysis from "./components/OperationAnalysis.vue";
 import AdminTaskCenter from "./components/AdminTaskCenter.vue";
+import AiTaskCenter from "./components/AiTaskCenter.vue";
 import type { ContentPlan, Dashboard, Integration } from "./types";
 
 type AnyRow = Record<string, any>;
@@ -31,6 +32,7 @@ type DouyinStatus = {
 const navItems = [
   { key: "dashboard", label: "今日总览", icon: House },
   { key: "taskCommand", label: "任务指挥台", icon: DocumentChecked },
+  { key: "aiTasks", label: "AI任务中心", icon: Monitor },
   { key: "mall", label: "赛电商城", icon: Shop },
   { key: "content", label: "内容审核", icon: DocumentChecked },
   { key: "assets", label: "品牌数据中心", icon: Files },
@@ -58,6 +60,7 @@ const contentRestrictionMode = ref<"NORMAL" | "HEALTH_RESTRICTED">("NORMAL");
 const brandDataCenter = ref<{ reload: () => Promise<void> }>();
 const operationAnalysis = ref<{ reload: () => Promise<void> }>();
 const adminTaskCenter = ref<{ reload: () => Promise<void> }>();
+const aiTaskCenter = ref<{ reload: () => Promise<void> }>();
 const comments = ref<AnyRow[]>([]);
 const live = ref<AnyRow[]>([]);
 const shopItems = ref<AnyRow[]>([]);
@@ -195,6 +198,7 @@ async function loadActive() {
   if (active.value === "mall") return;
   if (active.value === "dashboard") return loadDashboard();
   if (active.value === "taskCommand") return adminTaskCenter.value?.reload();
+  if (active.value === "aiTasks") return aiTaskCenter.value?.reload();
   if (active.value === "content") [content.value, ledger.value] = await Promise.all([api<ContentPlan[]>("/api/v1/content"), api<Ledger>("/api/v1/ledger")]);
   if (active.value === "assets") await brandDataCenter.value?.reload();
   if (active.value === "operationAnalysis") await operationAnalysis.value?.reload();
@@ -800,6 +804,7 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
       <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon class="page-alert" />
 
       <section v-if="active === 'taskCommand'" class="page"><AdminTaskCenter ref="adminTaskCenter" /></section>
+      <section v-if="active === 'aiTasks'" class="page"><AiTaskCenter ref="aiTaskCenter" /></section>
 
       <section v-if="active === 'dashboard'" class="page dashboard-page">
         <div class="hero-panel">
