@@ -102,6 +102,7 @@ export class DouyinIntegrationService {
     const clientKey = config.clientKey || opsConfig.douyin.clientKey;
     const clientSecret = secrets.douyin?.clientSecret || opsConfig.douyin.clientSecret;
     if (!clientKey || !clientSecret) throw new BadRequestException("请先保存抖音 Client Key 和 Client Secret");
+    await this.validateClientCredentials(clientKey, clientSecret);
 
     const state = randomBytes(24).toString("hex");
     const nextDouyin: DouyinSecret = {
@@ -274,6 +275,28 @@ export class DouyinIntegrationService {
       refresh_token: refreshToken,
       grant_type: "refresh_token",
     });
+  }
+
+  private async validateClientCredentials(clientKey: string, clientSecret: string) {
+    const response = await fetch("https://open.douyin.com/oauth/client_token/", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_key: clientKey,
+        client_secret: clientSecret,
+        grant_type: "client_credential",
+      }),
+    });
+    const result = await response.json() as Record<string, unknown>;
+    const data = result.data && typeof result.data === "object" && !Array.isArray(result.data)
+      ? result.data as Record<string, unknown>
+      : result;
+    const errorCode = number(data.error_code);
+    if (!response.ok || errorCode || !text(data.access_token)) {
+      throw new BadRequestException(
+        `抖音应用密钥验证失败：${text(data.description) || text(result.message) || `接口返回 ${response.status}`}`,
+      );
+    }
   }
 
   private async tokenRequest(url: string, form: Record<string, string>): Promise<TokenPayload> {

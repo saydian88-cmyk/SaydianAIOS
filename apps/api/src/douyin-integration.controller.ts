@@ -42,9 +42,15 @@ export class DouyinIntegrationController {
   @Get("oauth/callback")
   @Redirect(undefined, 302)
   async oauthCallback(@Query("code") code: string, @Query("state") state: string) {
-    await this.douyin.oauthCallback(code, state);
     const base = opsConfig.webBaseUrl.replace(/\/?$/u, "/");
-    return { url: `${base}?douyin=authorized`, statusCode: 302 };
+    try {
+      await this.douyin.oauthCallback(code, state);
+      return { url: `${base}?douyin=authorized`, statusCode: 302 };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "抖音账号授权失败";
+      const query = new URLSearchParams({ douyin: "failed", douyin_error: message });
+      return { url: `${base}?${query.toString()}`, statusCode: 302 };
+    }
   }
 
   @Post("webhooks")

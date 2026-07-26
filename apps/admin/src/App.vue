@@ -523,6 +523,8 @@ async function bootstrap() {
   try {
     const parameters = new URLSearchParams(window.location.search);
     const douyinAuthorized = parameters.get("douyin") === "authorized";
+    const douyinFailed = parameters.get("douyin") === "failed";
+    const douyinError = parameters.get("douyin_error");
     const code = parameters.get("code");
     if (code) {
       const result = await post<{ token: string; user: AuthUser }>("/api/v1/auth/wecom/login", { code });
@@ -549,6 +551,9 @@ async function bootstrap() {
     await loadDashboard();
     if (douyinAuthorized) {
       ElMessage.success("抖音账号授权成功");
+      window.history.replaceState({}, "", window.location.pathname);
+    } else if (douyinFailed) {
+      ElMessage.error(douyinError || "抖音账号授权失败，请重新授权");
       window.history.replaceState({}, "", window.location.pathname);
     }
   } catch (reason) {
