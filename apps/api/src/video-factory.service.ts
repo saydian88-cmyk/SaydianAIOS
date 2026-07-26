@@ -110,6 +110,10 @@ function object(value: unknown): JsonRow {
   return value && typeof value === "object" && !Array.isArray(value) ? value as JsonRow : {};
 }
 
+function jsonSafe<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value, (_key, item) => typeof item === "bigint" ? item.toString() : item)) as T;
+}
+
 function integrationKind(value?: string): IntegrationKind {
   return value === "TIKTOK" ? IntegrationKind.TIKTOK : IntegrationKind.DOUYIN;
 }
@@ -916,7 +920,7 @@ export class VideoFactoryService {
   }
 
   async projects(query: { status?: string; platform?: string; productModel?: string }) {
-    return this.prisma.contentPlan.findMany({
+    const rows = await this.prisma.contentPlan.findMany({
       where: {
         kind: "VIDEO",
         sourceSignals: { array_contains: [{ type: "VIDEO_FACTORY" }] },
@@ -934,6 +938,7 @@ export class VideoFactoryService {
       orderBy: { updatedAt: "desc" },
       take: 100,
     });
+    return jsonSafe(rows);
   }
 
   async project(id: string) {
@@ -957,7 +962,7 @@ export class VideoFactoryService {
       },
     });
     if (!plan) throw new NotFoundException("智能视频项目不存在");
-    return { ...plan, scriptCandidates: this.candidates(plan) };
+    return jsonSafe({ ...plan, scriptCandidates: this.candidates(plan) });
   }
 
   async job(id: string) {
@@ -965,12 +970,12 @@ export class VideoFactoryService {
       where: { id },
       include: { attempts: true, outputAsset: true, resolvedModel: { include: { provider: true } }, qualityChecks: true },
     });
-    if (generation) return { kind: "GENERATION", ...generation };
+    if (generation) return jsonSafe({ kind: "GENERATION", ...generation });
     const render = await this.prisma.videoRenderJob.findUnique({
       where: { id },
       include: { outputAsset: true, qualityChecks: true },
     });
-    if (render) return { kind: "RENDER", ...render };
+    if (render) return jsonSafe({ kind: "RENDER", ...render });
     throw new NotFoundException("视频任务不存在");
   }
 

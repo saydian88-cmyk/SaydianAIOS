@@ -18,6 +18,9 @@ describe("VideoFactoryService model routing", () => {
       videoModelProvider: {
         findMany: vi.fn(),
       },
+      contentPlan: {
+        findMany: vi.fn(),
+      },
     };
     service = new VideoFactoryService(prisma as never, {} as never, {} as never, {} as never);
     vi.spyOn(service, "ensureCatalog").mockResolvedValue();
@@ -66,5 +69,16 @@ describe("VideoFactoryService model routing", () => {
 
     expect(result[0]).toMatchObject({ code: "RUNWAY", secretConfigured: true });
     expect(result[0]).not.toHaveProperty("secretRef");
+  });
+
+  it("serializes nested asset BigInt fields in project lists", async () => {
+    prisma.contentPlan.findMany.mockResolvedValue([{
+      id: "project-1",
+      videoShots: [{ selectedAsset: { id: "asset-1", sizeBytes: 1024n } }],
+    }]);
+
+    const result = await service.projects({});
+
+    expect(result[0].videoShots[0].selectedAsset?.sizeBytes).toBe("1024");
   });
 });
