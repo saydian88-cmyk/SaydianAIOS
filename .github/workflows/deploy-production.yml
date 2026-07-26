@@ -96,12 +96,12 @@ jobs:
         run: |
           scp -P "${{ secrets.TENCENT_PORT || '22' }}" deploy/docker-compose.prod.yml deploy/gateway-nginx.conf deploy/deploy-ops.sh \
             "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}:/tmp/"
-          ssh -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}" \
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}" \
             "sudo bash -lc 'set -euo pipefail; install -m 644 /tmp/docker-compose.prod.yml /opt/saydian/config/docker-compose.prod.yml; install -m 644 /tmp/gateway-nginx.conf /opt/saydian/config/gateway-nginx.conf; install -m 755 /tmp/deploy-ops.sh /opt/saydian/bin/deploy-ops.sh'"
       - name: Deploy and verify
         shell: bash
         run: |
-          printf '%s' "${{ secrets.GITHUB_TOKEN }}" | ssh -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}" \
+          printf '%s' "${{ secrets.GITHUB_TOKEN }}" | ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}" \
             "sudo docker login ghcr.io -u '${{ github.actor }}' --password-stdin"
-          ssh -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}" \
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}" \
             "sudo GHCR_REPOSITORY='${{ github.repository_owner }}/saydianaios' /opt/saydian/bin/deploy-ops.sh '${{ github.sha }}'"
