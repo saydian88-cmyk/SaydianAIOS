@@ -208,6 +208,12 @@ async function switchPage(key: string) {
   await withLoading(loadActive);
 }
 
+async function openGeneratedContent() {
+  active.value = "content";
+  contentFilter.value = "PENDING_APPROVAL";
+  await withLoading(loadActive);
+}
+
 async function runDaily() {
   await withLoading(async () => {
     await post("/api/v1/jobs/run-daily");
@@ -859,7 +865,7 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
       </section>
 
       <section v-else-if="active === 'assets'" class="page">
-        <BrandDataCenter ref="brandDataCenter" />
+        <BrandDataCenter ref="brandDataCenter" @open-content="openGeneratedContent" />
       </section>
 
       <section v-else-if="active === 'ledger'" class="page">
