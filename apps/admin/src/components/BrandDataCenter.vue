@@ -12,6 +12,7 @@ type Overview = {
   ai: { state: string; message: string };
 };
 
+const emit = defineEmits<{ (event: "open-content"): void }>();
 const activeTab = ref("knowledge");
 const knowledgeView = ref("entries");
 const assetView = ref("list");
@@ -45,6 +46,8 @@ const keywordClusters = ref<Row[]>([]);
 const keywordDirections = ref<Row[]>([]);
 const keywordSourceStatus = ref<Row[]>([]);
 const keywordAnalysis = ref<Row>();
+const generatingKeywordId = ref("");
+const keywordGeneration = ref<Row>();
 const keywordDialog = ref(false);
 const keywordBatchDialog = ref(false);
 const keywordDirectionDialog = ref(false);
@@ -418,7 +421,14 @@ async function openSmartKeywordAnalysis(row: Row) {
   });
 }
 async function generateVideoFromKeyword(row: Row) {
-  await run(async () => {
+  if (generatingKeywordId.value) return;
+  generatingKeywordId.value = row.id;
+  keywordGeneration.value = {
+    state: "RUNNING",
+    title: `正在根据“${row.keyword}”生成视频方案`,
+    message: "正在匹配品牌知识、爆款参考和已有素材，通常需要约1分钟，请勿重复点击。",
+  };
+  try {
     const result = await post<Row>("/api/v1/content/daily-video/generate", {
       platform: row.platform,
       productModel: row.product?.modelCode,
@@ -426,7 +436,23 @@ async function generateVideoFromKeyword(row: Row) {
       force: true,
     });
     if (!result.created) throw new Error("未生成新候选，请检查已审核产品、素材与AI文本能力");
-  }, "已生成3个相关视频候选，第1个为主执行包");
+    keywordGeneration.value = {
+      state: "SUCCEEDED",
+      title: "视频方案生成完成",
+      message: `已生成${result.created}个候选，第1个为主执行包，正在打开内容审核。`,
+    };
+    ElMessage.success({ message: keywordGeneration.value.message, duration: 5000, showClose: true });
+    emit("open-content");
+  } catch (error) {
+    keywordGeneration.value = {
+      state: "FAILED",
+      title: "视频方案生成失败",
+      message: error instanceof Error ? error.message : "生成失败，请重试",
+    };
+    ElMessage.error({ message: keywordGeneration.value.message, duration: 5000, showClose: true });
+  } finally {
+    generatingKeywordId.value = "";
+  }
 }
 function openKeywordDirection(row?: Row, target = keywordPlatform.value || "DOUYIN") {
   editingDirectionId.value = row?.id || "";
@@ -1054,6 +1080,15 @@ onMounted(reload);
           <el-select v-model="smartKeywordFilter.status" clearable placeholder="状态"><el-option label="启用" value="ACTIVE" /><el-option label="暂停" value="PAUSED" /><el-option label="归档" value="ARCHIVED" /></el-select>
           <el-button type="primary" :icon="Search" @click="run(loadSmartKeywordWorkspace)">查询</el-button>
         </div>
+        <el-alert
+          v-if="keywordGeneration"
+          :title="keywordGeneration.title"
+          :description="keywordGeneration.message"
+          :type="keywordGeneration.state === 'FAILED' ? 'error' : keywordGeneration.state === 'SUCCEEDED' ? 'success' : 'info'"
+          :closable="keywordGeneration.state !== 'RUNNING'"
+          show-icon
+          class="page-alert"
+        />
         <div class="data-panel">
           <el-table :data="smartKeywordResult.items || []" stripe height="535">
             <el-table-column label="平台" width="92"><template #default="scope"><el-tag>{{ scope.row.platform === 'TIKTOK' ? 'TikTok' : '抖音' }}</el-tag></template></el-table-column>
@@ -1066,7 +1101,7 @@ onMounted(reload);
             <el-table-column label="视频" width="82"><template #default="scope"><el-switch :model-value="scope.row.contentEnabled" @change="(value: boolean) => updateSmartKeywordFlag(scope.row, 'contentEnabled', value)" /></template></el-table-column>
             <el-table-column label="置顶/锁定" width="130"><template #default="scope"><el-button link :type="scope.row.pinned ? 'warning' : 'info'" @click="updateSmartKeywordFlag(scope.row, 'pinned', !scope.row.pinned)">{{ scope.row.pinned ? '已置顶' : '置顶' }}</el-button><el-button link :type="scope.row.locked ? 'danger' : 'info'" @click="updateSmartKeywordFlag(scope.row, 'locked', !scope.row.locked)">{{ scope.row.locked ? '已锁定' : '锁定' }}</el-button></template></el-table-column>
             <el-table-column label="命中/更新" width="120"><template #default="scope">{{ scope.row.hitCount || 0 }}<small class="cell-note">{{ dateTime(scope.row.lastSeenAt) }}</small></template></el-table-column>
-            <el-table-column label="操作" width="235" fixed="right"><template #default="scope"><el-button link type="primary" @click="openSmartKeyword(scope.row)">编辑</el-button><el-button link @click="openSmartKeywordAnalysis(scope.row)">分析</el-button><el-button link type="success" :disabled="!['S','A'].includes(scope.row.grade) || !scope.row.contentEnabled" @click="generateVideoFromKeyword(scope.row)">生成视频</el-button><el-dropdown trigger="click" @command="(status: string) => updateSmartKeywordFlag(scope.row, 'status', status)"><el-button link>状态</el-button><template #dropdown><el-dropdown-menu><el-dropdown-item command="ACTIVE">恢复</el-dropdown-item><el-dropdown-item command="PAUSED">暂停</el-dropdown-item><el-dropdown-item command="ARCHIVED">归档</el-dropdown-item></el-dropdown-menu></template></el-dropdown></template></el-table-column>
+            <el-table-column label="操作" width="235" fixed="right"><template #default="scope"><el-button link type="primary" @click="openSmartKeyword(scope.row)">编辑</el-button><el-button link @click="openSmartKeywordAnalysis(scope.row)">分析</el-button><el-button link type="success" :loading="generatingKeywordId === scope.row.id" :disabled="Boolean(generatingKeywordId) || !['S','A'].includes(scope.row.grade) || !scope.row.contentEnabled" @click="generateVideoFromKeyword(scope.row)">生成视频</el-button><el-dropdown trigger="click" @command="(status: string) => updateSmartKeywordFlag(scope.row, 'status', status)"><el-button link>状态</el-button><template #dropdown><el-dropdown-menu><el-dropdown-item command="ACTIVE">恢复</el-dropdown-item><el-dropdown-item command="PAUSED">暂停</el-dropdown-item><el-dropdown-item command="ARCHIVED">归档</el-dropdown-item></el-dropdown-menu></template></el-dropdown></template></el-table-column>
           </el-table>
         </div>
       </template>
