@@ -161,7 +161,7 @@ async function main() {
         passwordHash: hashPassword(password),
         displayName: process.env.OPS_DEFAULT_ACTOR || "运营负责人",
       },
-      update: { status: "ACTIVE" },
+      update: { status: "ACTIVE", passwordHash: hashPassword(password) },
     });
     const role = await prisma.role.findUniqueOrThrow({ where: { code: "SUPER_ADMIN" } });
     await prisma.adminUserRole.upsert({

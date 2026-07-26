@@ -103,12 +103,16 @@ jobs:
             "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-workbench:${{ github.sha }}" \
             | gzip -1 > /tmp/saydian-ops-images.tar.gz
           scp -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -P "${{ secrets.TENCENT_PORT || '22' }}" \
-            /tmp/saydian-ops-images.tar.gz deploy/docker-compose.prod.yml deploy/gateway-nginx.conf deploy/deploy-ops.sh \
+            /tmp/saydian-ops-images.tar.gz deploy/docker-compose.prod.yml deploy/gateway-nginx.conf deploy/deploy-ops.sh deploy/set-production-env.py \
             "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}:/tmp/"
           ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}" \
-            "sudo bash -lc 'set -euo pipefail; install -m 644 /tmp/docker-compose.prod.yml /opt/saydian/config/docker-compose.prod.yml; install -m 644 /tmp/gateway-nginx.conf /opt/saydian/config/gateway-nginx.conf; install -m 755 /tmp/deploy-ops.sh /opt/saydian/bin/deploy-ops.sh; gzip -dc /tmp/saydian-ops-images.tar.gz | docker load; rm -f /tmp/saydian-ops-images.tar.gz'"
+            "sudo bash -lc 'set -euo pipefail; install -m 644 /tmp/docker-compose.prod.yml /opt/saydian/config/docker-compose.prod.yml; install -m 644 /tmp/gateway-nginx.conf /opt/saydian/config/gateway-nginx.conf; install -m 755 /tmp/deploy-ops.sh /opt/saydian/bin/deploy-ops.sh; install -m 700 /tmp/set-production-env.py /opt/saydian/bin/set-production-env.py; gzip -dc /tmp/saydian-ops-images.tar.gz | docker load; rm -f /tmp/saydian-ops-images.tar.gz'"
       - name: Deploy and verify
         shell: bash
         run: |
+          printf '%s' 'admin' | ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}" \
+            "sudo /opt/saydian/bin/set-production-env.py OPS_ADMIN_USERNAME"
+          printf '%s' "${{ secrets.OPS_ADMIN_PASSWORD }}" | ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}" \
+            "sudo /opt/saydian/bin/set-production-env.py OPS_ADMIN_PASSWORD"
           ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}" \
             "sudo GHCR_REPOSITORY='${{ github.repository_owner }}/saydianaios' /opt/saydian/bin/deploy-ops.sh '${{ github.sha }}'"
