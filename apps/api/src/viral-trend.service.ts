@@ -1,9 +1,9 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
-import { Cron } from "@nestjs/schedule";
 import { createHash } from "node:crypto";
 import { AiContentService, type AiViralKeyword } from "./ai-content.service";
 import { opsConfig } from "./config";
 import { PrismaService } from "./prisma.service";
+import { SmartKeywordService } from "./smart-keyword.service";
 import { ViralCollectorService } from "./viral-collector.service";
 import { allowedViralKeyword } from "./viral-keyword";
 import {
@@ -38,9 +38,14 @@ type LocalVideoItem = {
 
 const keywordQuotas: Record<AiViralKeyword["type"], number> = {
   PRODUCT: 15,
+  AUDIENCE: 10,
   PAIN: 15,
+  VALUE: 10,
   COMPETITOR: 10,
   SCENE: 10,
+  HOOK: 10,
+  CONVERSION: 10,
+  TREND: 10,
 };
 
 function object(value: unknown): JsonRecord {
@@ -100,145 +105,24 @@ export class ViralTrendService {
     private readonly prisma: PrismaService,
     private readonly aiContent: AiContentService,
     private readonly viralCollector: ViralCollectorService,
+    private readonly smartKeywords: SmartKeywordService,
   ) {}
-
-  @Cron("0 30 6 * * *", { timeZone: "Asia/Shanghai" })
-  async generateDailyKeywords() {
-    try {
-      await this.generateKeywords(false);
-    } catch (error) {
-      this.logger.error(error instanceof Error ? error.message : "每日爆款关键词生成失败");
-    }
-  }
 
   async todayKeywords(platform = "DOUYIN") {
     if (platform !== "DOUYIN") throw new BadRequestException("本地Chrome采集当前只支持抖音");
-    const planDate = shanghaiDateStart();
-    let plan = await this.prisma.viralKeywordPlan.findUnique({
-      where: { platform_planDate: { platform: "DOUYIN", planDate } },
-      include: { keywords: { include: { product: true }, orderBy: [{ priority: "asc" }, { type: "asc" }] } },
-    });
-    if (!plan) plan = await this.generateKeywords(false);
-    return plan;
+    return this.smartKeywords.todayPlan("DOUYIN");
   }
 
   async generateKeywords(force = false) {
-    const planDate = shanghaiDateStart();
-    const existing = await this.prisma.viralKeywordPlan.findUnique({
-      where: { platform_planDate: { platform: "DOUYIN", planDate } },
-      include: { keywords: { include: { product: true } } },
-    });
-    if (existing && !force) return existing;
-
-    const [products, faqs, knowledge, previousKeywords, integration] = await Promise.all([
-      this.prisma.product.findMany({ where: { status: "READY" }, orderBy: { modelCode: "asc" } }),
-      this.prisma.faqEntry.findMany({
-        where: { status: "READY" },
-        orderBy: [{ frequency: "desc" }, { updatedAt: "desc" }],
-        take: 40,
-        include: { product: true },
-      }),
-      this.prisma.knowledgeEntry.findMany({
-        where: { status: "READY" },
-        orderBy: { updatedAt: "desc" },
-        take: 40,
-      }),
-      this.prisma.viralKeyword.findMany({
-        where: { plan: { platform: "DOUYIN", planDate: { lt: planDate } } },
-        orderBy: [{ hitCount: "desc" }, { updatedAt: "desc" }],
-        take: 30,
-        include: { product: true },
-      }),
-      this.prisma.integration.findUnique({ where: { kind: "DOUYIN" } }),
-    ]);
-    const collector = object(object(integration?.publicConfig).viralCollector);
-    const competitors = strings(collector.competitorAccounts);
-    const context = {
-      products: products.map((product) => ({
-        model: product.modelCode,
-        name: product.name,
-        category: product.category,
-        metadata: product.metadata,
-      })),
-      faq: faqs.map((item) => ({
-        question: item.standardQuestion,
-        category: item.category,
-        frequency: item.frequency,
-        productModel: item.product?.modelCode,
-      })),
-      knowledge: knowledge.map((item) => ({
-        title: item.title,
-        category: item.category,
-        model: item.model,
-        summary: item.summary,
-      })),
-      competitors,
-      recentEffectiveKeywords: previousKeywords.map((item) => ({
-        keyword: item.keyword,
-        type: item.type,
-        hits: item.hitCount,
-        productModel: item.product?.modelCode,
-      })),
-    };
-
-    let generated: AiViralKeyword[] = [];
-    try {
-      generated = await this.aiContent.generateViralKeywords(context);
-    } catch (error) {
-      this.logger.warn(error instanceof Error ? error.message : "百炼关键词生成失败，使用产品知识兜底");
-    }
-    const fallback = this.fallbackKeywords(products, faqs, competitors);
-    const locked = previousKeywords.filter((item) => item.locked).map((item) => ({
-      keyword: item.keyword,
-      type: keywordType(item.type),
-      priority: keywordPriority(item.priority),
-      productModel: item.product?.modelCode,
-      reason: item.reason || "人工锁定关键词",
-      locked: true,
-    }));
-    const selected = this.selectKeywords([
-      ...locked,
-      ...generated.map((item) => ({ ...item, locked: false })),
-      ...fallback.map((item) => ({ ...item, locked: false })),
-    ], products.map((product) => product.name));
-    const productByModel = new Map(products.map((product) => [product.modelCode.toUpperCase(), product]));
-
-    const plan = await this.prisma.$transaction(async (tx) => {
-      if (existing) await tx.viralKeywordPlan.delete({ where: { id: existing.id } });
-      return tx.viralKeywordPlan.create({
-        data: {
-          platform: "DOUYIN",
-          planDate,
-          model: opsConfig.bailian.apiKey ? opsConfig.bailian.textModel : null,
-          generation: generated.length ? "AI" : "FALLBACK",
-          context: {
-            productCount: products.length,
-            faqCount: faqs.length,
-            competitorCount: competitors.length,
-            aiGeneratedCount: generated.length,
-          },
-          keywords: {
-            create: selected.map((item) => ({
-              keyword: item.keyword,
-              type: item.type,
-              priority: item.priority,
-              reason: item.reason,
-              locked: item.locked,
-              productId: item.productModel
-                ? productByModel.get(item.productModel.toUpperCase())?.id
-                : undefined,
-            })),
-          },
-        },
-        include: { keywords: { include: { product: true }, orderBy: [{ priority: "asc" }, { type: "asc" }] } },
-      });
-    });
-    return plan;
+    return this.smartKeywords.generatePlan("DOUYIN", force, "抖音兼容接口");
   }
 
   async updateKeyword(id: string, input: JsonRecord) {
     const keyword = await this.prisma.viralKeyword.findUnique({ where: { id } });
     if (!keyword) throw new NotFoundException("关键词不存在");
+    if (keyword.smartKeywordId) {
+      await this.smartKeywords.update(keyword.smartKeywordId, input, "抖音兼容接口");
+    }
     return this.prisma.viralKeyword.update({
       where: { id },
       data: {
@@ -469,7 +353,17 @@ export class ViralTrendService {
     source: Array<AiViralKeyword & { locked: boolean }>,
     productNames: string[],
   ) {
-    const counts: Record<AiViralKeyword["type"], number> = { PRODUCT: 0, PAIN: 0, COMPETITOR: 0, SCENE: 0 };
+    const counts: Record<AiViralKeyword["type"], number> = {
+      PRODUCT: 0,
+      AUDIENCE: 0,
+      PAIN: 0,
+      VALUE: 0,
+      SCENE: 0,
+      HOOK: 0,
+      CONVERSION: 0,
+      TREND: 0,
+      COMPETITOR: 0,
+    };
     const priorities: Record<AiViralKeyword["priority"], number> = { A: 0, B: 0, C: 0 };
     const seen = new Set<string>();
     const result: Array<AiViralKeyword & { locked: boolean }> = [];
@@ -579,6 +473,12 @@ export class ViralTrendService {
         where: { id: keyword!.id },
         data: { hitCount: { increment: 1 }, lastCollectedAt: capturedAt },
       });
+      if (keyword!.smartKeywordId) {
+        await this.prisma.smartKeyword.update({
+          where: { id: keyword!.smartKeywordId },
+          data: { hitCount: { increment: 1 }, lastCollectedAt: capturedAt, lastSeenAt: capturedAt },
+        });
+      }
     }
     const authorVideoCount = await this.prisma.externalVideo.count({
       where: { authorId: author.id, publishedAt: { gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } },

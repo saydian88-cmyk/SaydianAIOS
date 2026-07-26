@@ -8,6 +8,7 @@ import { AuthService } from "./auth.service";
 import { BrandDataService } from "./brand-data.service";
 import { CloudMediaService } from "./cloud-media.service";
 import { SourceSyncService } from "./source-sync.service";
+import { SmartKeywordService } from "./smart-keyword.service";
 import { ViralCollectorService } from "./viral-collector.service";
 import { ViralTrendService } from "./viral-trend.service";
 
@@ -28,6 +29,7 @@ export class BrandDataController {
     private readonly brandData: BrandDataService,
     private readonly cloudMedia: CloudMediaService,
     private readonly sourceSync: SourceSyncService,
+    private readonly smartKeywords: SmartKeywordService,
     private readonly viralCollector: ViralCollectorService,
     private readonly viralTrend: ViralTrendService,
   ) {}
@@ -374,6 +376,124 @@ export class BrandDataController {
   ) {
     this.actor(authorization);
     return this.viralTrend.todayKeywords(platform || "DOUYIN");
+  }
+
+  @Get("smart-keywords")
+  smartKeywordList(
+    @Headers("authorization") authorization: string | undefined,
+    @Query() query: Record<string, string | undefined>,
+  ) {
+    this.actor(authorization);
+    return this.smartKeywords.list(query);
+  }
+
+  @Post("smart-keywords")
+  createSmartKeyword(
+    @Headers("authorization") authorization: string | undefined,
+    @Headers("x-ops-actor") requestedActor: string | undefined,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.smartKeywords.create(body, this.actor(authorization, requestedActor));
+  }
+
+  @Post("smart-keywords/batch")
+  batchSmartKeywords(
+    @Headers("authorization") authorization: string | undefined,
+    @Headers("x-ops-actor") requestedActor: string | undefined,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.smartKeywords.batch(body, this.actor(authorization, requestedActor));
+  }
+
+  @Post("smart-keywords/generate")
+  generateSmartKeywords(
+    @Headers("authorization") authorization: string | undefined,
+    @Headers("x-ops-actor") requestedActor: string | undefined,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.smartKeywords.generate(body, this.actor(authorization, requestedActor));
+  }
+
+  @Get("smart-keywords/active")
+  activeSmartKeywords(
+    @Headers("authorization") authorization: string | undefined,
+    @Query("platform") target?: string,
+    @Query("consumer") consumer?: string,
+  ) {
+    this.actor(authorization);
+    return this.smartKeywords.active(target, consumer);
+  }
+
+  @Get("smart-keywords/source-status")
+  smartKeywordSourceStatus(@Headers("authorization") authorization?: string) {
+    this.actor(authorization);
+    return this.smartKeywords.sourceStatus();
+  }
+
+  @Get("smart-keywords/:id/analysis")
+  smartKeywordAnalysis(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+  ) {
+    this.actor(authorization);
+    return this.smartKeywords.analysis(id);
+  }
+
+  @Patch("smart-keywords/:id")
+  updateSmartKeyword(
+    @Headers("authorization") authorization: string | undefined,
+    @Headers("x-ops-actor") requestedActor: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.smartKeywords.update(id, body, this.actor(authorization, requestedActor));
+  }
+
+  @Post("smart-keywords/:id/feedback")
+  smartKeywordFeedback(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    this.actor(authorization);
+    return this.smartKeywords.recordFeedback(id, body);
+  }
+
+  @Get("keyword-clusters")
+  smartKeywordClusters(
+    @Headers("authorization") authorization: string | undefined,
+    @Query() query: Record<string, string | undefined>,
+  ) {
+    this.actor(authorization);
+    return this.smartKeywords.clusters(query);
+  }
+
+  @Get("keyword-directions")
+  smartKeywordDirections(
+    @Headers("authorization") authorization: string | undefined,
+    @Query() query: Record<string, string | undefined>,
+  ) {
+    this.actor(authorization);
+    return this.smartKeywords.directions(query);
+  }
+
+  @Post("keyword-directions")
+  createSmartKeywordDirection(
+    @Headers("authorization") authorization: string | undefined,
+    @Headers("x-ops-actor") requestedActor: string | undefined,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.smartKeywords.createDirection(body, this.actor(authorization, requestedActor));
+  }
+
+  @Patch("keyword-directions/:id")
+  updateSmartKeywordDirection(
+    @Headers("authorization") authorization: string | undefined,
+    @Headers("x-ops-actor") requestedActor: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.smartKeywords.updateDirection(id, body, this.actor(authorization, requestedActor));
   }
 
   @Post("viral-keywords/generate")

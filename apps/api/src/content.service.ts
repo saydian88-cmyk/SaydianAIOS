@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Injectable, NotFoundException, Optional } from "@nestjs/common";
 import { ContentKind, ContentStatus, IntegrationKind, Prisma } from "@prisma/client";
 import { exec, execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -10,6 +10,7 @@ import { AiArticlePackage, AiContentService, AiVideoCandidate } from "./ai-conte
 import { ContentGuardService } from "./content-guard.service";
 import { PlatformRegistry } from "./platform/platform.adapters";
 import { PrismaService } from "./prisma.service";
+import { SmartKeywordService } from "./smart-keyword.service";
 import { localDateKey, makeIdempotencyKey, startOfShanghaiDay } from "./utils";
 
 const execAsync = promisify(exec);
@@ -42,6 +43,7 @@ export class ContentService {
     private readonly guard: ContentGuardService,
     private readonly aiContent: AiContentService,
     private readonly platforms: PlatformRegistry,
+    @Optional() private readonly smartKeywords?: SmartKeywordService,
   ) {}
 
   private productionNo(date = new Date()) {
@@ -98,16 +100,17 @@ export class ContentService {
     date = new Date(),
     actor = "系统内容引擎",
     productModel?: string,
-    options: { assetOnly?: boolean; restricted?: boolean } = {},
+    options: { assetOnly?: boolean; restricted?: boolean; platform?: IntegrationKind; keywordIds?: string[]; force?: boolean } = {},
   ): Promise<{ created: number; selected: string[] }> {
     const planDate = startOfShanghaiDay(date);
-    if (!options.assetOnly && !options.restricted) {
+    if (!options.assetOnly && !options.restricted && !options.force) {
       const existing = await this.prisma.contentPlan.count({
         where: { kind: "VIDEO", planDate: { gte: planDate, lt: new Date(planDate.getTime() + 24 * 60 * 60 * 1000) } },
       });
       if (existing) return { created: 0, selected: [] };
     }
-    const baseContext = await this.generationContext(productModel, options.restricted);
+    const keywordPlatform = options.platform === "TIKTOK" ? "TIKTOK" : "DOUYIN";
+    const baseContext = await this.generationContext(productModel, options.restricted, keywordPlatform, options.keywordIds);
     const restrictionRules = options.restricted
       ? await this.prisma.phraseRule.findMany({
         where: { active: true, category: { in: ["HEALTH_RESTRICTED_WORD", "HEALTH_RESTRICTED_VISUAL"] } },
@@ -200,7 +203,22 @@ export class ContentService {
           scoreBreakdown: candidate.scoreBreakdown,
           hook: candidate.hook,
           outline: candidate.outline,
-          sourceSignals: [{ externalVideoIds: candidate.referenceIds, missingAssets: shootRequirements.filter((item) => item.coverage === "MISSING").map((item) => item.description), generationMode: options.assetOnly ? "ASSET_ONLY" : "ASSET_FIRST", contentRestrictionMode: options.restricted ? "HEALTH_RESTRICTED" : "NORMAL", existingAssetCount: assetIds.length, missingShotCount: missingCount, capturedAt: new Date().toISOString() }],
+          sourceSignals: [{
+            externalVideoIds: candidate.referenceIds,
+            mainKeyword: (context.keywordPlan as { main?: { keyword?: string } }).main?.keyword || null,
+            mainKeywordId: (context.keywordPlan as { main?: { id?: string } }).main?.id || null,
+            auxiliaryKeywords: ((context.keywordPlan as { auxiliary?: Array<{ keyword?: string }> }).auxiliary || []).map((item) => String(item.keyword || "")).filter(Boolean),
+            auxiliaryKeywordIds: ((context.keywordPlan as { auxiliary?: Array<{ id?: string }> }).auxiliary || []).map((item) => String(item.id || "")).filter(Boolean),
+            keywordCluster: JSON.parse(JSON.stringify((context.keywordPlan as { cluster?: unknown }).cluster ?? null)),
+            keywordDirection: JSON.parse(JSON.stringify((context.keywordPlan as { direction?: unknown }).direction ?? null)),
+            keywordPlatform,
+            missingAssets: shootRequirements.filter((item) => item.coverage === "MISSING").map((item) => item.description),
+            generationMode: options.assetOnly ? "ASSET_ONLY" : "ASSET_FIRST",
+            contentRestrictionMode: options.restricted ? "HEALTH_RESTRICTED" : "NORMAL",
+            existingAssetCount: assetIds.length,
+            missingShotCount: missingCount,
+            capturedAt: new Date().toISOString(),
+          }],
           evidenceIds: guard.evidenceIds,
           riskReasons: guard.reasons,
           createdBy: actor,
@@ -211,6 +229,20 @@ export class ContentService {
           status: index === 0 && guard.allowed ? "PENDING_APPROVAL" : "DRAFT",
           variants: { create: this.videoVariants(candidate) },
           contentAssets: { create: assetIds.map((assetId) => ({ assetId, role: "SCRIPT_MATCH" })) },
+          keywordRelations: {
+            create: [
+              ...((context.keywordPlan as { main?: { id?: string } }).main?.id
+                ? [{
+                  keywordId: (context.keywordPlan as { main: { id: string } }).main.id,
+                  usageType: "SMART_VIDEO",
+                  position: "PRIMARY",
+                }]
+                : []),
+              ...((context.keywordPlan as { auxiliary?: Array<{ id?: string }> }).auxiliary || [])
+                .filter((item): item is { id: string } => Boolean(item.id))
+                .map((item) => ({ keywordId: item.id, usageType: "SMART_VIDEO", position: "AUXILIARY" })),
+            ],
+          },
         },
       });
       if (index === 0) {
@@ -318,7 +350,12 @@ export class ContentService {
     ].join("\n");
   }
 
-  private async generationContext(productModel?: string, restricted = false): Promise<Record<string, unknown>> {
+  private async generationContext(
+    productModel?: string,
+    restricted = false,
+    keywordPlatform: "DOUYIN" | "TIKTOK" = "DOUYIN",
+    requestedKeywordIds: string[] = [],
+  ): Promise<Record<string, unknown>> {
     const products = await this.prisma.product.findMany({
       where: { status: "READY" },
       include: { skus: { where: { active: true }, select: { skuCode: true, name: true } } },
@@ -332,7 +369,7 @@ export class ContentService {
     const metadata = product.metadata && typeof product.metadata === "object" && !Array.isArray(product.metadata)
       ? product.metadata as Record<string, unknown>
       : {};
-    const [knowledge, faqs, assetRows, externalVideos, restrictedRules] = await Promise.all([
+    const [knowledge, faqs, assetRows, externalVideos, restrictedRules, keywordRows, activeDirections, requestedKeywordRows] = await Promise.all([
       this.prisma.knowledgeEntry.findMany({
         where: {
           status: "READY",
@@ -383,7 +420,7 @@ export class ContentService {
         take: 60,
       }),
       this.prisma.externalVideo.findMany({
-        where: { status: "READY", rightsStatus: "INTERNAL", level: "REFERENCE", availabilityStatus: "INACTIVE" },
+        where: { platform: keywordPlatform, status: "READY", rightsStatus: "INTERNAL", level: "REFERENCE", availabilityStatus: "INACTIVE" },
         select: {
           id: true,
           platform: true,
@@ -404,7 +441,53 @@ export class ContentService {
           select: { blockedText: true },
         })
         : Promise.resolve([]),
+      this.smartKeywords ? this.smartKeywords.active(keywordPlatform, "SMART_VIDEO") : Promise.resolve([]),
+      this.prisma.smartKeywordDirection.findMany({
+        where: {
+          platform: keywordPlatform,
+          active: true,
+          startAt: { lte: new Date() },
+          OR: [{ endAt: null }, { endAt: { gte: new Date() } }],
+        },
+        orderBy: [{ priority: "asc" }, { updatedAt: "desc" }],
+        take: 10,
+      }),
+      requestedKeywordIds.length
+        ? this.prisma.smartKeyword.findMany({
+          where: { id: { in: requestedKeywordIds }, platform: keywordPlatform, status: "ACTIVE", contentEnabled: true, grade: { in: ["S", "A"] } },
+          include: { product: true, cluster: true },
+        })
+        : Promise.resolve([]),
     ]);
+    const requested = new Set(requestedKeywordIds);
+    const eligibleKeywords = ([...requestedKeywordRows, ...keywordRows] as Array<{
+      id: string;
+      keyword: string;
+      productId: string | null;
+      opportunityScore: number;
+      grade: string;
+      cluster: unknown;
+      type: string;
+    }>)
+      .filter((item, index, rows) => rows.findIndex((candidate) => candidate.id === item.id) === index)
+      .filter((item) => !item.productId || item.productId === product.id);
+    const productKeywords = [
+      ...eligibleKeywords.filter((item) => requested.has(item.id)),
+      ...eligibleKeywords.filter((item) => !requested.has(item.id)),
+    ].slice(0, 5);
+    const keywordPlan = {
+      main: productKeywords[0] || null,
+      auxiliary: productKeywords.slice(1, 5),
+      cluster: productKeywords[0]?.cluster || null,
+      direction: activeDirections.find((item) => item.productIds.includes(product.id))
+        || activeDirections.find((item) => {
+          const keywordText = productKeywords.map((keyword) => keyword.keyword.toLowerCase()).join(" ");
+          return [...item.boostTerms, ...item.audienceTerms, ...item.painTerms, ...item.sceneTerms]
+            .some((term) => keywordText.includes(term.toLowerCase()));
+        })
+        || null,
+      rule: "1个主关键词＋2—4个辅助关键词；不得机械堆词",
+    };
     const restrictedTerms = restrictedRules.map((item) => item.blockedText.trim().toLowerCase()).filter(Boolean);
     const assets = restricted ? assetRows.filter((asset) => {
       const indexText = [
@@ -438,6 +521,7 @@ export class ContentService {
         grade: asset.qualityScore >= 90 ? "S" : asset.qualityScore >= 80 ? "A" : "B",
       })),
       externalReferences: externalVideos,
+      keywordPlan,
       constraints: {
         ownedAssetsOnly: "仅APPROVED+ACTIVE+COMMERCIAL/EDIT_ONLY可作为商用素材",
         externalReferences: "仅供拆解和仿拍，不得直接商用",

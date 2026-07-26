@@ -23,6 +23,7 @@ import { PlatformRegistry } from "./platform/platform.adapters";
 import { PrismaService } from "./prisma.service";
 import { ReportService } from "./report.service";
 import { SourceSyncService } from "./source-sync.service";
+import { SmartKeywordService } from "./smart-keyword.service";
 import { ViralCollectorService } from "./viral-collector.service";
 import { ViralTrendService } from "./viral-trend.service";
 
@@ -36,7 +37,7 @@ import { ViralTrendService } from "./viral-trend.service";
     PrismaService, AuthService, PlatformRegistry, ContentGuardService, OssStorageService, SourceSyncService,
     AiContentService, ContentService, MonitoringService, ReportService, OperationsService, LedgerService, AutomationService,
     AliyunImsProvider, BailianVideoAiProvider, CloudMediaService, ViralCollectorService, AssetAiService, BrandDataService,
-    OperationAnalysisService, DouyinIntegrationService, ViralTrendService,
+    OperationAnalysisService, DouyinIntegrationService, SmartKeywordService, ViralTrendService,
   ],
 })
 export class AppModule {}

@@ -1432,7 +1432,7 @@ export class BrandDataService {
     if (Number.isNaN(from.getTime())) throw new BadRequestException("日期格式应为 YYYY-MM-DD");
     from.setHours(0, 0, 0, 0);
     const to = new Date(from); to.setDate(to.getDate() + 1);
-    const [events, reviews, jobs, usages, metrics, gaps, tasks] = await Promise.all([
+    const [events, reviews, jobs, usages, metrics, gaps, tasks, keywordSnapshots, keywordPlans] = await Promise.all([
       this.prisma.uploadEvent.findMany({ where: { occurredAt: { gte: from, lt: to } }, include: { employee: true, asset: { select: { assetNo: true, displayName: true, fileName: true, kind: true, objectKey: true } }, batch: true }, orderBy: { occurredAt: "asc" } }),
       this.prisma.assetReviewDecision.findMany({ where: { createdAt: { gte: from, lt: to } }, include: { employee: true, asset: { select: { assetNo: true, displayName: true, fileName: true } } }, orderBy: { createdAt: "asc" } }),
       this.prisma.assetAnalysisJob.findMany({ where: { updatedAt: { gte: from, lt: to } }, include: { asset: { select: { assetNo: true, displayName: true, fileName: true } } }, orderBy: { updatedAt: "asc" } }),
@@ -1440,6 +1440,16 @@ export class BrandDataService {
       this.prisma.assetMetricSnapshot.findMany({ where: { capturedAt: { gte: from, lt: to } }, include: { asset: { select: { assetNo: true, displayName: true, fileName: true } } }, orderBy: { capturedAt: "asc" } }),
       this.prisma.assetGapSnapshot.findMany({ where: { snapshotDate: from, gapCount: { gt: 0 } }, orderBy: { severity: "desc" } }),
       this.prisma.opsTask.findMany({ where: { sourceType: "ASSET_GAP", createdAt: { gte: from, lt: to } }, orderBy: { createdAt: "asc" } }),
+      this.prisma.smartKeywordSnapshot.findMany({
+        where: { snapshotDate: from },
+        include: { keyword: { include: { product: true, cluster: true } } },
+        orderBy: [{ opportunityScore: "desc" }],
+      }),
+      this.prisma.viralKeywordPlan.findMany({
+        where: { planDate: from },
+        include: { keywords: { where: { active: true }, include: { smartKeyword: true } } },
+        orderBy: { platform: "asc" },
+      }),
     ]);
     const employeeMap = new Map<string, { employeeId: string | null; employee: string; uploaded: number; created: number; duplicates: number; failed: number }>();
     for (const event of events) {
@@ -1453,8 +1463,8 @@ export class BrandDataService {
     }
     return {
       date: from.toISOString().slice(0, 10),
-      summary: { uploaded: events.length, created: events.filter((item) => item.result === "CREATED").length, duplicates: events.filter((item) => item.result === "EXACT_DUPLICATE").length, failed: events.filter((item) => item.result === "FAILED").length, approved: reviews.filter((item) => item.action === "APPROVE").length, aiDerivedModules: events.filter((item) => item.asset?.kind === "VIDEO" && item.batch.sourceType === "AI_DERIVED").length, actualUsages: usages.length, metricSnapshots: metrics.length, generatedTasks: tasks.length, aiFailed: jobs.filter((item) => item.status === "FAILED").length, aiUnconfigured: jobs.filter((item) => item.status === "UNCONFIGURED").length, gaps: gaps.length },
-      employees: Array.from(employeeMap.values()), uploads: events.map((event) => ({ ...event, sizeBytes: Number(event.sizeBytes) })), reviews, jobs, usages, metrics, gaps, tasks,
+      summary: { uploaded: events.length, created: events.filter((item) => item.result === "CREATED").length, duplicates: events.filter((item) => item.result === "EXACT_DUPLICATE").length, failed: events.filter((item) => item.result === "FAILED").length, approved: reviews.filter((item) => item.action === "APPROVE").length, aiDerivedModules: events.filter((item) => item.asset?.kind === "VIDEO" && item.batch.sourceType === "AI_DERIVED").length, actualUsages: usages.length, metricSnapshots: metrics.length, generatedTasks: tasks.length, aiFailed: jobs.filter((item) => item.status === "FAILED").length, aiUnconfigured: jobs.filter((item) => item.status === "UNCONFIGURED").length, gaps: gaps.length, keywordSnapshots: keywordSnapshots.length, highOpportunityKeywords: keywordSnapshots.filter((item) => item.grade === "S" || item.grade === "A").length, keywordPlanCount: keywordPlans.reduce((sum, plan) => sum + plan.keywords.length, 0) },
+      employees: Array.from(employeeMap.values()), uploads: events.map((event) => ({ ...event, sizeBytes: Number(event.sizeBytes) })), reviews, jobs, usages, metrics, gaps, tasks, keywordSnapshots, keywordPlans,
       generatedAt: new Date().toISOString(),
     };
   }
