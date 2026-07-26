@@ -316,7 +316,11 @@ export class AuthService {
     try {
       const redirect = new URL(value);
       const allowed = new URL(opsConfig.webBaseUrl);
-      if (redirect.origin !== allowed.origin || !redirect.pathname.startsWith(allowed.pathname)) {
+      const employeePaths = [allowed.pathname, "/saidian-work/", "/saidian-ops/"];
+      if (
+        redirect.origin !== allowed.origin ||
+        !employeePaths.some((pathname) => redirect.pathname.startsWith(pathname))
+      ) {
         throw new Error("not allowed");
       }
     } catch {
