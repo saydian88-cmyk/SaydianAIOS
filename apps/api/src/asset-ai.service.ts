@@ -514,6 +514,14 @@ export class AssetAiService {
   private async bailianVision(type: AssetJobType, asset: JsonRecord) {
     const objectKey = text(asset.objectKey);
     if (!objectKey) throw new Error("素材缺少OSS对象");
+    const assetContext = await this.prisma.asset.findUnique({
+      where: { id: text(asset.id) },
+      include: { products: { include: { product: { select: { modelCode: true, name: true } } } } },
+    });
+    const knownProducts = assetContext?.products.map((item) => ({
+      modelCode: item.product.modelCode,
+      name: item.product.name,
+    })) || [];
     const restrictedRules = type === "OCR" ? [] : await this.prisma.phraseRule.findMany({
       where: { active: true, category: { in: ["HEALTH_RESTRICTED_WORD", "HEALTH_RESTRICTED_VISUAL"] } },
       select: { category: true, blockedText: true },
@@ -523,12 +531,14 @@ export class AssetAiService {
     const restrictedVisuals = restrictedRules.filter((item) => item.category === "HEALTH_RESTRICTED_VISUAL").map((item) => item.blockedText);
     const prompt = type === "OCR"
       ? "识别图片中的全部文字。返回JSON：{text,language,blocks:[{text,position}]}. 不要添加解释。"
-      : `分析赛电品牌图片或视频素材，为后续AI剪辑建立一次性结构化检索索引。
+      : `你是赛电素材库的视觉索引工程师。必须实际查看图片或完整视频画面，为后续AI剪辑建立可长期复用的结构化索引，禁止根据原文件名猜测。
+上传时已由用户关联的产品：${JSON.stringify(knownProducts)}。已关联型号优先作为product_model；画面无法确认的内容必须写入uncertainFields，禁止虚构。
 返回JSON：{"suggestedName":"","summary":"","products":[],"purposes":[],"features":[],"scenes":[],"actions":[],"shotTypes":[],"people":[],"objects":[],"audiences":[],"platforms":[],"visualStyles":[],"orientations":[],"speechTopics":[],"painPoints":[],"moduleSuggestion":"","tags":[],"riskWords":[],"indexConfidence":0.0,"uncertainFields":[]}。
-purposes描述素材用途，如功能展示、佩戴演示、生活场景、产品外观、开场钩子；features写具体功能，如心电图测量、血压测量、SOS。
-actions写画面动作；shotTypes写特写、中景、全景、俯拍等；scenes写具体环境；orientations写横屏或竖屏。
+必须逐项填写：products产品型号；purposes素材用途；features具体功能；scenes具体环境；actions人物或产品动作；shotTypes景别和机位；people人物；objects关键物体；audiences适用人群；platforms适用平台；visualStyles画面风格；orientations画面方向；speechTopics口播主题；painPoints用户痛点。
+标签必须具体到剪辑AI无需重新看画面就能判断能否使用。禁止只写“功能、演示、产品、人物、场景”等泛词，应写“血压测量、气囊充气、抬臂至心脏高度、表盘数值特写、客厅老人佩戴”等可检索短语。
+summary必须说明主体、动作、功能、场景、景别、画面方向、是否含字幕/口播；视频还要概括画面随时间发生的变化。
 riskWords必须标出画面、字幕、包装文字、界面文字、语音或动作中命中的风险词和风险画面概念。当前风险词：${JSON.stringify(restrictedWords)}；当前风险画面：${JSON.stringify(restrictedVisuals)}。
-suggestedName必须使用“型号-用途-核心功能或画面”的格式，例如“W9S-功能展示-心电图测量”，不能使用原文件编号或无意义名称。只返回JSON。`;
+suggestedName必须使用“型号-用途-核心功能或画面”作为基础格式，必要时追加“人物动作/场景-景别”，例如“W9S-功能展示-心电图测量-手指触摸电极-表盘特写”。不得使用原文件编号、泛化词或内容说明整句，名称控制在40字内。只返回JSON。`;
     const response = await fetch(`${opsConfig.bailian.baseUrl}/chat/completions`, {
       method: "POST",
       headers: { authorization: `Bearer ${opsConfig.bailian.apiKey}`, "content-type": "application/json" },
@@ -566,6 +576,7 @@ suggestedName必须使用“型号-用途-核心功能或画面”的格式，�
       return labels(result[field]).map((label) => ({ namespace, label }));
     });
     const indexConfidence = Math.max(0, Math.min(1, Number(result.indexConfidence) || 0));
+    await this.prisma.assetTag.deleteMany({ where: { assetId, source: "AI", locked: false } });
     for (const item of tags) {
       const code = item.label.toLowerCase().replace(/\s+/gu, "-").slice(0, 80);
       const tag = await this.prisma.tagDefinition.upsert({ where: { namespace_code: { namespace: item.namespace, code } }, update: { label: item.label }, create: { namespace: item.namespace, code, label: item.label } });
@@ -595,7 +606,7 @@ suggestedName必须使用“型号-用途-核心功能或画面”的格式，�
         ...(displayName ? { displayName } : {}),
         aiIndex: json(aiIndex),
         searchText,
-        indexVersion: 2,
+        indexVersion: 3,
         indexConfidence,
         indexNeedsReview: indexConfidence < 0.75,
         indexReviewedAt: new Date(),

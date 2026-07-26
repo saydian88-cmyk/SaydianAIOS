@@ -1161,15 +1161,20 @@ export class BrandDataService {
   async rebuildAssetIndex(actor: string) {
     const assets = await this.prisma.asset.findMany({
       where: { status: { not: "ARCHIVED" }, kind: { in: ["IMAGE", "VIDEO"] } },
-      select: { id: true, kind: true, analysisVersion: true },
+      select: { id: true, kind: true, analysisVersion: true, sourceSnapshot: true },
       orderBy: { updatedAt: "desc" },
       take: 1000,
     });
     for (const asset of assets) {
+      const snapshot = jsonRecord(asset.sourceSnapshot);
+      await this.prisma.asset.update({
+        where: { id: asset.id },
+        data: { sourceSnapshot: json({ ...snapshot, aiRename: true, indexRebuildVersion: 3 }) },
+      });
       await this.assetAi.enqueue(asset.id, asset.kind || "IMAGE", asset.analysisVersion + 1);
     }
-    await this.audit(actor, "ASSET_INDEX_REBUILD", "Asset", "ALL", { count: assets.length, indexVersion: 2 });
-    return { queued: assets.length, indexVersion: 2 };
+    await this.audit(actor, "ASSET_INDEX_REBUILD", "Asset", "ALL", { count: assets.length, indexVersion: 3, forceAiRename: true });
+    return { queued: assets.length, indexVersion: 3, forceAiRename: true };
   }
 
   async analysisJobs(query: Record<string, string | undefined>) {
