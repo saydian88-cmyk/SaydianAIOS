@@ -94,14 +94,21 @@ jobs:
       - name: Upload deployment files
         shell: bash
         run: |
-          scp -P "${{ secrets.TENCENT_PORT || '22' }}" deploy/docker-compose.prod.yml deploy/gateway-nginx.conf deploy/deploy-ops.sh \
+          docker pull "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-api:${{ github.sha }}"
+          docker pull "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-admin:${{ github.sha }}"
+          docker pull "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-workbench:${{ github.sha }}"
+          docker save \
+            "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-api:${{ github.sha }}" \
+            "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-admin:${{ github.sha }}" \
+            "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-workbench:${{ github.sha }}" \
+            | gzip -1 > /tmp/saydian-ops-images.tar.gz
+          scp -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -P "${{ secrets.TENCENT_PORT || '22' }}" \
+            /tmp/saydian-ops-images.tar.gz deploy/docker-compose.prod.yml deploy/gateway-nginx.conf deploy/deploy-ops.sh \
             "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}:/tmp/"
           ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}" \
-            "sudo bash -lc 'set -euo pipefail; install -m 644 /tmp/docker-compose.prod.yml /opt/saydian/config/docker-compose.prod.yml; install -m 644 /tmp/gateway-nginx.conf /opt/saydian/config/gateway-nginx.conf; install -m 755 /tmp/deploy-ops.sh /opt/saydian/bin/deploy-ops.sh'"
+            "sudo bash -lc 'set -euo pipefail; install -m 644 /tmp/docker-compose.prod.yml /opt/saydian/config/docker-compose.prod.yml; install -m 644 /tmp/gateway-nginx.conf /opt/saydian/config/gateway-nginx.conf; install -m 755 /tmp/deploy-ops.sh /opt/saydian/bin/deploy-ops.sh; gzip -dc /tmp/saydian-ops-images.tar.gz | docker load; rm -f /tmp/saydian-ops-images.tar.gz'"
       - name: Deploy and verify
         shell: bash
         run: |
-          printf '%s' "${{ secrets.GITHUB_TOKEN }}" | ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}" \
-            "sudo docker login ghcr.io -u '${{ github.actor }}' --password-stdin"
           ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}" \
             "sudo GHCR_REPOSITORY='${{ github.repository_owner }}/saydianaios' /opt/saydian/bin/deploy-ops.sh '${{ github.sha }}'"
