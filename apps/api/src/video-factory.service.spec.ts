@@ -81,4 +81,33 @@ describe("VideoFactoryService model routing", () => {
 
     expect(result[0].videoShots[0].selectedAsset?.sizeBytes).toBe("1024");
   });
+
+  it("does not mix the default keyword pool into a viral-reference project", async () => {
+    prisma.product = { findUnique: vi.fn().mockResolvedValue({ id: "product-c1", modelCode: "C1" }) };
+    prisma.smartKeyword = { findMany: vi.fn().mockResolvedValue([{ id: "keyword-bp", keyword: "爸妈不愿意测血压" }]) };
+    prisma.knowledgeEntry = { findMany: vi.fn().mockResolvedValue([]) };
+    prisma.asset = { findMany: vi.fn().mockResolvedValue([]) };
+    prisma.externalVideo = {
+      findMany: vi.fn().mockResolvedValue([{
+        id: "viral-1",
+        platform: "DOUYIN",
+        title: "固态电芯加持，告别充电宝安全焦虑",
+        transcript: "",
+        moduleSummary: null,
+        analysis: null,
+      }]),
+    };
+    prisma.opsTask = { findFirst: vi.fn() };
+
+    const context = await (service as any).buildContext({
+      platform: "DOUYIN",
+      productModel: "C1",
+      topic: "参考结构：不应覆盖外部爆款标题",
+      externalVideoIds: ["viral-1"],
+    });
+
+    expect(context.keywords).toEqual([]);
+    expect(context.topic).toBe("固态电芯加持，告别充电宝安全焦虑");
+    expect(prisma.smartKeyword.findMany).not.toHaveBeenCalled();
+  });
 });

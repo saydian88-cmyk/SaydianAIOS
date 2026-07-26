@@ -450,15 +450,18 @@ export class VideoFactoryService {
     const product = input.productModel
       ? await this.prisma.product.findUnique({ where: { modelCode: input.productModel } })
       : null;
-    const keywordWhere = input.keywordIds?.length
-      ? { id: { in: input.keywordIds } }
-      : { platform, status: "ACTIVE", contentEnabled: true, grade: { in: ["S", "A"] } };
-    const keywords = await this.prisma.smartKeyword.findMany({
-      where: keywordWhere,
-      include: { cluster: true },
-      orderBy: [{ pinned: "desc" }, { opportunityScore: "desc" }],
-      take: 5,
-    });
+    const shouldUseKeywordPool = Boolean(input.keywordIds?.length)
+      || (!input.topic && !input.externalVideoIds?.length && !input.assetGapTaskId);
+    const keywords = shouldUseKeywordPool
+      ? await this.prisma.smartKeyword.findMany({
+        where: input.keywordIds?.length
+          ? { id: { in: input.keywordIds } }
+          : { platform, status: "ACTIVE", contentEnabled: true, grade: { in: ["S", "A"] } },
+        include: { cluster: true },
+        orderBy: [{ pinned: "desc" }, { opportunityScore: "desc" }],
+        take: 5,
+      })
+      : [];
     const knowledge = await this.prisma.knowledgeEntry.findMany({
       where: {
         status: "READY",
@@ -512,7 +515,7 @@ export class VideoFactoryService {
       assets,
       references,
       assetGapTask,
-      topic: String(input.topic || keywords[0]?.keyword || `${input.productModel || "赛电产品"}短视频`).trim(),
+      topic: String(references[0]?.title || input.topic || keywords[0]?.keyword || `${input.productModel || "赛电产品"}短视频`).trim(),
       audience: String(input.audience || keywords.find((item) => item.audience)?.audience || "目标消费者").trim(),
       objective: String(input.objective || "内容种草与商品点击").trim(),
     };
