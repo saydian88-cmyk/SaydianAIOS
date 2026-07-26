@@ -102,7 +102,7 @@ jobs:
           find release-images -type f -name 'saydian-ops-images.part-*' -print0 \
             | xargs -0 -P 4 -I '{}' scp -P "$TENCENT_PORT" '{}' "$TENCENT_TARGET:/tmp/saydian-image-parts/"
           ssh -p "$TENCENT_PORT" "$TENCENT_TARGET" \
-            "sudo bash -lc 'set -euo pipefail; cat /tmp/saydian-image-parts/saydian-ops-images.part-* > /tmp/saydian-ops-images.tar.gz; install -m 644 /tmp/docker-compose.prod.yml /opt/saydian/config/docker-compose.prod.yml; install -m 644 /tmp/gateway-nginx.conf /opt/saydian/config/gateway-nginx.conf; install -m 755 /tmp/deploy-ops.sh /opt/saydian/bin/deploy-ops.sh; docker load -i /tmp/saydian-ops-images.tar.gz; rm -rf /tmp/saydian-image-parts /tmp/saydian-ops-images.tar.gz'"
+            "sudo bash -lc 'set -euo pipefail; cat /tmp/saydian-image-parts/saydian-ops-images.part-* > /tmp/saydian-image-parts/saydian-ops-images.tar.gz; install -m 644 /tmp/docker-compose.prod.yml /opt/saydian/config/docker-compose.prod.yml; install -m 644 /tmp/gateway-nginx.conf /opt/saydian/config/gateway-nginx.conf; install -m 755 /tmp/deploy-ops.sh /opt/saydian/bin/deploy-ops.sh; docker load -i /tmp/saydian-image-parts/saydian-ops-images.tar.gz; rm -rf /tmp/saydian-image-parts'"
       - name: Deploy and verify
         shell: bash
         run: |
