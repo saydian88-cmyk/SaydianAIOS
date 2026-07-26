@@ -63,7 +63,10 @@ export function buildAiAssetName(result: AnalysisRecord, productCodes: string[] 
     || firstValue(result.scenes)
     || firstValue(result.tags)
     || clean(result.summary, 18);
-  const parts = [model, moduleName, detail].filter((item, index, values) => item && values.indexOf(item) === index);
+  const action = firstValue(result.actions);
+  const shotType = firstValue(result.shotTypes);
+  const parts = [model, moduleName, detail, action, shotType]
+    .filter((item, index, values) => item && values.indexOf(item) === index);
   const generated = clean(parts.join("-"), 40);
   if (generated && !isIrregularAssetName(generated) && parts.length >= 2) return generated;
 

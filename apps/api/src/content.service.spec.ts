@@ -1,6 +1,6 @@
 import { BadRequestException } from "@nestjs/common";
 import { describe, expect, it, vi } from "vitest";
-import { ContentService, matchesRestrictedTerms, resolveVideoShotAssets } from "./content.service";
+import { ContentService, matchesRestrictedTerms, resolveVideoShotAssets, scoreShotAssetRelevance } from "./content.service";
 
 describe("ContentService production workflow", () => {
   it("detects restricted terms in script text and structured asset indexes", () => {
@@ -39,6 +39,29 @@ describe("ContentService production workflow", () => {
     await expect(service.startEditing("plan-1", "测试员工")).rejects.toThrow(
       new BadRequestException("补拍素材尚未全部完成"),
     );
+  });
+
+  it("rejects a generic product video that does not match the shot action", () => {
+    const result = scoreShotAssetRelevance("抬臂至心脏高度，轻按启动键，气囊充气后显示BP数值", "W9", {
+      id: "video-1",
+      displayName: "W9 产品外观旋转展示",
+      contentDescription: "桌面静态产品展示",
+      products: [{ product: { modelCode: "W9" } }],
+      tags: [{ label: "产品展示" }, { label: "桌面" }],
+    });
+    expect(result.accepted).toBe(false);
+  });
+
+  it("accepts a video whose model, function and actions match the shot", () => {
+    const result = scoreShotAssetRelevance("抬臂至心脏高度，轻按启动键，气囊充气后显示血压数值", "W9", {
+      id: "video-2",
+      displayName: "W9 血压测量",
+      contentDescription: "用户静坐佩戴手表，抬臂至心脏高度，启动气囊充气并显示血压数值",
+      products: [{ product: { modelCode: "W9" } }],
+      tags: [{ label: "血压测量" }, { label: "气囊充气" }, { label: "抬臂" }],
+    });
+    expect(result.accepted).toBe(true);
+    expect(result.score).toBeGreaterThanOrEqual(60);
   });
 
   it("does not start editing when a legacy completed requirement only has an image", async () => {

@@ -36,6 +36,40 @@ export function matchesRestrictedTerms(content: unknown, terms: string[]): boole
   });
 }
 
+const shotSemanticAnchors = [
+  "手腕", "佩戴", "抬臂", "静坐", "走路", "跑步", "老人", "父母", "家庭", "户外",
+  "表盘", "弹窗", "提示", "心脏", "心率", "心电", "血压", "血氧", "气囊", "充气",
+  "测量", "数值", "高压", "低压", "脉搏", "暂停", "故障", "蜂鸣", "声音",
+  "特写", "近景", "中景", "全景", "俯拍", "侧拍", "屏幕", "字幕", "logo",
+] as const;
+
+type MatchableAsset = {
+  id: string; displayName?: string | null; contentDescription?: string | null; searchText?: string | null;
+  scene?: string | null; aiIndex?: unknown; productScope?: string | null;
+  products?: Array<{ product?: { modelCode?: string | null } | null }>;
+  tags?: Array<{ code?: string | null; label?: string | null }>;
+  segments?: Array<{ moduleType?: string | null; transcript?: string | null }>;
+};
+
+export function scoreShotAssetRelevance(description: string, productModel: string | undefined, asset: MatchableAsset) {
+  const shot = description.toLowerCase();
+  const text = [
+    asset.displayName, asset.contentDescription, asset.searchText, asset.scene, JSON.stringify(asset.aiIndex ?? {}),
+    ...(asset.tags || []).flatMap((tag) => [tag.code, tag.label]),
+    ...(asset.segments || []).flatMap((segment) => [segment.moduleType, segment.transcript]),
+  ].filter(Boolean).join(" ").toLowerCase();
+  const required = shotSemanticAnchors.filter((term) => shot.includes(term));
+  const matched = required.filter((term) => text.includes(term));
+  const model = (productModel || "").trim().toLowerCase();
+  const linkedModels = (asset.products || []).map((item) => item.product?.modelCode?.toLowerCase()).filter(Boolean);
+  const modelMatched = !model || text.includes(model) || linkedModels.includes(model);
+  const score = required.length ? matched.length / required.length : 0;
+  return {
+    accepted: modelMatched && required.length > 0 && score >= 0.6 && (matched.length >= 2 || required.length === 1),
+    score: Math.round(score * 100), required, matched, modelMatched,
+  };
+}
+
 @Injectable()
 export class ContentService {
   constructor(
@@ -142,6 +176,7 @@ export class ContentService {
     const assetRows = context.assets as Array<{ id: string; kind?: string }>;
     const allowedAssetIds = new Set(assetRows.map((item) => item.id));
     const assetKindById = new Map(assetRows.map((item) => [item.id, String(item.kind || "").toUpperCase()]));
+    const assetById = new Map(assetRows.map((item) => [item.id, item as MatchableAsset]));
     const coverages = await Promise.all(candidates.map((candidate) => this.aiContent.analyzeVideoAssetCoverage({
       productModel: context.productModel,
       script: { topic: candidate.topic, hook: candidate.hook, outline: candidate.outline, scripts: candidate.scripts },
@@ -151,7 +186,9 @@ export class ContentService {
       const coverage = coverages[index];
       const missingCount = coverage.shots.filter((shot) => {
         const resolved = resolveVideoShotAssets(shot, allowedAssetIds, assetKindById);
-        return shot.coverage !== "EXISTING" || resolved.videoAssetIds.length === 0;
+        const relevantVideos = resolved.videoAssetIds.filter((id) =>
+          scoreShotAssetRelevance(shot.description, String(context.productModel || ""), assetById.get(id)!).accepted);
+        return shot.coverage !== "EXISTING" || relevantVideos.length === 0;
       }).length;
       return { candidate, coverage, missingCount };
     }).sort((left, right) => left.missingCount - right.missingCount || right.candidate.score - left.candidate.score);
@@ -175,8 +212,16 @@ export class ContentService {
       const coverageAssetIds = coverage.shots.flatMap((shot) => [...shot.matchedVideoAssetIds, ...shot.auxiliaryImageAssetIds, ...shot.matchedAssetIds]);
       const assetIds = Array.from(new Set([...candidate.assetIds, ...coverageAssetIds].filter((id) => allowedAssetIds.has(id))));
       const shootRequirements = coverage.shots.map((shot, shotIndex) => {
-        const { videoAssetIds, imageAssetIds, assetIds: matchedAssetIds } = resolveVideoShotAssets(shot, allowedAssetIds, assetKindById);
+        const resolved = resolveVideoShotAssets(shot, allowedAssetIds, assetKindById);
+        const videoAssetIds = resolved.videoAssetIds.filter((id) =>
+          scoreShotAssetRelevance(shot.description, String(context.productModel || ""), assetById.get(id)!).accepted);
+        const imageAssetIds = resolved.imageAssetIds.filter((id) =>
+          scoreShotAssetRelevance(shot.description, String(context.productModel || ""), assetById.get(id)!).accepted);
+        const matchedAssetIds = [...videoAssetIds, ...imageAssetIds];
         const existing = shot.coverage === "EXISTING" && videoAssetIds.length > 0;
+        const relevanceReason = !existing && resolved.videoAssetIds.length
+          ? "候选视频与镜头的型号、功能、动作或场景匹配度不足，已改为需要补拍"
+          : shot.reason;
         return {
           id: `shot-${shotIndex + 1}`,
           description: shot.description,
@@ -185,7 +230,7 @@ export class ContentService {
           assetIds: matchedAssetIds,
           videoAssetIds,
           imageAssetIds,
-          reason: !existing && imageAssetIds.length && !videoAssetIds.length ? `${shot.reason ? `${shot.reason}；` : ""}当前只有静态图片，可作为辅助画面，仍需补拍视频主画面` : shot.reason,
+          reason: !existing && imageAssetIds.length && !videoAssetIds.length ? `${relevanceReason ? `${relevanceReason}；` : ""}当前只有静态图片，可作为辅助画面，仍需补拍视频主画面` : relevanceReason,
         };
       });
       const plan = await this.prisma.contentPlan.create({
@@ -413,6 +458,8 @@ export class ContentService {
           searchText: true,
           indexVersion: true,
           scene: true,
+          productScope: true,
+          products: { select: { product: { select: { modelCode: true } } } },
           tags: { select: { tag: { select: { namespace: true, code: true, label: true } } } },
           segments: { select: { moduleType: true, startSeconds: true, endSeconds: true, transcript: true, confidence: true }, orderBy: { startSeconds: "asc" }, take: 12 },
         },
@@ -692,6 +739,7 @@ export class ContentService {
     const assetRows = context.assets as Array<{ id: string; kind?: string }>;
     const allowedAssetIds = new Set(assetRows.map((item) => item.id));
     const assetKindById = new Map(assetRows.map((item) => [item.id, String(item.kind || "").toUpperCase()]));
+    const refreshAssetById = new Map(assetRows.map((item) => [item.id, item as MatchableAsset]));
     const coverage = await this.aiContent.analyzeVideoAssetCoverage({
       productModel: plan.productModel,
       script: {
@@ -704,8 +752,16 @@ export class ContentService {
     });
     if (!coverage.shots.length) throw new BadRequestException("AI未能形成逐镜头素材清单，请重试");
     const requirements = coverage.shots.map((shot, index) => {
-      const { videoAssetIds, imageAssetIds, assetIds } = resolveVideoShotAssets(shot, allowedAssetIds, assetKindById);
+      const resolved = resolveVideoShotAssets(shot, allowedAssetIds, assetKindById);
+      const videoAssetIds = resolved.videoAssetIds.filter((assetId) =>
+        scoreShotAssetRelevance(shot.description, plan.productModel || undefined, refreshAssetById.get(assetId)!).accepted);
+      const imageAssetIds = resolved.imageAssetIds.filter((assetId) =>
+        scoreShotAssetRelevance(shot.description, plan.productModel || undefined, refreshAssetById.get(assetId)!).accepted);
+      const assetIds = [...videoAssetIds, ...imageAssetIds];
       const existing = shot.coverage === "EXISTING" && videoAssetIds.length > 0;
+      const relevanceReason = !existing && resolved.videoAssetIds.length
+        ? "候选视频与镜头的型号、功能、动作或场景匹配度不足，已改为需要补拍"
+        : shot.reason;
       return {
         id: `shot-${index + 1}`,
         description: shot.description,
@@ -714,7 +770,7 @@ export class ContentService {
         assetIds,
         videoAssetIds,
         imageAssetIds,
-        reason: !existing && imageAssetIds.length && !videoAssetIds.length ? `${shot.reason ? `${shot.reason}；` : ""}当前只有静态图片，可作为辅助画面，仍需补拍视频主画面` : shot.reason,
+        reason: !existing && imageAssetIds.length && !videoAssetIds.length ? `${relevanceReason ? `${relevanceReason}；` : ""}当前只有静态图片，可作为辅助画面，仍需补拍视频主画面` : relevanceReason,
       };
     });
     const matchedAssetIds = Array.from(new Set(requirements.flatMap((item) => item.assetIds)));
