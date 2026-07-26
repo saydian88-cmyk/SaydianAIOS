@@ -29,7 +29,7 @@ function encryptionKey() {
   return createHash("sha256").update(opsConfig.authSecret).digest();
 }
 
-function decryptRaw(value: string) {
+export function decryptIntegrationValue(value: string) {
   if (!value.startsWith("enc:")) return value;
   try {
     const [, ivValue, tagValue, encryptedValue] = value.split(":");
@@ -50,7 +50,7 @@ function decryptRaw(value: string) {
 
 export function readIntegrationSecret(value?: string | null): IntegrationSecretBundle {
   if (!value) return {};
-  const raw = decryptRaw(value);
+  const raw = decryptIntegrationValue(value);
   if (!raw) return {};
   try {
     const parsed = JSON.parse(raw) as unknown;
@@ -64,10 +64,14 @@ export function readIntegrationSecret(value?: string | null): IntegrationSecretB
 }
 
 export function writeIntegrationSecret(bundle: IntegrationSecretBundle) {
+  return encryptIntegrationValue(JSON.stringify(bundle));
+}
+
+export function encryptIntegrationValue(value: string) {
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", encryptionKey(), iv);
   const encrypted = Buffer.concat([
-    cipher.update(JSON.stringify(bundle), "utf8"),
+    cipher.update(value, "utf8"),
     cipher.final(),
   ]);
   return `enc:${iv.toString("base64")}:${cipher.getAuthTag().toString("base64")}:${encrypted.toString("base64")}`;

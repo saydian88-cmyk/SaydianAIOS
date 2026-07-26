@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, nextTick, onMounted, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox, type UploadUserFile } from "element-plus";
-import { Collection, Download, Plus, Refresh, Search, UploadFilled, View } from "@element-plus/icons-vue";
+import { Collection, Download, Plus, Refresh, Search, UploadFilled, VideoCamera, View } from "@element-plus/icons-vue";
 import { api, patch, post, remove, upload, uploadWithProgress } from "../api";
+import VideoFactory from "./VideoFactory.vue";
 
 type Row = Record<string, any>;
 type Overview = {
@@ -14,6 +15,7 @@ type Overview = {
 
 const emit = defineEmits<{ (event: "open-content"): void }>();
 const activeTab = ref("knowledge");
+const videoFactory = ref<InstanceType<typeof VideoFactory>>();
 const knowledgeView = ref("entries");
 const assetView = ref("list");
 const loading = ref(false);
@@ -423,26 +425,16 @@ async function openSmartKeywordAnalysis(row: Row) {
 async function generateVideoFromKeyword(row: Row) {
   if (generatingKeywordId.value) return;
   generatingKeywordId.value = row.id;
-  keywordGeneration.value = {
-    state: "RUNNING",
-    title: `正在根据“${row.keyword}”生成视频方案`,
-    message: "正在匹配品牌知识、爆款参考和已有素材，通常需要约1分钟，请勿重复点击。",
-  };
   try {
-    const result = await post<Row>("/api/v1/content/daily-video/generate", {
-      platform: row.platform,
-      productModel: row.product?.modelCode,
-      keywordIds: [row.id],
-      force: true,
-    });
-    if (!result.created) throw new Error("未生成新候选，请检查已审核产品、素材与AI文本能力");
+    activeTab.value = "videoFactory";
+    await nextTick();
+    videoFactory.value?.createFromKeyword(row);
     keywordGeneration.value = {
       state: "SUCCEEDED",
-      title: "视频方案生成完成",
-      message: `已生成${result.created}个候选，第1个为主执行包，正在打开内容审核。`,
+      title: "已进入智能视频工厂",
+      message: `关键词“${row.keyword}”已带入视频项目，可选择智能推荐或指定模型生成。`,
     };
-    ElMessage.success({ message: keywordGeneration.value.message, duration: 5000, showClose: true });
-    emit("open-content");
+    ElMessage.success(keywordGeneration.value.message);
   } catch (error) {
     keywordGeneration.value = {
       state: "FAILED",
@@ -453,6 +445,16 @@ async function generateVideoFromKeyword(row: Row) {
   } finally {
     generatingKeywordId.value = "";
   }
+}
+async function createVideoFromReference(row: Row) {
+  activeTab.value = "videoFactory";
+  await nextTick();
+  videoFactory.value?.createFromReference(row);
+}
+async function createVideoFromGap(row: Row) {
+  activeTab.value = "videoFactory";
+  await nextTick();
+  videoFactory.value?.createFromGap(row);
 }
 function openKeywordDirection(row?: Row, target = keywordPlatform.value || "DOUYIN") {
   editingDirectionId.value = row?.id || "";
@@ -583,6 +585,7 @@ async function reload() {
     const [summary, knowledgeRows, controlsRows] = await Promise.all([api<Overview>("/api/v1/brand-data/overview"), api<Row[]>("/api/v1/brand-data/knowledge"), api<typeof controls.value>("/api/v1/brand-data/knowledge-controls")]);
     overview.value = summary; knowledge.value = knowledgeRows; controls.value = controlsRows;
     await Promise.all([loadAssets(), loadJobs(), loadAiCapabilities(), loadGaps(), loadReport(), loadGrowthLoop(), loadViralWorkspace(), loadSmartKeywordWorkspace()]);
+    if (activeTab.value === "videoFactory") await videoFactory.value?.reload();
   });
 }
 
@@ -1022,6 +1025,7 @@ onMounted(reload);
       <button :class="{ active: activeTab === 'knowledge' }" @click="activeTab = 'knowledge'"><el-icon><Collection /></el-icon><span>品牌知识库</span><b>{{ overview?.knowledge.total ?? 0 }}</b></button>
       <button :class="{ active: activeTab === 'assets' }" @click="activeTab = 'assets'"><el-icon><UploadFilled /></el-icon><span>素材库</span><b>{{ overview?.assets.total ?? 0 }}</b></button>
       <button :class="{ active: activeTab === 'keywords' }" @click="activeTab = 'keywords'"><el-icon><Search /></el-icon><span>智能关键词</span><b>{{ smartKeywordResult.total || 0 }}</b></button>
+      <button :class="{ active: activeTab === 'videoFactory' }" @click="activeTab = 'videoFactory'"><el-icon><VideoCamera /></el-icon><span>智能视频工厂</span><b>AI</b></button>
       <button :class="{ active: activeTab === 'viral' }" @click="activeTab = 'viral'"><el-icon><View /></el-icon><span>爆款研究</span><b>{{ remakeTasks.length }}</b></button>
     </div>
 
@@ -1142,6 +1146,10 @@ onMounted(reload);
       </div>
     </template>
 
+    <template v-else-if="activeTab === 'videoFactory'">
+      <VideoFactory ref="videoFactory" :products="controls.products" />
+    </template>
+
     <template v-else-if="activeTab === 'assets'">
       <div class="workspace-heading"><div><h3>素材库</h3><p>按型号、用途、功能、场景、动作和景别建立AI剪辑索引。</p></div><div><el-button type="danger" plain @click="trashAssets(true)">清空素材库</el-button><el-button @click="rebuildAssetIndex">重建AI索引</el-button><el-button :icon="Refresh" @click="syncAssets">扫描同步</el-button><el-button type="primary" :icon="Plus" @click="openBatchUpload">上传素材</el-button></div></div>
       <el-segmented v-model="assetView" :options="[{ label: `素材 ${assetTotal}`, value: 'list' }, { label: `待审核 ${overview?.assets.pending || 0}`, value: 'review' }, { label: `回收站 ${overview?.assets.trash || 0}`, value: 'trash' }, { label: '视频切片', value: 'video' }, { label: `AI处理 ${jobs.length}`, value: 'jobs' }, { label: `缺口 ${gaps.filter(item => item.gapCount > 0).length}`, value: 'gaps' }, { label: '日报', value: 'report' }, { label: '增长闭环', value: 'loop' }]" @change="handleAssetViewChange" />
@@ -1218,7 +1226,7 @@ onMounted(reload);
         <div class="gap-task-toolbar"><span>已选择 {{ selectedGaps.length }} 项缺失素材</span><el-button type="primary" :disabled="!selectedGaps.length" @click="createGapTasks">生成补拍任务</el-button></div>
         <div class="data-panel"><el-table :data="gaps" stripe height="360" @selection-change="selectedGaps = $event"><el-table-column type="selection" width="46" :selectable="(row: Row) => row.gapCount > 0" /><el-table-column prop="productModel" label="型号" width="120" /><el-table-column prop="assetKind" label="类型" width="90" /><el-table-column prop="category" label="缺失类别" min-width="170" /><el-table-column label="优先级" width="90"><template #default="scope"><el-tag :type="scope.row.severity === 'HIGH' ? 'danger' : 'warning'">{{ scope.row.severity }}</el-tag></template></el-table-column><el-table-column prop="recommendation" label="需要补拍的具体素材" min-width="430" /><el-table-column prop="generatedBy" label="分析方式" width="140" /></el-table></div>
         <div class="workspace-heading compact"><div><h3>补拍任务</h3><p>拍摄完成后直接从任务上传，系统自动入素材库并建立AI索引。</p></div><el-button :icon="Refresh" @click="run(loadGapTasks)">刷新任务</el-button></div>
-        <div class="data-panel"><el-table :data="gapTasks" stripe height="300"><el-table-column prop="title" label="任务" min-width="230" /><el-table-column prop="description" label="拍摄要求" min-width="330" /><el-table-column prop="priority" label="优先级" width="90" /><el-table-column label="截止" width="135"><template #default="scope">{{ dateTime(scope.row.dueAt) }}</template></el-table-column><el-table-column label="状态" width="105"><template #default="scope"><el-tag :type="scope.row.status === 'DONE' ? 'success' : 'warning'">{{ scope.row.status === 'DONE' ? '已完成' : '待补拍' }}</el-tag></template></el-table-column><el-table-column label="操作" width="130"><template #default="scope"><el-button v-if="scope.row.status !== 'DONE'" link type="primary" @click="openGapTaskUpload(scope.row)">上传补拍素材</el-button><span v-else>已入素材库</span></template></el-table-column></el-table></div>
+        <div class="data-panel"><el-table :data="gapTasks" stripe height="300"><el-table-column prop="title" label="任务" min-width="230" /><el-table-column prop="description" label="拍摄要求" min-width="330" /><el-table-column prop="priority" label="优先级" width="90" /><el-table-column label="截止" width="135"><template #default="scope">{{ dateTime(scope.row.dueAt) }}</template></el-table-column><el-table-column label="状态" width="105"><template #default="scope"><el-tag :type="scope.row.status === 'DONE' ? 'success' : 'warning'">{{ scope.row.status === 'DONE' ? '已完成' : '待补拍' }}</el-tag></template></el-table-column><el-table-column label="操作" width="220"><template #default="scope"><template v-if="scope.row.status !== 'DONE'"><el-button link type="primary" @click="openGapTaskUpload(scope.row)">上传补拍</el-button><el-button link type="success" @click="createVideoFromGap(scope.row)">AI智能生成</el-button></template><span v-else>已入素材库</span></template></el-table-column></el-table></div>
       </template>
 
       <template v-else>
@@ -1316,7 +1324,7 @@ onMounted(reload);
             <el-table-column label="最新数据" width="125"><template #default="scope">播放 {{ scope.row.metrics?.[0]?.views ?? '未获取' }}<small class="cell-note">赞 {{ scope.row.metrics?.[0]?.likes ?? '未获取' }}</small></template></el-table-column>
             <el-table-column label="AI评级" width="100"><template #default="scope"><strong>{{ scope.row.scoreSnapshots?.[0]?.score ?? '待分析' }}</strong><small class="cell-note">{{ scope.row.scoreSnapshots?.[0]?.grade || '' }}</small></template></el-table-column>
             <el-table-column label="状态" width="125"><template #default="scope"><el-tag :type="statusType(scope.row.resolveJob?.status || scope.row.status)">{{ statusLabel(scope.row.resolveJob?.status || scope.row.status) }}</el-tag><small v-if="scope.row.resolveJob?.failureReason" class="cell-note">{{ scope.row.resolveJob.failureReason }}</small></template></el-table-column>
-            <el-table-column label="操作" width="145"><template #default="scope"><el-button link type="primary" @click="openExternal(scope.row.sourceUrl)">查看</el-button><el-button v-if="!scope.row.sourceObjectKey || scope.row.resolveJob?.status === 'FAILED'" link type="warning" @click="resolveExternalVideo(scope.row)">{{ scope.row.resolveJob?.status === 'FAILED' ? '重试' : '解析' }}</el-button></template></el-table-column>
+            <el-table-column label="操作" width="215"><template #default="scope"><el-button link type="primary" @click="openExternal(scope.row.sourceUrl)">查看</el-button><el-button link type="success" @click="createVideoFromReference(scope.row)">生成赛电版本</el-button><el-button v-if="!scope.row.sourceObjectKey || scope.row.resolveJob?.status === 'FAILED'" link type="warning" @click="resolveExternalVideo(scope.row)">{{ scope.row.resolveJob?.status === 'FAILED' ? '重试' : '解析' }}</el-button></template></el-table-column>
           </el-table>
         </div>
         <div class="data-panel">

@@ -87,6 +87,9 @@ const productionAiDialog = ref(false);
 const productionAiTarget = ref<{ plan: ContentPlan; requirement: ContentPlan["shootRequirements"][number] }>();
 const productionAiPrompt = ref("");
 const productionAiDuration = ref(5);
+const productionAiModels = ref<AnyRow[]>([]);
+const productionAiModelId = ref("");
+const productionAiAllowFallback = ref(false);
 const productionAiSubmitting = ref(false);
 const productionAiPollingRequirementId = ref("");
 const assetPreviewDialog = ref(false);
@@ -310,7 +313,7 @@ function openProductionUpload(item: ContentPlan, requirement: ContentPlan["shoot
   productionUploadDialog.value = true;
 }
 
-function openProductionAi(item: ContentPlan, requirement: ContentPlan["shootRequirements"][number]) {
+async function openProductionAi(item: ContentPlan, requirement: ContentPlan["shootRequirements"][number]) {
   productionAiTarget.value = { plan: item, requirement };
   productionAiPrompt.value = [
     `为短视频“${item.topic}”生成一个真实自然的竖屏补拍镜头。`,
@@ -319,6 +322,13 @@ function openProductionAi(item: ContentPlan, requirement: ContentPlan["shootRequ
     "电商UGC实拍质感，动作清楚，主体完整，光线自然，镜头稳定，不添加字幕、Logo或水印。",
   ].filter(Boolean).join("");
   productionAiDuration.value = 5;
+  productionAiModelId.value = "";
+  productionAiAllowFallback.value = false;
+  try {
+    productionAiModels.value = await api<AnyRow[]>("/api/v1/video-factory/models");
+  } catch {
+    productionAiModels.value = [];
+  }
   productionAiDialog.value = true;
 }
 
@@ -338,7 +348,7 @@ async function pollAiShotGeneration(item: ContentPlan, requirement: ContentPlan[
       const result = await api<{ status: string; failureReason?: string }>(`/api/v1/content/${item.id}/shoot-requirements/${requirement.id}/ai-generation`);
       if (result.status === "SUCCEEDED") {
         content.value = await api("/api/v1/content");
-        ElMessage.success("AI补拍视频已生成并自动关联当前镜头");
+        ElMessage.success("AI补拍视频已生成，已进入视频工厂待审核");
         return;
       }
       if (result.status === "FAILED") {
@@ -366,10 +376,13 @@ async function submitProductionAi() {
     await post(`/api/v1/content/${target.plan.id}/shoot-requirements/${target.requirement.id}/ai-generate`, {
       prompt,
       duration: productionAiDuration.value,
+      requestedModelId: productionAiModelId.value || undefined,
+      routingMode: productionAiModelId.value ? "FIXED" : "AUTO",
+      allowFallback: productionAiModelId.value ? productionAiAllowFallback.value : true,
     });
     content.value = await api("/api/v1/content");
     productionAiDialog.value = false;
-    ElMessage.success("AI生成任务已提交，完成后将自动回填当前镜头");
+    ElMessage.success("AI生成任务已提交，完成后进入视频工厂待审核");
     void pollAiShotGeneration(target.plan, target.requirement);
   } catch (reason) {
     ElMessage.error(reason instanceof Error ? reason.message : "AI生成任务提交失败");
@@ -1054,6 +1067,22 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
         <el-form label-position="top">
           <el-form-item label="生成要求"><el-input v-model="productionAiPrompt" type="textarea" :rows="6" maxlength="1500" show-word-limit /></el-form-item>
           <el-form-item label="视频时长"><el-radio-group v-model="productionAiDuration"><el-radio-button :value="5">5秒</el-radio-button><el-radio-button :value="10">10秒</el-radio-button></el-radio-group></el-form-item>
+          <el-form-item label="视频模型">
+            <el-select v-model="productionAiModelId" clearable placeholder="智能推荐（默认）">
+              <el-option label="智能推荐（默认）" value="" />
+              <el-option
+                v-for="model in productionAiModels"
+                :key="model.id"
+                :label="`${model.provider?.displayName || model.provider?.code} · ${model.displayName}`"
+                :value="model.id"
+                :disabled="!model.enabled || !model.provider?.enabled || !['HEALTHY','CONFIGURED'].includes(model.provider?.state)"
+              />
+            </el-select>
+            <small class="form-hint">未配置、已暂停或能力不匹配的模型不可提交。</small>
+          </el-form-item>
+          <el-form-item v-if="productionAiModelId" label="失败处理">
+            <el-switch v-model="productionAiAllowFallback" active-text="失败后自动切换备用模型" />
+          </el-form-item>
         </el-form>
         <template #footer><el-button :disabled="productionAiSubmitting" @click="productionAiDialog = false">取消</el-button><el-button type="success" :loading="productionAiSubmitting" @click="submitProductionAi">开始AI生成</el-button></template>
       </el-dialog>

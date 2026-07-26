@@ -13,6 +13,7 @@ import { PrismaService } from "./prisma.service";
 import { OssStorageService } from "./oss-storage.service";
 import { SmartKeywordService } from "./smart-keyword.service";
 import { localDateKey, makeIdempotencyKey, startOfShanghaiDay } from "./utils";
+import { VideoFactoryService } from "./video-factory.service";
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -123,6 +124,7 @@ export class ContentService {
     private readonly platforms: PlatformRegistry,
     @Optional() private readonly smartKeywords?: SmartKeywordService,
     @Optional() private readonly oss?: OssStorageService,
+    @Optional() private readonly videoFactory?: VideoFactoryService,
   ) {}
 
   private productionNo(date = new Date()) {
@@ -836,9 +838,66 @@ export class ContentService {
   async startAiShotGeneration(
     id: string,
     requirementId: string,
-    input: { prompt?: string; duration?: number },
+    input: { prompt?: string; duration?: number; requestedModelId?: string; routingMode?: string; allowFallback?: boolean },
     actor: string,
   ) {
+    if (this.videoFactory) {
+      const plan = await this.prisma.contentPlan.findUnique({ where: { id } });
+      if (!plan || plan.kind !== "VIDEO") throw new NotFoundException("视频生产单不存在");
+      const requirements = Array.isArray(plan.shootRequirements) ? plan.shootRequirements as Array<Record<string, unknown>> : [];
+      const target = requirements.find((item) => String(item.id) === requirementId);
+      if (!target) throw new NotFoundException("镜头素材项不存在");
+      const assetIds = Array.isArray(target.assetIds) ? target.assetIds.map(String) : [];
+      const videoAssetIds = Array.isArray(target.videoAssetIds) ? target.videoAssetIds.map(String) : [];
+      const imageAssetIds = Array.isArray(target.imageAssetIds) ? target.imageAssetIds.map(String) : [];
+      const shot = await this.prisma.videoShot.upsert({
+        where: { contentPlanId_requirementKey: { contentPlanId: id, requirementKey: requirementId } },
+        create: {
+          contentPlanId: id,
+          requirementKey: requirementId,
+          sequence: requirements.findIndex((item) => String(item.id) === requirementId),
+          title: `补拍镜头${requirements.findIndex((item) => String(item.id) === requirementId) + 1}`,
+          description: String(target.description || ""),
+          status: "OPEN",
+          sourcePreference: "AI_GENERATED",
+          durationSeconds: input.duration === 10 ? 10 : 5,
+          prompt: String(input.prompt || "").trim() || buildAiShotPrompt({
+            topic: plan.topic,
+            productModel: plan.productModel,
+            description: String(target.description || ""),
+          }),
+          assetIds,
+          selectedAssetId: videoAssetIds[0] || null,
+          requestedModelId: input.requestedModelId,
+          metadata: { imageAssetIds },
+        },
+        update: {
+          description: String(target.description || ""),
+          durationSeconds: input.duration === 10 ? 10 : 5,
+          prompt: String(input.prompt || "").trim() || undefined,
+          assetIds,
+          selectedAssetId: videoAssetIds[0] || null,
+          requestedModelId: input.requestedModelId,
+          metadata: { imageAssetIds },
+        },
+      });
+      const job = await this.videoFactory.enqueueShot(shot.id, {
+        prompt: input.prompt,
+        duration: input.duration,
+        requestedModelId: input.requestedModelId,
+        routingMode: input.routingMode,
+        allowFallback: input.allowFallback,
+      }, actor);
+      await this.videoFactory.syncCompatibility(id);
+      return {
+        taskId: job.id,
+        status: job.status,
+        prompt: job.prompt,
+        duration: Number((job.input as Record<string, unknown>).duration || 5),
+        model: input.requestedModelId || "AUTO",
+        requestedAt: job.createdAt.toISOString(),
+      };
+    }
     if (!opsConfig.bailian.apiKey) throw new BadRequestException("AI视频生成服务未配置");
     if (!this.oss?.isConfigured()) throw new BadRequestException("素材存储未配置，暂时无法保存AI生成视频");
     const plan = await this.prisma.contentPlan.findUnique({ where: { id } });
@@ -933,6 +992,27 @@ export class ContentService {
   }
 
   async getAiShotGeneration(id: string, requirementId: string, actor: string) {
+    if (this.videoFactory) {
+      const shot = await this.prisma.videoShot.findUnique({
+        where: { contentPlanId_requirementKey: { contentPlanId: id, requirementKey: requirementId } },
+        include: { generationJobs: { orderBy: { createdAt: "desc" }, take: 1, include: { resolvedModel: true } } },
+      });
+      const job = shot?.generationJobs[0];
+      if (!job) throw new NotFoundException("该镜头尚未创建AI生成任务");
+      await this.videoFactory.syncCompatibility(id);
+      return {
+        taskId: job.id,
+        status: job.status,
+        prompt: job.prompt,
+        duration: Number((job.input as Record<string, unknown>).duration || 5),
+        model: job.resolvedModel?.code || job.requestedModelId || "AUTO",
+        assetId: job.outputAssetId,
+        failureReason: job.failureReason,
+        requestedAt: job.createdAt.toISOString(),
+        completedAt: job.finishedAt?.toISOString(),
+        reviewRequired: Boolean(job.outputAssetId && shot?.status === "PENDING_REVIEW"),
+      };
+    }
     if (!opsConfig.bailian.apiKey) throw new BadRequestException("AI视频生成服务未配置");
     if (!this.oss?.isConfigured()) throw new BadRequestException("素材存储未配置，暂时无法保存AI生成视频");
     const plan = await this.prisma.contentPlan.findUnique({ where: { id } });
@@ -1140,6 +1220,11 @@ export class ContentService {
       || !["COMMERCIAL", "EDIT_ONLY"].includes(asset.rightsStatus),
     );
     if (unavailable.length) throw new BadRequestException(`有${unavailable.length}项素材未满足审核、可用或权限要求`);
+    if (this.videoFactory) {
+      await this.videoFactory.enqueueRender(id, actor);
+      await this.prisma.auditLog.create({ data: { actor, action: "VIDEO_EDIT_QUEUE", entityType: "ContentPlan", entityId: id, after: { renderer: "HYPERFRAMES_FFMPEG" } } });
+      return this.workflow(id);
+    }
     if (!opsConfig.videoRenderCommand) throw new BadRequestException("视频剪辑执行器未配置");
     const variant = plan.variants.find((item) => item.platform === "DOUYIN") || plan.variants[0];
     const metadata = variant?.metadata && typeof variant.metadata === "object" && !Array.isArray(variant.metadata)

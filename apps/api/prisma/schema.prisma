@@ -546,6 +546,10 @@ model Asset {
   segments          AssetSegment[]
   cloudMediaJobs    CloudMediaJob[]
   scoreSnapshots    AssetScoreSnapshot[]
+  videoShotSelections VideoShot[]            @relation("VideoShotSelectedAsset")
+  videoGenerationOutputs VideoGenerationJob[] @relation("VideoGenerationOutput")
+  videoRenderOutputs VideoRenderJob[]         @relation("VideoRenderOutput")
+  videoQualityChecks VideoQualityCheck[]
 
   @@index([sha256])
   @@index([model, status])
@@ -1515,10 +1519,235 @@ model ContentPlan {
   attributions     AttributionTouch[]
   optimizations    ContentOptimizationSuggestion[]
   keywordRelations SmartKeywordContentRelation[]
+  videoShots       VideoShot[]
+  videoGenerationJobs VideoGenerationJob[]
+  videoRenderJobs  VideoRenderJob[]
+  videoQualityChecks VideoQualityCheck[]
 
   @@index([planDate, kind])
   @@index([status])
   @@index([productionStage, planDate])
+}
+
+model VideoModelProvider {
+  id               String           @id @default(cuid())
+  code             String           @unique
+  displayName      String
+  state            IntegrationState @default(UNCONFIGURED)
+  region           String           @default("GLOBAL")
+  baseUrl          String?
+  capabilities     String[]         @default([])
+  publicConfig     Json             @default("{}")
+  secretRef        String?
+  maxConcurrency   Int              @default(2)
+  dailyBudget      Float?
+  priority         Int              @default(100)
+  enabled          Boolean          @default(false)
+  message          String           @default("未配置")
+  lastCheckedAt    DateTime?
+  lastSuccessAt    DateTime?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  models             VideoModelConfig[]
+  generationAttempts VideoGenerationAttempt[]
+
+  @@index([enabled, state, priority])
+}
+
+model VideoModelConfig {
+  id                 String   @id @default(cuid())
+  providerId         String
+  code               String
+  displayName        String
+  capabilities       String[] @default([])
+  supportedRatios    String[] @default(["9:16"])
+  supportedDurations Int[]    @default([5, 10])
+  supportedResolutions String[] @default(["480P"])
+  scenarioTags       String[] @default([])
+  costConfig         Json     @default("{}")
+  modelConfig        Json     @default("{}")
+  priority           Int      @default(100)
+  enabled            Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  provider             VideoModelProvider      @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  primaryPolicies      VideoRoutingPolicy[]     @relation("VideoRoutingPrimaryModel")
+  requestedShots       VideoShot[]              @relation("VideoShotRequestedModel")
+  requestedJobs        VideoGenerationJob[]     @relation("VideoGenerationRequestedModel")
+  resolvedJobs         VideoGenerationJob[]     @relation("VideoGenerationResolvedModel")
+  generationAttempts   VideoGenerationAttempt[]
+
+  @@unique([providerId, code])
+  @@index([enabled, priority])
+}
+
+model VideoRoutingPolicy {
+  id               String   @id @default(cuid())
+  policyKey        String   @unique
+  name             String
+  platform         String?
+  scenario         String?
+  productModel     String?
+  primaryModelId   String?
+  fallbackModelIds String[] @default([])
+  rules            Json     @default("{}")
+  priority         Int      @default(100)
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  primaryModel VideoModelConfig? @relation("VideoRoutingPrimaryModel", fields: [primaryModelId], references: [id], onDelete: SetNull)
+
+  @@index([active, platform, scenario, priority])
+}
+
+model VideoShot {
+  id                 String   @id @default(cuid())
+  contentPlanId      String
+  requirementKey     String
+  sequence           Int      @default(0)
+  title              String
+  description        String
+  moduleType         String   @default("SCENE")
+  status             String   @default("OPEN")
+  sourcePreference   String   @default("AUTO")
+  durationSeconds    Int      @default(5)
+  prompt             String?
+  voiceover          String?
+  subtitle           String?
+  assetIds           String[] @default([])
+  selectedAssetId    String?
+  requestedModelId   String?
+  metadata           Json     @default("{}")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  contentPlan    ContentPlan       @relation(fields: [contentPlanId], references: [id], onDelete: Cascade)
+  selectedAsset  Asset?            @relation("VideoShotSelectedAsset", fields: [selectedAssetId], references: [id], onDelete: SetNull)
+  requestedModel VideoModelConfig? @relation("VideoShotRequestedModel", fields: [requestedModelId], references: [id], onDelete: SetNull)
+  generationJobs VideoGenerationJob[]
+
+  @@unique([contentPlanId, requirementKey])
+  @@index([contentPlanId, sequence])
+  @@index([status])
+}
+
+model VideoGenerationJob {
+  id                 String    @id @default(cuid())
+  idempotencyKey     String    @unique
+  contentPlanId      String
+  shotId             String?
+  status             JobStatus @default(PENDING)
+  routingMode        String    @default("AUTO")
+  requestedModelId   String?
+  resolvedModelId    String?
+  allowFallback      Boolean   @default(true)
+  prompt             String
+  input              Json      @default("{}")
+  output             Json      @default("{}")
+  outputAssetId      String?
+  attemptCount       Int       @default(0)
+  maxAttempts        Int       @default(3)
+  estimatedCost      Float?
+  actualCost         Float     @default(0)
+  failureReason      String?
+  nextAttemptAt      DateTime?
+  startedAt          DateTime?
+  finishedAt         DateTime?
+  createdBy          String
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  contentPlan    ContentPlan       @relation(fields: [contentPlanId], references: [id], onDelete: Cascade)
+  shot           VideoShot?        @relation(fields: [shotId], references: [id], onDelete: SetNull)
+  requestedModel VideoModelConfig? @relation("VideoGenerationRequestedModel", fields: [requestedModelId], references: [id], onDelete: SetNull)
+  resolvedModel  VideoModelConfig? @relation("VideoGenerationResolvedModel", fields: [resolvedModelId], references: [id], onDelete: SetNull)
+  outputAsset    Asset?            @relation("VideoGenerationOutput", fields: [outputAssetId], references: [id], onDelete: SetNull)
+  attempts       VideoGenerationAttempt[]
+  qualityChecks  VideoQualityCheck[]
+
+  @@index([status, nextAttemptAt, createdAt])
+  @@index([contentPlanId, createdAt])
+  @@index([shotId, createdAt])
+}
+
+model VideoGenerationAttempt {
+  id             String    @id @default(cuid())
+  jobId          String
+  providerId     String
+  modelId        String
+  attemptNo      Int
+  status         JobStatus @default(PENDING)
+  externalJobId  String?
+  request        Json      @default("{}")
+  response       Json      @default("{}")
+  cost           Float     @default(0)
+  failureReason  String?
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  job      VideoGenerationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  provider VideoModelProvider @relation(fields: [providerId], references: [id], onDelete: Restrict)
+  model    VideoModelConfig   @relation(fields: [modelId], references: [id], onDelete: Restrict)
+
+  @@unique([jobId, attemptNo])
+  @@index([providerId, status])
+  @@index([externalJobId])
+}
+
+model VideoRenderJob {
+  id             String    @id @default(cuid())
+  idempotencyKey String    @unique
+  contentPlanId  String
+  status         JobStatus @default(PENDING)
+  renderer       String    @default("HYPERFRAMES_FFMPEG")
+  input          Json      @default("{}")
+  output         Json      @default("{}")
+  outputAssetId  String?
+  outputPath     String?
+  estimatedCost  Float?
+  actualCost     Float     @default(0)
+  failureReason  String?
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  createdBy      String
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  contentPlan   ContentPlan        @relation(fields: [contentPlanId], references: [id], onDelete: Cascade)
+  outputAsset   Asset?             @relation("VideoRenderOutput", fields: [outputAssetId], references: [id], onDelete: SetNull)
+  qualityChecks VideoQualityCheck[]
+
+  @@index([status, createdAt])
+  @@index([contentPlanId, createdAt])
+}
+
+model VideoQualityCheck {
+  id              String   @id @default(cuid())
+  contentPlanId   String
+  assetId         String?
+  generationJobId String?
+  renderJobId     String?
+  checkType       String
+  status          String   @default("PENDING")
+  score           Int      @default(0)
+  findings        Json     @default("[]")
+  reviewedBy      String?
+  reviewedAt      DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  contentPlan   ContentPlan        @relation(fields: [contentPlanId], references: [id], onDelete: Cascade)
+  asset         Asset?             @relation(fields: [assetId], references: [id], onDelete: SetNull)
+  generationJob VideoGenerationJob? @relation(fields: [generationJobId], references: [id], onDelete: Cascade)
+  renderJob     VideoRenderJob?    @relation(fields: [renderJobId], references: [id], onDelete: Cascade)
+
+  @@index([contentPlanId, status])
+  @@index([assetId])
 }
 
 model ContentVariant {

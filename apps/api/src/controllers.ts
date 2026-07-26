@@ -203,7 +203,13 @@ export class OpsController {
     return this.contentService.replaceShotAsset(id, requirementId, this.actor(authorization, requestedActor));
   }
   @Post("content/:id/shoot-requirements/:requirementId/ai-generate") generateShotAsset(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("id") id: string, @Param("requirementId") requirementId: string, @Body() body: Record<string, unknown>) {
-    return this.contentService.startAiShotGeneration(id, requirementId, { prompt: body.prompt ? String(body.prompt) : undefined, duration: Number(body.duration || 5) }, this.actor(authorization, requestedActor));
+    return this.contentService.startAiShotGeneration(id, requirementId, {
+      prompt: body.prompt ? String(body.prompt) : undefined,
+      duration: Number(body.duration || 5),
+      requestedModelId: body.requestedModelId ? String(body.requestedModelId) : undefined,
+      routingMode: body.routingMode ? String(body.routingMode) : undefined,
+      allowFallback: body.allowFallback === undefined ? undefined : Boolean(body.allowFallback),
+    }, this.actor(authorization, requestedActor));
   }
   @Get("content/:id/shoot-requirements/:requirementId/ai-generation") getGeneratedShotAsset(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("id") id: string, @Param("requirementId") requirementId: string) {
     return this.contentService.getAiShotGeneration(id, requirementId, this.actor(authorization, requestedActor));

@@ -32,6 +32,8 @@ docker compose --env-file "$production_env" --env-file "$images" -f "$compose" r
   node node_modules/prisma/build/index.js migrate deploy
 docker compose --env-file "$production_env" --env-file "$images" -f "$compose" run --rm ops-api \
   node_modules/.bin/tsx prisma/seed.ts
+docker compose --env-file "$production_env" --env-file "$images" -f "$compose" run --rm ops-api \
+  node_modules/.bin/tsx prisma/backfill-video-factory.ts
 docker compose --env-file "$production_env" --env-file "$images" -f "$compose" up -d --remove-orphans
 docker compose --env-file "$production_env" --env-file "$images" -f "$compose" restart gateway
 
@@ -47,6 +49,11 @@ if [[ "$healthy" != "1" ]]; then
     docker compose --env-file "$production_env" --env-file "$images" -f "$compose" up -d
   fi
   echo "health check failed; previous images restored" >&2
+  exit 1
+fi
+
+if ! docker compose --env-file "$production_env" --env-file "$images" -f "$compose" ps --status running -q video-worker | grep -q .; then
+  echo "video worker health check failed" >&2
   exit 1
 fi
 

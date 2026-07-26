@@ -44,6 +44,24 @@ services:
     mem_limit: 768m
     cpus: 0.8
 
+  video-worker:
+    image: ${OPS_API_IMAGE}
+    restart: unless-stopped
+    env_file:
+      - /opt/saydian/env/production.env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-saidian_ops}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-saidian_ops}?schema=public
+      MEDIA_PROCESSING_MODE: cloud
+      DERIVED_OUTPUT_DIR: /app/apps/api/data/derived
+    command: ["node", "dist/video-worker.js"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ops-data:/app/apps/api/data
+    mem_limit: 1536m
+    cpus: 1.5
+
   douyin-resolver:
     image: evil0ctal/douyin_tiktok_download_api:latest
     restart: unless-stopped

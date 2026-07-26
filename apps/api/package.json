@@ -13,6 +13,7 @@
     "prisma:push": "prisma db push",
     "prisma:seed": "tsx prisma/seed.ts",
     "prisma:backfill:v2": "tsx prisma/backfill-asset-v2.ts",
+    "prisma:backfill:video-factory": "tsx prisma/backfill-video-factory.ts",
     "aliyun:media:setup": "tsx scripts/setup-aliyun-media.ts"
   },
   "dependencies": {

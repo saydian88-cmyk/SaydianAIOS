@@ -26,18 +26,22 @@ import { SourceSyncService } from "./source-sync.service";
 import { SmartKeywordService } from "./smart-keyword.service";
 import { ViralCollectorService } from "./viral-collector.service";
 import { ViralTrendService } from "./viral-trend.service";
+import { VideoFactoryController } from "./video-factory.controller";
+import { VideoFactoryService } from "./video-factory.service";
+import { VideoFactoryWorkerService } from "./video-factory-worker.service";
 
 @Module({
   imports: [ScheduleModule.forRoot()],
   controllers: [
     AppController, HealthController, OpsController, BrandDataController,
-    OperationAnalysisController, DouyinIntegrationController,
+    OperationAnalysisController, DouyinIntegrationController, VideoFactoryController,
   ],
   providers: [
     PrismaService, AuthService, PlatformRegistry, ContentGuardService, OssStorageService, SourceSyncService,
     AiContentService, ContentService, MonitoringService, ReportService, OperationsService, LedgerService, AutomationService,
     AliyunImsProvider, BailianVideoAiProvider, CloudMediaService, ViralCollectorService, AssetAiService, BrandDataService,
     OperationAnalysisService, DouyinIntegrationService, SmartKeywordService, ViralTrendService,
+    VideoFactoryService, VideoFactoryWorkerService,
   ],
 })
 export class AppModule {}
