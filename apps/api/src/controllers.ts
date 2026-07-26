@@ -202,6 +202,12 @@ export class OpsController {
   @Post("content/:id/shoot-requirements/:requirementId/replace") replaceShotAsset(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("id") id: string, @Param("requirementId") requirementId: string) {
     return this.contentService.replaceShotAsset(id, requirementId, this.actor(authorization, requestedActor));
   }
+  @Post("content/:id/shoot-requirements/:requirementId/ai-generate") generateShotAsset(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("id") id: string, @Param("requirementId") requirementId: string, @Body() body: Record<string, unknown>) {
+    return this.contentService.startAiShotGeneration(id, requirementId, { prompt: body.prompt ? String(body.prompt) : undefined, duration: Number(body.duration || 5) }, this.actor(authorization, requestedActor));
+  }
+  @Get("content/:id/shoot-requirements/:requirementId/ai-generation") getGeneratedShotAsset(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("id") id: string, @Param("requirementId") requirementId: string) {
+    return this.contentService.getAiShotGeneration(id, requirementId, this.actor(authorization, requestedActor));
+  }
   @Post("content/:id/edit") startContentEditing(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("id") id: string) {
     return this.contentService.startEditing(id, this.actor(authorization, requestedActor));
   }

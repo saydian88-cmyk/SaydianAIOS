@@ -58,6 +58,11 @@ export const opsConfig = {
     taskUrl:
       process.env.BAILIAN_TASK_URL ||
       "https://dashscope.aliyuncs.com/api/v1/tasks",
+    videoGenerationUrl:
+      process.env.BAILIAN_VIDEO_GENERATION_URL ||
+      "https://dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis",
+    textToVideoModel: process.env.BAILIAN_TEXT_TO_VIDEO_MODEL || "wan2.5-t2v-preview",
+    imageToVideoModel: process.env.BAILIAN_IMAGE_TO_VIDEO_MODEL || "wan2.5-i2v-preview",
   },
   ims: {
     regionId: process.env.ALIYUN_IMS_REGION_ID || "cn-shenzhen",

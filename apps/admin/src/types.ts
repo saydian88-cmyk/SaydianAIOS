@@ -26,9 +26,32 @@ export type ContentPlan = {
   id: string;
   productionNo?: string;
   productionStage: string;
+  productModel?: string;
   owner?: string;
   targetPlatforms: string[];
-  shootRequirements: Array<{ id: string; description: string; status: string; coverage?: "EXISTING" | "MISSING"; assetIds?: string[]; videoAssetIds?: string[]; imageAssetIds?: string[]; reason?: string; note?: string }>;
+  shootRequirements: Array<{
+    id: string;
+    description: string;
+    status: string;
+    coverage?: "EXISTING" | "MISSING";
+    assetIds?: string[];
+    videoAssetIds?: string[];
+    imageAssetIds?: string[];
+    reason?: string;
+    note?: string;
+    aiGeneration?: {
+      taskId: string;
+      status: "PENDING" | "RUNNING" | "SUCCEEDED" | "FAILED";
+      prompt: string;
+      duration: number;
+      model: string;
+      referenceAssetId?: string;
+      assetId?: string;
+      failureReason?: string;
+      requestedAt?: string;
+      completedAt?: string;
+    };
+  }>;
   masterVideoPath?: string;
   masterVideoStatus: string;
   kind: "VIDEO" | "ARTICLE" | "SHORT_POST" | "WECHAT_MOMENT";

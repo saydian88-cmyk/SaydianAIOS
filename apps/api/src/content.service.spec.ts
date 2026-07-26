@@ -1,6 +1,6 @@
 import { BadRequestException } from "@nestjs/common";
 import { describe, expect, it, vi } from "vitest";
-import { ContentService, matchesRestrictedTerms, resolveVideoShotAssets, scoreShotAssetRelevance } from "./content.service";
+import { buildAiShotPrompt, completeAiShotRequirement, ContentService, matchesRestrictedTerms, resolveVideoShotAssets, scoreShotAssetRelevance } from "./content.service";
 
 describe("ContentService production workflow", () => {
   it("detects restricted terms in script text and structured asset indexes", () => {
@@ -62,6 +62,26 @@ describe("ContentService production workflow", () => {
     });
     expect(result.accepted).toBe(true);
     expect(result.score).toBeGreaterThanOrEqual(60);
+  });
+
+  it("builds a product-aware AI reshoot prompt", () => {
+    const prompt = buildAiShotPrompt({ topic: "父母健康关怀", productModel: "W9", description: "父亲在客厅抬腕查看手表" });
+    expect(prompt).toContain("W9");
+    expect(prompt).toContain("父亲在客厅抬腕查看手表");
+    expect(prompt).toContain("竖屏补拍镜头");
+  });
+
+  it("marks the shot complete after the generated video is attached", () => {
+    const completed = completeAiShotRequirement(
+      { id: "shot-1", status: "IN_PROGRESS", coverage: "MISSING", assetIds: ["image-1"], imageAssetIds: ["image-1"] },
+      { taskId: "task-1", status: "RUNNING", prompt: "生成佩戴镜头", duration: 5, model: "wan2.5-i2v-preview" },
+      "video-1",
+    );
+    expect(completed.status).toBe("DONE");
+    expect(completed.coverage).toBe("EXISTING");
+    expect(completed.videoAssetIds).toEqual(["video-1"]);
+    expect(completed.assetIds).toEqual(["image-1", "video-1"]);
+    expect(completed.aiGeneration).toEqual(expect.objectContaining({ status: "SUCCEEDED", assetId: "video-1" }));
   });
 
   it("does not start editing when a legacy completed requirement only has an image", async () => {

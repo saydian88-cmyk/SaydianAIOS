@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException, Optional } from "@nestjs/common";
 import { ContentKind, ContentStatus, IntegrationKind, Prisma } from "@prisma/client";
 import { exec, execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -10,6 +10,7 @@ import { AiArticlePackage, AiContentService, AiVideoCandidate } from "./ai-conte
 import { ContentGuardService } from "./content-guard.service";
 import { PlatformRegistry } from "./platform/platform.adapters";
 import { PrismaService } from "./prisma.service";
+import { OssStorageService } from "./oss-storage.service";
 import { SmartKeywordService } from "./smart-keyword.service";
 import { localDateKey, makeIdempotencyKey, startOfShanghaiDay } from "./utils";
 
@@ -34,6 +35,49 @@ export function matchesRestrictedTerms(content: unknown, terms: string[]): boole
     const blocked = term.trim().toLowerCase();
     return blocked.length > 0 && normalized.includes(blocked);
   });
+}
+
+type AiShotGeneration = {
+  taskId: string;
+  status: "PENDING" | "RUNNING" | "SUCCEEDED" | "FAILED";
+  prompt: string;
+  duration: number;
+  model: string;
+  referenceAssetId?: string;
+  productId?: string;
+  assetId?: string;
+  failureReason?: string;
+  requestedAt?: string;
+  completedAt?: string;
+};
+
+export function buildAiShotPrompt(input: { topic: string; productModel?: string | null; description: string }) {
+  return [
+    `为短视频“${input.topic}”生成一个真实自然的竖屏补拍镜头。`,
+    input.productModel ? `产品型号：${input.productModel}，保持产品外观、结构和佩戴方式一致。` : "",
+    `镜头内容：${input.description}。`,
+    "电商UGC实拍质感，动作清楚，主体完整，光线自然，镜头稳定，不添加字幕、Logo或水印。",
+  ].filter(Boolean).join("");
+}
+
+export function completeAiShotRequirement(requirement: Record<string, unknown>, generation: AiShotGeneration, assetId: string) {
+  const assetIds = Array.from(new Set([
+    ...(Array.isArray(requirement.assetIds) ? requirement.assetIds.map(String) : []),
+    assetId,
+  ]));
+  const videoAssetIds = Array.from(new Set([
+    ...(Array.isArray(requirement.videoAssetIds) ? requirement.videoAssetIds.map(String) : []),
+    assetId,
+  ]));
+  return {
+    ...requirement,
+    status: "DONE",
+    coverage: "EXISTING",
+    assetIds,
+    videoAssetIds,
+    note: "AI智能生成的视频已自动关联",
+    aiGeneration: { ...generation, status: "SUCCEEDED", assetId, completedAt: new Date().toISOString(), failureReason: undefined },
+  };
 }
 
 const shotSemanticAnchors = [
@@ -78,6 +122,7 @@ export class ContentService {
     private readonly aiContent: AiContentService,
     private readonly platforms: PlatformRegistry,
     @Optional() private readonly smartKeywords?: SmartKeywordService,
+    @Optional() private readonly oss?: OssStorageService,
   ) {}
 
   private productionNo(date = new Date()) {
@@ -786,6 +831,277 @@ export class ContentService {
       await tx.auditLog.create({ data: { actor, action: "SCRIPT_ASSET_COVERAGE_REFRESH", entityType: "ContentPlan", entityId: id, after: { requirements, productionStage } } });
     });
     return this.workflow(id);
+  }
+
+  async startAiShotGeneration(
+    id: string,
+    requirementId: string,
+    input: { prompt?: string; duration?: number },
+    actor: string,
+  ) {
+    if (!opsConfig.bailian.apiKey) throw new BadRequestException("AI视频生成服务未配置");
+    if (!this.oss?.isConfigured()) throw new BadRequestException("素材存储未配置，暂时无法保存AI生成视频");
+    const plan = await this.prisma.contentPlan.findUnique({ where: { id } });
+    if (!plan || plan.kind !== "VIDEO") throw new NotFoundException("视频生产单不存在");
+    const requirements = Array.isArray(plan.shootRequirements) ? plan.shootRequirements as Array<Record<string, unknown>> : [];
+    const target = requirements.find((item) => String(item.id) === requirementId);
+    if (!target) throw new NotFoundException("镜头素材项不存在");
+    const current = target.aiGeneration && typeof target.aiGeneration === "object" && !Array.isArray(target.aiGeneration)
+      ? target.aiGeneration as AiShotGeneration
+      : undefined;
+    if (current && ["PENDING", "RUNNING"].includes(current.status)) return current;
+
+    const duration = input.duration === 10 ? 10 : 5;
+    const prompt = String(input.prompt || "").trim() || buildAiShotPrompt({
+      topic: plan.topic,
+      productModel: plan.productModel,
+      description: String(target.description || ""),
+    });
+    const product = plan.productModel
+      ? await this.prisma.product.findUnique({ where: { modelCode: plan.productModel } })
+      : null;
+    const referenceAsset = product
+      ? await this.prisma.asset.findFirst({
+        where: {
+          kind: "IMAGE",
+          objectKey: { not: null },
+          reviewStatus: "APPROVED",
+          availabilityStatus: "ACTIVE",
+          rightsStatus: { in: ["COMMERCIAL", "EDIT_ONLY"] },
+          products: { some: { productId: product.id } },
+        },
+        orderBy: [{ qualityScore: "desc" }, { createdAt: "desc" }],
+      })
+      : null;
+    const model = referenceAsset ? opsConfig.bailian.imageToVideoModel : opsConfig.bailian.textToVideoModel;
+    const requestInput: Record<string, unknown> = { prompt };
+    if (referenceAsset?.objectKey) requestInput.img_url = this.oss.signedDownloadUrl(referenceAsset.objectKey, 3_600);
+    const response = await fetch(opsConfig.bailian.videoGenerationUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${opsConfig.bailian.apiKey}`,
+        "Content-Type": "application/json",
+        "X-DashScope-Async": "enable",
+      },
+      body: JSON.stringify({
+        model,
+        input: requestInput,
+        parameters: referenceAsset
+          ? { resolution: "480P", prompt_extend: true, duration, watermark: false }
+          : { size: "480*832", prompt_extend: true, duration, watermark: false },
+      }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    const payload = await response.json().catch(() => ({})) as {
+      output?: { task_id?: string; task_status?: string };
+      code?: string;
+      message?: string;
+    };
+    const taskId = String(payload.output?.task_id || "");
+    if (!response.ok || !taskId) {
+      throw new BadRequestException(payload.message || payload.code || `AI视频生成任务创建失败（${response.status}）`);
+    }
+    const generation: AiShotGeneration = {
+      taskId,
+      status: payload.output?.task_status === "RUNNING" ? "RUNNING" : "PENDING",
+      prompt,
+      duration,
+      model,
+      referenceAssetId: referenceAsset?.id,
+      productId: product?.id,
+      requestedAt: new Date().toISOString(),
+    };
+    const next = requirements.map((item) => String(item.id) === requirementId
+      ? { ...item, status: "IN_PROGRESS", note: "AI智能生成中", aiGeneration: generation }
+      : item);
+    await this.prisma.$transaction([
+      this.prisma.contentPlan.update({
+        where: { id },
+        data: { shootRequirements: JSON.parse(JSON.stringify(next)) as Prisma.InputJsonValue, productionStage: "AWAITING_ASSETS" },
+      }),
+      this.prisma.auditLog.create({
+        data: {
+          actor,
+          action: "SHOT_AI_GENERATION_START",
+          entityType: "ContentPlan",
+          entityId: id,
+          after: { requirementId, taskId, model, duration, referenceAssetId: referenceAsset?.id },
+        },
+      }),
+    ]);
+    return generation;
+  }
+
+  async getAiShotGeneration(id: string, requirementId: string, actor: string) {
+    if (!opsConfig.bailian.apiKey) throw new BadRequestException("AI视频生成服务未配置");
+    if (!this.oss?.isConfigured()) throw new BadRequestException("素材存储未配置，暂时无法保存AI生成视频");
+    const plan = await this.prisma.contentPlan.findUnique({ where: { id } });
+    if (!plan || plan.kind !== "VIDEO") throw new NotFoundException("视频生产单不存在");
+    const requirements = Array.isArray(plan.shootRequirements) ? plan.shootRequirements as Array<Record<string, unknown>> : [];
+    const target = requirements.find((item) => String(item.id) === requirementId);
+    if (!target) throw new NotFoundException("镜头素材项不存在");
+    const generation = target.aiGeneration && typeof target.aiGeneration === "object" && !Array.isArray(target.aiGeneration)
+      ? target.aiGeneration as AiShotGeneration
+      : undefined;
+    if (!generation?.taskId) throw new NotFoundException("该镜头尚未创建AI生成任务");
+    if (generation.status === "SUCCEEDED" && generation.assetId) return generation;
+
+    const response = await fetch(`${opsConfig.bailian.taskUrl.replace(/\/$/u, "")}/${encodeURIComponent(generation.taskId)}`, {
+      headers: { Authorization: `Bearer ${opsConfig.bailian.apiKey}` },
+      signal: AbortSignal.timeout(20_000),
+    });
+    const payload = await response.json().catch(() => ({})) as {
+      output?: { task_status?: string; video_url?: string; message?: string };
+      code?: string;
+      message?: string;
+    };
+    if (!response.ok) throw new BadRequestException(payload.message || payload.code || `AI视频生成进度查询失败（${response.status}）`);
+    const remoteStatus = String(payload.output?.task_status || "UNKNOWN");
+    if (remoteStatus !== "SUCCEEDED") {
+      const status: AiShotGeneration["status"] = remoteStatus === "FAILED" || remoteStatus === "CANCELED" || remoteStatus === "UNKNOWN"
+        ? "FAILED"
+        : remoteStatus === "RUNNING" ? "RUNNING" : "PENDING";
+      const updatedGeneration: AiShotGeneration = {
+        ...generation,
+        status,
+        failureReason: status === "FAILED" ? String(payload.output?.message || payload.message || "AI视频生成失败") : undefined,
+      };
+      const next = requirements.map((item) => String(item.id) === requirementId
+        ? {
+          ...item,
+          status: status === "FAILED" ? "OPEN" : "IN_PROGRESS",
+          note: status === "FAILED" ? updatedGeneration.failureReason : "AI智能生成中",
+          aiGeneration: updatedGeneration,
+        }
+        : item);
+      await this.prisma.contentPlan.update({
+        where: { id },
+        data: { shootRequirements: JSON.parse(JSON.stringify(next)) as Prisma.InputJsonValue },
+      });
+      return updatedGeneration;
+    }
+
+    const videoUrl = String(payload.output?.video_url || "");
+    if (!videoUrl) throw new BadRequestException("AI视频已生成，但未返回成品地址");
+    let asset = await this.prisma.asset.findUnique({ where: { sourceKey: `AI_GENERATED:${generation.taskId}` } });
+    if (!asset) {
+      const videoResponse = await fetch(videoUrl, { signal: AbortSignal.timeout(120_000) });
+      if (!videoResponse.ok) throw new BadRequestException(`AI视频下载失败（${videoResponse.status}）`);
+      const buffer = Buffer.from(await videoResponse.arrayBuffer());
+      const hash = createHash("sha256").update(buffer).digest("hex");
+      const publicNo = `SD-VIDEO-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${randomUUID().slice(0, 6).toUpperCase()}`;
+      const objectKey = this.oss.derivedObjectKey(generation.taskId, "ai-shot", 1, hash, ".mp4");
+      const stored = await this.oss.uploadGeneratedBuffer({
+        objectKey,
+        buffer,
+        actor,
+        sourceType: "AI_GENERATED",
+        sha256: hash,
+        originalName: `${publicNo}.mp4`,
+      });
+      asset = await this.prisma.asset.create({
+        data: {
+          sourceKey: `AI_GENERATED:${generation.taskId}`,
+          sourceType: "AI_GENERATED",
+          sourcePath: `oss://${objectKey}`,
+          fileName: `${publicNo}.mp4`,
+          originalFileName: `${publicNo}.mp4`,
+          extension: ".mp4",
+          mediaType: "VIDEO",
+          kind: "VIDEO",
+          assetNo: publicNo,
+          displayName: `AI补拍-${String(target.description || "").slice(0, 36)}`,
+          level: "AI_GENERATED",
+          productScope: generation.productId ? "MODEL" : "UNKNOWN",
+          processingStatus: "READY_FOR_REVIEW",
+          reviewStatus: "APPROVED",
+          availabilityStatus: "ACTIVE",
+          rightsStatus: "COMMERCIAL",
+          sha256: hash,
+          sizeBytes: buffer.length,
+          modifiedAt: new Date(),
+          width: 480,
+          height: 832,
+          durationSeconds: generation.duration,
+          aspectRatio: "9:16",
+          model: plan.productModel,
+          status: "READY",
+          qualityScore: 80,
+          contentDescription: String(target.description || ""),
+          isOriginal: false,
+          sourceSnapshot: {
+            provider: "BAILIAN_WAN",
+            taskId: generation.taskId,
+            model: generation.model,
+            prompt: generation.prompt,
+            referenceAssetId: generation.referenceAssetId,
+          },
+          aiIndex: {
+            source: "AI_GENERATED",
+            prompt: generation.prompt,
+            shotRequirementId: requirementId,
+            contentPlanId: id,
+          },
+          searchText: `${plan.productModel || ""} ${target.description || ""} AI生成补拍视频`,
+          indexNeedsReview: false,
+          storageProvider: "ALIYUN_OSS",
+          objectKey,
+          objectVersionId: stored.objectVersionId,
+          etag: stored.etag,
+          storageUrl: stored.storageUrl,
+          storageSyncedAt: stored.uploadedAt,
+          discoveredBy: actor,
+          versions: {
+            create: {
+              version: 1,
+              sha256: hash,
+              sourcePath: `oss://${objectKey}`,
+              objectKey,
+              objectVersionId: stored.objectVersionId,
+              etag: stored.etag,
+              storageUrl: stored.storageUrl,
+              createdBy: actor,
+              originalFileName: `${publicNo}.mp4`,
+              mimeType: "video/mp4",
+              extension: ".mp4",
+              sizeBytes: buffer.length,
+              width: 480,
+              height: 832,
+              durationSeconds: generation.duration,
+              technicalMetadata: { provider: "BAILIAN_WAN", taskId: generation.taskId, model: generation.model },
+            },
+          },
+          products: generation.productId
+            ? { create: [{ productId: generation.productId, scope: "MODEL", confidence: 1, confirmed: true }] }
+            : undefined,
+        },
+      });
+    }
+    const completedGeneration: AiShotGeneration = { ...generation, status: "SUCCEEDED", assetId: asset.id };
+    const next = requirements.map((item) => String(item.id) === requirementId
+      ? completeAiShotRequirement(item, completedGeneration, asset!.id)
+      : item);
+    const productionStage = next.every((item) => String(item.status) === "DONE") ? "READY_TO_EDIT" : "AWAITING_ASSETS";
+    await this.prisma.$transaction(async (tx) => {
+      await tx.contentAsset.createMany({
+        data: [{ contentPlanId: id, assetId: asset!.id, role: "AI_GENERATED_SHOT" }],
+        skipDuplicates: true,
+      });
+      await tx.contentPlan.update({
+        where: { id },
+        data: { shootRequirements: JSON.parse(JSON.stringify(next)) as Prisma.InputJsonValue, productionStage },
+      });
+      await tx.auditLog.create({
+        data: {
+          actor,
+          action: "SHOT_AI_GENERATION_COMPLETE",
+          entityType: "ContentPlan",
+          entityId: id,
+          after: { requirementId, taskId: generation.taskId, assetId: asset!.id, productionStage },
+        },
+      });
+    });
+    return { ...completedGeneration, completedAt: new Date().toISOString() };
   }
 
   async replaceShotAsset(id: string, requirementId: string, actor: string) {
