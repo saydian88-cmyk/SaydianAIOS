@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  ForbiddenException,
   Get,
   Headers,
   Param,
@@ -34,6 +35,14 @@ export class WorkbenchController {
 
   private employee(authorization?: string) {
     return this.auth.requireEmployee(authorization);
+  }
+
+  private requirePermission(authorization: string | undefined, permission: string) {
+    const employee = this.employee(authorization);
+    if (!employee.permissions.includes("*") && !employee.permissions.includes(permission)) {
+      throw new ForbiddenException("当前岗位没有此数据中心权限");
+    }
+    return employee;
   }
 
   @Get("me")
@@ -115,6 +124,53 @@ export class WorkbenchController {
   ) {
     this.employee(authorization);
     return this.brandData.knowledge({ ...query, status: "READY" });
+  }
+
+  @Get("data-center")
+  async dataCenter(
+    @Headers("authorization") authorization: string | undefined,
+    @Query() query: Record<string, string | undefined>,
+  ) {
+    const employee = this.requirePermission(authorization, "DATA_CENTER_VIEW");
+    const canViewAssets = employee.permissions.includes("*") || employee.permissions.includes("ASSET_VIEW");
+    const canViewKnowledge = employee.permissions.includes("*") || employee.permissions.includes("KNOWLEDGE_VIEW");
+    const canCurateAssets = employee.permissions.includes("*") || employee.permissions.includes("ASSET_CURATE");
+    const [assets, knowledge, pendingAssets] = await Promise.all([
+      canViewAssets
+        ? this.brandData.rankedAssets({
+            query: query.query,
+            model: query.model,
+            kind: query.kind,
+            moduleType: query.moduleType,
+            minimumScore: query.minimumScore || "0",
+            limit: query.limit || "60",
+          })
+        : Promise.resolve([]),
+      canViewKnowledge
+        ? this.brandData.knowledge({
+            query: query.query,
+            model: query.model,
+            type: query.type,
+            status: "READY",
+          })
+        : Promise.resolve([]),
+      canCurateAssets
+        ? this.brandData.assets({ reviewScope: "PENDING", pageSize: "12" })
+        : Promise.resolve({ items: [], total: 0 }),
+    ]);
+    const pending = Array.isArray(pendingAssets) ? pendingAssets : pendingAssets.items;
+    return {
+      permissions: employee.permissions,
+      summary: {
+        assets: assets.length,
+        priorityAssets: assets.filter((item) => ["S", "A"].includes(String(item.grade))).length,
+        knowledge: knowledge.length,
+        pending: Array.isArray(pending) ? pending.length : 0,
+      },
+      assets,
+      knowledge,
+      pendingAssets: pending,
+    };
   }
 
   @Get("live/learning")

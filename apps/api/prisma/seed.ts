@@ -9,12 +9,12 @@ const roles = [
   { code: "SYSTEM_ADMIN", name: "系统管理员", portal: "ADMIN", permissions: ["SYSTEM_VIEW", "SYSTEM_CONFIG", "ROLE_MANAGE", "MODEL_CONFIG", "SCHEDULE_MANAGE"], dataScope: "ALL" },
   { code: "CONTENT_MANAGER", name: "内容负责人", portal: "ADMIN", permissions: ["SYSTEM_VIEW", "TASK_MANAGE", "TASK_REVIEW", "KNOWLEDGE_REVIEW", "ASSET_REVIEW", "CONTENT_REVIEW"], dataScope: "ALL" },
   { code: "OPERATIONS_MANAGER", name: "运营负责人", portal: "ADMIN", permissions: ["SYSTEM_VIEW", "TASK_MANAGE", "TASK_REVIEW", "LEDGER_VIEW", "ANALYTICS_VIEW", "MALL_MANAGE"], dataScope: "ALL" },
-  { code: "CONTENT_OPERATOR", name: "运营", portal: "WORKBENCH", permissions: ["TASK_EXECUTE", "CONTENT_SUBMIT", "ASSET_UPLOAD", "KNOWLEDGE_SUBMIT", "MALL_EMPLOYEE"], dataScope: "SELF" },
-  { code: "VIDEO_SPECIALIST", name: "视频专员", portal: "WORKBENCH", permissions: ["TASK_EXECUTE", "VIDEO_EXECUTE", "ASSET_UPLOAD", "CONTENT_SUBMIT"], dataScope: "SELF" },
-  { code: "ASSET_CURATOR", name: "知识素材整理员", portal: "WORKBENCH", permissions: ["TASK_EXECUTE", "ASSET_UPLOAD", "ASSET_CURATE", "KNOWLEDGE_SUBMIT"], dataScope: "SELF" },
-  { code: "DESIGNER", name: "设计", portal: "WORKBENCH", permissions: ["TASK_EXECUTE", "DESIGN_EXECUTE", "ASSET_UPLOAD", "CONTENT_SUBMIT"], dataScope: "SELF" },
-  { code: "CUSTOMER_SERVICE", name: "客服", portal: "WORKBENCH", permissions: ["TASK_EXECUTE", "KNOWLEDGE_SUBMIT", "FAQ_SUBMIT", "MALL_EMPLOYEE"], dataScope: "SELF" },
-  { code: "LIVE_HOST", name: "主播", portal: "WORKBENCH", permissions: ["TASK_EXECUTE", "LIVE_LEARN", "LIVE_EXECUTE", "LIVE_REVIEW_SUBMIT", "KNOWLEDGE_VIEW"], dataScope: "SELF" },
+  { code: "CONTENT_OPERATOR", name: "运营", portal: "WORKBENCH", permissions: ["TASK_EXECUTE", "CONTENT_SUBMIT", "DATA_CENTER_VIEW", "ASSET_VIEW", "ASSET_UPLOAD", "KNOWLEDGE_VIEW", "KNOWLEDGE_SUBMIT", "MALL_EMPLOYEE"], dataScope: "SELF" },
+  { code: "VIDEO_SPECIALIST", name: "视频专员", portal: "WORKBENCH", permissions: ["TASK_EXECUTE", "VIDEO_EXECUTE", "CONTENT_SUBMIT", "DATA_CENTER_VIEW", "ASSET_VIEW", "ASSET_UPLOAD", "KNOWLEDGE_VIEW"], dataScope: "SELF" },
+  { code: "ASSET_CURATOR", name: "知识素材整理员", portal: "WORKBENCH", permissions: ["TASK_EXECUTE", "DATA_CENTER_VIEW", "ASSET_VIEW", "ASSET_UPLOAD", "ASSET_CURATE", "KNOWLEDGE_VIEW", "KNOWLEDGE_SUBMIT"], dataScope: "SELF" },
+  { code: "DESIGNER", name: "设计", portal: "WORKBENCH", permissions: ["TASK_EXECUTE", "DESIGN_EXECUTE", "CONTENT_SUBMIT", "DATA_CENTER_VIEW", "ASSET_VIEW", "ASSET_UPLOAD", "KNOWLEDGE_VIEW"], dataScope: "SELF" },
+  { code: "CUSTOMER_SERVICE", name: "客服", portal: "WORKBENCH", permissions: ["TASK_EXECUTE", "DATA_CENTER_VIEW", "ASSET_VIEW", "KNOWLEDGE_VIEW", "KNOWLEDGE_SUBMIT", "FAQ_SUBMIT", "MALL_EMPLOYEE"], dataScope: "SELF" },
+  { code: "LIVE_HOST", name: "主播", portal: "WORKBENCH", permissions: ["TASK_EXECUTE", "LIVE_LEARN", "LIVE_EXECUTE", "LIVE_REVIEW_SUBMIT", "DATA_CENTER_VIEW", "ASSET_VIEW", "KNOWLEDGE_VIEW"], dataScope: "SELF" },
 ] as const;
 
 const taskTemplates = [
