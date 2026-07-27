@@ -42,6 +42,15 @@ const dashboard = reactive<Row>({
 const tasks = ref<Row[]>([]);
 const taskScope = ref("MINE");
 const taskStatus = ref("");
+const operationTeam = reactive<Row>({ supervisor: null, directReports: [], invitations: { incoming: [], outgoing: [] }, operators: [] });
+const teamTasks = ref<Row[]>([]);
+const teamTaskVisible = ref(false);
+const inviteVisible = ref(false);
+const reviewVisible = ref(false);
+const reviewTaskRow = ref<Row>();
+const teamTaskForm = reactive({ assigneeEmployeeId: "", title: "", description: "", priority: "MEDIUM", dueAt: "", expectedResult: "", attachments: "" });
+const inviteForm = reactive({ recipientEmployeeId: "" });
+const reviewForm = reactive({ action: "APPROVE", note: "" });
 const activeTask = ref<Row>();
 const submitVisible = ref(false);
 const submitForm = reactive({ summary: "", assetId: "", metrics: "", improvements: "" });
@@ -116,11 +125,13 @@ const priorityLabels: Record<string, string> = {
 };
 const currentRoles = computed(() => user.value?.roles || []);
 const isLiveHost = computed(() => currentRoles.value.includes("LIVE_HOST"));
+const isOperator = computed(() => currentRoles.value.includes("CONTENT_OPERATOR"));
 const can = (permission: string) => Boolean(user.value?.permissions.includes("*") || user.value?.permissions.includes(permission));
 const canUseDataCenter = computed(() => can("DATA_CENTER_VIEW"));
 const navigation = computed(() => [
   { key: "home", label: "今日工作", icon: House, visible: true },
   { key: "tasks", label: "任务中心", icon: DocumentChecked, visible: true },
+  { key: "team", label: "团队协作", icon: DocumentChecked, visible: isOperator.value },
   { key: "data", label: "数据中心", icon: Files, visible: canUseDataCenter.value },
   { key: "live", label: "直播学习", icon: VideoCamera, visible: isLiveHost.value },
   { key: "messages", label: "消息通知", icon: Bell, visible: true },
@@ -198,6 +209,67 @@ async function loadTasks() {
   }
 }
 
+async function loadOperationTeam() {
+  const [team, taskResult] = await Promise.all([
+    api<Row>("/api/v1/workbench/operation-team"),
+    api<Row>("/api/v1/workbench/operation-team/tasks"),
+  ]);
+  Object.assign(operationTeam, team);
+  teamTasks.value = taskResult.items || [];
+}
+
+async function sendTeamInvite() {
+  if (!inviteForm.recipientEmployeeId) return ElMessage.warning("请选择运营");
+  await post("/api/v1/workbench/operation-team/invitations", inviteForm);
+  inviteVisible.value = false;
+  ElMessage.success("直属关系邀请已发送");
+  await loadOperationTeam();
+}
+
+async function respondInvite(id: string, action: string) {
+  await post(`/api/v1/workbench/operation-team/invitations/${id}/respond`, { action });
+  ElMessage.success(action === "ACCEPT" ? "直属关系已建立" : "邀请已拒绝");
+  await loadOperationTeam();
+}
+
+async function cancelInvite(id: string) {
+  await post(`/api/v1/workbench/operation-team/invitations/${id}/cancel`);
+  await loadOperationTeam();
+}
+
+async function removeDirectReport(id: string) {
+  await post(`/api/v1/workbench/operation-team/direct-reports/${id}/remove`);
+  ElMessage.success("直属关系已解除");
+  await loadOperationTeam();
+}
+
+async function createTeamTask() {
+  if (!teamTaskForm.assigneeEmployeeId || !teamTaskForm.title.trim()) return ElMessage.warning("请选择直属运营并填写任务标题");
+  await post("/api/v1/workbench/operation-team/tasks", {
+    ...teamTaskForm,
+    attachments: teamTaskForm.attachments.split("\n").map((item) => item.trim()).filter(Boolean),
+  });
+  teamTaskVisible.value = false;
+  ElMessage.success("任务已推送到直属运营的任务列表");
+  await loadOperationTeam();
+}
+
+function openTeamReview(task: Row) {
+  reviewTaskRow.value = task;
+  reviewForm.action = "APPROVE";
+  reviewForm.note = "";
+  reviewVisible.value = true;
+}
+
+async function reviewTeamTask() {
+  if (!reviewTaskRow.value) return;
+  if (reviewForm.action === "RETURN" && !reviewForm.note.trim()) return ElMessage.warning("退回时请填写修改要求");
+  await post(`/api/v1/workbench/operation-team/tasks/${reviewTaskRow.value.id}/review`, reviewForm);
+  reviewVisible.value = false;
+  ElMessage.success(reviewForm.action === "APPROVE" ? "任务已审核通过" : "任务已退回修改");
+  await loadOperationTeam();
+}
+
 async function loadLive() {
   Object.assign(liveData, await api<Row>("/api/v1/workbench/live/learning"));
 }
@@ -271,6 +343,7 @@ async function switchPage(page: string) {
   active.value = page;
   if (page === "home") await loadDashboard();
   if (page === "tasks") await loadTasks();
+  if (page === "team") await loadOperationTeam();
   if (page === "data") await loadDataCenter();
   if (page === "live") await loadLive();
   if (page === "messages") await loadNotices();
@@ -581,6 +654,63 @@ onMounted(() => void bootstrap());
         </section>
       </template>
 
+      <template v-else-if="active === 'team'">
+        <section class="team-hero section-card">
+          <div>
+            <p class="eyebrow">OPERATION TEAM</p>
+            <h2>运营团队协作</h2>
+            <p>运营助理仍属于运营岗位，通过直属关系安排并跟踪协作任务。</p>
+          </div>
+          <div class="team-hero-actions">
+            <el-button @click="inviteVisible = true">邀请直属运营</el-button>
+            <el-button v-if="operationTeam.directReports?.length" type="primary" @click="teamTaskVisible = true">安排任务</el-button>
+          </div>
+        </section>
+
+        <section class="team-grid">
+          <article class="section-card">
+            <div class="section-title"><div><p class="eyebrow">REPORTING LINE</p><h3>直属关系</h3></div></div>
+            <p class="team-supervisor">我的直属运营：<strong>{{ operationTeam.supervisor?.name || "暂未建立" }}</strong></p>
+            <div class="compact-list">
+              <div v-for="employee in operationTeam.directReports" :key="employee.id">
+                <div><strong>{{ employee.name }}</strong><span>运营 · {{ employee.employeeNo || "未设置工号" }}</span></div>
+                <el-button size="small" @click="removeDirectReport(employee.id)">解除</el-button>
+              </div>
+            </div>
+            <el-empty v-if="!operationTeam.directReports?.length" description="暂无直属运营" :image-size="60" />
+          </article>
+
+          <article class="section-card">
+            <div class="section-title"><div><p class="eyebrow">INVITATIONS</p><h3>关系邀请</h3></div></div>
+            <div class="compact-list">
+              <div v-for="invite in operationTeam.invitations?.incoming" :key="invite.id">
+                <div><strong>{{ invite.sender.name }}</strong><span>邀请你成为直属运营</span></div>
+                <div><el-button size="small" @click="respondInvite(invite.id, 'REJECT')">拒绝</el-button><el-button size="small" type="primary" @click="respondInvite(invite.id, 'ACCEPT')">接受</el-button></div>
+              </div>
+              <div v-for="invite in operationTeam.invitations?.outgoing" :key="invite.id">
+                <div><strong>{{ invite.recipient.name }}</strong><span>等待对方确认</span></div>
+                <el-button size="small" @click="cancelInvite(invite.id)">撤回</el-button>
+              </div>
+            </div>
+            <el-empty v-if="!operationTeam.invitations?.incoming?.length && !operationTeam.invitations?.outgoing?.length" description="暂无待处理邀请" :image-size="60" />
+          </article>
+        </section>
+
+        <section class="section-card task-list">
+          <div class="section-heading"><div><h3>我安排的任务</h3><p>只显示由你安排的协作任务，其他任务不会出现在这里。</p></div></div>
+          <article v-for="task in teamTasks" :key="task.id" class="task-card">
+            <div class="task-main">
+              <div class="task-meta"><el-tag size="small" :type="statusType(task.status)">{{ statusLabels[task.status] || task.status }}</el-tag><span>{{ task.assignee?.name }}</span><span>截止 {{ formatTime(task.dueAt) }}</span></div>
+              <h4>{{ task.title }}</h4>
+              <p>{{ task.description || task.expectedResult || "按要求完成并提交成果。" }}</p>
+              <p v-if="task.submissions?.[0]"><strong>最新提交：</strong>{{ task.submissions[0].summary }}</p>
+            </div>
+            <div class="task-actions"><el-button v-if="task.status === 'REVIEW'" type="primary" @click="openTeamReview(task)">审核成果</el-button></div>
+          </article>
+          <el-empty v-if="!teamTasks.length" description="还没有安排协作任务" />
+        </section>
+      </template>
+
       <template v-else-if="active === 'data'">
         <section class="data-hero">
           <div>
@@ -787,11 +917,47 @@ onMounted(() => void bootstrap());
     <nav class="bottom-nav">
       <button :class="{active: active === 'home'}" @click="switchPage('home')"><el-icon><House /></el-icon><span>今日</span></button>
       <button :class="{active: active === 'tasks'}" @click="switchPage('tasks')"><el-icon><DocumentChecked /></el-icon><span>任务</span></button>
+      <button v-if="isOperator" :class="{active: active === 'team'}" @click="switchPage('team')"><el-icon><DocumentChecked /></el-icon><span>协作</span></button>
       <button v-if="canUseDataCenter" :class="{active: active === 'data'}" @click="switchPage('data')"><el-icon><Files /></el-icon><span>数据</span></button>
       <button v-if="isLiveHost" :class="{active: active === 'live'}" @click="switchPage('live')"><el-icon><VideoCamera /></el-icon><span>直播</span></button>
       <button :class="{active: active === 'messages'}" @click="switchPage('messages')"><el-icon><Bell /></el-icon><span>消息</span><i v-if="dashboard.summary.unread">{{ dashboard.summary.unread }}</i></button>
     </nav>
   </div>
+
+  <el-dialog v-model="inviteVisible" title="邀请直属运营" width="min(520px, 92vw)">
+    <el-form label-position="top">
+      <el-form-item label="选择运营" required>
+        <el-select v-model="inviteForm.recipientEmployeeId" filterable placeholder="搜索运营姓名">
+          <el-option v-for="employee in operationTeam.operators" :key="employee.id" :label="employee.name" :value="employee.id" />
+        </el-select>
+      </el-form-item>
+      <p class="muted">对方接受后将成为你的直属运营；如果对方已有上级，会明确替换原关系。</p>
+    </el-form>
+    <template #footer><el-button @click="inviteVisible = false">取消</el-button><el-button type="primary" @click="sendTeamInvite">发送邀请</el-button></template>
+  </el-dialog>
+
+  <el-dialog v-model="teamTaskVisible" title="安排运营协作任务" width="min(620px, 92vw)">
+    <el-form label-position="top">
+      <el-form-item label="直属运营" required><el-select v-model="teamTaskForm.assigneeEmployeeId"><el-option v-for="employee in operationTeam.directReports" :key="employee.id" :label="employee.name" :value="employee.id" /></el-select></el-form-item>
+      <el-form-item label="任务标题" required><el-input v-model="teamTaskForm.title" /></el-form-item>
+      <el-form-item label="工作要求"><el-input v-model="teamTaskForm.description" type="textarea" :rows="3" /></el-form-item>
+      <el-form-item label="期望交付结果"><el-input v-model="teamTaskForm.expectedResult" type="textarea" :rows="2" /></el-form-item>
+      <div class="team-form-row">
+        <el-form-item label="优先级"><el-select v-model="teamTaskForm.priority"><el-option label="紧急" value="URGENT" /><el-option label="高" value="HIGH" /><el-option label="普通" value="MEDIUM" /><el-option label="低" value="LOW" /></el-select></el-form-item>
+        <el-form-item label="截止时间"><el-date-picker v-model="teamTaskForm.dueAt" type="datetime" value-format="YYYY-MM-DDTHH:mm:ssZ" /></el-form-item>
+      </div>
+      <el-form-item label="附件链接（每行一个）"><el-input v-model="teamTaskForm.attachments" type="textarea" :rows="2" /></el-form-item>
+    </el-form>
+    <template #footer><el-button @click="teamTaskVisible = false">取消</el-button><el-button type="primary" @click="createTeamTask">安排任务</el-button></template>
+  </el-dialog>
+
+  <el-dialog v-model="reviewVisible" title="审核运营任务成果" width="min(560px, 92vw)">
+    <el-form label-position="top">
+      <el-form-item label="审核结果"><el-radio-group v-model="reviewForm.action"><el-radio-button value="APPROVE">审核通过</el-radio-button><el-radio-button value="RETURN">退回修改</el-radio-button></el-radio-group></el-form-item>
+      <el-form-item label="审核说明"><el-input v-model="reviewForm.note" type="textarea" :rows="4" :placeholder="reviewForm.action === 'RETURN' ? '请填写具体修改要求' : '可填写确认说明'" /></el-form-item>
+    </el-form>
+    <template #footer><el-button @click="reviewVisible = false">取消</el-button><el-button type="primary" @click="reviewTeamTask">确认</el-button></template>
+  </el-dialog>
 
   <el-dialog v-model="submitVisible" title="提交任务成果" width="min(560px, 92vw)">
     <el-form label-position="top">

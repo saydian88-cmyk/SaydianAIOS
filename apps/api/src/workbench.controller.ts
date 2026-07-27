@@ -93,6 +93,72 @@ export class WorkbenchController {
     return this.workbench.submit(this.employee(authorization), id, body);
   }
 
+  @Get("operation-team")
+  operationTeam(
+    @Headers("authorization") authorization: string | undefined,
+    @Query() query: Record<string, string | undefined>,
+  ) {
+    return this.workbench.operationTeam(this.employee(authorization), query);
+  }
+
+  @Post("operation-team/invitations")
+  inviteOperator(
+    @Headers("authorization") authorization: string | undefined,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.workbench.inviteOperator(this.employee(authorization), body);
+  }
+
+  @Post("operation-team/invitations/:id/respond")
+  respondOperatorInvite(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.workbench.respondOperatorInvite(this.employee(authorization), id, body);
+  }
+
+  @Post("operation-team/invitations/:id/cancel")
+  cancelOperatorInvite(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+  ) {
+    return this.workbench.cancelOperatorInvite(this.employee(authorization), id);
+  }
+
+  @Post("operation-team/direct-reports/:employeeId/remove")
+  removeDirectReport(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("employeeId") employeeId: string,
+  ) {
+    return this.workbench.removeDirectReport(this.employee(authorization), employeeId);
+  }
+
+  @Get("operation-team/tasks")
+  teamTasks(
+    @Headers("authorization") authorization: string | undefined,
+    @Query() query: Record<string, string | undefined>,
+  ) {
+    return this.workbench.teamTasks(this.employee(authorization), query);
+  }
+
+  @Post("operation-team/tasks")
+  createTeamTask(
+    @Headers("authorization") authorization: string | undefined,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.workbench.createTeamTask(this.employee(authorization), body);
+  }
+
+  @Post("operation-team/tasks/:id/review")
+  reviewTeamTask(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.workbench.reviewTeamTask(this.employee(authorization), id, body);
+  }
+
   @Get("notifications")
   notifications(@Headers("authorization") authorization?: string) {
     return this.workbench.notifications(this.employee(authorization));

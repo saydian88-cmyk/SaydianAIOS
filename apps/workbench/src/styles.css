@@ -97,6 +97,13 @@ main { grid-column: 2; width: min(1240px, calc(100% - 48px)); margin: 24px auto;
 .data-hero h2 { margin: 0 0 8px; font-size: 30px; }
 .data-hero p:not(.eyebrow) { max-width: 700px; margin: 0; color: #6f7774; line-height: 1.6; }
 .data-hero-actions { display: flex; gap: 10px; }
+.team-hero { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 16px; }
+.team-hero h2 { margin: 5px 0 8px; }
+.team-hero p:not(.eyebrow) { margin: 0; color: #6f7774; }
+.team-hero-actions { display: flex; gap: 10px; }
+.team-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+.team-supervisor { padding: 13px 15px; border-radius: 12px; background: #f8f4ed; }
+.team-form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .data-metrics { margin-bottom: 18px; }
 .data-module-nav { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin: 18px 0; }
 .data-module-nav button { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; min-width: 0; padding: 18px; border: 1px solid #e5e0d7; border-radius: 18px; color: #28312f; background: #fff; text-align: left; cursor: pointer; transition: .18s ease; }
@@ -191,6 +198,9 @@ main { grid-column: 2; width: min(1240px, calc(100% - 48px)); margin: 24px auto;
   .toolbar { display: grid; }
   .toolbar .el-select { width: 100%; }
   .data-hero { display: block; padding: 23px 20px; }
+  .team-hero { display: block; }
+  .team-hero-actions { margin-top: 18px; }
+  .team-grid, .team-form-row { grid-template-columns: 1fr; }
   .data-hero h2 { font-size: 25px; }
   .data-hero-actions { margin-top: 18px; }
   .data-hero-actions .el-button { flex: 1; margin-left: 0; }

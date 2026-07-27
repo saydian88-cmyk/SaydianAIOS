@@ -385,6 +385,7 @@ model Employee {
   mobileMasked String?
   status       String   @default("ACTIVE")
   isSuperAdmin Boolean  @default(false)
+  supervisorEmployeeId String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -408,11 +409,34 @@ model Employee {
   taskAttachments TaskAttachment[]
   taskSubmissions TaskSubmission[]
   notifications   TaskNotification[]
+  supervisor      Employee?              @relation("EmployeeSupervisor", fields: [supervisorEmployeeId], references: [id], onDelete: SetNull)
+  directReports   Employee[]              @relation("EmployeeSupervisor")
+  sentReportingInvites     EmployeeReportingInvite[] @relation("ReportingInviteSender")
+  receivedReportingInvites EmployeeReportingInvite[] @relation("ReportingInviteRecipient")
+  assignedTeamTasks OpsTask[]             @relation("TaskAssigner")
   ownedAiTasks    AiTask[]             @relation("AiTaskOwner")
   reviewAiTasks   AiTask[]             @relation("AiTaskReviewer")
 
   @@index([departmentId, status])
+  @@index([supervisorEmployeeId, status])
   @@index([name])
+}
+
+model EmployeeReportingInvite {
+  id                  String   @id @default(cuid())
+  senderEmployeeId    String
+  recipientEmployeeId String
+  status              String   @default("PENDING")
+  respondedAt         DateTime?
+  cancelledAt         DateTime?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  sender    Employee @relation("ReportingInviteSender", fields: [senderEmployeeId], references: [id], onDelete: Cascade)
+  recipient Employee @relation("ReportingInviteRecipient", fields: [recipientEmployeeId], references: [id], onDelete: Cascade)
+
+  @@index([senderEmployeeId, status, createdAt])
+  @@index([recipientEmployeeId, status, createdAt])
 }
 
 model Product {
@@ -2204,6 +2228,7 @@ model OpsTask {
   assigneeEmployeeId String?
   requiredRoleCode   String?
   assignedBy         String?
+  assignedByEmployeeId String?
   collaborators      Json      @default("[]")
   sourceType         String?
   sourceId           String?
@@ -2240,6 +2265,7 @@ model OpsTask {
   updatedAt          DateTime  @updatedAt
 
   assignee      Employee?              @relation("TaskAssignee", fields: [assigneeEmployeeId], references: [id], onDelete: SetNull)
+  assignedByEmployee Employee?         @relation("TaskAssigner", fields: [assignedByEmployeeId], references: [id], onDelete: SetNull)
   template      TaskTemplate?          @relation(fields: [taskTemplateId], references: [id], onDelete: SetNull)
   history       OperationTaskHistory[]
   attachments   TaskAttachment[]
@@ -2250,6 +2276,7 @@ model OpsTask {
 
   @@index([status, dueAt])
   @@index([assigneeEmployeeId, status, dueAt])
+  @@index([assignedByEmployeeId, sourceType, status, dueAt])
   @@index([requiredRoleCode, status, dueAt])
   @@index([platform, storeKey, productId])
   @@index([findingId, status])

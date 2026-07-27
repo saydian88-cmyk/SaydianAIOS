@@ -204,8 +204,256 @@ export class WorkbenchService {
           data: { submissionId: submission.id, version: submission.version },
         },
       });
+      if (task.assignedByEmployeeId) {
+        await tx.taskNotification.create({
+          data: {
+            taskId: id,
+            recipientEmployeeId: task.assignedByEmployeeId,
+            type: "TEAM_TASK_SUBMITTED",
+            title: "直属运营已提交任务",
+            content: task.title,
+          },
+        });
+      }
       return { task: updated, submission };
     });
+  }
+
+  async operationTeam(session: SessionPayload, query: Record<string, string | undefined>) {
+    this.requireOperator(session);
+    const page = Math.max(1, Number(query.page || 1));
+    const pageSize = Math.min(50, Math.max(1, Number(query.pageSize || 20)));
+    const employeeId = session.employeeId!;
+    const [employee, directReports, incoming, outgoing, operators] = await Promise.all([
+      this.prisma.employee.findUnique({
+        where: { id: employeeId },
+        include: { supervisor: { select: { id: true, name: true, employeeNo: true } } },
+      }),
+      this.prisma.employee.findMany({
+        where: { supervisorEmployeeId: employeeId, status: "ACTIVE" },
+        select: { id: true, name: true, employeeNo: true, role: true },
+        orderBy: { name: "asc" },
+      }),
+      this.prisma.employeeReportingInvite.findMany({
+        where: { recipientEmployeeId: employeeId, status: "PENDING" },
+        include: { sender: { select: { id: true, name: true, employeeNo: true } } },
+        orderBy: { createdAt: "desc" },
+      }),
+      this.prisma.employeeReportingInvite.findMany({
+        where: { senderEmployeeId: employeeId, status: "PENDING" },
+        include: { recipient: { select: { id: true, name: true, employeeNo: true } } },
+        orderBy: { createdAt: "desc" },
+      }),
+      this.prisma.employee.findMany({
+        where: {
+          id: { not: employeeId },
+          status: "ACTIVE",
+          roles: { some: { role: { code: "CONTENT_OPERATOR", active: true } } },
+        },
+        select: { id: true, name: true, employeeNo: true, supervisorEmployeeId: true },
+        orderBy: { name: "asc" },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+    ]);
+    return {
+      supervisor: employee?.supervisor || null,
+      directReports,
+      invitations: { incoming, outgoing },
+      operators,
+      pagination: { page, pageSize },
+    };
+  }
+
+  async inviteOperator(session: SessionPayload, body: Record<string, unknown>) {
+    this.requireOperator(session);
+    const senderEmployeeId = session.employeeId!;
+    const recipientEmployeeId = value(body.recipientEmployeeId);
+    if (!recipientEmployeeId || recipientEmployeeId === senderEmployeeId) {
+      throw new BadRequestException("请选择其他运营员工");
+    }
+    await this.assertActiveOperator(recipientEmployeeId);
+    const duplicate = await this.prisma.employeeReportingInvite.findFirst({
+      where: { senderEmployeeId, recipientEmployeeId, status: "PENDING" },
+    });
+    if (duplicate) throw new BadRequestException("已向该运营发出邀请");
+    const invite = await this.prisma.employeeReportingInvite.create({
+      data: { senderEmployeeId, recipientEmployeeId },
+    });
+    await Promise.all([
+      this.prisma.taskNotification.create({
+        data: {
+          recipientEmployeeId,
+          type: "REPORTING_INVITE",
+          title: "收到直属关系邀请",
+          content: `${session.name} 邀请你成为直属运营`,
+        },
+      }),
+      this.audit(session.name, "REPORTING_INVITE_CREATE", "EmployeeReportingInvite", invite.id, {
+        senderEmployeeId,
+        recipientEmployeeId,
+      }),
+    ]);
+    return invite;
+  }
+
+  async respondOperatorInvite(session: SessionPayload, id: string, body: Record<string, unknown>) {
+    this.requireOperator(session);
+    const action = value(body.action).toUpperCase();
+    if (!["ACCEPT", "REJECT"].includes(action)) throw new BadRequestException("邀请处理动作不正确");
+    const invite = await this.prisma.employeeReportingInvite.findFirst({
+      where: { id, recipientEmployeeId: session.employeeId, status: "PENDING" },
+      include: { sender: true, recipient: true },
+    });
+    if (!invite) throw new NotFoundException("邀请不存在或已处理");
+    await this.assertActiveOperator(invite.senderEmployeeId);
+    if (action === "ACCEPT") await this.assertNoReportingCycle(invite.senderEmployeeId, invite.recipientEmployeeId);
+    return this.prisma.$transaction(async (tx) => {
+      if (action === "ACCEPT") {
+        await tx.employee.update({
+          where: { id: invite.recipientEmployeeId },
+          data: { supervisorEmployeeId: invite.senderEmployeeId },
+        });
+        await tx.employeeReportingInvite.updateMany({
+          where: { recipientEmployeeId: invite.recipientEmployeeId, status: "PENDING", id: { not: id } },
+          data: { status: "REJECTED", respondedAt: new Date() },
+        });
+      }
+      const updated = await tx.employeeReportingInvite.update({
+        where: { id },
+        data: { status: action === "ACCEPT" ? "ACCEPTED" : "REJECTED", respondedAt: new Date() },
+      });
+      await tx.taskNotification.create({
+        data: {
+          recipientEmployeeId: invite.senderEmployeeId,
+          type: action === "ACCEPT" ? "REPORTING_INVITE_ACCEPTED" : "REPORTING_INVITE_REJECTED",
+          title: action === "ACCEPT" ? "直属关系邀请已接受" : "直属关系邀请被拒绝",
+          content: invite.recipient.name,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          actor: session.name,
+          action: `REPORTING_INVITE_${action}`,
+          entityType: "EmployeeReportingInvite",
+          entityId: id,
+          after: { senderEmployeeId: invite.senderEmployeeId, recipientEmployeeId: invite.recipientEmployeeId },
+        },
+      });
+      return updated;
+    });
+  }
+
+  async cancelOperatorInvite(session: SessionPayload, id: string) {
+    this.requireOperator(session);
+    const invite = await this.prisma.employeeReportingInvite.findFirst({
+      where: { id, senderEmployeeId: session.employeeId, status: "PENDING" },
+    });
+    if (!invite) throw new NotFoundException("邀请不存在或已处理");
+    const result = await this.prisma.employeeReportingInvite.updateMany({
+      where: { id, senderEmployeeId: session.employeeId, status: "PENDING" },
+      data: { status: "CANCELLED", cancelledAt: new Date() },
+    });
+    if (!result.count) throw new NotFoundException("邀请不存在或已处理");
+    await Promise.all([
+      this.prisma.taskNotification.create({
+        data: { recipientEmployeeId: invite.recipientEmployeeId, type: "REPORTING_INVITE_CANCELLED", title: "直属关系邀请已撤回", content: session.name },
+      }),
+      this.audit(session.name, "REPORTING_INVITE_CANCEL", "EmployeeReportingInvite", id, {}),
+    ]);
+    return { ok: true };
+  }
+
+  async removeDirectReport(session: SessionPayload, employeeId: string) {
+    this.requireOperator(session);
+    const result = await this.prisma.employee.updateMany({
+      where: { id: employeeId, supervisorEmployeeId: session.employeeId },
+      data: { supervisorEmployeeId: null },
+    });
+    if (!result.count) throw new NotFoundException("该员工不是你的直属运营");
+    await Promise.all([
+      this.prisma.taskNotification.create({
+        data: { recipientEmployeeId: employeeId, type: "REPORTING_RELATION_REMOVED", title: "直属关系已解除", content: session.name },
+      }),
+      this.audit(session.name, "REPORTING_RELATION_REMOVE", "Employee", employeeId, {}),
+    ]);
+    return { ok: true };
+  }
+
+  async teamTasks(session: SessionPayload, query: Record<string, string | undefined>) {
+    this.requireOperator(session);
+    const page = Math.max(1, Number(query.page || 1));
+    const pageSize = Math.min(50, Math.max(1, Number(query.pageSize || 20)));
+    const where = {
+      assignedByEmployeeId: session.employeeId!,
+      sourceType: "OPERATOR_COLLAB",
+      ...(value(query.status) ? { status: value(query.status).toUpperCase() } : {}),
+    };
+    const [items, total] = await Promise.all([
+      this.prisma.opsTask.findMany({
+        where,
+        include: this.taskInclude(true),
+        orderBy: [{ dueAt: "asc" }, { createdAt: "desc" }],
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      this.prisma.opsTask.count({ where }),
+    ]);
+    return { items, total, page, pageSize };
+  }
+
+  async createTeamTask(session: SessionPayload, body: Record<string, unknown>) {
+    this.requireOperator(session);
+    const assigneeEmployeeId = value(body.assigneeEmployeeId);
+    const title = value(body.title);
+    if (!title || !assigneeEmployeeId) throw new BadRequestException("请选择直属运营并填写任务标题");
+    const assignee = await this.prisma.employee.findFirst({
+      where: {
+        id: assigneeEmployeeId,
+        supervisorEmployeeId: session.employeeId,
+        status: "ACTIVE",
+        roles: { some: { role: { code: "CONTENT_OPERATOR", active: true } } },
+      },
+    });
+    if (!assignee) throw new BadRequestException("只能给当前直属运营安排任务");
+    const created = await this.prisma.opsTask.create({
+      data: {
+        taskNo: `TEAM-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
+        title,
+        description: value(body.description) || null,
+        category: "OPERATOR_COLLAB",
+        priority: value(body.priority).toUpperCase() || "MEDIUM",
+        status: "ACCEPTED",
+        owner: assignee.name,
+        assigneeEmployeeId,
+        requiredRoleCode: "CONTENT_OPERATOR",
+        assignedBy: session.name,
+        assignedByEmployeeId: session.employeeId,
+        sourceType: "OPERATOR_COLLAB",
+        expectedResult: value(body.expectedResult) || null,
+        dueAt: date(body.dueAt),
+        acceptedAt: new Date(),
+        evidence: (body.attachments && typeof body.attachments === "object" ? { attachments: body.attachments } : {}) as object,
+      },
+      include: this.taskInclude(),
+    });
+    await Promise.all([
+      this.prisma.operationTaskHistory.create({
+        data: { taskId: created.id, toStatus: "ACCEPTED", action: "TEAM_ASSIGN", actor: session.name },
+      }),
+      this.notify(created.id, assigneeEmployeeId, "TEAM_TASK_ASSIGNED", "收到运营协作任务", created.title),
+      this.audit(session.name, "TEAM_TASK_CREATE", "OpsTask", created.id, { assigneeEmployeeId }),
+    ]);
+    return created;
+  }
+
+  async reviewTeamTask(session: SessionPayload, id: string, body: Record<string, unknown>) {
+    this.requireOperator(session);
+    const task = await this.prisma.opsTask.findFirst({
+      where: { id, assignedByEmployeeId: session.employeeId, sourceType: "OPERATOR_COLLAB" },
+    });
+    if (!task) throw new NotFoundException("只能审核自己安排的运营协作任务");
+    return this.reviewTask(id, body, session.name);
   }
 
   async notifications(session: SessionPayload) {
@@ -451,6 +699,45 @@ export class WorkbenchService {
         },
       ],
     };
+  }
+
+  private requireOperator(session: SessionPayload) {
+    if (!session.roles.includes("CONTENT_OPERATOR")) {
+      throw new BadRequestException("只有运营岗位可以使用团队协作");
+    }
+  }
+
+  private async assertActiveOperator(employeeId: string) {
+    const employee = await this.prisma.employee.findFirst({
+      where: {
+        id: employeeId,
+        status: "ACTIVE",
+        roles: { some: { role: { code: "CONTENT_OPERATOR", active: true } } },
+      },
+    });
+    if (!employee) throw new BadRequestException("对方不是可用的运营员工");
+    return employee;
+  }
+
+  private async assertNoReportingCycle(supervisorEmployeeId: string, employeeId: string) {
+    let current: string | null = supervisorEmployeeId;
+    const visited = new Set<string>();
+    for (let depth = 0; current && depth < 50; depth += 1) {
+      if (current === employeeId || visited.has(current)) throw new BadRequestException("直属关系不能形成循环");
+      visited.add(current);
+      const row: { supervisorEmployeeId: string | null } | null = await this.prisma.employee.findUnique({
+        where: { id: current },
+        select: { supervisorEmployeeId: true },
+      });
+      current = row?.supervisorEmployeeId || null;
+    }
+    if (current) throw new BadRequestException("运营层级超过系统允许的最大深度");
+  }
+
+  private audit(actor: string, action: string, entityType: string, entityId: string, after: unknown) {
+    return this.prisma.auditLog.create({
+      data: { actor, action, entityType, entityId, after: after as Prisma.InputJsonValue },
+    });
   }
 
   private async ownedTask(session: SessionPayload, id: string, statuses: string[]) {
