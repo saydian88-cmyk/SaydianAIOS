@@ -304,24 +304,11 @@ export class WorkbenchController {
   ) {
     const employee = this.requirePermission(authorization, "DATA_CENTER_VIEW");
     const canCurateAssets = employee.permissions.includes("*") || employee.permissions.includes("ASSET_CURATE");
-    const [assets, knowledge, pendingAssets, assetTotal, knowledgeTotal, keywords, viralKeywords, viralTrend, videoProjects, videoScripts, products, productionPlans] = await Promise.all([
-      this.brandData.rankedAssets({
-        query: query.query,
-        model: query.model,
-        kind: query.kind,
-        moduleType: query.moduleType,
-        minimumScore: query.minimumScore || "0",
-        limit: query.limit || "100",
-      }),
-      this.brandData.knowledge({
-        query: query.query,
-        model: query.model,
-        type: query.type,
-        status: "READY",
-      }),
-      canCurateAssets
-        ? this.brandData.assets({ reviewScope: "PENDING", pageSize: "12" })
-        : Promise.resolve({ items: [], total: 0 }),
+    const section = String(query.section || "knowledge");
+    const keyword = String(query.query || "").trim();
+    const model = String(query.model || "").trim();
+    const knowledgeType = String(query.type || "").toUpperCase();
+    const summaryPromise = Promise.all([
       this.prisma.asset.count({
         where: {
           reviewStatus: "APPROVED",
@@ -330,57 +317,152 @@ export class WorkbenchController {
         },
       }),
       this.prisma.knowledgeEntry.count({ where: { status: "READY" } }),
-      this.smartKeywords.list({
-        search: query.query,
-        platform: query.platform,
-        take: query.keywordLimit || "200",
-      }).catch(() => ({
-        total: 0,
-        items: [],
-        summary: [],
-        limits: { dailyCollectionPerPlatform: 50, pinnedPerPlatform: 50 },
-      })),
-      this.viralTrend.todayKeywords(query.platform || "DOUYIN").catch(() => ({ keywords: [] })),
-      this.viralTrend.trends({ take: query.viralLimit || "60" }).catch(() => ({
-        items: [],
-        summary: { total: 0 },
-      })),
-      this.videoFactory.projects({
-        platform: query.platform,
-        productModel: query.model,
-      }).catch(() => []),
-      this.prisma.contentPlan.findMany({
-        where: {
-          kind: "VIDEO",
-          ...(query.model ? { productModel: { contains: query.model, mode: "insensitive" } } : {}),
-        },
-        select: {
-          id: true,
-          productionNo: true,
-          topic: true,
-          productModel: true,
-          status: true,
-          productionStage: true,
-          sourceSignals: true,
-          createdAt: true,
-        },
-        orderBy: { createdAt: "desc" },
-        take: 30,
-      }),
-      this.prisma.product.findMany({
-        where: { status: { not: "ARCHIVED" } },
-        select: { id: true, modelCode: true, name: true, category: true },
-        orderBy: [{ category: "asc" }, { modelCode: "asc" }],
-        take: 500,
-      }),
-      this.prisma.contentPlan.findMany({
-        where: { kind: "VIDEO", productionStage: "AWAITING_ASSETS" },
-        select: { id: true, productionNo: true, topic: true, shootRequirements: true },
-        orderBy: { updatedAt: "desc" },
-        take: 100,
-      }),
+      this.prisma.smartKeyword.count(),
+      this.prisma.externalVideo.count(),
+      this.prisma.contentPlan.count({ where: { kind: "VIDEO" } }),
+      canCurateAssets ? this.prisma.asset.count({ where: { reviewStatus: "PENDING", deletedAt: null } }) : Promise.resolve(0),
     ]);
-    const pending = Array.isArray(pendingAssets) ? pendingAssets : pendingAssets.items;
+    const sectionPromise = section === "assets"
+      ? this.brandData.rankedAssets({
+        query: query.query,
+        model: query.model,
+        kind: query.kind,
+        moduleType: query.moduleType,
+        minimumScore: query.minimumScore || "0",
+        limit: query.limit || "100",
+      })
+      : section === "knowledge"
+        ? knowledgeType === "PRODUCT"
+          ? this.prisma.product.findMany({
+            where: {
+              status: "READY",
+              ...(model ? { modelCode: { contains: model, mode: "insensitive" as const } } : {}),
+              ...(keyword ? {
+                OR: [
+                  { name: { contains: keyword, mode: "insensitive" as const } },
+                  { modelCode: { contains: keyword, mode: "insensitive" as const } },
+                  { category: { contains: keyword, mode: "insensitive" as const } },
+                ],
+              } : {}),
+            },
+            select: { id: true, modelCode: true, name: true, category: true, updatedAt: true },
+            orderBy: [{ category: "asc" as const }, { modelCode: "asc" as const }],
+            take: 500,
+          }).then((items) => items.map((item) => ({
+            id: item.id,
+            type: "产品",
+            title: `${item.modelCode} · ${item.name}`,
+            category: item.category,
+            model: item.modelCode,
+            summary: "已审核产品资料",
+            updatedAt: item.updatedAt,
+          })))
+          : knowledgeType === "QUALIFICATION"
+            ? this.prisma.evidenceClaim.findMany({
+              where: {
+                status: "READY",
+                ...(keyword ? {
+                  OR: [
+                    { name: { contains: keyword, mode: "insensitive" as const } },
+                    { confirmedFact: { contains: keyword, mode: "insensitive" as const } },
+                    { publicWording: { contains: keyword, mode: "insensitive" as const } },
+                  ],
+                } : {}),
+              },
+              orderBy: { updatedAt: "desc" as const },
+              take: 500,
+            }).then((items) => items.map((item) => ({
+              id: item.id,
+              type: "资质",
+              title: item.name,
+              category: item.evidenceType,
+              model: item.coveredObject || "品牌通用",
+              summary: item.confirmedFact || item.publicWording || "已审核资质证据",
+              updatedAt: item.updatedAt,
+            })))
+            : knowledgeType === "KNOWLEDGE_GROUP"
+              ? this.prisma.knowledgeEntry.findMany({
+                where: {
+                  status: "READY",
+                  type: { in: ["BRAND", "PARAMETER", "KNOWLEDGE", "WORDING", "FORBIDDEN", "AFTER_SALE", "TUTORIAL"] },
+                  ...(model ? { model: { contains: model, mode: "insensitive" as const } } : {}),
+                  ...(keyword ? {
+                    OR: [
+                      { title: { contains: keyword, mode: "insensitive" as const } },
+                      { summary: { contains: keyword, mode: "insensitive" as const } },
+                      { body: { contains: keyword, mode: "insensitive" as const } },
+                    ],
+                  } : {}),
+                },
+                orderBy: { updatedAt: "desc" as const },
+                take: 500,
+              })
+              : this.brandData.knowledge({
+                query: query.query,
+                model: query.model,
+                type: knowledgeType === "FAQ" ? "FAQ" : undefined,
+                status: "READY",
+              })
+        : section === "keywords"
+          ? this.smartKeywords.list({
+            search: query.query,
+            platform: query.platform,
+            take: query.keywordLimit || "200",
+          }).catch(() => ({ total: 0, items: [], summary: [], limits: { dailyCollectionPerPlatform: 50, pinnedPerPlatform: 50 } }))
+          : section === "viral"
+            ? Promise.all([
+              this.viralTrend.todayKeywords(query.platform || "DOUYIN").catch(() => ({ keywords: [] })),
+              this.viralTrend.trends({ take: query.viralLimit || "60" }).catch(() => ({ items: [], summary: { total: 0 } })),
+            ])
+            : Promise.all([
+              this.videoFactory.projects({ platform: query.platform, productModel: query.model }).catch(() => []),
+              this.prisma.contentPlan.findMany({
+                where: {
+                  kind: "VIDEO",
+                  ...(query.model ? { productModel: { contains: query.model, mode: "insensitive" } } : {}),
+                },
+                select: {
+                  id: true,
+                  productionNo: true,
+                  topic: true,
+                  productModel: true,
+                  status: true,
+                  productionStage: true,
+                  sourceSignals: true,
+                  createdAt: true,
+                },
+                orderBy: { createdAt: "desc" },
+                take: 30,
+              }),
+            ]);
+    const optionsPromise = query.includeOptions === "1"
+      ? Promise.all([
+        this.prisma.product.findMany({
+          where: { status: { not: "ARCHIVED" } },
+          select: { id: true, modelCode: true, name: true, category: true },
+          orderBy: [{ category: "asc" }, { modelCode: "asc" }],
+          take: 500,
+        }),
+        this.prisma.contentPlan.findMany({
+          where: { kind: "VIDEO", productionStage: "AWAITING_ASSETS" },
+          select: { id: true, productionNo: true, topic: true, shootRequirements: true },
+          orderBy: { updatedAt: "desc" },
+          take: 100,
+        }),
+      ])
+      : Promise.resolve(undefined);
+    const [[assetTotal, knowledgeTotal, keywordTotal, viralTotal, videoProjectTotal, pendingTotal], sectionData, options] = await Promise.all([
+      summaryPromise,
+      sectionPromise,
+      optionsPromise,
+    ]);
+    const assets = section === "assets" ? sectionData as Array<Record<string, unknown>> : [];
+    const knowledge = section === "knowledge" ? sectionData as Array<Record<string, unknown>> : [];
+    const keywords = section === "keywords" ? sectionData : undefined;
+    const viralData = section === "viral" ? sectionData as [Record<string, unknown>, Record<string, unknown>] : undefined;
+    const videoData = section === "videoFactory" ? sectionData as [Array<Record<string, unknown>>, Array<Record<string, unknown>>] : undefined;
+    const videoProjects = videoData?.[0] || [];
+    const videoScripts = videoData?.[1] || [];
     return {
       permissions: employee.permissions,
       summary: {
@@ -388,21 +470,17 @@ export class WorkbenchController {
         assetResults: assets.length,
         priorityAssets: assets.filter((item) => ["S", "A"].includes(String(item.grade))).length,
         knowledge: knowledgeTotal,
-        pending: Array.isArray(pending) ? pending.length : 0,
-        keywords: keywords.total,
-        viralVideos: viralTrend.summary?.total || 0,
-        videoProjects: videoProjects.length,
+        pending: pendingTotal,
+        keywords: keywordTotal,
+        viralVideos: viralTotal,
+        videoProjects: videoProjectTotal,
       },
-      assets,
-      knowledge,
-      pendingAssets: pending,
-      keywords,
-      viralKeywords,
-      viralTrend,
-      videoProjects,
-      videoScripts,
-      products,
-      uploadOptions: { products, productionPlans },
+      ...(section === "assets" ? { assets } : {}),
+      ...(section === "knowledge" ? { knowledge } : {}),
+      ...(section === "keywords" ? { keywords } : {}),
+      ...(section === "viral" ? { viralKeywords: viralData?.[0], viralTrend: viralData?.[1] } : {}),
+      ...(section === "videoFactory" ? { videoProjects, videoScripts } : {}),
+      ...(options ? { products: options[0], uploadOptions: { products: options[0], productionPlans: options[1] } } : {}),
     };
   }
 

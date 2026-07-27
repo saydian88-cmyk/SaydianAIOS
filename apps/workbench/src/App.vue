@@ -121,6 +121,7 @@ const dataCenter = reactive<Row>({
   uploadOptions: { products: [], productionPlans: [] },
 });
 const dataCenterTab = ref("knowledge");
+const dataCenterLoading = ref(false);
 const dataCenterFilters = reactive({
   query: "",
   model: "",
@@ -401,13 +402,25 @@ async function loadNotices() {
 
 async function loadDataCenter() {
   const requestId = ++dataCenterRequestId;
+  dataCenterLoading.value = true;
   const parameters = new URLSearchParams();
   Object.entries(dataCenterFilters).forEach(([key, value]) => {
     if (value) parameters.set(key, value);
   });
+  parameters.set("section", dataCenterTab.value);
+  if (!dataCenter.uploadOptions.products?.length) parameters.set("includeOptions", "1");
   parameters.set("_", String(Date.now()));
-  const result = await api<Row>(`/api/v1/workbench/data-center?${parameters.toString()}`);
-  if (requestId === dataCenterRequestId) Object.assign(dataCenter, result);
+  try {
+    const result = await api<Row>(`/api/v1/workbench/data-center?${parameters.toString()}`);
+    if (requestId === dataCenterRequestId) Object.assign(dataCenter, result);
+  } finally {
+    if (requestId === dataCenterRequestId) dataCenterLoading.value = false;
+  }
+}
+
+async function switchDataCenterTab(tab: string) {
+  dataCenterTab.value = tab;
+  await loadDataCenter();
 }
 
 async function setAssetKind(kind: string) {
@@ -422,6 +435,7 @@ async function setKnowledgeType(type: string) {
 
 function useKeywordInFactory(keyword: Row) {
   dataCenterTab.value = "videoFactory";
+  void loadDataCenter();
   videoFactoryForm.platform = keyword.platform || "DOUYIN";
   videoFactoryForm.productModel = keyword.product?.modelCode || "";
   videoFactoryForm.topic = keyword.keyword || "";
@@ -432,6 +446,7 @@ function useKeywordInFactory(keyword: Row) {
 
 function useViralVideoInFactory(video: Row) {
   dataCenterTab.value = "videoFactory";
+  void loadDataCenter();
   videoFactoryForm.platform = video.platform || "DOUYIN";
   videoFactoryForm.productModel = video.keywordHits?.find((item: Row) => item.keyword?.product)?.keyword?.product?.modelCode || "";
   videoFactoryForm.topic = video.title || "爆款结构仿拍";
@@ -451,8 +466,8 @@ async function createVideoProject() {
     ElMessage.success("已生成3个视频方向，可继续生成拍摄执行包");
     videoFactoryForm.keywordIds = [];
     videoFactoryForm.externalVideoIds = [];
-    await loadDataCenter();
     dataCenterTab.value = "videoFactory";
+    await loadDataCenter();
   } finally {
     creatingVideoProject.value = false;
   }
@@ -477,8 +492,8 @@ async function generateWorkbenchVideoScript() {
     ElMessage.success(result.created
       ? (videoScriptMode.value === "ASSET_ONLY" ? "无需补拍脚本已生成，已进入脚本审核" : "视频脚本已生成，已进入脚本审核")
       : "今天已有同类脚本，没有重复创建");
-    await loadDataCenter();
     dataCenterTab.value = "videoFactory";
+    await loadDataCenter();
   } finally {
     generatingVideoScript.value = false;
   }
@@ -515,8 +530,8 @@ async function generateVideoProject(project: Row, candidateIndex = 0) {
   try {
     await post(`/api/v1/workbench/data-center/video-projects/${project.id}/generate`, { candidateIndex });
     ElMessage.success("拍摄执行包已生成，缺失镜头已形成补拍要求");
-    await loadDataCenter();
     dataCenterTab.value = "videoFactory";
+    await loadDataCenter();
   } finally {
     generatingProjectId.value = "";
   }
@@ -1140,11 +1155,11 @@ onMounted(() => void bootstrap());
         </section>
 
         <section class="data-module-nav">
-          <button :class="{ active: dataCenterTab === 'knowledge' }" @click="dataCenterTab = 'knowledge'"><el-icon><Collection /></el-icon><span>品牌知识</span><b>{{ dataCenter.summary.knowledge || 0 }}</b><small>产品、FAQ与SOP</small></button>
-          <button :class="{ active: dataCenterTab === 'assets' }" @click="dataCenterTab = 'assets'"><el-icon><Files /></el-icon><span>素材库</span><b>{{ dataCenter.summary.assets || 0 }}</b><small>全库检索与调用</small></button>
-          <button :class="{ active: dataCenterTab === 'keywords' }" @click="dataCenterTab = 'keywords'"><el-icon><Search /></el-icon><span>智能关键词</span><b>{{ dataCenter.summary.keywords || 0 }}</b><small>选题和流量方向</small></button>
-          <button :class="{ active: dataCenterTab === 'viral' }" @click="dataCenterTab = 'viral'"><el-icon><DataAnalysis /></el-icon><span>爆款研究</span><b>{{ dataCenter.summary.viralVideos || 0 }}</b><small>结构拆解与仿拍</small></button>
-          <button :class="{ active: dataCenterTab === 'videoFactory' }" @click="dataCenterTab = 'videoFactory'"><el-icon><VideoCamera /></el-icon><span>视频工厂</span><b>{{ dataCenter.summary.videoProjects || 0 }}</b><small>脚本与执行包</small></button>
+          <button :class="{ active: dataCenterTab === 'knowledge' }" @click="switchDataCenterTab('knowledge')"><el-icon><Collection /></el-icon><span>品牌知识</span><b>{{ dataCenter.summary.knowledge || 0 }}</b><small>产品、FAQ与SOP</small></button>
+          <button :class="{ active: dataCenterTab === 'assets' }" @click="switchDataCenterTab('assets')"><el-icon><Files /></el-icon><span>素材库</span><b>{{ dataCenter.summary.assets || 0 }}</b><small>全库检索与调用</small></button>
+          <button :class="{ active: dataCenterTab === 'keywords' }" @click="switchDataCenterTab('keywords')"><el-icon><Search /></el-icon><span>智能关键词</span><b>{{ dataCenter.summary.keywords || 0 }}</b><small>选题和流量方向</small></button>
+          <button :class="{ active: dataCenterTab === 'viral' }" @click="switchDataCenterTab('viral')"><el-icon><DataAnalysis /></el-icon><span>爆款研究</span><b>{{ dataCenter.summary.viralVideos || 0 }}</b><small>结构拆解与仿拍</small></button>
+          <button :class="{ active: dataCenterTab === 'videoFactory' }" @click="switchDataCenterTab('videoFactory')"><el-icon><VideoCamera /></el-icon><span>视频工厂</span><b>{{ dataCenter.summary.videoProjects || 0 }}</b><small>脚本与执行包</small></button>
         </section>
 
         <section v-if="dataCenterTab === 'assets'" class="data-quick-switch" aria-label="素材类型快速切换">
@@ -1152,7 +1167,7 @@ onMounted(() => void bootstrap());
         </section>
 
         <section v-if="dataCenterTab === 'knowledge'" class="data-quick-switch" aria-label="品牌知识快速切换">
-          <button v-for="item in [{ label: '全部知识', value: '' }, { label: '产品', value: 'PRODUCT' }, { label: '知识 / SOP', value: 'SOP' }, { label: 'FAQ', value: 'FAQ' }, { label: '资质', value: 'CLAIM' }]" :key="item.value || 'ALL'" :class="{ active: dataCenterFilters.type === item.value }" @click="setKnowledgeType(item.value)">{{ item.label }}</button>
+          <button v-for="item in [{ label: '全部知识', value: '' }, { label: '产品', value: 'PRODUCT' }, { label: '知识 / SOP', value: 'KNOWLEDGE_GROUP' }, { label: 'FAQ', value: 'FAQ' }, { label: '资质', value: 'QUALIFICATION' }]" :key="item.value || 'ALL'" :class="{ active: dataCenterFilters.type === item.value }" @click="setKnowledgeType(item.value)">{{ item.label }}</button>
         </section>
 
         <section v-if="['assets','knowledge','keywords'].includes(dataCenterTab)" class="section-card data-toolbar">
@@ -1176,7 +1191,7 @@ onMounted(() => void bootstrap());
           </div>
         </section>
 
-        <section v-if="dataCenterTab === 'assets'">
+        <section v-if="dataCenterTab === 'assets'" v-loading="dataCenterLoading">
           <div class="workspace-summary asset-summary">
             <strong>素材检索结果 {{ dataCenter.summary.assetResults || 0 }} 条</strong>
             <span>全库可用素材 {{ dataCenter.summary.assets || 0 }} 条，按评级优先展示；输入型号、场景或模块可检索全库。</span>
@@ -1202,7 +1217,7 @@ onMounted(() => void bootstrap());
           </div>
         </section>
 
-        <section v-else-if="dataCenterTab === 'knowledge'" class="section-card knowledge-list">
+        <section v-else-if="dataCenterTab === 'knowledge'" v-loading="dataCenterLoading" class="section-card knowledge-list">
           <article v-for="item in dataCenter.knowledge" :key="item.id">
             <div class="knowledge-type">{{ item.type || "知识" }}</div>
             <div>
@@ -1214,7 +1229,7 @@ onMounted(() => void bootstrap());
           <el-empty v-if="!dataCenter.knowledge?.length" description="没有找到符合条件的知识" />
         </section>
 
-        <section v-else-if="dataCenterTab === 'keywords'" class="keyword-workspace">
+        <section v-else-if="dataCenterTab === 'keywords'" v-loading="dataCenterLoading" class="keyword-workspace">
           <div class="workspace-summary"><strong>智能关键词 {{ dataCenter.keywords?.total || 0 }} 条</strong><span>按机会分和优先级排序，点击“用于视频”即可带入视频工厂。</span></div>
           <div class="keyword-grid">
             <article v-for="keyword in dataCenter.keywords?.items || []" :key="keyword.id">
@@ -1228,7 +1243,7 @@ onMounted(() => void bootstrap());
           <el-empty v-if="!dataCenter.keywords?.items?.length" description="当前没有符合条件的关键词" />
         </section>
 
-        <section v-else-if="dataCenterTab === 'viral'" class="viral-workspace">
+        <section v-else-if="dataCenterTab === 'viral'" v-loading="dataCenterLoading" class="viral-workspace">
           <div class="metric-grid viral-metrics">
             <article><span>12小时视频</span><strong>{{ dataCenter.viralTrend?.summary?.total || 0 }}</strong></article>
             <article><span>速度达标</span><strong>{{ dataCenter.viralTrend?.summary?.candidates || 0 }}</strong></article>
@@ -1257,7 +1272,7 @@ onMounted(() => void bootstrap());
           </div>
         </section>
 
-        <section v-else class="video-factory-workspace">
+        <section v-else v-loading="dataCenterLoading" class="video-factory-workspace">
           <div class="section-card factory-create">
             <div class="section-heading"><div><h3>新建智能视频项目</h3><p>统一选择素材使用方式、内容限制和生成结果，也可从关键词或爆款研究一键带入。</p></div><el-tag type="success">运营 / 视频专员</el-tag></div>
             <div class="factory-form">
