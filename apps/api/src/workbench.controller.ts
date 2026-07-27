@@ -461,6 +461,9 @@ export class WorkbenchController {
       restricted: String(body.contentRestrictionMode || "NORMAL") === "HEALTH_RESTRICTED",
       platform: body.platform === "TIKTOK" ? "TIKTOK" : "DOUYIN",
       keywordIds: Array.isArray(body.keywordIds) ? body.keywordIds.map(String) : [],
+      topic: String(body.topic || "").trim(),
+      audience: String(body.audience || "").trim(),
+      objective: String(body.objective || "").trim(),
       force: true,
     });
   }

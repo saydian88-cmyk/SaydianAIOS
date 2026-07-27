@@ -181,7 +181,7 @@ export class ContentService {
     date = new Date(),
     actor = "系统内容引擎",
     productModel?: string,
-    options: { assetOnly?: boolean; restricted?: boolean; platform?: IntegrationKind; keywordIds?: string[]; force?: boolean } = {},
+    options: { assetOnly?: boolean; restricted?: boolean; platform?: IntegrationKind; keywordIds?: string[]; force?: boolean; topic?: string; audience?: string; objective?: string } = {},
   ): Promise<{ created: number; selected: string[] }> {
     const planDate = startOfShanghaiDay(date);
     if (!options.assetOnly && !options.restricted && !options.force) {
@@ -202,6 +202,11 @@ export class ContentService {
     const context: Record<string, unknown> = {
       ...baseContext,
       generationMode: options.assetOnly ? "ASSET_ONLY" : "ASSET_FIRST",
+      requestedProject: {
+        topic: String(options.topic || "").trim(),
+        audience: String(options.audience || "").trim(),
+        objective: String(options.objective || "").trim(),
+      },
       contentRestrictionMode: options.restricted ? "HEALTH_RESTRICTED" : "NORMAL",
       restrictedWords: restrictionRules.filter((item) => item.category === "HEALTH_RESTRICTED_WORD").map((item) => item.blockedText),
       restrictedVisuals: restrictionRules.filter((item) => item.category === "HEALTH_RESTRICTED_VISUAL").map((item) => item.blockedText),

@@ -470,6 +470,9 @@ async function generateWorkbenchVideoScript() {
       productModel: videoFactoryForm.productModel,
       platform: videoFactoryForm.platform,
       keywordIds: videoFactoryForm.keywordIds,
+      topic: videoFactoryForm.topic,
+      audience: videoFactoryForm.audience,
+      objective: videoFactoryForm.objective,
     });
     ElMessage.success(result.created
       ? (videoScriptMode.value === "ASSET_ONLY" ? "无需补拍脚本已生成，已进入脚本审核" : "视频脚本已生成，已进入脚本审核")
@@ -1255,34 +1258,8 @@ onMounted(() => void bootstrap());
         </section>
 
         <section v-else class="video-factory-workspace">
-          <div v-if="canGenerateVideoScript" class="section-card factory-capabilities">
-            <div class="section-heading"><div><h3>视频脚本生成</h3><p>运营和视频专员可直接生成脚本，继续进入现有脚本审核流程。</p></div><el-tag type="success">运营 / 视频专员</el-tag></div>
-            <div class="factory-capability-form">
-              <el-select v-model="videoFactoryForm.productModel" clearable filterable placeholder="搜索或选择产品型号">
-                <el-option v-for="product in productOptions" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" />
-              </el-select>
-              <el-select v-model="videoFactoryForm.platform"><el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" /></el-select>
-              <el-select v-model="videoScriptMode">
-                <el-option label="普通脚本（优先使用素材库已有素材）" value="ASSET_FIRST" />
-                <el-option label="无需补拍快速成片" value="ASSET_ONLY" />
-              </el-select>
-              <el-select v-model="videoScriptRestriction">
-                <el-option label="普通内容" value="NORMAL" />
-                <el-option label="健康内容受限" value="HEALTH_RESTRICTED" />
-              </el-select>
-              <el-button type="primary" :loading="generatingVideoScript" @click="generateWorkbenchVideoScript">{{ videoScriptMode === "ASSET_ONLY" ? "生成无需补拍脚本" : "生成视频脚本" }}</el-button>
-            </div>
-            <el-alert v-if="videoScriptMode === 'ASSET_ONLY'" title="只使用素材库已有视频素材；素材无法完整覆盖时不会伪造脚本，将明确提示缺少素材。" type="info" :closable="false" />
-            <div v-if="dataCenter.videoScripts?.length" class="factory-script-list">
-              <article v-for="script in dataCenter.videoScripts.slice(0, 6)" :key="script.id">
-                <div><strong>{{ script.topic }}</strong><span>{{ script.productModel || "通用" }} · {{ statusLabels[script.status] || script.status }}</span></div>
-                <el-tag size="small" :type="script.sourceSignals?.[0]?.generationMode === 'ASSET_ONLY' ? 'success' : 'info'">{{ script.sourceSignals?.[0]?.generationMode === "ASSET_ONLY" ? "无需补拍" : "优先使用素材库已有素材" }}</el-tag>
-              </article>
-            </div>
-          </div>
-
           <div class="section-card factory-create">
-            <div class="section-heading"><div><h3>新建智能视频项目</h3><p>可直接填写主题，也可从关键词或爆款研究一键带入。</p></div><el-tag type="success">员工可用</el-tag></div>
+            <div class="section-heading"><div><h3>新建智能视频项目</h3><p>统一选择素材使用方式、内容限制和生成结果，也可从关键词或爆款研究一键带入。</p></div><el-tag type="success">运营 / 视频专员</el-tag></div>
             <div class="factory-form">
               <el-select v-model="videoFactoryForm.platform" placeholder="目标平台"><el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" /></el-select>
               <el-select v-model="videoFactoryForm.productModel" clearable filterable placeholder="搜索或选择产品型号">
@@ -1291,8 +1268,22 @@ onMounted(() => void bootstrap());
               <el-input v-model="videoFactoryForm.audience" placeholder="目标人群，如 子女送父母" />
               <el-input v-model="videoFactoryForm.topic" placeholder="视频主题或关键词" />
               <el-input v-model="videoFactoryForm.objective" placeholder="内容目标" />
-              <el-button type="primary" :loading="creatingVideoProject" @click="createVideoProject">生成3个视频方向</el-button>
             </div>
+            <div v-if="canGenerateVideoScript" class="factory-generation-options">
+              <el-select v-model="videoScriptMode">
+                <el-option label="优先使用素材库已有素材" value="ASSET_FIRST" />
+                <el-option label="仅使用已有素材（无需补拍）" value="ASSET_ONLY" />
+              </el-select>
+              <el-select v-model="videoScriptRestriction">
+                <el-option label="普通内容" value="NORMAL" />
+                <el-option label="健康内容受限" value="HEALTH_RESTRICTED" />
+              </el-select>
+              <div class="factory-generation-actions">
+                <el-button :loading="creatingVideoProject" @click="createVideoProject">生成3个视频方向</el-button>
+                <el-button type="primary" :loading="generatingVideoScript" @click="generateWorkbenchVideoScript">{{ videoScriptMode === "ASSET_ONLY" ? "直接生成无需补拍脚本" : "直接生成视频脚本" }}</el-button>
+              </div>
+            </div>
+            <el-alert v-if="videoScriptMode === 'ASSET_ONLY'" title="项目只使用素材库已有视频素材；不能完整覆盖时会明确提示缺少素材，不会生成需要补拍的脚本。" type="info" :closable="false" />
             <div v-if="videoFactoryForm.keywordIds.length || videoFactoryForm.externalVideoIds.length" class="factory-context">
               已带入 {{ videoFactoryForm.keywordIds.length }} 个关键词、{{ videoFactoryForm.externalVideoIds.length }} 条爆款参考
             </div>
