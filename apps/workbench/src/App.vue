@@ -83,6 +83,7 @@ const uploadStage = ref("");
 const assetPreviewVisible = ref(false);
 const assetPreviewLoading = ref(false);
 const assetPreviewUrl = ref("");
+const assetPreviewPosterUrl = ref("");
 const assetDetail = ref<Row>();
 const assetEditMode = ref(false);
 const assetEditSaving = ref(false);
@@ -146,6 +147,8 @@ const analyzingAssetGaps = ref(false);
 const creatingGapTasks = ref(false);
 const assetGaps = ref<Row[]>([]);
 const selectedAssetGapIds = ref<string[]>([]);
+const assetGapVisible = ref(false);
+const assetGapProductModel = ref("");
 let dataCenterRequestId = 0;
 
 const classificationOptions = [
@@ -479,11 +482,11 @@ async function generateWorkbenchVideoScript() {
 }
 
 async function analyzeWorkbenchAssetGaps() {
-  if (!videoFactoryForm.productModel.trim()) return ElMessage.warning("请先填写需要分析的产品型号");
+  if (!assetGapProductModel.value.trim()) return ElMessage.warning("请选择需要分析的产品型号");
   analyzingAssetGaps.value = true;
   try {
     assetGaps.value = await post<Row[]>("/api/v1/workbench/data-center/asset-gaps/analyze", {
-      productModel: videoFactoryForm.productModel,
+      productModel: assetGapProductModel.value,
     });
     selectedAssetGapIds.value = assetGaps.value.filter((item) => Number(item.gapCount || 0) > 0).map((item) => item.id);
     ElMessage.success(assetGaps.value.length ? "缺失素材分析完成，可勾选生成补拍任务" : "当前没有发现缺失素材");
@@ -721,6 +724,7 @@ async function submitAsset() {
 async function openAssetPreview(row: Row) {
   assetPreviewLoading.value = true;
   assetPreviewUrl.value = "";
+  assetPreviewPosterUrl.value = row.thumbnailUrl || "";
   assetEditMode.value = false;
   assetPreviewVisible.value = true;
   try {
@@ -1153,16 +1157,16 @@ onMounted(() => void bootstrap());
             <el-input v-model="dataCenterFilters.query" clearable placeholder="搜索名称、编号、内容或知识">
               <template #prefix><el-icon><Search /></el-icon></template>
             </el-input>
-            <el-select v-model="dataCenterFilters.model" clearable filterable placeholder="搜索或选择产品型号">
+            <el-select v-model="dataCenterFilters.model" clearable filterable placeholder="搜索或选择产品型号" @change="loadDataCenter">
               <el-option v-for="product in productOptions" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" />
             </el-select>
-            <el-select v-if="dataCenterTab === 'assets'" v-model="dataCenterFilters.kind" clearable placeholder="素材类型">
+            <el-select v-if="dataCenterTab === 'assets'" v-model="dataCenterFilters.kind" clearable placeholder="素材类型" @change="loadDataCenter">
               <el-option label="图片" value="IMAGE" />
               <el-option label="视频" value="VIDEO" />
               <el-option label="文档" value="DOCUMENT" />
               <el-option label="音频" value="AUDIO" />
             </el-select>
-            <el-select v-if="dataCenterTab === 'assets'" v-model="dataCenterFilters.moduleType" clearable placeholder="视频模块">
+            <el-select v-if="dataCenterTab === 'assets'" v-model="dataCenterFilters.moduleType" clearable placeholder="视频模块" @change="loadDataCenter">
               <el-option v-for="item in classificationOptions" :key="item.value" :label="item.label" :value="item.value" />
             </el-select>
             <el-button type="primary" @click="loadDataCenter">查找</el-button>
@@ -1170,12 +1174,18 @@ onMounted(() => void bootstrap());
         </section>
 
         <section v-if="dataCenterTab === 'assets'">
-          <div class="workspace-summary"><strong>素材检索结果 {{ dataCenter.summary.assetResults || 0 }} 条</strong><span>全库可用素材 {{ dataCenter.summary.assets || 0 }} 条，按评级优先展示；输入型号、场景或模块可检索全库。</span></div>
+          <div class="workspace-summary asset-summary">
+            <strong>素材检索结果 {{ dataCenter.summary.assetResults || 0 }} 条</strong>
+            <span>全库可用素材 {{ dataCenter.summary.assets || 0 }} 条，按评级优先展示；输入型号、场景或模块可检索全库。</span>
+            <el-button v-if="canGenerateVideoScript" size="small" plain @click="assetGapVisible = true">AI 缺失素材分析</el-button>
+          </div>
           <div class="asset-grid">
             <article v-for="asset in dataCenter.assets" :key="asset.id" class="asset-card" role="button" tabindex="0" @click="openAssetPreview(asset)" @keydown.enter="openAssetPreview(asset)">
               <div class="asset-thumb">
                 <img v-if="asset.thumbnailUrl" :src="asset.thumbnailUrl" :alt="asset.displayName || asset.assetNo" />
                 <el-icon v-else><Files /></el-icon>
+                <span v-if="asset.kind === 'VIDEO'" class="asset-play">▶</span>
+                <small class="asset-kind-label">{{ asset.kind === "VIDEO" ? "视频" : asset.kind === "IMAGE" ? "图片" : asset.kind === "AUDIO" ? "音频" : "文档" }}</small>
                 <b>{{ asset.grade || "B" }}</b>
               </div>
               <div class="asset-copy">
@@ -1269,22 +1279,6 @@ onMounted(() => void bootstrap());
                 <el-tag size="small" :type="script.sourceSignals?.[0]?.generationMode === 'ASSET_ONLY' ? 'success' : 'info'">{{ script.sourceSignals?.[0]?.generationMode === "ASSET_ONLY" ? "无需补拍" : "优先复用素材" }}</el-tag>
               </article>
             </div>
-          </div>
-
-          <div v-if="canGenerateVideoScript" class="section-card factory-capabilities">
-            <div class="section-heading"><div><h3>AI缺失素材分析</h3><p>按产品型号读取当前素材索引，列出真正缺少的画面，并生成补拍任务。</p></div></div>
-            <div class="gap-analysis-form">
-              <el-select v-model="videoFactoryForm.productModel" clearable filterable placeholder="搜索或选择产品型号">
-                <el-option v-for="product in productOptions" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" />
-              </el-select>
-              <el-button type="primary" :loading="analyzingAssetGaps" @click="analyzeWorkbenchAssetGaps">分析缺失素材</el-button>
-            </div>
-            <el-checkbox-group v-if="assetGaps.length" v-model="selectedAssetGapIds" class="gap-result-list">
-              <el-checkbox v-for="gap in assetGaps" :key="gap.id" :value="gap.id">
-                <strong>{{ gap.category }}</strong><span>{{ gap.assetKind }} · {{ gap.severity }} · {{ gap.recommendation }}</span>
-              </el-checkbox>
-            </el-checkbox-group>
-            <div v-if="assetGaps.length" class="gap-task-action"><span>已选择 {{ selectedAssetGapIds.length }} 项</span><el-button type="primary" :disabled="!selectedAssetGapIds.length" :loading="creatingGapTasks" @click="createWorkbenchGapTasks">生成补拍任务</el-button></div>
           </div>
 
           <div class="section-card factory-create">
@@ -1541,11 +1535,34 @@ onMounted(() => void bootstrap());
     </template>
   </el-dialog>
 
+  <el-dialog v-model="assetGapVisible" title="AI 缺失素材分析" width="min(720px, 94vw)" destroy-on-close>
+    <p class="dialog-hint">选择产品型号，AI 将读取该型号现有素材索引，只列出真正缺少的画面。</p>
+    <div class="gap-analysis-form">
+      <el-select v-model="assetGapProductModel" clearable filterable placeholder="搜索或选择产品型号">
+        <el-option v-for="product in productOptions" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" />
+      </el-select>
+      <el-button type="primary" :loading="analyzingAssetGaps" @click="analyzeWorkbenchAssetGaps">开始分析</el-button>
+    </div>
+    <el-checkbox-group v-if="assetGaps.length" v-model="selectedAssetGapIds" class="gap-result-list">
+      <el-checkbox v-for="gap in assetGaps" :key="gap.id" :value="gap.id">
+        <strong>{{ gap.category }}</strong><span>{{ gap.assetKind }} · {{ gap.severity }} · {{ gap.recommendation }}</span>
+      </el-checkbox>
+    </el-checkbox-group>
+    <el-empty v-else-if="!analyzingAssetGaps" description="选择产品型号后开始分析" />
+    <template #footer>
+      <div class="gap-task-action">
+        <span v-if="assetGaps.length">已选择 {{ selectedAssetGapIds.length }} 项</span>
+        <el-button @click="assetGapVisible = false">关闭</el-button>
+        <el-button v-if="assetGaps.length" type="primary" :disabled="!selectedAssetGapIds.length" :loading="creatingGapTasks" @click="createWorkbenchGapTasks">生成补拍任务</el-button>
+      </div>
+    </template>
+  </el-dialog>
+
   <el-drawer v-model="assetPreviewVisible" title="素材预览" size="min(860px, 96vw)" destroy-on-close>
     <div v-loading="assetPreviewLoading" class="employee-asset-preview">
       <template v-if="assetPreviewUrl">
         <img v-if="assetPreviewType === 'image'" :src="assetPreviewUrl" :alt="assetDetail?.displayName || assetDetail?.fileName" />
-        <video v-else-if="assetPreviewType === 'video'" :src="assetPreviewUrl" controls preload="metadata" />
+        <video v-else-if="assetPreviewType === 'video'" :src="assetPreviewUrl" :poster="assetPreviewPosterUrl" controls preload="metadata" playsinline />
         <audio v-else-if="assetPreviewType === 'audio'" :src="assetPreviewUrl" controls />
         <iframe v-else-if="['office','document'].includes(assetPreviewType)" :src="assetPreviewEmbedUrl" :title="assetDetail?.displayName || '素材预览'" />
         <el-empty v-else description="该格式请在新窗口中打开预览" />

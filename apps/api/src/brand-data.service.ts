@@ -784,7 +784,9 @@ export class BrandDataService {
     const items = rows.slice(0, take).map((row) => {
       const view = this.assetView(row);
       const latest = row.versions[0];
-      const thumbnailObjectKey = row.kind === "IMAGE" ? (latest?.previewObjectKey || latest?.objectKey || row.objectKey) : null;
+      const thumbnailObjectKey: string | undefined = ["IMAGE", "VIDEO"].includes(String(row.kind))
+        ? (latest?.previewObjectKey || (row.kind === "IMAGE" ? latest?.objectKey || row.objectKey : undefined) || undefined)
+        : undefined;
       let thumbnailUrl: string | null = null;
       if (thumbnailObjectKey && this.oss.isConfigured()) {
         try { thumbnailUrl = this.oss.signedDownloadUrl(thumbnailObjectKey, 900); } catch { thumbnailUrl = null; }
@@ -842,7 +844,9 @@ export class BrandDataService {
     });
     return rows.map((row) => {
       const latest = row.versions[0];
-      const thumbnailObjectKey = row.kind === "IMAGE" ? (latest?.previewObjectKey || latest?.objectKey || row.objectKey) : null;
+      const thumbnailObjectKey: string | undefined = ["IMAGE", "VIDEO"].includes(String(row.kind))
+        ? (latest?.previewObjectKey || (row.kind === "IMAGE" ? latest?.objectKey || row.objectKey : undefined) || undefined)
+        : undefined;
       let thumbnailUrl: string | null = null;
       if (thumbnailObjectKey && this.oss.isConfigured()) {
         try { thumbnailUrl = this.oss.signedDownloadUrl(thumbnailObjectKey, 900); } catch { thumbnailUrl = null; }
