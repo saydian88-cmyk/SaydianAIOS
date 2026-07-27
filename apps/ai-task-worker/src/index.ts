@@ -557,9 +557,11 @@ async function execute(claimed: JsonRecord) {
     await writeFile(join(workspace, "result.json"), JSON.stringify(result, null, 2), "utf8");
     await checkpoint(taskId, "QUALITY_CHECK", 78, "正在校验和上传结果");
     const execution = record(record(packaged).execution);
+    const structuredOnlyKinds = new Set(["SCRIPT_CANDIDATES", "VIDEO_SCRIPT", "STORYBOARD_JSON", "STRUCTURED_RESULT"]);
+    const generatedFiles = Array.isArray(result.outputFiles) ? result.outputFiles : [];
     const files = String(task.type || "") === "VIDEO" && String(execution.mode || "") === "SCRIPT_ONLY"
       ? []
-      : Array.isArray(result.outputFiles) ? result.outputFiles : [];
+      : generatedFiles.filter((item) => !structuredOnlyKinds.has(String(record(item).kind || "").toUpperCase()));
     for (const raw of files) {
       await checkpoint(taskId, "UPLOADING", 85, `正在上传${String((raw as JsonRecord).title || "任务输出")}`);
       await uploadFile(taskId, workspace, raw as JsonRecord);
