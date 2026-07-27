@@ -556,7 +556,10 @@ async function execute(claimed: JsonRecord) {
     result = await renderLocalVideo(result, packaged, workspace);
     await writeFile(join(workspace, "result.json"), JSON.stringify(result, null, 2), "utf8");
     await checkpoint(taskId, "QUALITY_CHECK", 78, "正在校验和上传结果");
-    const files = Array.isArray(result.outputFiles) ? result.outputFiles : [];
+    const execution = record(record(packaged).execution);
+    const files = String(task.type || "") === "VIDEO" && String(execution.mode || "") === "SCRIPT_ONLY"
+      ? []
+      : Array.isArray(result.outputFiles) ? result.outputFiles : [];
     for (const raw of files) {
       await checkpoint(taskId, "UPLOADING", 85, `正在上传${String((raw as JsonRecord).title || "任务输出")}`);
       await uploadFile(taskId, workspace, raw as JsonRecord);
@@ -566,11 +569,13 @@ async function execute(claimed: JsonRecord) {
       body: JSON.stringify({ nodeCode, result }),
     });
   } catch (error) {
+    const message = error instanceof Error ? error.message : "Codex执行失败";
+    process.stderr.write(`${new Date().toISOString()} ${taskNo} ${message}\n`);
     await api(`/api/v1/ai-tasks/runner/tasks/${taskId}/fail`, {
       method: "POST",
       body: JSON.stringify({
         nodeCode,
-        message: error instanceof Error ? error.message : "Codex执行失败",
+        message,
       }),
     }).catch(() => undefined);
   } finally {
