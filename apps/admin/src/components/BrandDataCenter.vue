@@ -15,6 +15,8 @@ type Overview = {
 
 const emit = defineEmits<{ (event: "open-content"): void }>();
 const activeTab = ref("knowledge");
+const loadedTabs = new Set<string>();
+const tabLoads = new Map<string, Promise<void>>();
 const videoFactory = ref<InstanceType<typeof VideoFactory>>();
 const knowledgeView = ref("entries");
 const assetView = ref("list");
@@ -431,7 +433,7 @@ async function generateVideoFromKeyword(row: Row) {
     videoFactory.value?.createFromKeyword(row);
     keywordGeneration.value = {
       state: "SUCCEEDED",
-      title: "已进入智能视频工厂",
+      title: "已进入视频工厂",
       message: `关键词“${row.keyword}”已带入视频项目，可选择智能推荐或指定模型生成。`,
     };
     ElMessage.success(keywordGeneration.value.message);
@@ -580,12 +582,34 @@ async function retryCloudJob(row: Row) { await run(async () => { await post(`/ap
 function openExternal(url: string) { window.open(url, "_blank", "noopener,noreferrer"); }
 async function refreshGrowthLoop() { await run(async () => { growthLoop.value = await post<Row>("/api/v1/brand-data/growth-loop/refresh"); await Promise.all([loadAssets(), loadGaps(), loadReport(), refreshOverview()]); }, "评分、缺口和下一轮任务已更新"); }
 async function refreshOverview() { overview.value = await api<Overview>("/api/v1/brand-data/overview"); }
+async function loadTabData(tab: string, force = false) {
+  if (!force && loadedTabs.has(tab)) return;
+  const existing = tabLoads.get(tab);
+  if (existing) return existing;
+  const task = (async () => {
+    if (tab === "knowledge") await Promise.all([loadKnowledge(), loadControls()]);
+    else if (tab === "assets") await Promise.all([loadAssets(), loadJobs(), loadAiCapabilities()]);
+    else if (tab === "keywords") await Promise.all([loadControls(), loadSmartKeywordWorkspace()]);
+    else if (tab === "viral") await loadViralWorkspace();
+    else if (tab === "videoFactory") {
+      await loadControls();
+      await nextTick();
+      if (force) await videoFactory.value?.reload();
+    }
+    loadedTabs.add(tab);
+  })().finally(() => tabLoads.delete(tab));
+  tabLoads.set(tab, task);
+  return task;
+}
+async function switchTab(tab: string) {
+  activeTab.value = tab;
+  await nextTick();
+  await run(() => loadTabData(tab));
+}
 async function reload() {
   await run(async () => {
-    const [summary, knowledgeRows, controlsRows] = await Promise.all([api<Overview>("/api/v1/brand-data/overview"), api<Row[]>("/api/v1/brand-data/knowledge"), api<typeof controls.value>("/api/v1/brand-data/knowledge-controls")]);
-    overview.value = summary; knowledge.value = knowledgeRows; controls.value = controlsRows;
-    await Promise.all([loadAssets(), loadJobs(), loadAiCapabilities(), loadGaps(), loadReport(), loadGrowthLoop(), loadViralWorkspace(), loadSmartKeywordWorkspace()]);
-    if (activeTab.value === "videoFactory") await videoFactory.value?.reload();
+    await refreshOverview();
+    await loadTabData(activeTab.value, true);
   });
 }
 
@@ -983,6 +1007,8 @@ async function filterByAssetTag(label: string) {
 }
 async function handleAssetViewChange(value: string) {
   if (value === "gaps") await run(async () => { await Promise.all([loadGaps(), loadGapTasks()]); });
+  if (value === "report") await run(loadReport);
+  if (value === "loop") await run(loadGrowthLoop);
   if (value === "trash") {
     assetFilter.reviewStatus = "";
     assetFilter.reviewScope = "TRASH";
@@ -1022,11 +1048,11 @@ onMounted(reload);
     </div>
 
     <div class="main-tabs">
-      <button :class="{ active: activeTab === 'knowledge' }" @click="activeTab = 'knowledge'"><el-icon><Collection /></el-icon><span>品牌知识库</span><b>{{ overview?.knowledge.total ?? 0 }}</b></button>
-      <button :class="{ active: activeTab === 'assets' }" @click="activeTab = 'assets'"><el-icon><UploadFilled /></el-icon><span>素材库</span><b>{{ overview?.assets.total ?? 0 }}</b></button>
-      <button :class="{ active: activeTab === 'keywords' }" @click="activeTab = 'keywords'"><el-icon><Search /></el-icon><span>智能关键词</span><b>{{ smartKeywordResult.total || 0 }}</b></button>
-      <button :class="{ active: activeTab === 'videoFactory' }" @click="activeTab = 'videoFactory'"><el-icon><VideoCamera /></el-icon><span>智能视频工厂</span><b>AI</b></button>
-      <button :class="{ active: activeTab === 'viral' }" @click="activeTab = 'viral'"><el-icon><View /></el-icon><span>爆款研究</span><b>{{ remakeTasks.length }}</b></button>
+      <button :class="{ active: activeTab === 'knowledge' }" @click="switchTab('knowledge')"><el-icon><Collection /></el-icon><span>品牌知识库</span><b>{{ overview?.knowledge.total ?? 0 }}</b></button>
+      <button :class="{ active: activeTab === 'assets' }" @click="switchTab('assets')"><el-icon><UploadFilled /></el-icon><span>素材库</span><b>{{ overview?.assets.total ?? 0 }}</b></button>
+      <button :class="{ active: activeTab === 'keywords' }" @click="switchTab('keywords')"><el-icon><Search /></el-icon><span>智能关键词</span><b>{{ smartKeywordResult.total || 0 }}</b></button>
+      <button :class="{ active: activeTab === 'viral' }" @click="switchTab('viral')"><el-icon><View /></el-icon><span>爆款研究</span><b>{{ remakeTasks.length }}</b></button>
+      <button :class="{ active: activeTab === 'videoFactory' }" @click="switchTab('videoFactory')"><el-icon><VideoCamera /></el-icon><span>视频工厂</span><b>AI</b></button>
     </div>
 
     <template v-if="activeTab === 'knowledge'">
@@ -1152,7 +1178,7 @@ onMounted(reload);
 
     <template v-else-if="activeTab === 'assets'">
       <div class="workspace-heading"><div><h3>素材库</h3><p>按型号、用途、功能、场景、动作和景别建立AI剪辑索引。</p></div><div><el-button type="danger" plain @click="trashAssets(true)">清空素材库</el-button><el-button @click="rebuildAssetIndex">重建AI索引</el-button><el-button :icon="Refresh" @click="syncAssets">扫描同步</el-button><el-button type="primary" :icon="Plus" @click="openBatchUpload">上传素材</el-button></div></div>
-      <el-segmented v-model="assetView" :options="[{ label: `素材 ${assetTotal}`, value: 'list' }, { label: `待审核 ${overview?.assets.pending || 0}`, value: 'review' }, { label: `回收站 ${overview?.assets.trash || 0}`, value: 'trash' }, { label: '视频切片', value: 'video' }, { label: `AI处理 ${jobs.length}`, value: 'jobs' }, { label: `缺口 ${gaps.filter(item => item.gapCount > 0).length}`, value: 'gaps' }, { label: '日报', value: 'report' }, { label: '增长闭环', value: 'loop' }]" @change="handleAssetViewChange" />
+      <el-segmented v-model="assetView" :options="[{ label: `素材 ${assetTotal}`, value: 'list' }, { label: `待审核 ${overview?.assets.pending || 0}`, value: 'review' }, { label: `回收站 ${overview?.assets.trash || 0}`, value: 'trash' }, { label: '视频切片', value: 'video' }, { label: `AI处理 ${jobs.length}`, value: 'jobs' }, { label: `缺口 ${overview?.assets.gapCount || 0}`, value: 'gaps' }, { label: '日报', value: 'report' }, { label: '增长闭环', value: 'loop' }]" @change="handleAssetViewChange" />
 
       <template v-if="assetView === 'loop'">
         <div class="workspace-heading compact"><div><h3>素材增长闭环</h3><p>上传、处理、审核、调用、效果回流、评分和下一轮任务在同一条链路中追踪。</p></div><el-button type="primary" :icon="Refresh" @click="refreshGrowthLoop">更新闭环</el-button></div>

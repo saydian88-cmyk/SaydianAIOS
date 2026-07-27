@@ -384,7 +384,7 @@ onBeforeUnmount(() => {
     <div class="factory-hero">
       <div>
         <span>SMART VIDEO FACTORY · V1.0</span>
-        <h3>智能视频工厂</h3>
+        <h3>视频工厂</h3>
         <p>优先复用已审核真实素材，缺失镜头再调用AI；外部爆款只提取结构、Hook和节奏。</p>
       </div>
       <div>
