@@ -216,7 +216,7 @@ export class WorkbenchController {
   ) {
     const employee = this.requirePermission(authorization, "DATA_CENTER_VIEW");
     const canCurateAssets = employee.permissions.includes("*") || employee.permissions.includes("ASSET_CURATE");
-    const [assets, knowledge, pendingAssets, assetTotal, knowledgeTotal, keywords, viralKeywords, viralTrend, videoProjects, videoScripts] = await Promise.all([
+    const [assets, knowledge, pendingAssets, assetTotal, knowledgeTotal, keywords, viralKeywords, viralTrend, videoProjects, videoScripts, products] = await Promise.all([
       this.brandData.rankedAssets({
         query: query.query,
         model: query.model,
@@ -279,6 +279,11 @@ export class WorkbenchController {
         orderBy: { createdAt: "desc" },
         take: 30,
       }),
+      this.prisma.product.findMany({
+        where: { status: "READY" },
+        select: { id: true, modelCode: true, name: true, category: true },
+        orderBy: [{ category: "asc" }, { modelCode: "asc" }],
+      }),
     ]);
     const pending = Array.isArray(pendingAssets) ? pendingAssets : pendingAssets.items;
     return {
@@ -301,6 +306,7 @@ export class WorkbenchController {
       viralTrend,
       videoProjects,
       videoScripts,
+      products,
     };
   }
 

@@ -81,6 +81,7 @@ const dataCenter = reactive<Row>({
   viralTrend: { summary: {}, items: [] },
   videoProjects: [],
   videoScripts: [],
+  products: [],
 });
 const dataCenterTab = ref("assets");
 const dataCenterFilters = reactive({
@@ -138,6 +139,7 @@ const isLiveHost = computed(() => currentRoles.value.includes("LIVE_HOST"));
 const isOperator = computed(() => currentRoles.value.includes("CONTENT_OPERATOR"));
 const isCollaborator = computed(() => currentRoles.value.some((role) => ["CONTENT_OPERATOR", "VIDEO_SPECIALIST", "DESIGNER"].includes(role)));
 const canGenerateVideoScript = computed(() => currentRoles.value.some((role) => ["CONTENT_OPERATOR", "VIDEO_SPECIALIST"].includes(role)) && can("CONTENT_SUBMIT"));
+const productOptions = computed<Row[]>(() => dataCenter.products || []);
 const can = (permission: string) => Boolean(user.value?.permissions.includes("*") || user.value?.permissions.includes(permission));
 const canUseDataCenter = computed(() => can("DATA_CENTER_VIEW"));
 const navigation = computed(() => [
@@ -851,7 +853,9 @@ onMounted(() => void bootstrap());
             <el-input v-model="dataCenterFilters.query" clearable placeholder="搜索名称、编号、内容或知识">
               <template #prefix><el-icon><Search /></el-icon></template>
             </el-input>
-            <el-input v-model="dataCenterFilters.model" clearable placeholder="产品型号，如 W9" />
+            <el-select v-model="dataCenterFilters.model" clearable filterable placeholder="搜索或选择产品型号">
+              <el-option v-for="product in productOptions" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" />
+            </el-select>
             <el-select v-if="dataCenterTab === 'assets'" v-model="dataCenterFilters.kind" clearable placeholder="素材类型">
               <el-option label="图片" value="IMAGE" />
               <el-option label="视频" value="VIDEO" />
@@ -944,7 +948,9 @@ onMounted(() => void bootstrap());
           <div v-if="canGenerateVideoScript" class="section-card factory-capabilities">
             <div class="section-heading"><div><h3>视频脚本生成</h3><p>运营和视频专员可直接生成脚本，继续进入现有脚本审核流程。</p></div><el-tag type="success">运营 / 视频专员</el-tag></div>
             <div class="factory-capability-form">
-              <el-input v-model="videoFactoryForm.productModel" placeholder="产品型号；无需补拍模式必填" />
+              <el-select v-model="videoFactoryForm.productModel" clearable filterable placeholder="搜索或选择产品型号">
+                <el-option v-for="product in productOptions" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" />
+              </el-select>
               <el-select v-model="videoFactoryForm.platform"><el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" /></el-select>
               <el-select v-model="videoScriptMode">
                 <el-option label="普通脚本（优先复用素材）" value="ASSET_FIRST" />
@@ -968,7 +974,9 @@ onMounted(() => void bootstrap());
           <div v-if="canGenerateVideoScript" class="section-card factory-capabilities">
             <div class="section-heading"><div><h3>AI缺失素材分析</h3><p>按产品型号读取当前素材索引，列出真正缺少的画面，并生成补拍任务。</p></div></div>
             <div class="gap-analysis-form">
-              <el-input v-model="videoFactoryForm.productModel" placeholder="输入已审核产品型号，如 W9" />
+              <el-select v-model="videoFactoryForm.productModel" clearable filterable placeholder="搜索或选择产品型号">
+                <el-option v-for="product in productOptions" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" />
+              </el-select>
               <el-button type="primary" :loading="analyzingAssetGaps" @click="analyzeWorkbenchAssetGaps">分析缺失素材</el-button>
             </div>
             <el-checkbox-group v-if="assetGaps.length" v-model="selectedAssetGapIds" class="gap-result-list">
@@ -983,7 +991,9 @@ onMounted(() => void bootstrap());
             <div class="section-heading"><div><h3>新建智能视频项目</h3><p>可直接填写主题，也可从关键词或爆款研究一键带入。</p></div><el-tag type="success">员工可用</el-tag></div>
             <div class="factory-form">
               <el-select v-model="videoFactoryForm.platform" placeholder="目标平台"><el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" /></el-select>
-              <el-input v-model="videoFactoryForm.productModel" placeholder="产品型号，如 W9" />
+              <el-select v-model="videoFactoryForm.productModel" clearable filterable placeholder="搜索或选择产品型号">
+                <el-option v-for="product in productOptions" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" />
+              </el-select>
               <el-input v-model="videoFactoryForm.audience" placeholder="目标人群，如 子女送父母" />
               <el-input v-model="videoFactoryForm.topic" placeholder="视频主题或关键词" />
               <el-input v-model="videoFactoryForm.objective" placeholder="内容目标" />
@@ -1127,7 +1137,7 @@ onMounted(() => void bootstrap());
   <el-dialog v-model="uploadVisible" title="上传新素材" width="min(560px, 92vw)">
     <el-form label-position="top">
       <el-form-item label="选择文件" required><input type="file" @change="uploadFile = ($event.target as HTMLInputElement).files?.[0]" /></el-form-item>
-      <el-form-item label="关联型号"><el-input v-model="uploadForm.model" placeholder="可不填，AI将自动识别" /></el-form-item>
+      <el-form-item label="关联型号"><el-select v-model="uploadForm.model" clearable filterable placeholder="可不选，由AI自动识别"><el-option v-for="product in productOptions" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" /></el-select></el-form-item>
       <el-form-item label="一句话说明"><el-input v-model="uploadForm.name" placeholder="例如 W9家庭场景佩戴演示" /></el-form-item>
       <el-form-item label="来源"><el-select v-model="uploadForm.source"><el-option label="员工原创" value="员工原创" /><el-option label="AI生成" value="AI生成" /><el-option label="外部参考" value="外部参考" /></el-select></el-form-item>
     </el-form>
@@ -1139,7 +1149,7 @@ onMounted(() => void bootstrap());
       <el-form-item label="标题" required><el-input v-model="knowledgeForm.title" /></el-form-item>
       <el-form-item label="类型"><el-select v-model="knowledgeForm.type"><el-option label="FAQ问答" value="FAQ" /><el-option label="产品知识" value="PRODUCT" /><el-option label="直播知识" value="SOP" /><el-option label="行业知识" value="INDUSTRY" /></el-select></el-form-item>
       <el-form-item label="分类" required><el-input v-model="knowledgeForm.category" /></el-form-item>
-      <el-form-item label="关联型号"><el-input v-model="knowledgeForm.model" /></el-form-item>
+      <el-form-item label="关联型号"><el-select v-model="knowledgeForm.model" clearable filterable placeholder="搜索或选择产品型号"><el-option v-for="product in productOptions" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" /></el-select></el-form-item>
       <el-form-item label="标准回复"><el-input v-model="knowledgeForm.reply" type="textarea" :rows="4" /></el-form-item>
       <el-form-item label="完整正文"><el-input v-model="knowledgeForm.body" type="textarea" :rows="5" /></el-form-item>
     </el-form>
