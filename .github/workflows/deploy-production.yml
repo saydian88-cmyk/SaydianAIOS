@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      admin_only:
+        description: Deploy only the admin image
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -77,6 +83,8 @@ jobs:
     needs: images
     runs-on: ubuntu-24.04
     environment: production
+    env:
+      ADMIN_ONLY: ${{ inputs.admin_only || false }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/login-action@v3
@@ -94,25 +102,67 @@ jobs:
       - name: Upload deployment files
         shell: bash
         run: |
-          docker pull "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-api:${{ github.sha }}"
           docker pull "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-admin:${{ github.sha }}"
-          docker pull "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-workbench:${{ github.sha }}"
-          docker save \
-            "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-api:${{ github.sha }}" \
-            "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-admin:${{ github.sha }}" \
-            "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-workbench:${{ github.sha }}" \
-            | gzip -1 > /tmp/saydian-ops-images.tar.gz
-          scp -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -P "${{ secrets.TENCENT_PORT || '22' }}" \
-            /tmp/saydian-ops-images.tar.gz deploy/docker-compose.prod.yml deploy/gateway-nginx.conf deploy/deploy-ops.sh deploy/set-production-env.py \
-            "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}:/tmp/"
-          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}" \
-            "sudo bash -lc 'set -euo pipefail; install -m 644 /tmp/docker-compose.prod.yml /opt/saydian/config/docker-compose.prod.yml; install -m 644 /tmp/gateway-nginx.conf /opt/saydian/config/gateway-nginx.conf; install -m 755 /tmp/deploy-ops.sh /opt/saydian/bin/deploy-ops.sh; install -m 700 /tmp/set-production-env.py /opt/saydian/bin/set-production-env.py; gzip -dc /tmp/saydian-ops-images.tar.gz | docker load; rm -f /tmp/saydian-ops-images.tar.gz'"
+          if [[ "$ADMIN_ONLY" == "true" ]]; then
+            docker save "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-admin:${{ github.sha }}" \
+              | gzip -1 > /tmp/saydian-ops-admin.tar.gz
+            scp -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -P "${{ secrets.TENCENT_PORT || '22' }}" \
+              /tmp/saydian-ops-admin.tar.gz \
+              "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}:/tmp/"
+            ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}" \
+              "sudo bash -lc 'set -euo pipefail; gzip -dc /tmp/saydian-ops-admin.tar.gz | docker load; rm -f /tmp/saydian-ops-admin.tar.gz'"
+          else
+            docker pull "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-api:${{ github.sha }}"
+            docker pull "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-workbench:${{ github.sha }}"
+            docker save \
+              "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-api:${{ github.sha }}" \
+              "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-admin:${{ github.sha }}" \
+              "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-workbench:${{ github.sha }}" \
+              | gzip -1 > /tmp/saydian-ops-images.tar.gz
+            scp -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -P "${{ secrets.TENCENT_PORT || '22' }}" \
+              /tmp/saydian-ops-images.tar.gz deploy/docker-compose.prod.yml deploy/gateway-nginx.conf deploy/deploy-ops.sh deploy/set-production-env.py \
+              "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}:/tmp/"
+            ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}" \
+              "sudo bash -lc 'set -euo pipefail; install -m 644 /tmp/docker-compose.prod.yml /opt/saydian/config/docker-compose.prod.yml; install -m 644 /tmp/gateway-nginx.conf /opt/saydian/config/gateway-nginx.conf; install -m 755 /tmp/deploy-ops.sh /opt/saydian/bin/deploy-ops.sh; install -m 700 /tmp/set-production-env.py /opt/saydian/bin/set-production-env.py; gzip -dc /tmp/saydian-ops-images.tar.gz | docker load; rm -f /tmp/saydian-ops-images.tar.gz'"
+          fi
       - name: Deploy and verify
         shell: bash
         run: |
-          printf '%s' 'admin' | ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}" \
-            "sudo /opt/saydian/bin/set-production-env.py OPS_ADMIN_USERNAME"
-          printf '%s' "${{ secrets.OPS_ADMIN_PASSWORD }}" | ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}" \
-            "sudo /opt/saydian/bin/set-production-env.py OPS_ADMIN_PASSWORD"
-          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}" \
-            "sudo GHCR_REPOSITORY='${{ github.repository_owner }}/saydianaios' /opt/saydian/bin/deploy-ops.sh '${{ github.sha }}'"
+          if [[ "$ADMIN_ONLY" == "true" ]]; then
+            admin_image="ghcr.io/${{ github.repository_owner }}/saydianaios/ops-admin:${{ github.sha }}"
+            ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}" \
+              "sudo env ADMIN_IMAGE='$admin_image' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          base="/opt/saydian"
+          compose="$base/config/docker-compose.prod.yml"
+          images="$base/env/images.env"
+          production_env="$base/env/production.env"
+          previous_admin="$(grep '^OPS_ADMIN_IMAGE=' "$images" | cut -d= -f2-)"
+          sed -i "s|^OPS_ADMIN_IMAGE=.*|OPS_ADMIN_IMAGE=$ADMIN_IMAGE|" "$images"
+          docker compose --env-file "$production_env" --env-file "$images" -f "$compose" up -d ops-admin
+          docker compose --env-file "$production_env" --env-file "$images" -f "$compose" restart gateway
+          healthy=0
+          for _ in $(seq 1 20); do
+            if curl -fsS -H 'Host: stest.saydian.cn' https://127.0.0.1/saidian-admin/ -k >/dev/null; then
+              healthy=1
+              break
+            fi
+            sleep 3
+          done
+          if [[ "$healthy" != "1" ]]; then
+            sed -i "s|^OPS_ADMIN_IMAGE=.*|OPS_ADMIN_IMAGE=$previous_admin|" "$images"
+            docker compose --env-file "$production_env" --env-file "$images" -f "$compose" up -d ops-admin
+            docker compose --env-file "$production_env" --env-file "$images" -f "$compose" restart gateway
+            echo "admin health check failed; previous image restored" >&2
+            exit 1
+          fi
+          docker image prune -af --filter "until=24h" >/dev/null
+          REMOTE
+          else
+            printf '%s' 'admin' | ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}" \
+              "sudo /opt/saydian/bin/set-production-env.py OPS_ADMIN_USERNAME"
+            printf '%s' "${{ secrets.OPS_ADMIN_PASSWORD }}" | ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}" \
+              "sudo /opt/saydian/bin/set-production-env.py OPS_ADMIN_PASSWORD"
+            ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}" \
+              "sudo GHCR_REPOSITORY='${{ github.repository_owner }}/saydianaios' /opt/saydian/bin/deploy-ops.sh '${{ github.sha }}'"
+          fi
