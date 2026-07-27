@@ -236,6 +236,60 @@ export class VideoFactoryService {
     });
   }
 
+  async registerLocalMaster(contentPlanId: string, assetId: string, taskId: string, actor: string) {
+    const asset = await this.prisma.asset.findUnique({ where: { id: assetId } });
+    if (!asset) throw new NotFoundException("视频成品不存在");
+    const renderJob = await this.prisma.videoRenderJob.upsert({
+      where: { idempotencyKey: `video-render:codex-local:${contentPlanId}:${assetId}` },
+      create: {
+        idempotencyKey: `video-render:codex-local:${contentPlanId}:${assetId}`,
+        contentPlanId,
+        status: "SUCCEEDED",
+        renderer: "CODEX_LOCAL_FFMPEG",
+        input: { source: "AI_TASK", taskId },
+        output: { source: "CODEX_LOCAL", assetId },
+        outputAssetId: assetId,
+        outputPath: asset.storageUrl || asset.sourcePath,
+        actualCost: 0,
+        startedAt: asset.createdAt,
+        finishedAt: new Date(),
+        createdBy: actor,
+      },
+      update: {
+        status: "SUCCEEDED",
+        output: { source: "CODEX_LOCAL", assetId },
+        outputAssetId: assetId,
+        outputPath: asset.storageUrl || asset.sourcePath,
+        failureReason: null,
+        finishedAt: new Date(),
+      },
+    });
+    await this.prisma.videoQualityCheck.updateMany({
+      where: { contentPlanId, assetId, renderJobId: null },
+      data: { renderJobId: renderJob.id },
+    });
+    return renderJob;
+  }
+
+  async backfillLocalMasterRenderJobs(actor = "系统迁移") {
+    const relations = await this.prisma.contentAsset.findMany({
+      where: {
+        role: "VIDEO_FACTORY_MASTER",
+        asset: { kind: "VIDEO" },
+      },
+      include: { asset: true },
+    });
+    for (const relation of relations) {
+      await this.registerLocalMaster(
+        relation.contentPlanId,
+        relation.assetId,
+        `backfill:${relation.contentPlanId}`,
+        actor,
+      );
+    }
+    return relations.length;
+  }
+
   private providerView<T extends { secretRef: string | null }>(provider: T) {
     const { secretRef: _secretRef, ...visible } = provider;
     return { ...visible, secretConfigured: Boolean(_secretRef) };

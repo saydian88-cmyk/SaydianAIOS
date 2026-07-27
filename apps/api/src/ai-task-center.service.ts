@@ -117,6 +117,7 @@ export class AiTaskCenterService implements OnModuleInit {
         update: {},
       });
     }
+    await this.videoFactory.backfillLocalMasterRenderJobs();
   }
 
   async overview() {
@@ -1090,6 +1091,7 @@ export class AiTaskCenterService implements OnModuleInit {
         orderBy: { createdAt: "desc" },
       });
       if (masterOutput?.assetId) {
+        const renderJob = await this.videoFactory.registerLocalMaster(project.id, masterOutput.assetId, task.id, actor);
         await this.prisma.$transaction([
           this.prisma.contentAsset.upsert({
             where: {
@@ -1117,6 +1119,7 @@ export class AiTaskCenterService implements OnModuleInit {
             data: {
               contentPlanId: project.id,
               assetId: masterOutput.assetId,
+              renderJobId: renderJob.id,
               checkType: "FINAL_REVIEW",
               status: "REVIEW_REQUIRED",
               score: 0,
@@ -1124,6 +1127,20 @@ export class AiTaskCenterService implements OnModuleInit {
             },
           }),
         ]);
+        await this.prisma.opsTask.updateMany({
+          where: {
+            sourceType: "AI_TASK",
+            sourceId: task.id,
+            category: "CONTENT_PRODUCTION",
+            status: { not: "COMPLETED" },
+          },
+          data: {
+            status: "COMPLETED",
+            completedAt: new Date(),
+            completedBy: actor,
+            result: "Codex已完成并上传主成片，无需补拍",
+          },
+        });
         return { status: "PENDING_REVIEW" as AiTaskStatus, message: "Codex本地成片已上传，等待审核" };
       }
 

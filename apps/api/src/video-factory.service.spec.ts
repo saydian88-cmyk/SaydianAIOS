@@ -21,6 +21,18 @@ describe("VideoFactoryService model routing", () => {
       contentPlan: {
         findMany: vi.fn(),
       },
+      asset: {
+        findUnique: vi.fn(),
+      },
+      contentAsset: {
+        findMany: vi.fn(),
+      },
+      videoRenderJob: {
+        upsert: vi.fn(),
+      },
+      videoQualityCheck: {
+        updateMany: vi.fn(),
+      },
     };
     service = new VideoFactoryService(prisma as never, {} as never, {} as never, {} as never);
     vi.spyOn(service, "ensureCatalog").mockResolvedValue();
@@ -109,5 +121,31 @@ describe("VideoFactoryService model routing", () => {
     expect(context.keywords).toEqual([]);
     expect(context.topic).toBe("固态电芯加持，告别充电宝安全焦虑");
     expect(prisma.smartKeyword.findMany).not.toHaveBeenCalled();
+  });
+
+  it("registers a Codex local master as a successful video factory render", async () => {
+    prisma.asset.findUnique.mockResolvedValue({
+      id: "asset-master",
+      storageUrl: "https://oss.example/master.mp4",
+      sourcePath: "C:\\tasks\\master.mp4",
+      createdAt: new Date("2026-07-28T00:00:00.000Z"),
+    });
+    prisma.videoRenderJob.upsert.mockResolvedValue({ id: "render-local" });
+
+    const result = await service.registerLocalMaster("plan-1", "asset-master", "task-1", "Codex执行器");
+
+    expect(result.id).toBe("render-local");
+    expect(prisma.videoRenderJob.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      create: expect.objectContaining({
+        contentPlanId: "plan-1",
+        status: "SUCCEEDED",
+        renderer: "CODEX_LOCAL_FFMPEG",
+        outputAssetId: "asset-master",
+      }),
+    }));
+    expect(prisma.videoQualityCheck.updateMany).toHaveBeenCalledWith({
+      where: { contentPlanId: "plan-1", assetId: "asset-master", renderJobId: null },
+      data: { renderJobId: "render-local" },
+    });
   });
 });
