@@ -6,6 +6,7 @@ import { PrismaService } from "./prisma.service";
 
 const openStatuses = ["OPEN", "ACCEPTED", "IN_PROGRESS", "RETURNED", "REVIEW"];
 const doneStatuses = ["COMPLETED", "CANCELLED", "VERIFIED"];
+const collaborationRoleCodes = ["CONTENT_OPERATOR", "VIDEO_SPECIALIST", "DESIGNER"];
 
 function value(input: unknown) {
   return String(input ?? "").trim();
@@ -210,7 +211,7 @@ export class WorkbenchService {
             taskId: id,
             recipientEmployeeId: task.assignedByEmployeeId,
             type: "TEAM_TASK_SUBMITTED",
-            title: "协作运营已提交任务",
+            title: "协作成员已提交任务",
             content: task.title,
           },
         });
@@ -220,7 +221,7 @@ export class WorkbenchService {
   }
 
   async operationTeam(session: SessionPayload, query: Record<string, string | undefined>) {
-    this.requireOperator(session);
+    this.requireCollaborator(session);
     const page = Math.max(1, Number(query.page || 1));
     const pageSize = Math.min(50, Math.max(1, Number(query.pageSize || 20)));
     const employeeId = session.employeeId!;
@@ -231,7 +232,7 @@ export class WorkbenchService {
       }),
       this.prisma.employee.findMany({
         where: { supervisorEmployeeId: employeeId, status: "ACTIVE" },
-        select: { id: true, name: true, employeeNo: true, role: true, collaborationNote: true },
+        select: { id: true, name: true, employeeNo: true, role: true, collaborationNote: true, roles: { select: { role: { select: { code: true, name: true } } } } },
         orderBy: { name: "asc" },
       }),
       this.prisma.employeeReportingInvite.findMany({
@@ -248,9 +249,9 @@ export class WorkbenchService {
         where: {
           id: { not: employeeId },
           status: "ACTIVE",
-          roles: { some: { role: { code: "CONTENT_OPERATOR", active: true } } },
+          roles: { some: { role: { code: { in: collaborationRoleCodes }, active: true } } },
         },
-        select: { id: true, name: true, employeeNo: true, supervisorEmployeeId: true },
+        select: { id: true, name: true, employeeNo: true, supervisorEmployeeId: true, roles: { select: { role: { select: { code: true, name: true } } } } },
         orderBy: { name: "asc" },
         skip: (page - 1) * pageSize,
         take: pageSize,
@@ -272,7 +273,7 @@ export class WorkbenchService {
     if (!recipientEmployeeId || recipientEmployeeId === senderEmployeeId) {
       throw new BadRequestException("请选择其他运营员工");
     }
-    await this.assertActiveOperator(recipientEmployeeId);
+    await this.assertActiveCollaborator(recipientEmployeeId);
     const duplicate = await this.prisma.employeeReportingInvite.findFirst({
       where: { senderEmployeeId, recipientEmployeeId, status: "PENDING" },
     });
@@ -287,7 +288,7 @@ export class WorkbenchService {
           recipientEmployeeId,
           type: "REPORTING_INVITE",
           title: "收到协作关系邀请",
-          content: relationshipNote ? `${session.name}：${relationshipNote}` : `${session.name} 邀请你成为协作运营`,
+          content: relationshipNote ? `${session.name}：${relationshipNote}` : `${session.name} 邀请你成为协作成员`,
         },
       }),
       this.audit(session.name, "REPORTING_INVITE_CREATE", "EmployeeReportingInvite", invite.id, {
@@ -299,7 +300,7 @@ export class WorkbenchService {
   }
 
   async respondOperatorInvite(session: SessionPayload, id: string, body: Record<string, unknown>) {
-    this.requireOperator(session);
+    this.requireCollaborator(session);
     const action = value(body.action).toUpperCase();
     if (!["ACCEPT", "REJECT"].includes(action)) throw new BadRequestException("邀请处理动作不正确");
     const invite = await this.prisma.employeeReportingInvite.findFirst({
@@ -371,7 +372,7 @@ export class WorkbenchService {
       where: { id: employeeId, supervisorEmployeeId: session.employeeId },
       data: { supervisorEmployeeId: null, collaborationNote: null },
     });
-    if (!result.count) throw new NotFoundException("该员工不是你的协作运营");
+    if (!result.count) throw new NotFoundException("该员工不是你的协作成员");
     await Promise.all([
       this.prisma.taskNotification.create({
         data: { recipientEmployeeId: employeeId, type: "REPORTING_RELATION_REMOVED", title: "协作关系已解除", content: session.name },
@@ -382,7 +383,7 @@ export class WorkbenchService {
   }
 
   async teamTasks(session: SessionPayload, query: Record<string, string | undefined>) {
-    this.requireOperator(session);
+    this.requireCollaborator(session);
     const page = Math.max(1, Number(query.page || 1));
     const pageSize = Math.min(50, Math.max(1, Number(query.pageSize || 20)));
     const where = {
@@ -413,10 +414,12 @@ export class WorkbenchService {
         id: assigneeEmployeeId,
         supervisorEmployeeId: session.employeeId,
         status: "ACTIVE",
-        roles: { some: { role: { code: "CONTENT_OPERATOR", active: true } } },
+        roles: { some: { role: { code: { in: collaborationRoleCodes }, active: true } } },
       },
+      include: { roles: { include: { role: true } } },
     });
-    if (!assignee) throw new BadRequestException("只能给当前协作运营安排任务");
+    if (!assignee) throw new BadRequestException("只能给当前协作成员安排任务");
+    const requiredRoleCode = collaborationRoleCodes.find((code) => assignee.roles.some((item) => item.role.active && item.role.code === code))!;
     const created = await this.prisma.opsTask.create({
       data: {
         taskNo: `TEAM-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
@@ -427,7 +430,7 @@ export class WorkbenchService {
         status: "ACCEPTED",
         owner: assignee.name,
         assigneeEmployeeId,
-        requiredRoleCode: "CONTENT_OPERATOR",
+        requiredRoleCode,
         assignedBy: session.name,
         assignedByEmployeeId: session.employeeId,
         sourceType: "OPERATOR_COLLAB",
@@ -708,6 +711,12 @@ export class WorkbenchService {
     }
   }
 
+  private requireCollaborator(session: SessionPayload) {
+    if (!session.roles.some((role) => collaborationRoleCodes.includes(role))) {
+      throw new BadRequestException("当前岗位不能使用运营协作");
+    }
+  }
+
   private async assertActiveOperator(employeeId: string) {
     const employee = await this.prisma.employee.findFirst({
       where: {
@@ -716,7 +725,19 @@ export class WorkbenchService {
         roles: { some: { role: { code: "CONTENT_OPERATOR", active: true } } },
       },
     });
-    if (!employee) throw new BadRequestException("对方不是可用的运营员工");
+    if (!employee) throw new BadRequestException("邀请方当前不是可用的运营员工");
+    return employee;
+  }
+
+  private async assertActiveCollaborator(employeeId: string) {
+    const employee = await this.prisma.employee.findFirst({
+      where: {
+        id: employeeId,
+        status: "ACTIVE",
+        roles: { some: { role: { code: { in: collaborationRoleCodes }, active: true } } },
+      },
+    });
+    if (!employee) throw new BadRequestException("对方不是可用的运营、视频专员或设计人员");
     return employee;
   }
 

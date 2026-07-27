@@ -126,12 +126,13 @@ const priorityLabels: Record<string, string> = {
 const currentRoles = computed(() => user.value?.roles || []);
 const isLiveHost = computed(() => currentRoles.value.includes("LIVE_HOST"));
 const isOperator = computed(() => currentRoles.value.includes("CONTENT_OPERATOR"));
+const isCollaborator = computed(() => currentRoles.value.some((role) => ["CONTENT_OPERATOR", "VIDEO_SPECIALIST", "DESIGNER"].includes(role)));
 const can = (permission: string) => Boolean(user.value?.permissions.includes("*") || user.value?.permissions.includes(permission));
 const canUseDataCenter = computed(() => can("DATA_CENTER_VIEW"));
 const navigation = computed(() => [
   { key: "home", label: "今日工作", icon: House, visible: true },
   { key: "tasks", label: "任务中心", icon: DocumentChecked, visible: true },
-  { key: "team", label: "团队协作", icon: DocumentChecked, visible: isOperator.value },
+  { key: "team", label: "团队协作", icon: DocumentChecked, visible: isCollaborator.value },
   { key: "data", label: "数据中心", icon: Files, visible: canUseDataCenter.value },
   { key: "live", label: "直播学习", icon: VideoCamera, visible: isLiveHost.value },
   { key: "messages", label: "消息通知", icon: Bell, visible: true },
@@ -209,6 +210,12 @@ async function loadTasks() {
   }
 }
 
+function collaborationRoleLabel(employee: Row) {
+  const codes = (employee.roles || []).map((item: Row) => item.role?.code).filter(Boolean);
+  const code = ["CONTENT_OPERATOR", "VIDEO_SPECIALIST", "DESIGNER"].find((item) => codes.includes(item));
+  return roleLabels[code || ""] || "协作成员";
+}
+
 async function loadOperationTeam() {
   const [team, taskResult] = await Promise.all([
     api<Row>("/api/v1/workbench/operation-team"),
@@ -244,13 +251,13 @@ async function removeDirectReport(id: string) {
 }
 
 async function createTeamTask() {
-  if (!teamTaskForm.assigneeEmployeeId || !teamTaskForm.title.trim()) return ElMessage.warning("请选择协作运营并填写任务标题");
+  if (!teamTaskForm.assigneeEmployeeId || !teamTaskForm.title.trim()) return ElMessage.warning("请选择协作成员并填写任务标题");
   await post("/api/v1/workbench/operation-team/tasks", {
     ...teamTaskForm,
     attachments: teamTaskForm.attachments.split("\n").map((item) => item.trim()).filter(Boolean),
   });
   teamTaskVisible.value = false;
-  ElMessage.success("任务已推送到协作运营的任务列表");
+  ElMessage.success("任务已推送到协作成员的任务列表");
   await loadOperationTeam();
 }
 
@@ -661,7 +668,7 @@ onMounted(() => void bootstrap());
             <h2>运营团队协作</h2>
           </div>
           <div class="team-hero-actions">
-            <el-button @click="inviteVisible = true">邀请协作运营</el-button>
+            <el-button v-if="isOperator" @click="inviteVisible = true">邀请协作成员</el-button>
             <el-button v-if="operationTeam.directReports?.length" type="primary" @click="teamTaskVisible = true">安排任务</el-button>
           </div>
         </section>
@@ -669,21 +676,21 @@ onMounted(() => void bootstrap());
         <section class="team-grid">
           <article class="section-card">
             <div class="section-title"><div><p class="eyebrow">COLLABORATION</p><h3>协作关系</h3></div></div>
-            <p class="team-supervisor">我的上级协作运营：<strong>{{ operationTeam.supervisor?.name || "暂未建立" }}</strong><small v-if="operationTeam.supervisor?.collaborationNote">{{ operationTeam.supervisor.collaborationNote }}</small></p>
+            <p class="team-supervisor">我的上级运营：<strong>{{ operationTeam.supervisor?.name || "暂未建立" }}</strong><small v-if="operationTeam.supervisor?.collaborationNote">{{ operationTeam.supervisor.collaborationNote }}</small></p>
             <div class="compact-list">
               <div v-for="employee in operationTeam.directReports" :key="employee.id">
-                <div><strong>{{ employee.name }}</strong><span>协作运营 · {{ employee.employeeNo || "未设置工号" }}<template v-if="employee.collaborationNote"> · {{ employee.collaborationNote }}</template></span></div>
+                <div><strong>{{ employee.name }}</strong><span>{{ collaborationRoleLabel(employee) }} · {{ employee.employeeNo || "未设置工号" }}<template v-if="employee.collaborationNote"> · {{ employee.collaborationNote }}</template></span></div>
                 <el-button size="small" @click="removeDirectReport(employee.id)">解除</el-button>
               </div>
             </div>
-            <el-empty v-if="!operationTeam.directReports?.length" description="暂无协作运营" :image-size="60" />
+            <el-empty v-if="!operationTeam.directReports?.length" description="暂无协作成员" :image-size="60" />
           </article>
 
           <article class="section-card">
             <div class="section-title"><div><p class="eyebrow">INVITATIONS</p><h3>关系邀请</h3></div></div>
             <div class="compact-list">
               <div v-for="invite in operationTeam.invitations?.incoming" :key="invite.id">
-                <div><strong>{{ invite.sender.name }}</strong><span>邀请你成为协作运营<template v-if="invite.relationshipNote"> · {{ invite.relationshipNote }}</template></span></div>
+                <div><strong>{{ invite.sender.name }}</strong><span>邀请你成为协作成员<template v-if="invite.relationshipNote"> · {{ invite.relationshipNote }}</template></span></div>
                 <div><el-button size="small" @click="respondInvite(invite.id, 'REJECT')">拒绝</el-button><el-button size="small" type="primary" @click="respondInvite(invite.id, 'ACCEPT')">接受</el-button></div>
               </div>
               <div v-for="invite in operationTeam.invitations?.outgoing" :key="invite.id">
@@ -916,29 +923,29 @@ onMounted(() => void bootstrap());
     <nav class="bottom-nav">
       <button :class="{active: active === 'home'}" @click="switchPage('home')"><el-icon><House /></el-icon><span>今日</span></button>
       <button :class="{active: active === 'tasks'}" @click="switchPage('tasks')"><el-icon><DocumentChecked /></el-icon><span>任务</span></button>
-      <button v-if="isOperator" :class="{active: active === 'team'}" @click="switchPage('team')"><el-icon><DocumentChecked /></el-icon><span>协作</span></button>
+      <button v-if="isCollaborator" :class="{active: active === 'team'}" @click="switchPage('team')"><el-icon><DocumentChecked /></el-icon><span>协作</span></button>
       <button v-if="canUseDataCenter" :class="{active: active === 'data'}" @click="switchPage('data')"><el-icon><Files /></el-icon><span>数据</span></button>
       <button v-if="isLiveHost" :class="{active: active === 'live'}" @click="switchPage('live')"><el-icon><VideoCamera /></el-icon><span>直播</span></button>
       <button :class="{active: active === 'messages'}" @click="switchPage('messages')"><el-icon><Bell /></el-icon><span>消息</span><i v-if="dashboard.summary.unread">{{ dashboard.summary.unread }}</i></button>
     </nav>
   </div>
 
-  <el-dialog v-model="inviteVisible" title="邀请协作运营" width="min(520px, 92vw)">
+  <el-dialog v-model="inviteVisible" title="邀请协作成员" width="min(520px, 92vw)">
     <el-form label-position="top">
       <el-form-item label="选择运营" required>
-        <el-select v-model="inviteForm.recipientEmployeeId" filterable placeholder="搜索运营姓名">
-          <el-option v-for="employee in operationTeam.operators" :key="employee.id" :label="employee.name" :value="employee.id" />
+        <el-select v-model="inviteForm.recipientEmployeeId" filterable placeholder="搜索运营、视频专员或设计">
+          <el-option v-for="employee in operationTeam.operators" :key="employee.id" :label="`${employee.name} · ${collaborationRoleLabel(employee)}`" :value="employee.id" />
         </el-select>
       </el-form-item>
       <el-form-item label="关系说明"><el-input v-model="inviteForm.relationshipNote" type="textarea" :rows="3" placeholder="例如：负责协助短视频排期、素材跟进和发布复盘" /></el-form-item>
-      <p class="muted">对方接受后将建立协作关系；如果对方已有上级协作运营，会明确替换原关系。</p>
+      <p class="muted">运营、视频专员和设计均可接受邀请；如果对方已有上级运营，会明确替换原关系。</p>
     </el-form>
     <template #footer><el-button @click="inviteVisible = false">取消</el-button><el-button type="primary" @click="sendTeamInvite">发送邀请</el-button></template>
   </el-dialog>
 
   <el-dialog v-model="teamTaskVisible" title="安排运营协作任务" width="min(620px, 92vw)">
     <el-form label-position="top">
-      <el-form-item label="协作运营" required><el-select v-model="teamTaskForm.assigneeEmployeeId"><el-option v-for="employee in operationTeam.directReports" :key="employee.id" :label="employee.name" :value="employee.id" /></el-select></el-form-item>
+      <el-form-item label="协作成员" required><el-select v-model="teamTaskForm.assigneeEmployeeId"><el-option v-for="employee in operationTeam.directReports" :key="employee.id" :label="`${employee.name} · ${collaborationRoleLabel(employee)}`" :value="employee.id" /></el-select></el-form-item>
       <el-form-item label="任务标题" required><el-input v-model="teamTaskForm.title" /></el-form-item>
       <el-form-item label="工作要求"><el-input v-model="teamTaskForm.description" type="textarea" :rows="3" /></el-form-item>
       <el-form-item label="期望交付结果"><el-input v-model="teamTaskForm.expectedResult" type="textarea" :rows="2" /></el-form-item>

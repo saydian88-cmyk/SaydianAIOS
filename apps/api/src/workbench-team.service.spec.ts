@@ -30,7 +30,7 @@ describe("WorkbenchService operation team", () => {
     await expect(target.createTeamTask(operator, {
       assigneeEmployeeId: "other-operator",
       title: "协作任务",
-    })).rejects.toThrow("只能给当前协作运营安排任务");
+    })).rejects.toThrow("只能给当前协作成员安排任务");
   });
 
   it("only reviews tasks assigned by the current operator", async () => {
