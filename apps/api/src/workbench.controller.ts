@@ -138,43 +138,33 @@ export class WorkbenchController {
     @Query() query: Record<string, string | undefined>,
   ) {
     const employee = this.requirePermission(authorization, "DATA_CENTER_VIEW");
-    const canViewAssets = employee.permissions.includes("*") || employee.permissions.includes("ASSET_VIEW");
-    const canViewKnowledge = employee.permissions.includes("*") || employee.permissions.includes("KNOWLEDGE_VIEW");
     const canCurateAssets = employee.permissions.includes("*") || employee.permissions.includes("ASSET_CURATE");
     const [assets, knowledge, pendingAssets, assetTotal, knowledgeTotal, keywords, viralKeywords, viralTrend, videoProjects] = await Promise.all([
-      canViewAssets
-        ? this.brandData.rankedAssets({
-            query: query.query,
-            model: query.model,
-            kind: query.kind,
-            moduleType: query.moduleType,
-            minimumScore: query.minimumScore || "0",
-            limit: query.limit || "100",
-          })
-        : Promise.resolve([]),
-      canViewKnowledge
-        ? this.brandData.knowledge({
-            query: query.query,
-            model: query.model,
-            type: query.type,
-            status: "READY",
-          })
-        : Promise.resolve([]),
+      this.brandData.rankedAssets({
+        query: query.query,
+        model: query.model,
+        kind: query.kind,
+        moduleType: query.moduleType,
+        minimumScore: query.minimumScore || "0",
+        limit: query.limit || "100",
+      }),
+      this.brandData.knowledge({
+        query: query.query,
+        model: query.model,
+        type: query.type,
+        status: "READY",
+      }),
       canCurateAssets
         ? this.brandData.assets({ reviewScope: "PENDING", pageSize: "12" })
         : Promise.resolve({ items: [], total: 0 }),
-      canViewAssets
-        ? this.prisma.asset.count({
-            where: {
-              reviewStatus: "APPROVED",
-              availabilityStatus: "ACTIVE",
-              rightsStatus: { in: ["COMMERCIAL", "EDIT_ONLY"] },
-            },
-          })
-        : Promise.resolve(0),
-      canViewKnowledge
-        ? this.prisma.knowledgeEntry.count({ where: { status: "READY" } })
-        : Promise.resolve(0),
+      this.prisma.asset.count({
+        where: {
+          reviewStatus: "APPROVED",
+          availabilityStatus: "ACTIVE",
+          rightsStatus: { in: ["COMMERCIAL", "EDIT_ONLY"] },
+        },
+      }),
+      this.prisma.knowledgeEntry.count({ where: { status: "READY" } }),
       this.smartKeywords.list({
         search: query.query,
         platform: query.platform,
