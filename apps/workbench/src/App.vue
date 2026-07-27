@@ -89,6 +89,7 @@ const videoFactoryForm = reactive({
 });
 const creatingVideoProject = ref(false);
 const generatingProjectId = ref("");
+let dataCenterRequestId = 0;
 
 const roleLabels: Record<string, string> = {
   CONTENT_OPERATOR: "运营",
@@ -206,11 +207,14 @@ async function loadNotices() {
 }
 
 async function loadDataCenter() {
+  const requestId = ++dataCenterRequestId;
   const parameters = new URLSearchParams();
   Object.entries(dataCenterFilters).forEach(([key, value]) => {
     if (value) parameters.set(key, value);
   });
-  Object.assign(dataCenter, await api<Row>(`/api/v1/workbench/data-center?${parameters.toString()}`));
+  parameters.set("_", String(Date.now()));
+  const result = await api<Row>(`/api/v1/workbench/data-center?${parameters.toString()}`);
+  if (requestId === dataCenterRequestId) Object.assign(dataCenter, result);
 }
 
 function useKeywordInFactory(keyword: Row) {
