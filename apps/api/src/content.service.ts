@@ -207,7 +207,7 @@ export class ContentService {
       restrictedVisuals: restrictionRules.filter((item) => item.category === "HEALTH_RESTRICTED_VISUAL").map((item) => item.blockedText),
       generationGoal: options.assetOnly
         ? "只使用素材库已有素材，审核通过后直接进入AI剪辑"
-        : "优先复用素材库已有素材，尽量减少补拍",
+        : "生成脚本前先读取素材库索引，优先使用素材库已有且与镜头准确匹配的视频素材；只有素材库确实没有合格画面时才列为补拍，尽量减少补拍",
     };
     const generatedCandidates = await this.aiContent.generateVideoCandidates(context);
     const restrictedTerms = restrictionRules.map((item) => item.blockedText.trim().toLowerCase()).filter(Boolean);

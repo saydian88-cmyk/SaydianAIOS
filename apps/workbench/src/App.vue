@@ -1263,7 +1263,7 @@ onMounted(() => void bootstrap());
               </el-select>
               <el-select v-model="videoFactoryForm.platform"><el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" /></el-select>
               <el-select v-model="videoScriptMode">
-                <el-option label="普通脚本（优先复用素材）" value="ASSET_FIRST" />
+                <el-option label="普通脚本（优先使用素材库已有素材）" value="ASSET_FIRST" />
                 <el-option label="无需补拍快速成片" value="ASSET_ONLY" />
               </el-select>
               <el-select v-model="videoScriptRestriction">
@@ -1276,7 +1276,7 @@ onMounted(() => void bootstrap());
             <div v-if="dataCenter.videoScripts?.length" class="factory-script-list">
               <article v-for="script in dataCenter.videoScripts.slice(0, 6)" :key="script.id">
                 <div><strong>{{ script.topic }}</strong><span>{{ script.productModel || "通用" }} · {{ statusLabels[script.status] || script.status }}</span></div>
-                <el-tag size="small" :type="script.sourceSignals?.[0]?.generationMode === 'ASSET_ONLY' ? 'success' : 'info'">{{ script.sourceSignals?.[0]?.generationMode === "ASSET_ONLY" ? "无需补拍" : "优先复用素材" }}</el-tag>
+                <el-tag size="small" :type="script.sourceSignals?.[0]?.generationMode === 'ASSET_ONLY' ? 'success' : 'info'">{{ script.sourceSignals?.[0]?.generationMode === "ASSET_ONLY" ? "无需补拍" : "优先使用素材库已有素材" }}</el-tag>
               </article>
             </div>
           </div>
