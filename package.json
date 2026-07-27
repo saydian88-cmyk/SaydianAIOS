@@ -5,7 +5,7 @@
   "packageManager": "pnpm@11.9.0",
   "scripts": {
     "dev:api": "pnpm --filter @saidian-ops/api start:dev",
-    "dev:ai-task-runner": "pnpm --filter @saidian-ops/api exec tsx src/ai-task-runner.ts",
+    "dev:ai-task-runner": "pnpm --filter @saidian-ops/ai-task-worker start",
     "dev:video-worker": "pnpm --filter @saidian-ops/api exec tsx src/video-worker.ts",
     "dev:admin": "pnpm --filter @saidian-ops/admin dev",
     "build": "pnpm -r --if-present build",

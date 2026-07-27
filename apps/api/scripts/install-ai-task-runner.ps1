@@ -13,25 +13,33 @@ $startScript = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "start-ai-tas
 $configRoot = Join-Path $env:LOCALAPPDATA "SaydianAiTaskRunner"
 $configPath = Join-Path $configRoot "runner.env"
 $workPath = Join-Path $configRoot "work"
+$installedStartScript = Join-Path $configRoot "start-ai-task-runner.ps1"
+$resolvedPnpm = (Get-Command pnpm.cmd -ErrorAction Stop).Source
+$resolvedCodex = (Get-Command $CodexExecutable -ErrorAction Stop).Source
+$resolvedFfmpeg = (Get-Command ffmpeg.exe -ErrorAction Stop).Source
 
 New-Item -ItemType Directory -Path $configRoot -Force | Out-Null
 New-Item -ItemType Directory -Path $workPath -Force | Out-Null
+Copy-Item -LiteralPath $startScript -Destination $installedStartScript -Force
 
 $lines = @(
   "AI_TASK_API_URL=$($ApiUrl.TrimEnd('/'))"
   "AI_TASK_RUNNER_TOKEN=$RunnerToken"
   "AI_TASK_RUNNER_NODE_CODE=$NodeCode"
-  "AI_TASK_RUNNER_VERSION=1.0.0"
+  "AI_TASK_RUNNER_VERSION=1.1.0"
   "AI_TASK_WORKDIR=$workPath"
   "AI_TASK_REPO_PATH=$repoPath"
-  "CODEX_EXECUTABLE=$CodexExecutable"
+  "PNPM_EXECUTABLE=$resolvedPnpm"
+  "CODEX_EXECUTABLE=$resolvedCodex"
+  "FFMPEG_EXECUTABLE=$resolvedFfmpeg"
 )
 Set-Content -LiteralPath $configPath -Value $lines -Encoding UTF8
 
 $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+$powerShellPath = (Get-Command powershell.exe -ErrorAction Stop).Source
 $action = New-ScheduledTaskAction `
-  -Execute "powershell.exe" `
-  -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$startScript`" -ConfigPath `"$configPath`""
+  -Execute $powerShellPath `
+  -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$installedStartScript`" -ConfigPath `"$configPath`""
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $currentUser
 $settings = New-ScheduledTaskSettingsSet `
   -AllowStartIfOnBatteries `

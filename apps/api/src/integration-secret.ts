@@ -24,6 +24,7 @@ export type IntegrationSecretBundle = {
   selfHostedCollectorToken?: string;
   wecomAppSecret?: string;
   douyin?: DouyinSecret;
+  credentials?: Record<string, string>;
 };
 
 function encryptionKey() {

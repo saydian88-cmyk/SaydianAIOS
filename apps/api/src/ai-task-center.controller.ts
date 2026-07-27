@@ -127,6 +127,24 @@ export class AiTaskCenterController {
     return this.tasks.claimRunner(this.runnerToken(authorization), body);
   }
 
+  @Get("runner/tasks/:id/package")
+  taskPackage(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Query("nodeCode") nodeCode: string,
+  ) {
+    return this.tasks.runnerPackage(this.runnerToken(authorization), id, { nodeCode });
+  }
+
+  @Post("runner/tasks/:id/checkpoint")
+  checkpoint(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.tasks.runnerCheckpoint(this.runnerToken(authorization), id, body);
+  }
+
   @Post("runner/tasks/:id/heartbeat")
   heartbeat(
     @Headers("authorization") authorization: string | undefined,

@@ -13,7 +13,10 @@ type Overview = {
   ai: { state: string; message: string };
 };
 
-const emit = defineEmits<{ (event: "open-content"): void }>();
+const emit = defineEmits<{
+  (event: "open-content"): void;
+  (event: "open-system-config"): void;
+}>();
 const activeTab = ref("knowledge");
 const loadedTabs = new Set<string>();
 const tabLoads = new Map<string, Promise<void>>();
@@ -1173,7 +1176,7 @@ onMounted(reload);
     </template>
 
     <template v-else-if="activeTab === 'videoFactory'">
-      <VideoFactory ref="videoFactory" :products="controls.products" />
+      <VideoFactory ref="videoFactory" :products="controls.products" @open-system-config="emit('open-system-config')" />
     </template>
 
     <template v-else-if="activeTab === 'assets'">

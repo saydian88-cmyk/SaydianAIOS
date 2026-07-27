@@ -26,6 +26,8 @@ import { PrismaService } from "./prisma.service";
 import { ReportService } from "./report.service";
 import { SourceSyncService } from "./source-sync.service";
 import { SmartKeywordService } from "./smart-keyword.service";
+import { SystemConfigController } from "./system-config.controller";
+import { SystemConfigService } from "./system-config.service";
 import { ViralCollectorService } from "./viral-collector.service";
 import { ViralTrendService } from "./viral-trend.service";
 import { VideoFactoryController } from "./video-factory.controller";
@@ -40,7 +42,7 @@ import { WecomNotificationService } from "./wecom-notification.service";
   controllers: [
     AppController, HealthController, OpsController, BrandDataController,
     OperationAnalysisController, DouyinIntegrationController, VideoFactoryController,
-    WorkbenchController, AdminV2Controller, AiTaskCenterController,
+    WorkbenchController, AdminV2Controller, AiTaskCenterController, SystemConfigController,
   ],
   providers: [
     PrismaService, AuthService, PlatformRegistry, ContentGuardService, OssStorageService, SourceSyncService,
@@ -48,7 +50,7 @@ import { WecomNotificationService } from "./wecom-notification.service";
     AliyunImsProvider, BailianVideoAiProvider, CloudMediaService, ViralCollectorService, AssetAiService, BrandDataService,
     OperationAnalysisService, DouyinIntegrationService, SmartKeywordService, ViralTrendService,
     VideoFactoryService, VideoFactoryWorkerService,
-    WorkbenchService, WecomNotificationService, AiTaskCenterService,
+    WorkbenchService, WecomNotificationService, AiTaskCenterService, SystemConfigService,
   ],
 })
 export class AppModule {}

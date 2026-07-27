@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { api, patch, post } from "../api";
 
 type Row = Record<string, any>;
+const emit = defineEmits<{ navigate: [key: string] }>();
 
 const taskTypes = [
   ["VIDEO", "视频生成"],
@@ -20,9 +21,6 @@ const tabs = [
   ["review", "待审核"],
   ["completed", "已完成"],
   ["failed", "失败重试"],
-  ["policies", "定时策略"],
-  ["runners", "执行节点"],
-  ["cost", "模型与成本"],
 ] as const;
 const runningStatuses = ["CLAIMED", "RUNNING", "QUALITY_CHECK", "UPLOADING", "RETRY"];
 const pendingStatuses = ["PENDING", "WAITING_CONFIRMATION", "WAITING_INPUT", "RETURNED"];
@@ -54,6 +52,8 @@ const form = reactive<Row>({
   estimatedCost: 0,
   budgetLimit: 0,
   autoExecute: true,
+  executionMode: "FULL_VIDEO",
+  allowExternalGeneration: false,
 });
 const runnerForm = reactive<Row>({
   nodeCode: "windows-codex-01",
@@ -151,6 +151,11 @@ async function createTask() {
       productModel: form.productModel || undefined,
       estimatedCost: Number(form.estimatedCost || 0),
       budgetLimit: Number(form.budgetLimit || 0),
+      input: form.type === "VIDEO" ? { executionMode: form.executionMode } : {},
+      modelPolicy: {
+        strategy: "CODEX_FIRST",
+        allowExternalGeneration: form.type === "VIDEO" && Boolean(form.allowExternalGeneration),
+      },
     });
     createVisible.value = false;
     ElMessage.success("AI任务已创建");
@@ -276,7 +281,10 @@ onMounted(load);
         <h2>AI任务中心</h2>
         <p>Codex及AI模型执行；审核通过后的改进事项再转入员工任务指挥台。</p>
       </div>
-      <el-button type="primary" @click="createVisible = true">创建AI任务</el-button>
+      <div class="section-head">
+        <el-button @click="emit('navigate', 'integrations')">前往系统配置</el-button>
+        <el-button type="primary" @click="createVisible = true">创建AI任务</el-button>
+      </div>
     </div>
 
     <div class="summary-grid">
@@ -393,6 +401,10 @@ onMounted(load);
           <el-form-item label="负责人"><el-select v-model="form.ownerEmployeeId" clearable><el-option v-for="item in employees" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
         </div>
         <el-form-item label="任务要求"><el-input v-model="form.instructions" type="textarea" :rows="4" /></el-form-item>
+        <div v-if="form.type === 'VIDEO'" class="form-grid">
+          <el-form-item label="视频任务模式"><el-radio-group v-model="form.executionMode"><el-radio-button value="FULL_VIDEO">生成完整视频</el-radio-button><el-radio-button value="SCRIPT_ONLY">仅生成脚本</el-radio-button></el-radio-group></el-form-item>
+          <el-form-item label="外部视觉模型"><el-switch v-model="form.allowExternalGeneration" active-text="本地能力不足时允许调用" /></el-form-item>
+        </div>
         <div class="form-grid">
           <el-form-item label="预计费用"><el-input-number v-model="form.estimatedCost" :min="0" :precision="2" /></el-form-item>
           <el-form-item label="单任务预算上限"><el-input-number v-model="form.budgetLimit" :min="0" :precision="2" /></el-form-item>

@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox, type UploadUserFile } from "element-plus";
 import {
-  Bell, Connection, DataAnalysis, DocumentChecked, Files, House, Monitor, Promotion,
+  Bell, DataAnalysis, DocumentChecked, Files, House, Monitor, Promotion,
   Refresh, Search, Setting, Shop, UploadFilled, VideoCamera,
 } from "@element-plus/icons-vue";
 import { api, clearToken, download, getActor, getToken, patch, post, remove, setActor, setToken, uploadWithProgress } from "./api";
@@ -10,25 +10,12 @@ import BrandDataCenter from "./components/BrandDataCenter.vue";
 import OperationAnalysis from "./components/OperationAnalysis.vue";
 import AdminTaskCenter from "./components/AdminTaskCenter.vue";
 import AiTaskCenter from "./components/AiTaskCenter.vue";
+import SystemConfigCenter from "./components/SystemConfigCenter.vue";
 import type { ContentPlan, Dashboard, Integration } from "./types";
 
 type AnyRow = Record<string, any>;
 type Ledger = { departments: AnyRow[]; employees: AnyRow[]; products: AnyRow[]; accounts: AnyRow[]; stores: AnyRow[]; imports: AnyRow[]; snapshots: AnyRow[]; attributions: AnyRow[]; sourceHealth: AnyRow[] };
 type AuthUser = { adminUserId?: string; id?: string; name: string; username?: string; roles?: string[]; permissions?: string[]; isSuperAdmin?: boolean; loginType: string; portal?: string };
-type DouyinStatus = {
-  state: string;
-  message: string;
-  clientKey: string;
-  clientSecretConfigured: boolean;
-  authorized: boolean;
-  openIdMasked: string;
-  scope: string;
-  expiresAt?: string;
-  redirectUri: string;
-  webhookUrl: string;
-  lastSuccessAt?: string;
-};
-
 const navItems = [
   { key: "dashboard", label: "今日总览", icon: House },
   { key: "taskCommand", label: "任务指挥台", icon: DocumentChecked },
@@ -40,7 +27,7 @@ const navItems = [
   { key: "operationAnalysis", label: "运营分析", icon: DataAnalysis },
   { key: "engagement", label: "评论与直播", icon: VideoCamera },
   { key: "reports", label: "报告与任务", icon: DataAnalysis },
-  { key: "integrations", label: "连接设置", icon: Connection },
+  { key: "integrations", label: "系统配置", icon: Setting },
 ];
 
 const active = ref("dashboard");
@@ -61,6 +48,7 @@ const brandDataCenter = ref<{ reload: () => Promise<void> }>();
 const operationAnalysis = ref<{ reload: () => Promise<void> }>();
 const adminTaskCenter = ref<{ reload: () => Promise<void> }>();
 const aiTaskCenter = ref<{ reload: () => Promise<void> }>();
+const systemConfigCenter = ref<{ reload: () => Promise<void> }>();
 const comments = ref<AnyRow[]>([]);
 const live = ref<AnyRow[]>([]);
 const shopItems = ref<AnyRow[]>([]);
@@ -81,9 +69,6 @@ const ledgerFormType = ref<"employees" | "products" | "accounts" | "stores">("em
 const ledgerEditingId = ref("");
 const ledgerContinue = ref(false);
 const ledgerForm = reactive<Record<string, any>>({});
-const douyinStatus = ref<DouyinStatus>();
-const douyinClientKey = ref("");
-const douyinClientSecret = ref("");
 const productionUploadDialog = ref(false);
 const productionUploadFiles = ref<UploadUserFile[]>([]);
 const productionUploadProgress = ref(0);
@@ -210,13 +195,7 @@ async function loadActive() {
   }
   if (active.value === "engagement") [comments.value, live.value] = await Promise.all([api<AnyRow[]>("/api/v1/comments"), api<AnyRow[]>("/api/v1/live")]);
   if (active.value === "reports") [reports.value, jobs.value, tasks.value, sops.value] = await Promise.all([api<AnyRow[]>("/api/v1/reports"), api<AnyRow[]>("/api/v1/jobs"), api<AnyRow[]>("/api/v1/tasks"), api<AnyRow[]>("/api/v1/sops")]);
-  if (active.value === "integrations") {
-    [integrations.value, douyinStatus.value] = await Promise.all([
-      api<Integration[]>("/api/v1/integrations"),
-      api<DouyinStatus>("/api/v1/integrations/douyin/status"),
-    ]);
-    douyinClientKey.value = douyinStatus.value.clientKey;
-  }
+  if (active.value === "integrations") return systemConfigCenter.value?.reload();
 }
 
 async function switchPage(key: string) {
@@ -252,32 +231,6 @@ async function generateAssetOnlyVideo() {
     contentFilter.value = "PENDING_APPROVAL";
     await loadActive();
   }, "无需补拍脚本已生成，审核通过后可直接启动AI剪辑");
-}
-
-async function checkIntegrations() {
-  await withLoading(async () => {
-    await post("/api/v1/integrations/check");
-    integrations.value = await api("/api/v1/integrations");
-    if (active.value === "dashboard") await loadDashboard();
-  }, "连接状态已刷新");
-}
-
-async function saveDouyinConfig() {
-  await withLoading(async () => {
-    douyinStatus.value = await post<DouyinStatus>("/api/v1/integrations/douyin/config", {
-      clientKey: douyinClientKey.value,
-      clientSecret: douyinClientSecret.value,
-    });
-    douyinClientSecret.value = "";
-    integrations.value = await api("/api/v1/integrations");
-  }, "抖音应用配置已保存");
-}
-
-async function authorizeDouyin() {
-  await withLoading(async () => {
-    const result = await api<{ url: string }>("/api/v1/integrations/douyin/authorize-url");
-    window.location.assign(result.url);
-  });
 }
 
 async function approve(item: ContentPlan) {
@@ -804,7 +757,7 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
       <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon class="page-alert" />
 
       <section v-if="active === 'taskCommand'" class="page"><AdminTaskCenter ref="adminTaskCenter" /></section>
-      <section v-if="active === 'aiTasks'" class="page"><AiTaskCenter ref="aiTaskCenter" /></section>
+      <section v-if="active === 'aiTasks'" class="page"><AiTaskCenter ref="aiTaskCenter" @navigate="switchPage" /></section>
 
       <section v-if="active === 'dashboard'" class="page dashboard-page">
         <div class="hero-panel">
@@ -956,7 +909,7 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
       </section>
 
       <section v-else-if="active === 'assets'" class="page">
-        <BrandDataCenter ref="brandDataCenter" @open-content="openGeneratedContent" />
+        <BrandDataCenter ref="brandDataCenter" @open-content="openGeneratedContent" @open-system-config="switchPage('integrations')" />
       </section>
 
       <section v-else-if="active === 'ledger'" class="page">
@@ -1014,29 +967,7 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
         <div class="sop-list" v-else><article v-for="item in sops" :key="item.id"><div><strong>{{ item.kind }} · V{{ item.version }}</strong><el-tag :type="item.status === 'ACTIVE' ? 'success' : 'info'">{{ item.status }}</el-tag></div><p>{{ item.changeNote }}</p><small>生效时间 {{ time(item.effectiveAt) }}</small></article></div>
       </section>
 
-      <section v-else class="page">
-        <div class="section-heading"><div><span class="eyebrow">INTEGRATION STATUS</span><h2>平台连接与能力状态</h2><p>每个账号分别显示能力；未验证的接口不会显示为已打通。</p></div><el-button :icon="Refresh" @click="checkIntegrations">检查全部连接</el-button></div>
-        <section class="douyin-config-panel">
-          <div class="douyin-config-head">
-            <div><strong>抖音开放平台</strong><p>授权赛电自有抖音账号，接收平台事件并为内容效果回收提供身份基础。</p></div>
-            <el-tag :type="statusType(douyinStatus?.state || 'UNCONFIGURED')">{{ statusLabel(douyinStatus?.state || "UNCONFIGURED") }}</el-tag>
-          </div>
-          <div class="douyin-config-form">
-            <el-input v-model="douyinClientKey" placeholder="Client Key"><template #prepend>Client Key</template></el-input>
-            <el-input v-model="douyinClientSecret" type="password" show-password placeholder="留空表示保留现有密钥"><template #prepend>Client Secret</template></el-input>
-            <el-button type="primary" :loading="loading" @click="saveDouyinConfig">保存应用配置</el-button>
-            <el-button :disabled="!douyinStatus?.clientSecretConfigured" @click="authorizeDouyin">{{ douyinStatus?.authorized ? "重新授权账号" : "授权抖音账号" }}</el-button>
-          </div>
-          <div class="douyin-config-meta">
-            <span>回调：{{ douyinStatus?.redirectUri || "加载中" }}</span>
-            <span>Webhook：{{ douyinStatus?.webhookUrl || "加载中" }}</span>
-            <span>账号：{{ douyinStatus?.openIdMasked || "未授权" }}</span>
-            <span>令牌有效期：{{ time(douyinStatus?.expiresAt) }}</span>
-          </div>
-        </section>
-        <div class="integration-grid"><article v-for="item in integrations" :key="item.id"><div class="integration-icon">{{ item.displayName.slice(0, 1) }}</div><div class="integration-copy"><div><h3>{{ item.displayName }}</h3><el-tag :type="statusType(item.state)">{{ statusLabel(item.state) }}</el-tag></div><p>{{ item.message }}</p><div class="capability-tags"><span v-for="capability in item.capabilities" :key="capability">{{ capability }}</span><span v-if="!item.capabilities.length">暂无已验证能力</span></div><small>检查时间：{{ time(item.lastCheckedAt) }}</small></div></article></div>
-        <section class="token-panel"><div><el-icon><Setting /></el-icon><div><strong>总管理后台身份</strong><p>当前管理员：{{ actorInput }}。员工身份、岗位和权限在任务指挥台统一管理。</p></div></div><el-tag type="success">已登录</el-tag></section>
-      </section>
+      <SystemConfigCenter v-else ref="systemConfigCenter" />
 
       <el-dialog v-model="productionUploadDialog" title="上传对应拍摄素材" width="680px" destroy-on-close>
         <div class="production-upload-context">

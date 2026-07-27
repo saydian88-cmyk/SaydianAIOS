@@ -7,6 +7,7 @@ import { api, patch, post } from "../api";
 type Row = Record<string, any>;
 
 const props = defineProps<{ products: Row[] }>();
+const emit = defineEmits<{ (event: "open-system-config"): void }>();
 const loading = ref(false);
 const view = ref("opportunities");
 const projects = ref<Row[]>([]);
@@ -35,6 +36,8 @@ const createForm = reactive({
   assetGapTaskId: "",
   requestedModelId: "",
   allowFallback: true,
+  executionMode: "FULL_VIDEO",
+  allowExternalGeneration: false,
 });
 const providerForm = reactive({
   code: "",
@@ -154,6 +157,7 @@ function resetCreate() {
   Object.assign(createForm, {
     platform: "DOUYIN", productModel: "", topic: "", audience: "", objective: "内容种草与商品点击",
     keywordIds: [], externalVideoIds: [], requestedModelId: "", allowFallback: true,
+    executionMode: "FULL_VIDEO", allowExternalGeneration: false,
     assetGapTaskId: "",
   });
 }
@@ -165,6 +169,7 @@ function openCreate() {
 
 function onCreateModelChange(value: string) {
   createForm.allowFallback = !value;
+  createForm.allowExternalGeneration = Boolean(value);
 }
 
 function shotModels(shot: Row) {
@@ -202,20 +207,39 @@ function createFromGap(task: Row) {
 async function createAndGenerate() {
   if (!createForm.topic.trim()) return ElMessage.warning("请填写视频主题或选择关键词");
   await run(async () => {
-    const project = await post<Row>("/api/v1/video-factory/projects", {
-      ...createForm,
-      routingMode: createForm.requestedModelId ? "FIXED" : "AUTO",
-    });
-    await post(`/api/v1/video-factory/projects/${project.id}/generate`, {
-      candidateIndex: 0,
-      requestedModelId: createForm.requestedModelId || undefined,
-      routingMode: createForm.requestedModelId ? "FIXED" : "AUTO",
-      allowFallback: createForm.allowFallback,
+    await post<Row>("/api/v1/ai-tasks", {
+      type: "VIDEO",
+      title: createForm.topic,
+      platform: createForm.platform,
+      productModel: createForm.productModel || undefined,
+      sourceType: createForm.assetGapTaskId
+        ? "ASSET_GAP"
+        : createForm.keywordIds.length
+          ? "SMART_KEYWORD"
+          : createForm.externalVideoIds.length
+            ? "VIRAL_RESEARCH"
+            : "VIDEO_FACTORY",
+      sourceId: createForm.assetGapTaskId || createForm.keywordIds[0] || createForm.externalVideoIds[0] || undefined,
+      instructions: `${createForm.objective}；目标人群：${createForm.audience || "目标用户"}`,
+      input: {
+        executionMode: createForm.executionMode,
+        topic: createForm.topic,
+        audience: createForm.audience,
+        objective: createForm.objective,
+        keywordIds: createForm.keywordIds,
+        externalVideoIds: createForm.externalVideoIds,
+        assetGapTaskId: createForm.assetGapTaskId || undefined,
+      },
+      modelPolicy: {
+        strategy: "CODEX_FIRST",
+        requestedModelId: createForm.requestedModelId || undefined,
+        allowFallback: createForm.allowFallback,
+        allowExternalGeneration: createForm.allowExternalGeneration,
+      },
     });
     createDialog.value = false;
     await reload();
-    await openProject(project.id);
-  }, "脚本、分镜和缺失镜头任务已创建");
+  }, createForm.executionMode === "SCRIPT_ONLY" ? "脚本任务已进入AI任务中心" : "完整视频任务已进入AI任务中心");
 }
 
 async function openProject(id: string) {
@@ -225,10 +249,26 @@ async function openProject(id: string) {
 
 async function generateProject(row: Row, candidateIndex = 0) {
   await run(async () => {
-    await post(`/api/v1/video-factory/projects/${row.id}/generate`, { candidateIndex, routingMode: "AUTO", allowFallback: true });
+    await post("/api/v1/ai-tasks", {
+      type: "VIDEO",
+      title: row.topic,
+      platform: row.targetPlatforms?.[0] || "DOUYIN",
+      productModel: row.productModel || undefined,
+      sourceType: "VIDEO_PROJECT",
+      sourceId: row.id,
+      instructions: `执行视频工厂第${candidateIndex + 1}套方案`,
+      input: {
+        executionMode: "FULL_VIDEO",
+        existingContentPlanId: row.id,
+        candidateIndex,
+      },
+      modelPolicy: {
+        strategy: "CODEX_FIRST",
+        allowExternalGeneration: false,
+      },
+    });
     await reload();
-    await openProject(row.id);
-  }, "视频项目已进入生产");
+  }, "视频项目已进入AI任务中心");
 }
 
 async function generateShot(shot: Row, modelId = "") {
@@ -389,6 +429,7 @@ onBeforeUnmount(() => {
       </div>
       <div>
         <el-button :icon="Refresh" @click="reload">刷新</el-button>
+        <el-button @click="emit('open-system-config')">模型配置</el-button>
         <el-button type="primary" :icon="Plus" @click="openCreate">一键生成视频</el-button>
       </div>
     </div>
@@ -407,7 +448,6 @@ onBeforeUnmount(() => {
       { label: `生成任务 ${runningCount}`, value: 'jobs' },
       { label: `成片库 ${outputs.length}`, value: 'outputs' },
       { label: '质检审核', value: 'quality' },
-      { label: '模型与成本', value: 'models' },
     ]" />
 
     <div v-if="view === 'opportunities'" class="opportunity-grid">
@@ -496,7 +536,7 @@ onBeforeUnmount(() => {
       </el-table>
     </div>
 
-    <template v-else>
+    <template v-else-if="view === 'models'">
       <div class="model-route">
         <article v-for="platform in ['DOUYIN','TIKTOK']" :key="platform">
           <strong>{{ platform === 'DOUYIN' ? '抖音默认模型' : 'TikTok默认模型' }}</strong>
@@ -533,13 +573,15 @@ onBeforeUnmount(() => {
       <el-form label-position="top" class="form-grid">
         <el-form-item label="目标平台"><el-select v-model="createForm.platform"><el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" /></el-select></el-form-item>
         <el-form-item label="产品型号"><el-select v-model="createForm.productModel" clearable filterable><el-option v-for="item in props.products" :key="item.id" :label="`${item.modelCode} · ${item.name}`" :value="item.modelCode" /></el-select></el-form-item>
+        <el-form-item label="任务模式" class="full"><el-radio-group v-model="createForm.executionMode"><el-radio-button value="SCRIPT_ONLY">仅生成脚本</el-radio-button><el-radio-button value="FULL_VIDEO">生成完整视频</el-radio-button></el-radio-group><small class="form-tip">完整视频优先复用已审核素材，由本地Codex完成合成和质检。</small></el-form-item>
         <el-form-item label="主题/主关键词" class="full" required><el-input v-model="createForm.topic" maxlength="150" /></el-form-item>
         <el-form-item label="目标人群"><el-input v-model="createForm.audience" /></el-form-item>
         <el-form-item label="内容目标"><el-input v-model="createForm.objective" /></el-form-item>
-        <el-form-item label="生成模型" class="full"><el-select v-model="createForm.requestedModelId" clearable placeholder="智能推荐（默认）" @change="onCreateModelChange"><el-option v-for="item in enabledModels" :key="item.id" :label="`${item.provider.displayName} · ${item.displayName}`" :value="item.id" /></el-select><small class="form-tip">智能推荐默认允许降级；指定模型默认不切换，也可手动开启备用。</small></el-form-item>
+        <el-form-item label="生成模型" class="full"><el-select v-model="createForm.requestedModelId" clearable placeholder="Codex智能推荐（默认）" @change="onCreateModelChange"><el-option v-for="item in enabledModels" :key="item.id" :label="`${item.provider.displayName} · ${item.displayName}`" :value="item.id" /></el-select><small class="form-tip">默认使用Codex本地工具；指定模型表示允许该任务调用外部视觉能力。</small></el-form-item>
+        <el-form-item label="外部视觉能力" class="full"><el-switch v-model="createForm.allowExternalGeneration" active-text="本地素材不足时允许调用已配置模型" /></el-form-item>
         <el-form-item label="失败策略" class="full"><el-switch v-model="createForm.allowFallback" active-text="允许失败后自动切换模型" /></el-form-item>
       </el-form>
-      <template #footer><el-button @click="createDialog = false">取消</el-button><el-button type="primary" @click="createAndGenerate">生成3套脚本并执行主方案</el-button></template>
+      <template #footer><el-button @click="createDialog = false">取消</el-button><el-button type="primary" @click="createAndGenerate">{{ createForm.executionMode === 'SCRIPT_ONLY' ? '生成3套脚本' : '生成3套脚本并执行主方案' }}</el-button></template>
     </el-dialog>
 
     <el-dialog v-model="providerDialog" :title="editingProviderId ? '设置视频服务商' : '新增视频服务商'" width="760px" destroy-on-close>
