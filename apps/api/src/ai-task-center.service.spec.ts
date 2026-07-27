@@ -163,7 +163,7 @@ describe("AiTaskCenterService", () => {
           mediaType: "image/jpeg",
           extension: "jpg",
           sha256: "hash",
-          sizeBytes: 100,
+          sizeBytes: 100n,
           objectKey: "assets/w9.jpg",
           storageUrl: "oss://bucket/assets/w9.jpg",
           sourcePath: "D:\\素材\\w9.jpg",
@@ -190,7 +190,12 @@ describe("AiTaskCenterService", () => {
       strategy: "CODEX_FIRST",
       allowExternalGeneration: false,
     });
-    expect(result.assets[0]).toMatchObject({ id: "asset-1", downloadUrl: null, localPath: null });
+    expect(result.assets[0]).toMatchObject({
+      id: "asset-1",
+      sizeBytes: "100",
+      downloadUrl: null,
+      localPath: null,
+    });
     expect(result.assets[0]).not.toHaveProperty("sourcePath");
     expect(result.assets[0]).not.toHaveProperty("objectKey");
   });

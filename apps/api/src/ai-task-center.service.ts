@@ -636,6 +636,7 @@ export class AiTaskCenterService implements OnModuleInit {
         }
         return {
           ...metadata,
+          sizeBytes: asset.sizeBytes.toString(),
           downloadUrl,
           localPath: null,
         };
