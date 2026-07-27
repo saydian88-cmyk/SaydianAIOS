@@ -169,13 +169,21 @@ export class WorkbenchController {
         search: query.query,
         platform: query.platform,
         take: query.keywordLimit || "200",
-      }),
-      this.viralTrend.todayKeywords(query.platform || "DOUYIN"),
-      this.viralTrend.trends({ take: query.viralLimit || "60" }),
+      }).catch(() => ({
+        total: 0,
+        items: [],
+        summary: [],
+        limits: { dailyCollectionPerPlatform: 50, pinnedPerPlatform: 50 },
+      })),
+      this.viralTrend.todayKeywords(query.platform || "DOUYIN").catch(() => ({ keywords: [] })),
+      this.viralTrend.trends({ take: query.viralLimit || "60" }).catch(() => ({
+        items: [],
+        summary: { total: 0 },
+      })),
       this.videoFactory.projects({
         platform: query.platform,
         productModel: query.model,
-      }),
+      }).catch(() => []),
     ]);
     const pending = Array.isArray(pendingAssets) ? pendingAssets : pendingAssets.items;
     return {
