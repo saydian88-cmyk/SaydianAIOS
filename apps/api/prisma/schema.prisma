@@ -386,6 +386,7 @@ model Employee {
   status       String   @default("ACTIVE")
   isSuperAdmin Boolean  @default(false)
   supervisorEmployeeId String?
+  collaborationNote    String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -427,6 +428,7 @@ model EmployeeReportingInvite {
   senderEmployeeId    String
   recipientEmployeeId String
   status              String   @default("PENDING")
+  relationshipNote    String?
   respondedAt         DateTime?
   cancelledAt         DateTime?
   createdAt           DateTime @default(now())

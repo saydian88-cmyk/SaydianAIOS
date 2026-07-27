@@ -30,7 +30,7 @@ describe("WorkbenchService operation team", () => {
     await expect(target.createTeamTask(operator, {
       assigneeEmployeeId: "other-operator",
       title: "协作任务",
-    })).rejects.toThrow("只能给当前直属运营安排任务");
+    })).rejects.toThrow("只能给当前协作运营安排任务");
   });
 
   it("only reviews tasks assigned by the current operator", async () => {
@@ -60,6 +60,6 @@ describe("WorkbenchService operation team", () => {
       },
     });
     await expect(target.respondOperatorInvite(operator, "invite-1", { action: "ACCEPT" }))
-      .rejects.toThrow("直属关系不能形成循环");
+      .rejects.toThrow("协作关系不能形成循环");
   });
 });

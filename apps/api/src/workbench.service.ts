@@ -210,7 +210,7 @@ export class WorkbenchService {
             taskId: id,
             recipientEmployeeId: task.assignedByEmployeeId,
             type: "TEAM_TASK_SUBMITTED",
-            title: "直属运营已提交任务",
+            title: "协作运营已提交任务",
             content: task.title,
           },
         });
@@ -231,7 +231,7 @@ export class WorkbenchService {
       }),
       this.prisma.employee.findMany({
         where: { supervisorEmployeeId: employeeId, status: "ACTIVE" },
-        select: { id: true, name: true, employeeNo: true, role: true },
+        select: { id: true, name: true, employeeNo: true, role: true, collaborationNote: true },
         orderBy: { name: "asc" },
       }),
       this.prisma.employeeReportingInvite.findMany({
@@ -257,7 +257,7 @@ export class WorkbenchService {
       }),
     ]);
     return {
-      supervisor: employee?.supervisor || null,
+      supervisor: employee?.supervisor ? { ...employee.supervisor, collaborationNote: employee.collaborationNote } : null,
       directReports,
       invitations: { incoming, outgoing },
       operators,
@@ -277,16 +277,17 @@ export class WorkbenchService {
       where: { senderEmployeeId, recipientEmployeeId, status: "PENDING" },
     });
     if (duplicate) throw new BadRequestException("已向该运营发出邀请");
+    const relationshipNote = value(body.relationshipNote);
     const invite = await this.prisma.employeeReportingInvite.create({
-      data: { senderEmployeeId, recipientEmployeeId },
+      data: { senderEmployeeId, recipientEmployeeId, relationshipNote: relationshipNote || null },
     });
     await Promise.all([
       this.prisma.taskNotification.create({
         data: {
           recipientEmployeeId,
           type: "REPORTING_INVITE",
-          title: "收到直属关系邀请",
-          content: `${session.name} 邀请你成为直属运营`,
+          title: "收到协作关系邀请",
+          content: relationshipNote ? `${session.name}：${relationshipNote}` : `${session.name} 邀请你成为协作运营`,
         },
       }),
       this.audit(session.name, "REPORTING_INVITE_CREATE", "EmployeeReportingInvite", invite.id, {
@@ -312,7 +313,7 @@ export class WorkbenchService {
       if (action === "ACCEPT") {
         await tx.employee.update({
           where: { id: invite.recipientEmployeeId },
-          data: { supervisorEmployeeId: invite.senderEmployeeId },
+          data: { supervisorEmployeeId: invite.senderEmployeeId, collaborationNote: invite.relationshipNote },
         });
         await tx.employeeReportingInvite.updateMany({
           where: { recipientEmployeeId: invite.recipientEmployeeId, status: "PENDING", id: { not: id } },
@@ -327,7 +328,7 @@ export class WorkbenchService {
         data: {
           recipientEmployeeId: invite.senderEmployeeId,
           type: action === "ACCEPT" ? "REPORTING_INVITE_ACCEPTED" : "REPORTING_INVITE_REJECTED",
-          title: action === "ACCEPT" ? "直属关系邀请已接受" : "直属关系邀请被拒绝",
+          title: action === "ACCEPT" ? "协作关系邀请已接受" : "协作关系邀请被拒绝",
           content: invite.recipient.name,
         },
       });
@@ -357,7 +358,7 @@ export class WorkbenchService {
     if (!result.count) throw new NotFoundException("邀请不存在或已处理");
     await Promise.all([
       this.prisma.taskNotification.create({
-        data: { recipientEmployeeId: invite.recipientEmployeeId, type: "REPORTING_INVITE_CANCELLED", title: "直属关系邀请已撤回", content: session.name },
+        data: { recipientEmployeeId: invite.recipientEmployeeId, type: "REPORTING_INVITE_CANCELLED", title: "协作关系邀请已撤回", content: session.name },
       }),
       this.audit(session.name, "REPORTING_INVITE_CANCEL", "EmployeeReportingInvite", id, {}),
     ]);
@@ -368,12 +369,12 @@ export class WorkbenchService {
     this.requireOperator(session);
     const result = await this.prisma.employee.updateMany({
       where: { id: employeeId, supervisorEmployeeId: session.employeeId },
-      data: { supervisorEmployeeId: null },
+      data: { supervisorEmployeeId: null, collaborationNote: null },
     });
-    if (!result.count) throw new NotFoundException("该员工不是你的直属运营");
+    if (!result.count) throw new NotFoundException("该员工不是你的协作运营");
     await Promise.all([
       this.prisma.taskNotification.create({
-        data: { recipientEmployeeId: employeeId, type: "REPORTING_RELATION_REMOVED", title: "直属关系已解除", content: session.name },
+        data: { recipientEmployeeId: employeeId, type: "REPORTING_RELATION_REMOVED", title: "协作关系已解除", content: session.name },
       }),
       this.audit(session.name, "REPORTING_RELATION_REMOVE", "Employee", employeeId, {}),
     ]);
@@ -406,7 +407,7 @@ export class WorkbenchService {
     this.requireOperator(session);
     const assigneeEmployeeId = value(body.assigneeEmployeeId);
     const title = value(body.title);
-    if (!title || !assigneeEmployeeId) throw new BadRequestException("请选择直属运营并填写任务标题");
+    if (!title || !assigneeEmployeeId) throw new BadRequestException("请选择协作运营并填写任务标题");
     const assignee = await this.prisma.employee.findFirst({
       where: {
         id: assigneeEmployeeId,
@@ -415,7 +416,7 @@ export class WorkbenchService {
         roles: { some: { role: { code: "CONTENT_OPERATOR", active: true } } },
       },
     });
-    if (!assignee) throw new BadRequestException("只能给当前直属运营安排任务");
+    if (!assignee) throw new BadRequestException("只能给当前协作运营安排任务");
     const created = await this.prisma.opsTask.create({
       data: {
         taskNo: `TEAM-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
@@ -723,7 +724,7 @@ export class WorkbenchService {
     let current: string | null = supervisorEmployeeId;
     const visited = new Set<string>();
     for (let depth = 0; current && depth < 50; depth += 1) {
-      if (current === employeeId || visited.has(current)) throw new BadRequestException("直属关系不能形成循环");
+      if (current === employeeId || visited.has(current)) throw new BadRequestException("协作关系不能形成循环");
       visited.add(current);
       const row: { supervisorEmployeeId: string | null } | null = await this.prisma.employee.findUnique({
         where: { id: current },

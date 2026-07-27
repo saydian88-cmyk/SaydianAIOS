@@ -1,4 +1,5 @@
 ALTER TABLE "Employee" ADD COLUMN "supervisorEmployeeId" TEXT;
+ALTER TABLE "Employee" ADD COLUMN "collaborationNote" TEXT;
 ALTER TABLE "OpsTask" ADD COLUMN "assignedByEmployeeId" TEXT;
 
 CREATE TABLE "EmployeeReportingInvite" (
@@ -6,6 +7,7 @@ CREATE TABLE "EmployeeReportingInvite" (
   "senderEmployeeId" TEXT NOT NULL,
   "recipientEmployeeId" TEXT NOT NULL,
   "status" TEXT NOT NULL DEFAULT 'PENDING',
+  "relationshipNote" TEXT,
   "respondedAt" TIMESTAMP(3),
   "cancelledAt" TIMESTAMP(3),
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,

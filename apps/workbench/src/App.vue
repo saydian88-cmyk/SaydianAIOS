@@ -49,7 +49,7 @@ const inviteVisible = ref(false);
 const reviewVisible = ref(false);
 const reviewTaskRow = ref<Row>();
 const teamTaskForm = reactive({ assigneeEmployeeId: "", title: "", description: "", priority: "MEDIUM", dueAt: "", expectedResult: "", attachments: "" });
-const inviteForm = reactive({ recipientEmployeeId: "" });
+const inviteForm = reactive({ recipientEmployeeId: "", relationshipNote: "" });
 const reviewForm = reactive({ action: "APPROVE", note: "" });
 const activeTask = ref<Row>();
 const submitVisible = ref(false);
@@ -222,13 +222,13 @@ async function sendTeamInvite() {
   if (!inviteForm.recipientEmployeeId) return ElMessage.warning("请选择运营");
   await post("/api/v1/workbench/operation-team/invitations", inviteForm);
   inviteVisible.value = false;
-  ElMessage.success("直属关系邀请已发送");
+  ElMessage.success("协作关系邀请已发送");
   await loadOperationTeam();
 }
 
 async function respondInvite(id: string, action: string) {
   await post(`/api/v1/workbench/operation-team/invitations/${id}/respond`, { action });
-  ElMessage.success(action === "ACCEPT" ? "直属关系已建立" : "邀请已拒绝");
+  ElMessage.success(action === "ACCEPT" ? "协作关系已建立" : "邀请已拒绝");
   await loadOperationTeam();
 }
 
@@ -239,18 +239,18 @@ async function cancelInvite(id: string) {
 
 async function removeDirectReport(id: string) {
   await post(`/api/v1/workbench/operation-team/direct-reports/${id}/remove`);
-  ElMessage.success("直属关系已解除");
+  ElMessage.success("协作关系已解除");
   await loadOperationTeam();
 }
 
 async function createTeamTask() {
-  if (!teamTaskForm.assigneeEmployeeId || !teamTaskForm.title.trim()) return ElMessage.warning("请选择直属运营并填写任务标题");
+  if (!teamTaskForm.assigneeEmployeeId || !teamTaskForm.title.trim()) return ElMessage.warning("请选择协作运营并填写任务标题");
   await post("/api/v1/workbench/operation-team/tasks", {
     ...teamTaskForm,
     attachments: teamTaskForm.attachments.split("\n").map((item) => item.trim()).filter(Boolean),
   });
   teamTaskVisible.value = false;
-  ElMessage.success("任务已推送到直属运营的任务列表");
+  ElMessage.success("任务已推送到协作运营的任务列表");
   await loadOperationTeam();
 }
 
@@ -659,32 +659,31 @@ onMounted(() => void bootstrap());
           <div>
             <p class="eyebrow">OPERATION TEAM</p>
             <h2>运营团队协作</h2>
-            <p>运营助理仍属于运营岗位，通过直属关系安排并跟踪协作任务。</p>
           </div>
           <div class="team-hero-actions">
-            <el-button @click="inviteVisible = true">邀请直属运营</el-button>
+            <el-button @click="inviteVisible = true">邀请协作运营</el-button>
             <el-button v-if="operationTeam.directReports?.length" type="primary" @click="teamTaskVisible = true">安排任务</el-button>
           </div>
         </section>
 
         <section class="team-grid">
           <article class="section-card">
-            <div class="section-title"><div><p class="eyebrow">REPORTING LINE</p><h3>直属关系</h3></div></div>
-            <p class="team-supervisor">我的直属运营：<strong>{{ operationTeam.supervisor?.name || "暂未建立" }}</strong></p>
+            <div class="section-title"><div><p class="eyebrow">COLLABORATION</p><h3>协作关系</h3></div></div>
+            <p class="team-supervisor">我的上级协作运营：<strong>{{ operationTeam.supervisor?.name || "暂未建立" }}</strong><small v-if="operationTeam.supervisor?.collaborationNote">{{ operationTeam.supervisor.collaborationNote }}</small></p>
             <div class="compact-list">
               <div v-for="employee in operationTeam.directReports" :key="employee.id">
-                <div><strong>{{ employee.name }}</strong><span>运营 · {{ employee.employeeNo || "未设置工号" }}</span></div>
+                <div><strong>{{ employee.name }}</strong><span>协作运营 · {{ employee.employeeNo || "未设置工号" }}<template v-if="employee.collaborationNote"> · {{ employee.collaborationNote }}</template></span></div>
                 <el-button size="small" @click="removeDirectReport(employee.id)">解除</el-button>
               </div>
             </div>
-            <el-empty v-if="!operationTeam.directReports?.length" description="暂无直属运营" :image-size="60" />
+            <el-empty v-if="!operationTeam.directReports?.length" description="暂无协作运营" :image-size="60" />
           </article>
 
           <article class="section-card">
             <div class="section-title"><div><p class="eyebrow">INVITATIONS</p><h3>关系邀请</h3></div></div>
             <div class="compact-list">
               <div v-for="invite in operationTeam.invitations?.incoming" :key="invite.id">
-                <div><strong>{{ invite.sender.name }}</strong><span>邀请你成为直属运营</span></div>
+                <div><strong>{{ invite.sender.name }}</strong><span>邀请你成为协作运营<template v-if="invite.relationshipNote"> · {{ invite.relationshipNote }}</template></span></div>
                 <div><el-button size="small" @click="respondInvite(invite.id, 'REJECT')">拒绝</el-button><el-button size="small" type="primary" @click="respondInvite(invite.id, 'ACCEPT')">接受</el-button></div>
               </div>
               <div v-for="invite in operationTeam.invitations?.outgoing" :key="invite.id">
@@ -924,21 +923,22 @@ onMounted(() => void bootstrap());
     </nav>
   </div>
 
-  <el-dialog v-model="inviteVisible" title="邀请直属运营" width="min(520px, 92vw)">
+  <el-dialog v-model="inviteVisible" title="邀请协作运营" width="min(520px, 92vw)">
     <el-form label-position="top">
       <el-form-item label="选择运营" required>
         <el-select v-model="inviteForm.recipientEmployeeId" filterable placeholder="搜索运营姓名">
           <el-option v-for="employee in operationTeam.operators" :key="employee.id" :label="employee.name" :value="employee.id" />
         </el-select>
       </el-form-item>
-      <p class="muted">对方接受后将成为你的直属运营；如果对方已有上级，会明确替换原关系。</p>
+      <el-form-item label="关系说明"><el-input v-model="inviteForm.relationshipNote" type="textarea" :rows="3" placeholder="例如：负责协助短视频排期、素材跟进和发布复盘" /></el-form-item>
+      <p class="muted">对方接受后将建立协作关系；如果对方已有上级协作运营，会明确替换原关系。</p>
     </el-form>
     <template #footer><el-button @click="inviteVisible = false">取消</el-button><el-button type="primary" @click="sendTeamInvite">发送邀请</el-button></template>
   </el-dialog>
 
   <el-dialog v-model="teamTaskVisible" title="安排运营协作任务" width="min(620px, 92vw)">
     <el-form label-position="top">
-      <el-form-item label="直属运营" required><el-select v-model="teamTaskForm.assigneeEmployeeId"><el-option v-for="employee in operationTeam.directReports" :key="employee.id" :label="employee.name" :value="employee.id" /></el-select></el-form-item>
+      <el-form-item label="协作运营" required><el-select v-model="teamTaskForm.assigneeEmployeeId"><el-option v-for="employee in operationTeam.directReports" :key="employee.id" :label="employee.name" :value="employee.id" /></el-select></el-form-item>
       <el-form-item label="任务标题" required><el-input v-model="teamTaskForm.title" /></el-form-item>
       <el-form-item label="工作要求"><el-input v-model="teamTaskForm.description" type="textarea" :rows="3" /></el-form-item>
       <el-form-item label="期望交付结果"><el-input v-model="teamTaskForm.expectedResult" type="textarea" :rows="2" /></el-form-item>
