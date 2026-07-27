@@ -104,13 +104,13 @@ jobs:
         run: |
           docker pull "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-admin:${{ github.sha }}"
           if [[ "$ADMIN_ONLY" == "true" ]]; then
-            docker save "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-admin:${{ github.sha }}" \
-              | gzip -1 > /tmp/saydian-ops-admin.tar.gz
+            admin_container="$(docker create "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-admin:${{ github.sha }}")"
+            docker cp "$admin_container:/usr/share/nginx/html" /tmp/admin-html
+            docker rm "$admin_container"
+            tar -C /tmp -czf /tmp/saydian-ops-admin-html.tar.gz admin-html
             scp -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -P "${{ secrets.TENCENT_PORT || '22' }}" \
-              /tmp/saydian-ops-admin.tar.gz \
+              /tmp/saydian-ops-admin-html.tar.gz \
               "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}:/tmp/"
-            ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}" \
-              "sudo bash -lc 'set -euo pipefail; gzip -dc /tmp/saydian-ops-admin.tar.gz | docker load; rm -f /tmp/saydian-ops-admin.tar.gz'"
           else
             docker pull "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-api:${{ github.sha }}"
             docker pull "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-workbench:${{ github.sha }}"
@@ -138,6 +138,12 @@ jobs:
           images="$base/env/images.env"
           production_env="$base/env/production.env"
           previous_admin="$(grep '^OPS_ADMIN_IMAGE=' "$images" | cut -d= -f2-)"
+          build_dir="$(mktemp -d)"
+          trap 'rm -rf "$build_dir"' EXIT
+          tar -C "$build_dir" -xzf /tmp/saydian-ops-admin-html.tar.gz
+          rm -f /tmp/saydian-ops-admin-html.tar.gz
+          printf 'FROM %s\nCOPY admin-html/ /usr/share/nginx/html/\n' "$previous_admin" > "$build_dir/Dockerfile"
+          docker build -t "$ADMIN_IMAGE" "$build_dir"
           sed -i "s|^OPS_ADMIN_IMAGE=.*|OPS_ADMIN_IMAGE=$ADMIN_IMAGE|" "$images"
           docker compose --env-file "$production_env" --env-file "$images" -f "$compose" up -d ops-admin
           docker compose --env-file "$production_env" --env-file "$images" -f "$compose" restart gateway
