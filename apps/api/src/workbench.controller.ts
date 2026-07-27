@@ -9,9 +9,14 @@ import {
   Post,
   Query,
   UploadedFile,
+  UploadedFiles,
   UseInterceptors,
 } from "@nestjs/common";
-import { FileInterceptor } from "@nestjs/platform-express";
+import { FileInterceptor, FilesInterceptor } from "@nestjs/platform-express";
+import { randomUUID } from "node:crypto";
+import { mkdirSync } from "node:fs";
+import { extname, resolve } from "node:path";
+import { diskStorage } from "multer";
 import { AuthService } from "./auth.service";
 import { BrandDataService } from "./brand-data.service";
 import { PrismaService } from "./prisma.service";
@@ -26,6 +31,21 @@ type UploadFile = {
   size: number;
   buffer: Buffer;
 };
+
+type DiskFile = {
+  originalname: string;
+  mimetype: string;
+  size: number;
+  path: string;
+};
+
+const workbenchUploadInbox = resolve(process.cwd(), "data", "upload-inbox");
+mkdirSync(workbenchUploadInbox, { recursive: true });
+
+const workbenchBatchUploadStorage = diskStorage({
+  destination: workbenchUploadInbox,
+  filename: (_request, file, callback) => callback(null, `${Date.now()}-${randomUUID()}${extname(file.originalname).toLowerCase()}`),
+});
 
 @Controller("api/v1/workbench")
 export class WorkbenchController {
@@ -114,6 +134,57 @@ export class WorkbenchController {
     return this.brandData.uploadAsset(file, { ...body, employeeId: employee.employeeId }, employee.name);
   }
 
+  @Post("upload-batches")
+  createUploadBatch(
+    @Headers("authorization") authorization: string | undefined,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const employee = this.requirePermission(authorization, "ASSET_UPLOAD");
+    return this.brandData.createUploadBatch({ ...body, employeeId: employee.employeeId }, employee.name);
+  }
+
+  @Post("upload-batches/assist")
+  assistUploadBatch(
+    @Headers("authorization") authorization: string | undefined,
+    @Body() body: Record<string, unknown>,
+  ) {
+    this.requirePermission(authorization, "ASSET_UPLOAD");
+    return this.brandData.suggestUploadMetadata(body);
+  }
+
+  @Post("upload-batches/:id/files")
+  @UseInterceptors(FilesInterceptor("files", 20, {
+    storage: workbenchBatchUploadStorage,
+    limits: { fileSize: 200 * 1024 * 1024, files: 20 },
+  }))
+  uploadBatchFiles(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @UploadedFiles() files: DiskFile[],
+    @Body() body: Record<string, unknown>,
+  ) {
+    const employee = this.requirePermission(authorization, "ASSET_UPLOAD");
+    return this.brandData.uploadBatchFiles(id, files, employee.name, body);
+  }
+
+  @Get("assets/:id")
+  asset(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+  ) {
+    this.requirePermission(authorization, "DATA_CENTER_VIEW");
+    return this.brandData.asset(id);
+  }
+
+  @Get("assets/:id/download-url")
+  assetDownloadUrl(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+  ) {
+    this.requirePermission(authorization, "DATA_CENTER_VIEW");
+    return this.brandData.assetDownloadUrl(id);
+  }
+
   @Post("knowledge")
   createKnowledge(
     @Headers("authorization") authorization: string | undefined,
@@ -139,7 +210,7 @@ export class WorkbenchController {
   ) {
     const employee = this.requirePermission(authorization, "DATA_CENTER_VIEW");
     const canCurateAssets = employee.permissions.includes("*") || employee.permissions.includes("ASSET_CURATE");
-    const [assets, knowledge, pendingAssets, assetTotal, knowledgeTotal, keywords, viralKeywords, viralTrend, videoProjects] = await Promise.all([
+    const [assets, knowledge, pendingAssets, assetTotal, knowledgeTotal, keywords, viralKeywords, viralTrend, videoProjects, products, productionPlans] = await Promise.all([
       this.brandData.rankedAssets({
         query: query.query,
         model: query.model,
@@ -184,6 +255,18 @@ export class WorkbenchController {
         platform: query.platform,
         productModel: query.model,
       }).catch(() => []),
+      this.prisma.product.findMany({
+        where: { status: { not: "ARCHIVED" } },
+        select: { id: true, modelCode: true, name: true, category: true },
+        orderBy: [{ category: "asc" }, { modelCode: "asc" }],
+        take: 500,
+      }),
+      this.prisma.contentPlan.findMany({
+        where: { kind: "VIDEO", productionStage: "AWAITING_ASSETS" },
+        select: { id: true, productionNo: true, topic: true, shootRequirements: true },
+        orderBy: { updatedAt: "desc" },
+        take: 100,
+      }),
     ]);
     const pending = Array.isArray(pendingAssets) ? pendingAssets : pendingAssets.items;
     return {
@@ -205,6 +288,7 @@ export class WorkbenchController {
       viralKeywords,
       viralTrend,
       videoProjects,
+      uploadOptions: { products, productionPlans },
     };
   }
 

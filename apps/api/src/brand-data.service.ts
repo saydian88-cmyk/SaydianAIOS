@@ -840,12 +840,21 @@ export class BrandDataService {
       orderBy: [{ qualityScore: "desc" }, { useCount: "desc" }, { updatedAt: "desc" }],
       take: limit,
     });
-    return rows.map((row) => ({
-      ...this.assetView(row),
-      grade: assetGrade(row.qualityScore),
-      callable: true,
-      moduleTypes: Array.from(new Set(row.segments.map((segment) => segment.moduleType).filter(Boolean))),
-    }));
+    return rows.map((row) => {
+      const latest = row.versions[0];
+      const thumbnailObjectKey = row.kind === "IMAGE" ? (latest?.previewObjectKey || latest?.objectKey || row.objectKey) : null;
+      let thumbnailUrl: string | null = null;
+      if (thumbnailObjectKey && this.oss.isConfigured()) {
+        try { thumbnailUrl = this.oss.signedDownloadUrl(thumbnailObjectKey, 900); } catch { thumbnailUrl = null; }
+      }
+      return {
+        ...this.assetView(row),
+        thumbnailUrl,
+        grade: assetGrade(row.qualityScore),
+        callable: true,
+        moduleTypes: Array.from(new Set(row.segments.map((segment) => segment.moduleType).filter(Boolean))),
+      };
+    });
   }
 
   async asset(id: string) {
