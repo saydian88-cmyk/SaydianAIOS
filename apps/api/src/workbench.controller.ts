@@ -15,6 +15,9 @@ import { FileInterceptor } from "@nestjs/platform-express";
 import { AuthService } from "./auth.service";
 import { BrandDataService } from "./brand-data.service";
 import { PrismaService } from "./prisma.service";
+import { SmartKeywordService } from "./smart-keyword.service";
+import { VideoFactoryService } from "./video-factory.service";
+import { ViralTrendService } from "./viral-trend.service";
 import { WorkbenchService } from "./workbench.service";
 
 type UploadFile = {
@@ -31,6 +34,9 @@ export class WorkbenchController {
     private readonly workbench: WorkbenchService,
     private readonly brandData: BrandDataService,
     private readonly prisma: PrismaService,
+    private readonly smartKeywords: SmartKeywordService,
+    private readonly viralTrend: ViralTrendService,
+    private readonly videoFactory: VideoFactoryService,
   ) {}
 
   private employee(authorization?: string) {
@@ -135,7 +141,7 @@ export class WorkbenchController {
     const canViewAssets = employee.permissions.includes("*") || employee.permissions.includes("ASSET_VIEW");
     const canViewKnowledge = employee.permissions.includes("*") || employee.permissions.includes("KNOWLEDGE_VIEW");
     const canCurateAssets = employee.permissions.includes("*") || employee.permissions.includes("ASSET_CURATE");
-    const [assets, knowledge, pendingAssets] = await Promise.all([
+    const [assets, knowledge, pendingAssets, assetTotal, knowledgeTotal, keywords, viralKeywords, viralTrend, videoProjects] = await Promise.all([
       canViewAssets
         ? this.brandData.rankedAssets({
             query: query.query,
@@ -143,7 +149,7 @@ export class WorkbenchController {
             kind: query.kind,
             moduleType: query.moduleType,
             minimumScore: query.minimumScore || "0",
-            limit: query.limit || "60",
+            limit: query.limit || "100",
           })
         : Promise.resolve([]),
       canViewKnowledge
@@ -157,20 +163,84 @@ export class WorkbenchController {
       canCurateAssets
         ? this.brandData.assets({ reviewScope: "PENDING", pageSize: "12" })
         : Promise.resolve({ items: [], total: 0 }),
+      canViewAssets
+        ? this.prisma.asset.count({
+            where: {
+              reviewStatus: "APPROVED",
+              availabilityStatus: "ACTIVE",
+              rightsStatus: { in: ["COMMERCIAL", "EDIT_ONLY"] },
+            },
+          })
+        : Promise.resolve(0),
+      canViewKnowledge
+        ? this.prisma.knowledgeEntry.count({ where: { status: "READY" } })
+        : Promise.resolve(0),
+      this.smartKeywords.list({
+        search: query.query,
+        platform: query.platform,
+        take: query.keywordLimit || "200",
+      }),
+      this.viralTrend.todayKeywords(query.platform || "DOUYIN"),
+      this.viralTrend.trends({ take: query.viralLimit || "60" }),
+      this.videoFactory.projects({
+        platform: query.platform,
+        productModel: query.model,
+      }),
     ]);
     const pending = Array.isArray(pendingAssets) ? pendingAssets : pendingAssets.items;
     return {
       permissions: employee.permissions,
       summary: {
-        assets: assets.length,
+        assets: assetTotal,
+        assetResults: assets.length,
         priorityAssets: assets.filter((item) => ["S", "A"].includes(String(item.grade))).length,
-        knowledge: knowledge.length,
+        knowledge: knowledgeTotal,
         pending: Array.isArray(pending) ? pending.length : 0,
+        keywords: keywords.total,
+        viralVideos: viralTrend.summary?.total || 0,
+        videoProjects: videoProjects.length,
       },
       assets,
       knowledge,
       pendingAssets: pending,
+      keywords,
+      viralKeywords,
+      viralTrend,
+      videoProjects,
     };
+  }
+
+  @Post("data-center/video-projects")
+  createVideoProject(
+    @Headers("authorization") authorization: string | undefined,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const employee = this.requirePermission(authorization, "DATA_CENTER_VIEW");
+    return this.videoFactory.createProject({
+      platform: String(body.platform || "DOUYIN"),
+      productModel: body.productModel ? String(body.productModel) : undefined,
+      topic: body.topic ? String(body.topic) : undefined,
+      audience: body.audience ? String(body.audience) : undefined,
+      objective: body.objective ? String(body.objective) : undefined,
+      keywordIds: Array.isArray(body.keywordIds) ? body.keywordIds.map(String) : [],
+      externalVideoIds: Array.isArray(body.externalVideoIds) ? body.externalVideoIds.map(String) : [],
+      routingMode: "AUTO",
+      allowFallback: true,
+    }, employee.name);
+  }
+
+  @Post("data-center/video-projects/:id/generate")
+  generateVideoProject(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const employee = this.requirePermission(authorization, "DATA_CENTER_VIEW");
+    return this.videoFactory.generateProject(id, {
+      candidateIndex: Number(body.candidateIndex || 0),
+      routingMode: "AUTO",
+      allowFallback: true,
+    }, employee.name);
   }
 
   @Get("live/learning")

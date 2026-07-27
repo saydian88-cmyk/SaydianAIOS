@@ -65,6 +65,10 @@ const dataCenter = reactive<Row>({
   assets: [],
   knowledge: [],
   pendingAssets: [],
+  keywords: { total: 0, items: [] },
+  viralKeywords: { keywords: [] },
+  viralTrend: { summary: {}, items: [] },
+  videoProjects: [],
 });
 const dataCenterTab = ref("assets");
 const dataCenterFilters = reactive({
@@ -74,6 +78,17 @@ const dataCenterFilters = reactive({
   moduleType: "",
   minimumScore: "60",
 });
+const videoFactoryForm = reactive({
+  platform: "DOUYIN",
+  productModel: "",
+  topic: "",
+  audience: "",
+  objective: "种草与转化",
+  keywordIds: [] as string[],
+  externalVideoIds: [] as string[],
+});
+const creatingVideoProject = ref(false);
+const generatingProjectId = ref("");
 
 const roleLabels: Record<string, string> = {
   CONTENT_OPERATOR: "运营",
@@ -131,6 +146,33 @@ function statusType(status: string) {
   return "info";
 }
 
+function compactNumber(value?: number | string) {
+  const number = Number(value || 0);
+  if (number >= 100_000_000) return `${(number / 100_000_000).toFixed(1)}亿`;
+  if (number >= 10_000) return `${(number / 10_000).toFixed(1)}万`;
+  return new Intl.NumberFormat("zh-CN").format(number);
+}
+
+function percent(value?: number | string) {
+  const number = Number(value || 0);
+  return `${(number <= 1 ? number * 100 : number).toFixed(1)}%`;
+}
+
+function platformLabel(value?: string) {
+  return ({ DOUYIN: "抖音", TIKTOK: "TikTok", XIAOHONGSHU: "小红书", WECHAT_CHANNELS: "视频号" } as Record<string, string>)[String(value)] || value || "未设置";
+}
+
+function projectCandidates(project: Row) {
+  const signal = Array.isArray(project.sourceSignals)
+    ? project.sourceSignals.find((item: Row) => item.type === "VIDEO_FACTORY")
+    : undefined;
+  return Array.isArray(project.scriptCandidates) ? project.scriptCandidates : signal?.scriptCandidates || [];
+}
+
+function openExternal(url: string) {
+  window.open(url, "_blank", "noopener,noreferrer");
+}
+
 function liveOptimization(task: Row) {
   return task.submissions?.[0]?.payload?.aiOptimization as Row | undefined;
 }
@@ -169,6 +211,56 @@ async function loadDataCenter() {
     if (value) parameters.set(key, value);
   });
   Object.assign(dataCenter, await api<Row>(`/api/v1/workbench/data-center?${parameters.toString()}`));
+}
+
+function useKeywordInFactory(keyword: Row) {
+  dataCenterTab.value = "videoFactory";
+  videoFactoryForm.platform = keyword.platform || "DOUYIN";
+  videoFactoryForm.productModel = keyword.product?.modelCode || "";
+  videoFactoryForm.topic = keyword.keyword || "";
+  videoFactoryForm.audience = keyword.audience || "";
+  videoFactoryForm.keywordIds = [keyword.id];
+  videoFactoryForm.externalVideoIds = [];
+}
+
+function useViralVideoInFactory(video: Row) {
+  dataCenterTab.value = "videoFactory";
+  videoFactoryForm.platform = video.platform || "DOUYIN";
+  videoFactoryForm.productModel = video.keywordHits?.find((item: Row) => item.keyword?.product)?.keyword?.product?.modelCode || "";
+  videoFactoryForm.topic = video.title || "爆款结构仿拍";
+  videoFactoryForm.audience = "";
+  videoFactoryForm.keywordIds = (video.keywordHits || []).map((item: Row) => item.keywordId || item.keyword?.id).filter(Boolean);
+  videoFactoryForm.externalVideoIds = [video.id];
+}
+
+async function createVideoProject() {
+  if (!videoFactoryForm.topic.trim()) {
+    ElMessage.warning("请填写视频主题或先选择关键词、爆款参考");
+    return;
+  }
+  creatingVideoProject.value = true;
+  try {
+    await post("/api/v1/workbench/data-center/video-projects", videoFactoryForm);
+    ElMessage.success("已生成3个视频方向，可继续生成拍摄执行包");
+    videoFactoryForm.keywordIds = [];
+    videoFactoryForm.externalVideoIds = [];
+    await loadDataCenter();
+    dataCenterTab.value = "videoFactory";
+  } finally {
+    creatingVideoProject.value = false;
+  }
+}
+
+async function generateVideoProject(project: Row, candidateIndex = 0) {
+  generatingProjectId.value = project.id;
+  try {
+    await post(`/api/v1/workbench/data-center/video-projects/${project.id}/generate`, { candidateIndex });
+    ElMessage.success("拍摄执行包已生成，缺失镜头已形成补拍要求");
+    await loadDataCenter();
+    dataCenterTab.value = "videoFactory";
+  } finally {
+    generatingProjectId.value = "";
+  }
 }
 
 async function switchPage(page: string) {
@@ -489,8 +581,8 @@ onMounted(() => void bootstrap());
         <section class="data-hero">
           <div>
             <p class="eyebrow">BRAND DATA CENTER</p>
-            <h2>查素材、学知识，直接为任务服务</h2>
-            <p>只展示已审核、可调用的数据；不同岗位按权限看到素材、知识和待整理内容。</p>
+            <h2>从品牌资产到爆款内容，一站完成</h2>
+            <p>每位员工都可检索全量可用素材与知识，使用智能关键词、爆款研究和视频工厂直接形成执行方案。</p>
           </div>
           <div class="data-hero-actions">
             <el-button v-if="can('ASSET_UPLOAD')" type="primary" @click="uploadVisible = true">上传素材</el-button>
@@ -498,48 +590,51 @@ onMounted(() => void bootstrap());
           </div>
         </section>
 
-        <section class="metric-grid data-metrics">
-          <article><span>可用素材</span><strong>{{ dataCenter.summary.assets || 0 }}</strong></article>
-          <article><span>S/A级素材</span><strong>{{ dataCenter.summary.priorityAssets || 0 }}</strong></article>
-          <article><span>已审核知识</span><strong>{{ dataCenter.summary.knowledge || 0 }}</strong></article>
-          <article v-if="can('ASSET_CURATE')"><span>待整理素材</span><strong>{{ dataCenter.summary.pending || 0 }}</strong></article>
+        <section class="data-module-nav">
+          <button :class="{ active: dataCenterTab === 'assets' }" @click="dataCenterTab = 'assets'"><el-icon><Files /></el-icon><span>素材库</span><b>{{ dataCenter.summary.assets || 0 }}</b><small>全库检索与调用</small></button>
+          <button :class="{ active: dataCenterTab === 'knowledge' }" @click="dataCenterTab = 'knowledge'"><el-icon><Collection /></el-icon><span>品牌知识</span><b>{{ dataCenter.summary.knowledge || 0 }}</b><small>产品、FAQ与SOP</small></button>
+          <button :class="{ active: dataCenterTab === 'keywords' }" @click="dataCenterTab = 'keywords'"><el-icon><Search /></el-icon><span>智能关键词</span><b>{{ dataCenter.summary.keywords || 0 }}</b><small>选题和流量方向</small></button>
+          <button :class="{ active: dataCenterTab === 'viral' }" @click="dataCenterTab = 'viral'"><el-icon><DataAnalysis /></el-icon><span>爆款研究</span><b>{{ dataCenter.summary.viralVideos || 0 }}</b><small>结构拆解与仿拍</small></button>
+          <button :class="{ active: dataCenterTab === 'videoFactory' }" @click="dataCenterTab = 'videoFactory'"><el-icon><VideoCamera /></el-icon><span>视频工厂</span><b>{{ dataCenter.summary.videoProjects || 0 }}</b><small>脚本与执行包</small></button>
         </section>
 
-        <section class="section-card data-toolbar">
-          <div class="data-search">
+        <section v-if="['assets','knowledge','keywords'].includes(dataCenterTab)" class="section-card data-toolbar">
+          <div class="data-search" :class="{ compact: dataCenterTab !== 'assets' }">
             <el-input v-model="dataCenterFilters.query" clearable placeholder="搜索名称、编号、内容或知识">
               <template #prefix><el-icon><Search /></el-icon></template>
             </el-input>
             <el-input v-model="dataCenterFilters.model" clearable placeholder="产品型号，如 W9" />
-            <el-select v-model="dataCenterFilters.kind" clearable placeholder="素材类型">
+            <el-select v-if="dataCenterTab === 'assets'" v-model="dataCenterFilters.kind" clearable placeholder="素材类型">
               <el-option label="图片" value="IMAGE" />
               <el-option label="视频" value="VIDEO" />
               <el-option label="文档" value="DOCUMENT" />
               <el-option label="音频" value="AUDIO" />
             </el-select>
-            <el-select v-model="dataCenterFilters.moduleType" clearable placeholder="视频模块">
+            <el-select v-if="dataCenterTab === 'assets'" v-model="dataCenterFilters.moduleType" clearable placeholder="视频模块">
               <el-option v-for="item in ['HOOK','PAIN','SCENE','FEATURE','BENEFIT','PROOF','DEMO','TRAFFIC','OFFER','CTA','ENDING']" :key="item" :label="item" :value="item" />
             </el-select>
             <el-button type="primary" @click="loadDataCenter">查找</el-button>
           </div>
-          <el-segmented v-model="dataCenterTab" :options="[{label:'素材库',value:'assets'},{label:'知识库',value:'knowledge'},...(can('ASSET_CURATE')?[{label:'待整理',value:'pending'}]:[])]" />
         </section>
 
-        <section v-if="dataCenterTab === 'assets'" class="asset-grid">
-          <article v-for="asset in dataCenter.assets" :key="asset.id" class="asset-card">
-            <div class="asset-thumb">
-              <img v-if="asset.thumbnailUrl" :src="asset.thumbnailUrl" :alt="asset.displayName || asset.assetNo" />
-              <el-icon v-else><Files /></el-icon>
-              <b>{{ asset.grade || "B" }}</b>
-            </div>
-            <div class="asset-copy">
-              <div class="task-meta"><span>{{ asset.kind || "素材" }}</span><span>{{ asset.model || asset.productScope || "通用" }}</span><span>{{ asset.qualityScore || 0 }}分</span></div>
-              <h4>{{ asset.displayName || asset.fileName || asset.assetNo }}</h4>
-              <p>{{ asset.contentDescription || asset.searchText || "已审核可调用素材" }}</p>
-              <small>{{ asset.assetNo }}</small>
-            </div>
-          </article>
-          <el-empty v-if="!dataCenter.assets?.length" description="没有找到符合条件的可用素材" />
+        <section v-if="dataCenterTab === 'assets'">
+          <div class="workspace-summary"><strong>素材检索结果 {{ dataCenter.summary.assetResults || 0 }} 条</strong><span>全库可用素材 {{ dataCenter.summary.assets || 0 }} 条，按评级优先展示；输入型号、场景或模块可检索全库。</span></div>
+          <div class="asset-grid">
+            <article v-for="asset in dataCenter.assets" :key="asset.id" class="asset-card">
+              <div class="asset-thumb">
+                <img v-if="asset.thumbnailUrl" :src="asset.thumbnailUrl" :alt="asset.displayName || asset.assetNo" />
+                <el-icon v-else><Files /></el-icon>
+                <b>{{ asset.grade || "B" }}</b>
+              </div>
+              <div class="asset-copy">
+                <div class="task-meta"><span>{{ asset.kind || "素材" }}</span><span>{{ asset.model || asset.productScope || "通用" }}</span><span>{{ asset.qualityScore || 0 }}分</span></div>
+                <h4>{{ asset.displayName || asset.fileName || asset.assetNo }}</h4>
+                <p>{{ asset.contentDescription || asset.searchText || "已审核可调用素材" }}</p>
+                <small>{{ asset.assetNo }}</small>
+              </div>
+            </article>
+            <el-empty v-if="!dataCenter.assets?.length" description="没有找到符合条件的可用素材" />
+          </div>
         </section>
 
         <section v-else-if="dataCenterTab === 'knowledge'" class="section-card knowledge-list">
@@ -554,16 +649,84 @@ onMounted(() => void bootstrap());
           <el-empty v-if="!dataCenter.knowledge?.length" description="没有找到符合条件的知识" />
         </section>
 
-        <section v-else class="section-card task-list">
-          <article v-for="asset in dataCenter.pendingAssets" :key="asset.id" class="task-card">
-            <div class="task-main">
-              <div class="task-meta"><span>{{ asset.kind }}</span><span>{{ asset.assetNo }}</span></div>
-              <h4>{{ asset.displayName || asset.fileName || "待AI命名素材" }}</h4>
-              <p>{{ asset.contentDescription || "请核对型号、分类、版权和AI标签后提交主管审核。" }}</p>
+        <section v-else-if="dataCenterTab === 'keywords'" class="keyword-workspace">
+          <div class="workspace-summary"><strong>智能关键词 {{ dataCenter.keywords?.total || 0 }} 条</strong><span>按机会分和优先级排序，点击“用于视频”即可带入视频工厂。</span></div>
+          <div class="keyword-grid">
+            <article v-for="keyword in dataCenter.keywords?.items || []" :key="keyword.id">
+              <div><el-tag :type="keyword.grade === 'S' ? 'danger' : keyword.grade === 'A' ? 'warning' : 'info'">{{ keyword.grade || keyword.priority || 'B' }}</el-tag><small>{{ platformLabel(keyword.platform) }} · {{ keyword.type }}</small></div>
+              <h4>{{ keyword.keyword }}</h4>
+              <p>{{ keyword.reason || [keyword.audience, keyword.pain, keyword.scene].filter(Boolean).join(" · ") || "可用于内容选题与平台搜索" }}</p>
+              <div class="keyword-score"><span>机会分</span><strong>{{ Number(keyword.opportunityScore || 0).toFixed(0) }}</strong></div>
+              <el-button type="primary" plain @click="useKeywordInFactory(keyword)">用于视频</el-button>
+            </article>
+          </div>
+          <el-empty v-if="!dataCenter.keywords?.items?.length" description="当前没有符合条件的关键词" />
+        </section>
+
+        <section v-else-if="dataCenterTab === 'viral'" class="viral-workspace">
+          <div class="metric-grid viral-metrics">
+            <article><span>12小时视频</span><strong>{{ dataCenter.viralTrend?.summary?.total || 0 }}</strong></article>
+            <article><span>速度达标</span><strong>{{ dataCenter.viralTrend?.summary?.candidates || 0 }}</strong></article>
+            <article><span>S级趋势</span><strong>{{ dataCenter.viralTrend?.summary?.sGrade || 0 }}</strong></article>
+            <article><span>A级观察</span><strong>{{ dataCenter.viralTrend?.summary?.aGrade || 0 }}</strong></article>
+          </div>
+          <div class="section-card viral-keywords">
+            <div class="section-heading"><div><h3>今日研究关键词</h3><p>由产品、痛点、竞品与场景自动生成。</p></div><span>更新 {{ formatTime(dataCenter.viralTrend?.summary?.lastSyncAt) }}</span></div>
+            <div class="chip-list"><span v-for="keyword in dataCenter.viralKeywords?.keywords || []" :key="keyword.id">{{ keyword.keyword }}</span></div>
+          </div>
+          <div class="section-card viral-list">
+            <article v-for="video in dataCenter.viralTrend?.items || []" :key="video.id">
+              <div class="viral-grade">{{ video.latestMetric?.viralGrade || "C" }}<small>{{ Number(video.latestMetric?.viralIndex || 0).toFixed(0) }}</small></div>
+              <div class="viral-copy">
+                <div class="task-meta"><span>{{ platformLabel(video.platform) }}</span><span>{{ video.author?.nickname || video.accountName || "未知作者" }}</span><span>{{ formatTime(video.publishedAt) }}</span></div>
+                <h4>{{ video.title || video.externalContentId }}</h4>
+                <p>播放 {{ compactNumber(video.latestMetric?.views) }} · 速度 {{ compactNumber(video.latestMetric?.playVelocity) }}/小时 · 互动 {{ percent(video.latestMetric?.engagementRate) }}</p>
+                <small>命中：{{ video.keywordHits?.map((item: Row) => item.keyword?.keyword).filter(Boolean).join("、") || "未关联关键词" }}</small>
+              </div>
+              <div class="viral-actions">
+                <el-button v-if="video.sourceUrl" @click="openExternal(video.sourceUrl)">查看原视频</el-button>
+                <el-button type="primary" @click="useViralVideoInFactory(video)">生成仿拍方案</el-button>
+              </div>
+            </article>
+            <el-empty v-if="!dataCenter.viralTrend?.items?.length" description="暂无12小时爆款数据，等待采集任务同步" />
+          </div>
+        </section>
+
+        <section v-else class="video-factory-workspace">
+          <div class="section-card factory-create">
+            <div class="section-heading"><div><h3>新建智能视频项目</h3><p>可直接填写主题，也可从关键词或爆款研究一键带入。</p></div><el-tag type="success">员工可用</el-tag></div>
+            <div class="factory-form">
+              <el-select v-model="videoFactoryForm.platform" placeholder="目标平台"><el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" /></el-select>
+              <el-input v-model="videoFactoryForm.productModel" placeholder="产品型号，如 W9" />
+              <el-input v-model="videoFactoryForm.audience" placeholder="目标人群，如 子女送父母" />
+              <el-input v-model="videoFactoryForm.topic" placeholder="视频主题或关键词" />
+              <el-input v-model="videoFactoryForm.objective" placeholder="内容目标" />
+              <el-button type="primary" :loading="creatingVideoProject" @click="createVideoProject">生成3个视频方向</el-button>
             </div>
-            <el-button type="primary" plain @click="switchPage('tasks')">查看整理任务</el-button>
-          </article>
-          <el-empty v-if="!dataCenter.pendingAssets?.length" description="当前没有待整理素材" />
+            <div v-if="videoFactoryForm.keywordIds.length || videoFactoryForm.externalVideoIds.length" class="factory-context">
+              已带入 {{ videoFactoryForm.keywordIds.length }} 个关键词、{{ videoFactoryForm.externalVideoIds.length }} 条爆款参考
+            </div>
+          </div>
+
+          <div class="factory-projects">
+            <article v-for="project in dataCenter.videoProjects || []" :key="project.id" class="section-card factory-project">
+              <div class="factory-project-head">
+                <div><div class="task-meta"><span>{{ platformLabel(project.targetPlatforms?.[0]) }}</span><span>{{ project.productModel || "品牌通用" }}</span><span>{{ project.productionNo }}</span></div><h3>{{ project.topic }}</h3></div>
+                <el-tag>{{ project.productionStage || "脚本已生成" }}</el-tag>
+              </div>
+              <div class="candidate-grid">
+                <article v-for="(candidate, index) in projectCandidates(project)" :key="`${project.id}-${index}`">
+                  <small>方向 {{ Number(index) + 1 }} · {{ candidate.score || 0 }}分</small>
+                  <h4>{{ candidate.topic }}</h4>
+                  <p><b>HOOK：</b>{{ candidate.hook }}</p>
+                  <p>{{ candidate.scripts?.zh15 || candidate.outline?.join("；") }}</p>
+                  <el-button type="primary" plain :loading="generatingProjectId === project.id" @click="generateVideoProject(project, Number(index))">生成拍摄执行包</el-button>
+                </article>
+              </div>
+              <div v-if="project.videoShots?.length" class="shot-summary">已形成 {{ project.videoShots.length }} 个镜头任务 · {{ project.videoShots.filter((shot: Row) => !shot.selectedAssetId).length }} 个镜头待补拍或生成</div>
+            </article>
+            <el-empty v-if="!dataCenter.videoProjects?.length" description="暂无视频项目，可从关键词、爆款研究或上方表单开始" />
+          </div>
         </section>
       </template>
 
