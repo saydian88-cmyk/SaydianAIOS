@@ -622,15 +622,24 @@ export class AiTaskCenterService implements OnModuleInit {
         missingFields: snapshot.missingFields,
         capturedAt: snapshot.capturedAt,
       })),
-      assets: assets.map((asset) => ({
-        ...asset,
-        downloadUrl: asset.objectKey
-          ? this.oss.signedDownloadUrl(asset.objectKey, 3_600)
-          : /^https?:\/\//iu.test(asset.storageUrl || "")
-            ? asset.storageUrl
-            : null,
-        localPath: asset.objectKey ? null : asset.sourcePath,
-      })),
+      assets: assets.map((asset) => {
+        const { objectKey, sourcePath, ...metadata } = asset;
+        let downloadUrl: string | null = null;
+        if (objectKey) {
+          try {
+            downloadUrl = this.oss.signedDownloadUrl(objectKey, 3_600);
+          } catch {
+            downloadUrl = /^https?:\/\//iu.test(asset.storageUrl || "") ? asset.storageUrl : null;
+          }
+        } else if (/^https?:\/\//iu.test(asset.storageUrl || "")) {
+          downloadUrl = asset.storageUrl;
+        }
+        return {
+          ...metadata,
+          downloadUrl,
+          localPath: null,
+        };
+      }),
       execution: {
         mode: text(input.executionMode).toUpperCase() || (task.type === "VIDEO" ? "FULL_VIDEO" : "DEFAULT"),
         strategy: text(modelPolicy.strategy).toUpperCase() || "CODEX_FIRST",

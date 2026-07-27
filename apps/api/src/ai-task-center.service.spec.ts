@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 import { AiTaskCenterService } from "./ai-task-center.service";
 
 function serviceWith(overrides: Record<string, unknown> = {}) {
@@ -116,5 +117,81 @@ describe("AiTaskCenterService", () => {
 
     expect(result).toEqual({ ...existing, duplicate: true });
     expect(create).not.toHaveBeenCalled();
+  });
+
+  it("returns a task package when an OSS signed URL cannot be created", async () => {
+    const token = "runner-token";
+    const task = {
+      id: "task-1",
+      taskNo: "AIT-1",
+      type: "VIDEO",
+      title: "脚本任务",
+      input: { executionMode: "SCRIPT_ONLY" },
+      modelPolicy: { strategy: "CODEX_FIRST", allowExternalGeneration: false },
+      inputSnapshots: [{
+        id: "snapshot-1",
+        kind: "TASK_CONTEXT",
+        sourceType: "SMART_KEYWORD",
+        sourceId: "keyword-1",
+        checksum: "checksum",
+        payload: { assets: [{ id: "asset-1" }] },
+        missingFields: [],
+        capturedAt: new Date(),
+      }],
+      attempts: [],
+      outputs: [],
+      notifications: [],
+    };
+    const prisma = {
+      aiWorkerNode: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "node-1",
+          nodeCode: "windows-codex-01",
+          tokenHash: createHash("sha256").update(token).digest("hex"),
+        }),
+      },
+      aiTask: {
+        findFirst: vi.fn().mockResolvedValue(task),
+        findUnique: vi.fn().mockResolvedValue(task),
+      },
+      asset: {
+        findMany: vi.fn().mockResolvedValue([{
+          id: "asset-1",
+          assetNo: "AST-1",
+          displayName: "W9产品图",
+          kind: "IMAGE",
+          mediaType: "image/jpeg",
+          extension: "jpg",
+          sha256: "hash",
+          sizeBytes: 100,
+          objectKey: "assets/w9.jpg",
+          storageUrl: "oss://bucket/assets/w9.jpg",
+          sourcePath: "D:\\素材\\w9.jpg",
+          reviewStatus: "APPROVED",
+          availabilityStatus: "ACTIVE",
+          rightsStatus: "COMMERCIAL",
+        }]),
+      },
+    };
+    const oss = { signedDownloadUrl: vi.fn(() => { throw new Error("OSS unavailable"); }) };
+    const service = new AiTaskCenterService(
+      prisma as never,
+      oss as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    const result = await service.runnerPackage(token, task.id, { nodeCode: "windows-codex-01" });
+
+    expect(result.execution).toMatchObject({
+      mode: "SCRIPT_ONLY",
+      strategy: "CODEX_FIRST",
+      allowExternalGeneration: false,
+    });
+    expect(result.assets[0]).toMatchObject({ id: "asset-1", downloadUrl: null, localPath: null });
+    expect(result.assets[0]).not.toHaveProperty("sourcePath");
+    expect(result.assets[0]).not.toHaveProperty("objectKey");
   });
 });
