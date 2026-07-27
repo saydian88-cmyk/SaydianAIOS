@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
+import type { UploadUserFile } from "element-plus";
 import {
   Bell,
   Collection,
@@ -13,7 +14,7 @@ import {
   UploadFilled,
   VideoCamera,
 } from "@element-plus/icons-vue";
-import { api, clearToken, getToken, post, setToken } from "./api";
+import { api, clearToken, getToken, post, setToken, uploadWithProgress } from "./api";
 
 type Row = Record<string, any>;
 type SessionUser = {
@@ -57,8 +58,42 @@ const activeTask = ref<Row>();
 const submitVisible = ref(false);
 const submitForm = reactive({ summary: "", assetId: "", metrics: "", improvements: "" });
 const uploadVisible = ref(false);
-const uploadForm = reactive({ model: "", name: "", source: "员工原创", copyrightStatus: "OWNED" });
-const uploadFile = ref<File>();
+const uploadFiles = ref<UploadUserFile[]>([]);
+const uploadTechnicalInfo = ref<Row[]>([]);
+const uploadForm = reactive({
+  sourceType: "EMPLOYEE_CAPTURE",
+  productScope: "UNKNOWN",
+  productIds: [] as string[],
+  assetKind: "",
+  contentDescription: "",
+  classificationTags: [] as string[],
+  aiRename: true,
+  originalStatus: true,
+  rightsStatus: "COMMERCIAL",
+  acquiredAt: "",
+  contentPlanId: "",
+  shootRequirementId: "",
+});
+const uploadAssistState = ref("");
+const uploadAssistMessage = ref("");
+const uploading = ref(false);
+const uploadProgress = ref(0);
+const uploadEta = ref("");
+const uploadStage = ref("");
+const assetPreviewVisible = ref(false);
+const assetPreviewLoading = ref(false);
+const assetPreviewUrl = ref("");
+const assetDetail = ref<Row>();
+const assetEditMode = ref(false);
+const assetEditSaving = ref(false);
+const assetEditForm = reactive({
+  displayName: "",
+  productScope: "UNKNOWN",
+  productIds: [] as string[],
+  contentDescription: "",
+  scene: "",
+  classificationTags: [] as string[],
+});
 const knowledgeVisible = ref(false);
 const knowledgeForm = reactive({
   title: "",
@@ -82,13 +117,15 @@ const dataCenter = reactive<Row>({
   videoProjects: [],
   videoScripts: [],
   products: [],
+  uploadOptions: { products: [], productionPlans: [] },
 });
-const dataCenterTab = ref("assets");
+const dataCenterTab = ref("knowledge");
 const dataCenterFilters = reactive({
   query: "",
   model: "",
   kind: "",
   moduleType: "",
+  type: "",
   minimumScore: "60",
 });
 const videoFactoryForm = reactive({
@@ -110,6 +147,20 @@ const creatingGapTasks = ref(false);
 const assetGaps = ref<Row[]>([]);
 const selectedAssetGapIds = ref<string[]>([]);
 let dataCenterRequestId = 0;
+
+const classificationOptions = [
+  { label: "钩子", value: "HOOK" },
+  { label: "痛点", value: "PAIN" },
+  { label: "使用场景", value: "SCENE" },
+  { label: "功能点", value: "FEATURE" },
+  { label: "用户利益", value: "BENEFIT" },
+  { label: "信任证明", value: "PROOF" },
+  { label: "产品演示", value: "DEMO" },
+  { label: "引流", value: "TRAFFIC" },
+  { label: "优惠", value: "OFFER" },
+  { label: "行动引导", value: "CTA" },
+  { label: "结尾", value: "ENDING" },
+];
 
 const roleLabels: Record<string, string> = {
   CONTENT_OPERATOR: "运营",
@@ -151,6 +202,27 @@ const navigation = computed(() => [
   { key: "messages", label: "消息通知", icon: Bell, visible: true },
 ].filter((item) => item.visible));
 const pageTitle = computed(() => navigation.value.find((item) => item.key === active.value)?.label || "员工工作台");
+const selectedProductionPlan = computed(() => dataCenter.uploadOptions.productionPlans
+  ?.find((item: Row) => item.id === uploadForm.contentPlanId));
+const selectedUploadModels = computed(() => dataCenter.uploadOptions.products
+  ?.filter((item: Row) => uploadForm.productIds.includes(item.id))
+  .map((item: Row) => item.modelCode) || []);
+const assetPreviewType = computed(() => {
+  const row = assetDetail.value || {};
+  const latest = row.versions?.[0] || {};
+  const name = String(latest.fileName || row.fileName || row.displayName || "").toLowerCase();
+  const mime = String(latest.mimeType || row.mimeType || "").toLowerCase();
+  if (row.kind === "IMAGE" || mime.startsWith("image/")) return "image";
+  if (row.kind === "VIDEO" || mime.startsWith("video/")) return "video";
+  if (row.kind === "AUDIO" || mime.startsWith("audio/")) return "audio";
+  if (/\.(doc|docx|xls|xlsx|ppt|pptx)$/u.test(name)) return "office";
+  if (/\.pdf$/u.test(name) || mime === "application/pdf") return "document";
+  if (/\.(txt|md)$/u.test(name) || mime.startsWith("text/")) return "document";
+  return "unsupported";
+});
+const assetPreviewEmbedUrl = computed(() => assetPreviewType.value === "office" && assetPreviewUrl.value
+  ? `https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(assetPreviewUrl.value)}`
+  : assetPreviewUrl.value);
 
 function formatTime(input?: string) {
   if (!input) return "未设置";
@@ -162,6 +234,21 @@ function formatTime(input?: string) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(value);
+}
+
+function fileSize(value?: number | string) {
+  const bytes = Number(value || 0);
+  if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${bytes} B`;
+}
+
+function durationLabel(value?: number | string) {
+  const seconds = Math.max(0, Number(value || 0));
+  if (!seconds) return "—";
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes ? `${minutes}分` : ""}${Math.round(seconds % 60)}秒`;
 }
 
 function statusType(status: string) {
@@ -320,6 +407,16 @@ async function loadDataCenter() {
   if (requestId === dataCenterRequestId) Object.assign(dataCenter, result);
 }
 
+async function setAssetKind(kind: string) {
+  dataCenterFilters.kind = kind;
+  await loadDataCenter();
+}
+
+async function setKnowledgeType(type: string) {
+  dataCenterFilters.type = type;
+  await loadDataCenter();
+}
+
 function useKeywordInFactory(keyword: Row) {
   dataCenterTab.value = "videoFactory";
   videoFactoryForm.platform = keyword.platform || "DOUYIN";
@@ -470,22 +567,217 @@ async function submitTask() {
   if (active.value === "team") await loadOperationTeam();
 }
 
+async function openUpload() {
+  if (!dataCenter.uploadOptions.products?.length) {
+    try { await loadDataCenter(); } catch { /* 上传仍可在不选型号时继续 */ }
+  }
+  uploadFiles.value = [];
+  uploadTechnicalInfo.value = [];
+  Object.assign(uploadForm, {
+    sourceType: "EMPLOYEE_CAPTURE",
+    productScope: "UNKNOWN",
+    productIds: [],
+    assetKind: "",
+    contentDescription: "",
+    classificationTags: [],
+    aiRename: true,
+    originalStatus: true,
+    rightsStatus: "COMMERCIAL",
+    acquiredAt: "",
+    contentPlanId: "",
+    shootRequirementId: "",
+  });
+  uploadAssistState.value = "";
+  uploadAssistMessage.value = "";
+  uploadProgress.value = 0;
+  uploadEta.value = "";
+  uploadStage.value = "";
+  uploadVisible.value = true;
+}
+
+function selectProductionPlan() {
+  uploadForm.shootRequirementId = "";
+}
+
+async function inspectUploadFiles() {
+  await Promise.resolve();
+  const files = uploadFiles.value.map((item) => item.raw).filter(Boolean) as File[];
+  uploadTechnicalInfo.value = await Promise.all(files.map(async (file) => {
+    const extension = file.name.includes(".") ? file.name.split(".").pop()?.toUpperCase() || "未知" : "未知";
+    const base: Row = {
+      name: file.name,
+      format: extension,
+      mimeType: file.type || "未知",
+      size: file.size,
+      width: 0,
+      height: 0,
+      durationSeconds: 0,
+      quality: "待AI分析",
+    };
+    if (!file.type.startsWith("video/") && !file.type.startsWith("image/")) return base;
+    const url = URL.createObjectURL(file);
+    try {
+      if (file.type.startsWith("video/")) {
+        const video = document.createElement("video");
+        video.preload = "metadata";
+        video.src = url;
+        await new Promise<void>((resolve) => {
+          video.onloadedmetadata = () => resolve();
+          video.onerror = () => resolve();
+        });
+        base.width = video.videoWidth || 0;
+        base.height = video.videoHeight || 0;
+        base.durationSeconds = Number.isFinite(video.duration) ? video.duration : 0;
+      } else {
+        const image = new Image();
+        image.src = url;
+        await new Promise<void>((resolve) => {
+          image.onload = () => resolve();
+          image.onerror = () => resolve();
+        });
+        base.width = image.naturalWidth || 0;
+        base.height = image.naturalHeight || 0;
+      }
+      if (base.width && base.height) {
+        base.quality = Math.min(base.width, base.height) >= 1080
+          ? "高清"
+          : Math.min(base.width, base.height) >= 720 ? "清晰" : "建议优化";
+      }
+      return base;
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }));
+}
+
+async function assistUpload() {
+  const files = uploadFiles.value.map((item) => item.raw).filter(Boolean) as File[];
+  if (!files.length) return ElMessage.warning("请先选择素材文件");
+  await inspectUploadFiles();
+  uploadAssistState.value = "RUNNING";
+  uploadAssistMessage.value = "正在识别文件类型、型号和内容说明…";
+  try {
+    const result = await post<Row>("/api/v1/workbench/upload-batches/assist", {
+      files: files.map((file) => ({ name: file.name, type: file.type, size: file.size })),
+    });
+    const suggestions = result.suggestions || {};
+    if (suggestions.assetKind) uploadForm.assetKind = suggestions.assetKind;
+    if (Array.isArray(suggestions.productIds)) uploadForm.productIds = suggestions.productIds;
+    uploadForm.productScope = uploadForm.productIds.length ? "MODEL" : (suggestions.productScope || "UNKNOWN");
+    if (!uploadForm.contentDescription && suggestions.contentDescription) uploadForm.contentDescription = suggestions.contentDescription;
+    if (Array.isArray(suggestions.classificationTags)) uploadForm.classificationTags = suggestions.classificationTags;
+    uploadAssistState.value = result.state || "AVAILABLE";
+    uploadAssistMessage.value = result.message || "辅助填写完成，请确认";
+  } catch (error) {
+    uploadAssistState.value = "FAILED";
+    uploadAssistMessage.value = error instanceof Error ? error.message : "辅助填写失败";
+  }
+}
+
 async function submitAsset() {
-  if (!can("ASSET_UPLOAD")) {
-    ElMessage.warning("当前岗位没有素材上传权限");
-    return;
+  if (!can("ASSET_UPLOAD")) return ElMessage.warning("当前岗位没有素材上传权限");
+  const files = uploadFiles.value.map((item) => item.raw).filter(Boolean) as File[];
+  if (!files.length) return ElMessage.warning("请选择素材文件");
+  if (files.length > 20) return ElMessage.warning("每批最多20个文件");
+  uploading.value = true;
+  uploadProgress.value = 0;
+  uploadEta.value = "计算中";
+  uploadStage.value = "准备上传";
+  try {
+    if (uploadTechnicalInfo.value.length !== files.length) await inspectUploadFiles();
+    uploadForm.productScope = uploadForm.productIds.length ? "MODEL" : "UNKNOWN";
+    const batch = await post<Row>("/api/v1/workbench/upload-batches", { ...uploadForm });
+    const form = new FormData();
+    files.forEach((file) => form.append("files", file));
+    form.append("classificationTags", JSON.stringify(uploadForm.classificationTags));
+    form.append("aiRename", String(uploadForm.aiRename));
+    form.append("technicalInfo", JSON.stringify(uploadTechnicalInfo.value));
+    const startedAt = Date.now();
+    const result = await uploadWithProgress<Row>(`/api/v1/workbench/upload-batches/${batch.id}/files`, form, (loaded, total) => {
+      uploadProgress.value = total ? Math.min(100, Math.round((loaded / total) * 100)) : 0;
+      const elapsed = Math.max((Date.now() - startedAt) / 1000, 0.2);
+      const speed = loaded / elapsed;
+      const remaining = speed > 0 ? Math.max(0, (total - loaded) / speed) : 0;
+      uploadEta.value = remaining > 1 ? `约${Math.ceil(remaining)}秒` : "即将完成";
+      uploadStage.value = uploadProgress.value >= 100 ? "正在写入OSS并提交AI处理" : "正在上传";
+    });
+    uploadVisible.value = false;
+    const duplicates = Number(result.duplicateCount || 0);
+    const failed = Number(result.failedCount || 0);
+    if (duplicates || failed) {
+      ElMessage.warning(`批次完成：新增${result.createdCount || 0}，重复${duplicates}，失败${failed}`);
+    } else {
+      ElMessage.success("素材批次已进入AI处理流水线");
+    }
+    if (active.value === "data") await loadDataCenter();
+    else await loadDashboard();
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "上传失败");
+  } finally {
+    uploading.value = false;
   }
-  if (!uploadFile.value) {
-    ElMessage.warning("请选择素材文件");
-    return;
+}
+
+async function openAssetPreview(row: Row) {
+  assetPreviewLoading.value = true;
+  assetPreviewUrl.value = "";
+  assetEditMode.value = false;
+  assetPreviewVisible.value = true;
+  try {
+    const [detail, download] = await Promise.all([
+      api<Row>(`/api/v1/workbench/assets/${row.id}`),
+      api<{ url: string }>(`/api/v1/workbench/assets/${row.id}/download-url`),
+    ]);
+    assetDetail.value = detail;
+    assetPreviewUrl.value = download.url;
+    Object.assign(assetEditForm, {
+      displayName: detail.displayName || detail.fileName || "",
+      productScope: detail.productScope || (detail.products?.length ? "MODEL" : "UNKNOWN"),
+      productIds: (detail.products || []).map((item: Row) => item.productId || item.product?.id || item.id).filter(Boolean),
+      contentDescription: detail.contentDescription || "",
+      scene: detail.scene || "",
+      classificationTags: (detail.tags || [])
+        .filter((item: Row) => (item.tag?.namespace || item.namespace) === "content_classification")
+        .map((item: Row) => item.tag?.code || item.code)
+        .filter(Boolean),
+    });
+  } catch (error) {
+    assetPreviewVisible.value = false;
+    ElMessage.error(error instanceof Error ? error.message : "素材预览加载失败");
+  } finally {
+    assetPreviewLoading.value = false;
   }
-  const form = new FormData();
-  form.append("file", uploadFile.value);
-  Object.entries(uploadForm).forEach(([key, value]) => form.append(key, value));
-  await api("/api/v1/workbench/assets/upload", { method: "POST", body: form });
-  uploadVisible.value = false;
-  uploadFile.value = undefined;
-  ElMessage.success("素材已上传，AI分析完成后进入待审核");
+}
+
+async function saveAssetMetadata() {
+  if (!assetDetail.value?.id) return;
+  assetEditSaving.value = true;
+  try {
+    const detail = await api<Row>(`/api/v1/workbench/assets/${assetDetail.value.id}/metadata`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        ...assetEditForm,
+        productScope: assetEditForm.productIds.length ? "MODEL" : assetEditForm.productScope,
+        tags: assetEditForm.classificationTags.map((code) => ({
+          namespace: "content_classification",
+          code,
+          label: classificationOptions.find((item) => item.value === code)?.label || code,
+        })),
+      }),
+    });
+    assetDetail.value = detail;
+    assetEditMode.value = false;
+    ElMessage.success("素材分类与标签已保存");
+    await loadDataCenter();
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "素材信息保存失败");
+  } finally {
+    assetEditSaving.value = false;
+  }
+}
+
+function openAssetFile() {
+  if (assetPreviewUrl.value) window.open(assetPreviewUrl.value, "_blank", "noopener,noreferrer");
 }
 
 async function submitKnowledge() {
@@ -608,7 +900,7 @@ onMounted(() => void bootstrap());
     <aside class="side-nav">
       <div class="side-brand">
         <div class="logo small">S</div>
-        <div><strong>SAYDIAN</strong><span>员工工作台</span></div>
+        <div><strong>SAYDIAN</strong><span>智能工作台</span></div>
       </div>
       <nav>
         <button v-for="item in navigation" :key="item.key" :class="{ active: active === item.key }" @click="switchPage(item.key)">
@@ -685,7 +977,7 @@ onMounted(() => void bootstrap());
             <div class="action-grid">
               <button @click="switchPage('tasks')"><el-icon><DocumentChecked /></el-icon><span>处理任务</span></button>
               <button v-if="canUseDataCenter" @click="switchPage('data')"><el-icon><DataAnalysis /></el-icon><span>数据中心</span></button>
-              <button v-if="can('ASSET_UPLOAD')" @click="uploadVisible = true"><el-icon><UploadFilled /></el-icon><span>上传素材</span></button>
+              <button v-if="can('ASSET_UPLOAD')" @click="openUpload"><el-icon><UploadFilled /></el-icon><span>上传素材</span></button>
               <button v-if="can('KNOWLEDGE_SUBMIT')" @click="knowledgeVisible = true"><el-icon><Collection /></el-icon><span>补充知识</span></button>
               <button v-if="isLiveHost" @click="switchPage('live')"><el-icon><VideoCamera /></el-icon><span>直播学习</span></button>
               <button @click="openMall"><el-icon><Shop /></el-icon><span>商城员工端</span></button>
@@ -835,17 +1127,25 @@ onMounted(() => void bootstrap());
             <p>每位员工都可检索全量可用素材与知识，使用智能关键词、爆款研究和视频工厂直接形成执行方案。</p>
           </div>
           <div class="data-hero-actions">
-            <el-button v-if="can('ASSET_UPLOAD')" type="primary" @click="uploadVisible = true">上传素材</el-button>
+            <el-button v-if="can('ASSET_UPLOAD')" type="primary" @click="openUpload">上传素材</el-button>
             <el-button v-if="can('KNOWLEDGE_SUBMIT')" @click="knowledgeVisible = true">补充知识</el-button>
           </div>
         </section>
 
         <section class="data-module-nav">
-          <button :class="{ active: dataCenterTab === 'assets' }" @click="dataCenterTab = 'assets'"><el-icon><Files /></el-icon><span>素材库</span><b>{{ dataCenter.summary.assets || 0 }}</b><small>全库检索与调用</small></button>
           <button :class="{ active: dataCenterTab === 'knowledge' }" @click="dataCenterTab = 'knowledge'"><el-icon><Collection /></el-icon><span>品牌知识</span><b>{{ dataCenter.summary.knowledge || 0 }}</b><small>产品、FAQ与SOP</small></button>
+          <button :class="{ active: dataCenterTab === 'assets' }" @click="dataCenterTab = 'assets'"><el-icon><Files /></el-icon><span>素材库</span><b>{{ dataCenter.summary.assets || 0 }}</b><small>全库检索与调用</small></button>
           <button :class="{ active: dataCenterTab === 'keywords' }" @click="dataCenterTab = 'keywords'"><el-icon><Search /></el-icon><span>智能关键词</span><b>{{ dataCenter.summary.keywords || 0 }}</b><small>选题和流量方向</small></button>
           <button :class="{ active: dataCenterTab === 'viral' }" @click="dataCenterTab = 'viral'"><el-icon><DataAnalysis /></el-icon><span>爆款研究</span><b>{{ dataCenter.summary.viralVideos || 0 }}</b><small>结构拆解与仿拍</small></button>
           <button :class="{ active: dataCenterTab === 'videoFactory' }" @click="dataCenterTab = 'videoFactory'"><el-icon><VideoCamera /></el-icon><span>视频工厂</span><b>{{ dataCenter.summary.videoProjects || 0 }}</b><small>脚本与执行包</small></button>
+        </section>
+
+        <section v-if="dataCenterTab === 'assets'" class="data-quick-switch" aria-label="素材类型快速切换">
+          <button v-for="item in [{ label: '全部', value: '' }, { label: '视频', value: 'VIDEO' }, { label: '图片', value: 'IMAGE' }, { label: '音频', value: 'AUDIO' }, { label: '文档', value: 'DOCUMENT' }]" :key="item.value || 'ALL'" :class="{ active: dataCenterFilters.kind === item.value }" @click="setAssetKind(item.value)">{{ item.label }}</button>
+        </section>
+
+        <section v-if="dataCenterTab === 'knowledge'" class="data-quick-switch" aria-label="品牌知识快速切换">
+          <button v-for="item in [{ label: '全部知识', value: '' }, { label: '产品', value: 'PRODUCT' }, { label: '知识 / SOP', value: 'SOP' }, { label: 'FAQ', value: 'FAQ' }, { label: '资质', value: 'CLAIM' }]" :key="item.value || 'ALL'" :class="{ active: dataCenterFilters.type === item.value }" @click="setKnowledgeType(item.value)">{{ item.label }}</button>
         </section>
 
         <section v-if="['assets','knowledge','keywords'].includes(dataCenterTab)" class="section-card data-toolbar">
@@ -863,7 +1163,7 @@ onMounted(() => void bootstrap());
               <el-option label="音频" value="AUDIO" />
             </el-select>
             <el-select v-if="dataCenterTab === 'assets'" v-model="dataCenterFilters.moduleType" clearable placeholder="视频模块">
-              <el-option v-for="item in ['HOOK','PAIN','SCENE','FEATURE','BENEFIT','PROOF','DEMO','TRAFFIC','OFFER','CTA','ENDING']" :key="item" :label="item" :value="item" />
+              <el-option v-for="item in classificationOptions" :key="item.value" :label="item.label" :value="item.value" />
             </el-select>
             <el-button type="primary" @click="loadDataCenter">查找</el-button>
           </div>
@@ -872,7 +1172,7 @@ onMounted(() => void bootstrap());
         <section v-if="dataCenterTab === 'assets'">
           <div class="workspace-summary"><strong>素材检索结果 {{ dataCenter.summary.assetResults || 0 }} 条</strong><span>全库可用素材 {{ dataCenter.summary.assets || 0 }} 条，按评级优先展示；输入型号、场景或模块可检索全库。</span></div>
           <div class="asset-grid">
-            <article v-for="asset in dataCenter.assets" :key="asset.id" class="asset-card">
+            <article v-for="asset in dataCenter.assets" :key="asset.id" class="asset-card" role="button" tabindex="0" @click="openAssetPreview(asset)" @keydown.enter="openAssetPreview(asset)">
               <div class="asset-thumb">
                 <img v-if="asset.thumbnailUrl" :src="asset.thumbnailUrl" :alt="asset.displayName || asset.assetNo" />
                 <el-icon v-else><Files /></el-icon>
@@ -1134,15 +1434,168 @@ onMounted(() => void bootstrap());
     <template #footer><el-button @click="submitVisible = false">取消</el-button><el-button type="primary" @click="submitTask">提交审核</el-button></template>
   </el-dialog>
 
-  <el-dialog v-model="uploadVisible" title="上传新素材" width="min(560px, 92vw)">
-    <el-form label-position="top">
-      <el-form-item label="选择文件" required><input type="file" @change="uploadFile = ($event.target as HTMLInputElement).files?.[0]" /></el-form-item>
-      <el-form-item label="关联型号"><el-select v-model="uploadForm.model" clearable filterable placeholder="可不选，由AI自动识别"><el-option v-for="product in productOptions" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" /></el-select></el-form-item>
-      <el-form-item label="一句话说明"><el-input v-model="uploadForm.name" placeholder="例如 W9家庭场景佩戴演示" /></el-form-item>
-      <el-form-item label="来源"><el-select v-model="uploadForm.source"><el-option label="员工原创" value="员工原创" /><el-option label="AI生成" value="AI生成" /><el-option label="外部参考" value="外部参考" /></el-select></el-form-item>
+  <el-dialog v-model="uploadVisible" title="上传素材" width="min(760px, 94vw)" destroy-on-close>
+    <el-upload
+      v-model:file-list="uploadFiles"
+      drag
+      multiple
+      :auto-upload="false"
+      :limit="20"
+      :disabled="uploading"
+      class="employee-asset-upload"
+      @change="inspectUploadFiles"
+      @remove="inspectUploadFiles"
+    >
+      <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
+      <div class="el-upload__text">拖入文件，或<em>点击选择</em></div>
+      <template #tip><div class="el-upload__tip">最多20个，单文件不超过200MB；上传员工由企业微信身份自动记录。</div></template>
+    </el-upload>
+
+    <div class="upload-ai-assist">
+      <div><strong>AI辅助填写</strong><span>{{ uploadAssistMessage || "选择文件后，可自动判断类型、型号和内容说明" }}</span></div>
+      <el-button :loading="uploadAssistState === 'RUNNING'" @click="assistUpload">AI帮我填写</el-button>
+    </div>
+
+    <el-form label-position="top" class="upload-form-grid">
+      <el-form-item label="关联视频生产单">
+        <el-select v-model="uploadForm.contentPlanId" clearable filterable placeholder="补拍素材请选择对应生产单" @change="selectProductionPlan">
+          <el-option v-for="item in dataCenter.uploadOptions.productionPlans" :key="item.id" :label="`${item.productionNo || '历史内容'} · ${item.topic}`" :value="item.id" />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="对应补拍项">
+        <el-select v-model="uploadForm.shootRequirementId" clearable :disabled="!uploadForm.contentPlanId" placeholder="选择这批素材完成的拍摄要求">
+          <el-option v-for="item in (selectedProductionPlan?.shootRequirements || []).filter((row: Row) => row.status !== 'DONE')" :key="item.id" :label="item.description" :value="item.id" />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="产品型号（可不选）">
+        <el-select v-model="uploadForm.productIds" multiple filterable placeholder="AI识别后请确认">
+          <el-option v-for="item in dataCenter.uploadOptions.products" :key="item.id" :label="`${item.modelCode} · ${item.name}`" :value="item.id" />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="素材来源">
+        <el-select v-model="uploadForm.sourceType">
+          <el-option label="员工拍摄/制作" value="EMPLOYEE_CAPTURE" />
+          <el-option label="网页上传" value="WEB_UPLOAD" />
+          <el-option label="供应商" value="SUPPLIER" />
+          <el-option label="UGC授权" value="UGC" />
+          <el-option label="外部参考" value="EXTERNAL_REFERENCE" />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="内容说明" class="full">
+        <el-input v-model="uploadForm.contentDescription" type="textarea" :rows="2" placeholder="可留空，由AI辅助填写" />
+      </el-form-item>
+      <el-form-item label="人工基础分类（确认后锁定）" class="full">
+        <el-select v-model="uploadForm.classificationTags" multiple clearable filterable placeholder="详细剪辑索引由AI查看画面后生成">
+          <el-option v-for="item in classificationOptions" :key="item.value" :label="item.label" :value="item.value" />
+        </el-select>
+      </el-form-item>
+      <div class="full upload-index-note">
+        <div><strong>剪辑AI详细索引</strong><el-tag size="small" type="info">上传后自动生成</el-tag></div>
+        <p>AI会查看实际画面，识别型号、用途、功能、场景、动作、人群、平台、口播和痛点；并按内容自动命名，例如：<b>{{ selectedUploadModels[0] || "W9S" }}－功能展示－心电图测量</b>。</p>
+      </div>
+      <el-form-item label="素材名称" class="full">
+        <div class="upload-rename-option">
+          <el-switch v-model="uploadForm.aiRename" active-text="用AI标签重新命名" inactive-text="保留原文件名" />
+          <small>{{ uploadForm.aiRename ? "AI分析完成后，用“型号－用途－核心功能/场景”作为素材名称" : "仍会生成AI标签和索引，但素材名称保持上传时的文件名" }}</small>
+        </div>
+      </el-form-item>
+      <el-collapse class="full upload-advanced">
+        <el-collapse-item title="更多信息（一般无需修改）" name="advanced">
+          <div class="upload-advanced-grid">
+            <el-select v-model="uploadForm.assetKind" clearable placeholder="素材类型自动识别">
+              <el-option label="图片" value="IMAGE" />
+              <el-option label="视频" value="VIDEO" />
+              <el-option label="音频" value="AUDIO" />
+              <el-option label="文档" value="DOCUMENT" />
+            </el-select>
+            <el-select v-model="uploadForm.rightsStatus">
+              <el-option label="可直接商用" value="COMMERCIAL" />
+              <el-option label="修改后可用" value="EDIT_ONLY" />
+              <el-option label="内部参考" value="INTERNAL" />
+              <el-option label="待确认授权" value="AUTH_REQUIRED" />
+            </el-select>
+            <el-date-picker v-model="uploadForm.acquiredAt" type="date" value-format="YYYY-MM-DD" placeholder="获得/拍摄日期" />
+            <el-switch v-model="uploadForm.originalStatus" active-text="公司原创" inactive-text="非原创" />
+          </div>
+          <div v-if="uploadTechnicalInfo.length" class="upload-technical-info">
+            <strong>文件与AI预检信息</strong>
+            <el-table :data="uploadTechnicalInfo" size="small" max-height="210">
+              <el-table-column prop="name" label="文件" min-width="180" show-overflow-tooltip />
+              <el-table-column prop="format" label="格式" width="72" />
+              <el-table-column label="大小" width="90"><template #default="scope">{{ fileSize(scope.row.size) }}</template></el-table-column>
+              <el-table-column label="时长" width="90"><template #default="scope">{{ durationLabel(scope.row.durationSeconds) }}</template></el-table-column>
+              <el-table-column label="分辨率" width="105"><template #default="scope">{{ scope.row.width && scope.row.height ? `${scope.row.width}×${scope.row.height}` : "—" }}</template></el-table-column>
+              <el-table-column prop="quality" label="质量" width="90" />
+            </el-table>
+          </div>
+        </el-collapse-item>
+      </el-collapse>
     </el-form>
-    <template #footer><el-button @click="uploadVisible = false">取消</el-button><el-button type="primary" @click="submitAsset">上传并AI分析</el-button></template>
+    <div v-if="uploading || uploadProgress" class="employee-upload-progress">
+      <div><span>{{ uploadStage }}</span><small>{{ uploadProgress < 100 ? `预计剩余 ${uploadEta}` : "文件已上传，正在云端入库" }}</small></div>
+      <el-progress :percentage="uploadProgress" />
+    </div>
+    <template #footer>
+      <el-button :disabled="uploading" @click="uploadVisible = false">取消</el-button>
+      <el-button type="primary" :loading="uploading" @click="submitAsset">{{ uploading ? `${uploadProgress}%` : "确认上传" }}</el-button>
+    </template>
   </el-dialog>
+
+  <el-drawer v-model="assetPreviewVisible" title="素材预览" size="min(860px, 96vw)" destroy-on-close>
+    <div v-loading="assetPreviewLoading" class="employee-asset-preview">
+      <template v-if="assetPreviewUrl">
+        <img v-if="assetPreviewType === 'image'" :src="assetPreviewUrl" :alt="assetDetail?.displayName || assetDetail?.fileName" />
+        <video v-else-if="assetPreviewType === 'video'" :src="assetPreviewUrl" controls preload="metadata" />
+        <audio v-else-if="assetPreviewType === 'audio'" :src="assetPreviewUrl" controls />
+        <iframe v-else-if="['office','document'].includes(assetPreviewType)" :src="assetPreviewEmbedUrl" :title="assetDetail?.displayName || '素材预览'" />
+        <el-empty v-else description="该格式请在新窗口中打开预览" />
+      </template>
+      <div v-if="assetDetail" class="employee-asset-detail">
+        <div>
+          <small>{{ assetDetail.assetNo }}</small>
+          <h3>{{ assetDetail.displayName || assetDetail.fileName || assetDetail.assetNo }}</h3>
+          <p>{{ assetDetail.contentDescription || "暂无内容说明" }}</p>
+        </div>
+        <dl>
+          <div><dt>类型</dt><dd>{{ assetDetail.kind || "—" }}</dd></div>
+          <div><dt>型号</dt><dd>{{ assetDetail.model || assetDetail.products?.map((item: Row) => item.modelCode).join("、") || "通用" }}</dd></div>
+          <div><dt>评级</dt><dd>{{ assetDetail.qualityScore || 0 }}分</dd></div>
+          <div><dt>大小</dt><dd>{{ fileSize(assetDetail.sizeBytes) }}</dd></div>
+          <div><dt>来源</dt><dd>{{ assetDetail.sourceType || "—" }}</dd></div>
+          <div><dt>上传人</dt><dd>{{ assetDetail.createdByEmployee?.name || assetDetail.discoveredBy || "—" }}</dd></div>
+        </dl>
+        <div class="preview-actions">
+          <el-button @click="assetEditMode = !assetEditMode">{{ assetEditMode ? "取消编辑" : "编辑分类与标签" }}</el-button>
+          <el-button @click="openAssetFile">新窗口打开</el-button>
+          <el-button type="primary" @click="openAssetFile">下载原文件</el-button>
+        </div>
+        <el-form v-if="assetEditMode" label-position="top" class="asset-edit-form">
+          <el-form-item label="素材名称" class="full"><el-input v-model="assetEditForm.displayName" /></el-form-item>
+          <el-form-item label="产品范围">
+            <el-select v-model="assetEditForm.productScope">
+              <el-option label="具体型号" value="MODEL" />
+              <el-option label="系列通用" value="SERIES" />
+              <el-option label="品牌通用" value="BRAND" />
+              <el-option label="未确认" value="UNKNOWN" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="关联产品">
+            <el-select v-model="assetEditForm.productIds" multiple filterable clearable placeholder="可选择多个型号">
+              <el-option v-for="item in dataCenter.uploadOptions.products" :key="item.id" :label="`${item.modelCode} · ${item.name}`" :value="item.id" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="使用场景"><el-input v-model="assetEditForm.scene" placeholder="如家庭、运动、送礼" /></el-form-item>
+          <el-form-item label="视频模块 / 内容标签">
+            <el-select v-model="assetEditForm.classificationTags" multiple filterable clearable>
+              <el-option v-for="item in classificationOptions" :key="item.value" :label="item.label" :value="item.value" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="内容说明" class="full"><el-input v-model="assetEditForm.contentDescription" type="textarea" :rows="3" /></el-form-item>
+          <div class="full asset-edit-actions"><el-button type="primary" :loading="assetEditSaving" @click="saveAssetMetadata">保存分类与标签</el-button></div>
+        </el-form>
+      </div>
+    </div>
+  </el-drawer>
 
   <el-dialog v-model="knowledgeVisible" title="补充知识或FAQ" width="min(600px, 92vw)">
     <el-form label-position="top">
