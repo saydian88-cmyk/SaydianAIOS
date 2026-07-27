@@ -453,7 +453,7 @@ onMounted(() => void bootstrap());
     <aside class="side-nav">
       <div class="side-brand">
         <div class="logo small">S</div>
-        <div><strong>SAYDIAN</strong><span>员工工作台</span></div>
+        <div><strong>SAYDIAN</strong><span>智能工作台</span></div>
       </div>
       <nav>
         <button v-for="item in navigation" :key="item.key" :class="{ active: active === item.key }" @click="switchPage(item.key)">
