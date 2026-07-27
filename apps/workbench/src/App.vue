@@ -44,6 +44,7 @@ const taskScope = ref("MINE");
 const taskStatus = ref("");
 const operationTeam = reactive<Row>({ supervisor: null, directReports: [], invitations: { incoming: [], outgoing: [] }, operators: [] });
 const teamTasks = ref<Row[]>([]);
+const teamTaskFilters = reactive({ status: "", assigneeEmployeeId: "" });
 const teamTaskVisible = ref(false);
 const inviteVisible = ref(false);
 const reviewVisible = ref(false);
@@ -217,12 +218,21 @@ function collaborationRoleLabel(employee: Row) {
 }
 
 async function loadOperationTeam() {
+  const parameters = new URLSearchParams();
+  if (teamTaskFilters.status) parameters.set("status", teamTaskFilters.status);
+  if (teamTaskFilters.assigneeEmployeeId) parameters.set("assigneeEmployeeId", teamTaskFilters.assigneeEmployeeId);
   const [team, taskResult] = await Promise.all([
     api<Row>("/api/v1/workbench/operation-team"),
-    api<Row>("/api/v1/workbench/operation-team/tasks"),
+    api<Row>(`/api/v1/workbench/operation-team/tasks?${parameters.toString()}`),
   ]);
   Object.assign(operationTeam, team);
   teamTasks.value = taskResult.items || [];
+}
+
+async function setTeamTaskUrgency(task: Row, urgent: boolean) {
+  await post(`/api/v1/workbench/operation-team/tasks/${task.id}/urgency`, { urgent });
+  ElMessage.success(urgent ? "已标记为紧急任务，并通知协作成员优先处理" : "已取消紧急标记");
+  await loadOperationTeam();
 }
 
 async function sendTeamInvite() {
@@ -703,15 +713,28 @@ onMounted(() => void bootstrap());
         </section>
 
         <section class="section-card task-list">
-          <div class="section-heading"><div><h3>我安排的任务</h3><p>只显示由你安排的协作任务，其他任务不会出现在这里。</p></div></div>
+          <div class="section-heading">
+            <div><h3>我安排的任务</h3><p>只显示由你安排的协作任务，紧急任务优先排列。</p></div>
+            <div class="team-task-filters">
+              <el-select v-model="teamTaskFilters.status" clearable placeholder="全部状态" @change="loadOperationTeam">
+                <el-option v-for="(label, key) in statusLabels" :key="key" :label="label" :value="key" />
+              </el-select>
+              <el-select v-model="teamTaskFilters.assigneeEmployeeId" clearable placeholder="全部协作人" @change="loadOperationTeam">
+                <el-option v-for="employee in operationTeam.directReports" :key="employee.id" :label="employee.name" :value="employee.id" />
+              </el-select>
+            </div>
+          </div>
           <article v-for="task in teamTasks" :key="task.id" class="task-card">
             <div class="task-main">
-              <div class="task-meta"><el-tag size="small" :type="statusType(task.status)">{{ statusLabels[task.status] || task.status }}</el-tag><span>{{ task.assignee?.name }}</span><span>截止 {{ formatTime(task.dueAt) }}</span></div>
+              <div class="task-meta"><el-tag v-if="task.priority === 'URGENT'" size="small" type="danger">紧急</el-tag><el-tag size="small" :type="statusType(task.status)">{{ statusLabels[task.status] || task.status }}</el-tag><span>{{ task.assignee?.name }}</span><span>截止 {{ formatTime(task.dueAt) }}</span></div>
               <h4>{{ task.title }}</h4>
               <p>{{ task.description || task.expectedResult || "按要求完成并提交成果。" }}</p>
               <p v-if="task.submissions?.[0]"><strong>最新提交：</strong>{{ task.submissions[0].summary }}</p>
             </div>
-            <div class="task-actions"><el-button v-if="task.status === 'REVIEW'" type="primary" @click="openTeamReview(task)">审核成果</el-button></div>
+            <div class="task-actions">
+              <el-button v-if="!['COMPLETED','CANCELLED','VERIFIED'].includes(task.status)" :type="task.priority === 'URGENT' ? 'danger' : 'default'" @click="setTeamTaskUrgency(task, task.priority !== 'URGENT')">{{ task.priority === "URGENT" ? "取消紧急" : "标记紧急" }}</el-button>
+              <el-button v-if="task.status === 'REVIEW'" type="primary" @click="openTeamReview(task)">审核成果</el-button>
+            </div>
           </article>
           <el-empty v-if="!teamTasks.length" description="还没有安排协作任务" />
         </section>

@@ -105,6 +105,7 @@ main { grid-column: 2; width: min(1240px, calc(100% - 48px)); margin: 24px auto;
 .team-supervisor { padding: 13px 15px; border-radius: 12px; background: #f8f4ed; }
 .team-supervisor small { display: block; margin-top: 3px; color: #817a70; font-weight: 400; }
 .team-form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.team-task-filters { display: grid; grid-template-columns: 150px 170px; gap: 10px; }
 .data-metrics { margin-bottom: 18px; }
 .data-module-nav { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin: 18px 0; }
 .data-module-nav button { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; min-width: 0; padding: 18px; border: 1px solid #e5e0d7; border-radius: 18px; color: #28312f; background: #fff; text-align: left; cursor: pointer; transition: .18s ease; }
@@ -202,6 +203,7 @@ main { grid-column: 2; width: min(1240px, calc(100% - 48px)); margin: 24px auto;
   .team-hero { display: block; }
   .team-hero-actions { margin-top: 18px; }
   .team-grid, .team-form-row { grid-template-columns: 1fr; }
+  .team-task-filters { grid-template-columns: 1fr; width: 100%; }
   .data-hero h2 { font-size: 25px; }
   .data-hero-actions { margin-top: 18px; }
   .data-hero-actions .el-button { flex: 1; margin-left: 0; }

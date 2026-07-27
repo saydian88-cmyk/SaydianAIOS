@@ -51,8 +51,9 @@ export class WorkbenchService {
       }),
     ]);
     const now = Date.now();
-    const mine = tasks.filter((task) => task.assigneeEmployeeId === employeeId);
-    const available = tasks.filter((task) => !task.assigneeEmployeeId && task.status === "OPEN");
+    const sortedTasks = this.sortTasks(tasks);
+    const mine = sortedTasks.filter((task) => task.assigneeEmployeeId === employeeId);
+    const available = sortedTasks.filter((task) => !task.assigneeEmployeeId && task.status === "OPEN");
     return {
       employee,
       summary: {
@@ -93,12 +94,13 @@ export class WorkbenchService {
             status ? { status } : {},
           ],
         };
-    return this.prisma.opsTask.findMany({
+    const rows = await this.prisma.opsTask.findMany({
       where,
       include: this.taskInclude(),
       orderBy: [{ dueAt: "asc" }, { createdAt: "desc" }],
       take: 200,
     });
+    return this.sortTasks(rows);
   }
 
   async task(session: SessionPayload, id: string) {
@@ -390,6 +392,7 @@ export class WorkbenchService {
       assignedByEmployeeId: session.employeeId!,
       sourceType: "OPERATOR_COLLAB",
       ...(value(query.status) ? { status: value(query.status).toUpperCase() } : {}),
+      ...(value(query.assigneeEmployeeId) ? { assigneeEmployeeId: value(query.assigneeEmployeeId) } : {}),
     };
     const [items, total] = await Promise.all([
       this.prisma.opsTask.findMany({
@@ -401,7 +404,7 @@ export class WorkbenchService {
       }),
       this.prisma.opsTask.count({ where }),
     ]);
-    return { items, total, page, pageSize };
+    return { items: this.sortTasks(items), total, page, pageSize };
   }
 
   async createTeamTask(session: SessionPayload, body: Record<string, unknown>) {
@@ -458,6 +461,39 @@ export class WorkbenchService {
     });
     if (!task) throw new NotFoundException("只能审核自己安排的运营协作任务");
     return this.reviewTask(id, body, session.name);
+  }
+
+  async setTeamTaskUrgency(session: SessionPayload, id: string, urgent: boolean) {
+    this.requireOperator(session);
+    const task = await this.prisma.opsTask.findFirst({
+      where: { id, assignedByEmployeeId: session.employeeId, sourceType: "OPERATOR_COLLAB" },
+    });
+    if (!task) throw new NotFoundException("只能调整自己安排的协作任务");
+    if (doneStatuses.includes(task.status)) throw new BadRequestException("已完成或已取消的任务不能调整紧急状态");
+    const priority = urgent ? "URGENT" : "MEDIUM";
+    const updated = await this.prisma.opsTask.update({ where: { id }, data: { priority } });
+    await Promise.all([
+      this.prisma.operationTaskHistory.create({
+        data: {
+          taskId: id,
+          fromStatus: task.status,
+          toStatus: task.status,
+          action: urgent ? "MARK_URGENT" : "CLEAR_URGENT",
+          actor: session.name,
+        },
+      }),
+      task.assigneeEmployeeId
+        ? this.notify(
+            id,
+            task.assigneeEmployeeId,
+            urgent ? "TEAM_TASK_URGENT" : "TEAM_TASK_URGENCY_CLEARED",
+            urgent ? "协作任务已标记为紧急" : "协作任务已取消紧急",
+            task.title,
+          )
+        : Promise.resolve(),
+      this.audit(session.name, urgent ? "TEAM_TASK_MARK_URGENT" : "TEAM_TASK_CLEAR_URGENT", "OpsTask", id, { priority }),
+    ]);
+    return updated;
   }
 
   async notifications(session: SessionPayload) {
@@ -819,6 +855,16 @@ export class WorkbenchService {
     }
     actions.push({ key: "MALL", label: "进入商城员工端", path: "/mall" });
     return actions;
+  }
+
+  private sortTasks<T extends { priority: string; dueAt: Date | null; createdAt: Date }>(tasks: T[]) {
+    const weight: Record<string, number> = { URGENT: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
+    return [...tasks].sort((left, right) => {
+      const priority = (weight[left.priority] ?? 9) - (weight[right.priority] ?? 9);
+      if (priority) return priority;
+      const due = (left.dueAt?.getTime() ?? Number.MAX_SAFE_INTEGER) - (right.dueAt?.getTime() ?? Number.MAX_SAFE_INTEGER);
+      return due || right.createdAt.getTime() - left.createdAt.getTime();
+    });
   }
 
   private sameDay(left: Date, right: Date) {

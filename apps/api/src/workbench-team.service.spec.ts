@@ -41,6 +41,21 @@ describe("WorkbenchService operation team", () => {
       .rejects.toThrow("只能审核自己安排的运营协作任务");
   });
 
+  it("does not mark a completed collaboration task as urgent", async () => {
+    const target = service({
+      opsTask: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: "task-1",
+          status: "COMPLETED",
+          assignedByEmployeeId: "operator-1",
+          sourceType: "OPERATOR_COLLAB",
+        }),
+      },
+    });
+    await expect(target.setTeamTaskUrgency(operator, "task-1", true))
+      .rejects.toThrow("已完成或已取消的任务不能调整紧急状态");
+  });
+
   it("rejects a reporting relationship cycle", async () => {
     const target = service({
       employee: {

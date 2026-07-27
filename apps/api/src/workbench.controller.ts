@@ -159,6 +159,15 @@ export class WorkbenchController {
     return this.workbench.reviewTeamTask(this.employee(authorization), id, body);
   }
 
+  @Post("operation-team/tasks/:id/urgency")
+  setTeamTaskUrgency(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.workbench.setTeamTaskUrgency(this.employee(authorization), id, body.urgent === true);
+  }
+
   @Get("notifications")
   notifications(@Headers("authorization") authorization?: string) {
     return this.workbench.notifications(this.employee(authorization));
