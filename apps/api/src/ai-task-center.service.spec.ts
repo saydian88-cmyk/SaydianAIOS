@@ -199,4 +199,34 @@ describe("AiTaskCenterService", () => {
     expect(result.assets[0]).not.toHaveProperty("sourcePath");
     expect(result.assets[0]).not.toHaveProperty("objectKey");
   });
+
+  it("serializes uploaded output asset sizes for task APIs", async () => {
+    const task = {
+      id: "task-with-video",
+      outputs: [{
+        id: "output-1",
+        asset: { id: "asset-1", sizeBytes: 1_495_435n },
+      }],
+    };
+    const prisma = {
+      aiTask: {
+        findMany: vi.fn().mockResolvedValue([task]),
+        findUnique: vi.fn().mockResolvedValue(task),
+      },
+    };
+    const service = new AiTaskCenterService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    const [listed] = await service.tasks({});
+    const detailed = await service.task(task.id);
+
+    expect(listed.outputs[0].asset?.sizeBytes).toBe("1495435");
+    expect(detailed.outputs[0].asset?.sizeBytes).toBe("1495435");
+  });
 });

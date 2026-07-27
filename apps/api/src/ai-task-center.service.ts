@@ -51,6 +51,26 @@ function object(value: unknown): JsonRecord {
   return value && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : {};
 }
 
+function normalizeTaskOutputSizes<T>(task: T): T {
+  const source = object(task);
+  if (!Array.isArray(source.outputs)) return task;
+  return {
+    ...source,
+    outputs: source.outputs.map((raw) => {
+      const output = object(raw);
+      if (!output.asset || typeof output.asset !== "object") return output;
+      const asset = object(output.asset);
+      return {
+        ...output,
+        asset: {
+          ...asset,
+          sizeBytes: typeof asset.sizeBytes === "bigint" ? asset.sizeBytes.toString() : asset.sizeBytes,
+        },
+      };
+    }),
+  } as T;
+}
+
 function strings(value: unknown): string[] {
   return Array.isArray(value) ? value.map(text).filter(Boolean) : [];
 }
@@ -146,18 +166,19 @@ export class AiTaskCenterService implements OnModuleInit {
         ],
       } : {}),
     };
-    return this.prisma.aiTask.findMany({
+    const tasks = await this.prisma.aiTask.findMany({
       where,
       include: this.includeTask(),
       orderBy: [{ priority: "asc" }, { createdAt: "desc" }],
       take: 500,
     });
+    return tasks.map(normalizeTaskOutputSizes);
   }
 
   async task(id: string) {
     const task = await this.prisma.aiTask.findUnique({ where: { id }, include: this.includeTask(true) });
     if (!task) throw new NotFoundException("AI任务不存在");
-    return task;
+    return normalizeTaskOutputSizes(task);
   }
 
   async createTask(body: JsonRecord, actor: string) {
