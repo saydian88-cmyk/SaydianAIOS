@@ -44,6 +44,7 @@ const taskScope = ref("MINE");
 const taskStatus = ref("");
 const operationTeam = reactive<Row>({ supervisor: null, directReports: [], invitations: { incoming: [], outgoing: [] }, operators: [] });
 const teamTasks = ref<Row[]>([]);
+const receivedTeamTasks = ref<Row[]>([]);
 const teamTaskFilters = reactive({ status: "", assigneeEmployeeId: "" });
 const teamTaskVisible = ref(false);
 const inviteVisible = ref(false);
@@ -221,12 +222,14 @@ async function loadOperationTeam() {
   const parameters = new URLSearchParams();
   if (teamTaskFilters.status) parameters.set("status", teamTaskFilters.status);
   if (teamTaskFilters.assigneeEmployeeId) parameters.set("assigneeEmployeeId", teamTaskFilters.assigneeEmployeeId);
-  const [team, taskResult] = await Promise.all([
+  const [team, taskResult, receivedResult] = await Promise.all([
     api<Row>("/api/v1/workbench/operation-team"),
     api<Row>(`/api/v1/workbench/operation-team/tasks?${parameters.toString()}`),
+    api<Row>("/api/v1/workbench/operation-team/tasks?scope=RECEIVED"),
   ]);
   Object.assign(operationTeam, team);
   teamTasks.value = taskResult.items || [];
+  receivedTeamTasks.value = receivedResult.items || [];
 }
 
 async function setTeamTaskUrgency(task: Row, urgent: boolean) {
@@ -376,6 +379,7 @@ async function startTask(task: Row) {
   await post(`/api/v1/workbench/tasks/${task.id}/start`);
   ElMessage.success("任务已开始");
   await Promise.all([loadDashboard(), loadTasks()]);
+  if (active.value === "team") await loadOperationTeam();
 }
 
 function openSubmit(task: Row) {
@@ -403,6 +407,7 @@ async function submitTask() {
   submitVisible.value = false;
   ElMessage.success("已提交主管审核");
   await Promise.all([loadDashboard(), loadTasks()]);
+  if (active.value === "team") await loadOperationTeam();
 }
 
 async function submitAsset() {
@@ -712,7 +717,29 @@ onMounted(() => void bootstrap());
           </article>
         </section>
 
-        <section class="section-card task-list">
+        <section class="section-card task-list received-team-tasks">
+          <div class="section-heading"><div><p class="eyebrow">ASSIGNED TO ME</p><h3>别人安排给我的任务</h3><p>紧急事项会自动排在最前面。</p></div></div>
+          <article v-for="task in receivedTeamTasks" :key="task.id" class="task-card" :class="{ urgent: task.priority === 'URGENT' }">
+            <div class="task-main">
+              <div class="task-meta">
+                <el-tag v-if="task.priority === 'URGENT'" size="small" type="danger">紧急优先</el-tag>
+                <el-tag size="small" :type="statusType(task.status)">{{ statusLabels[task.status] || task.status }}</el-tag>
+                <span>{{ task.assignedBy || "运营安排" }}</span>
+                <span>截止 {{ formatTime(task.dueAt) }}</span>
+              </div>
+              <h4>{{ task.title }}</h4>
+              <p>{{ task.description || task.expectedResult || "按要求完成并提交成果。" }}</p>
+              <p v-if="task.returnReason" class="return-note">修改要求：{{ task.returnReason }}</p>
+            </div>
+            <div class="task-actions">
+              <el-button v-if="['ACCEPTED','RETURNED'].includes(task.status)" type="primary" @click="startTask(task)">开始任务</el-button>
+              <el-button v-if="['ACCEPTED','IN_PROGRESS','RETURNED'].includes(task.status)" @click="openSubmit(task)">提交成果</el-button>
+            </div>
+          </article>
+          <el-empty v-if="!receivedTeamTasks.length" description="当前没有别人安排给你的协作任务" />
+        </section>
+
+        <section v-if="isOperator" class="section-card task-list">
           <div class="section-heading">
             <div><h3>我安排的任务</h3><p>只显示由你安排的协作任务，紧急任务优先排列。</p></div>
             <div class="team-task-filters">

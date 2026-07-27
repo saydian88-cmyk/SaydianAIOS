@@ -56,6 +56,23 @@ describe("WorkbenchService operation team", () => {
       .rejects.toThrow("已完成或已取消的任务不能调整紧急状态");
   });
 
+  it("lists received collaboration tasks for the current employee", async () => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    const target = service({
+      opsTask: {
+        findMany,
+        count: vi.fn().mockResolvedValue(0),
+      },
+    });
+    await target.teamTasks(operator, { scope: "RECEIVED" });
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        assigneeEmployeeId: "operator-1",
+        sourceType: "OPERATOR_COLLAB",
+      }),
+    }));
+  });
+
   it("rejects a reporting relationship cycle", async () => {
     const target = service({
       employee: {

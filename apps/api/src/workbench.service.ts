@@ -388,11 +388,14 @@ export class WorkbenchService {
     this.requireCollaborator(session);
     const page = Math.max(1, Number(query.page || 1));
     const pageSize = Math.min(50, Math.max(1, Number(query.pageSize || 20)));
+    const received = value(query.scope).toUpperCase() === "RECEIVED";
     const where = {
-      assignedByEmployeeId: session.employeeId!,
+      ...(received
+        ? { assigneeEmployeeId: session.employeeId! }
+        : { assignedByEmployeeId: session.employeeId! }),
       sourceType: "OPERATOR_COLLAB",
       ...(value(query.status) ? { status: value(query.status).toUpperCase() } : {}),
-      ...(value(query.assigneeEmployeeId) ? { assigneeEmployeeId: value(query.assigneeEmployeeId) } : {}),
+      ...(!received && value(query.assigneeEmployeeId) ? { assigneeEmployeeId: value(query.assigneeEmployeeId) } : {}),
     };
     const [items, total] = await Promise.all([
       this.prisma.opsTask.findMany({
