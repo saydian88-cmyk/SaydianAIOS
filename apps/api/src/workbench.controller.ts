@@ -185,6 +185,23 @@ export class WorkbenchController {
     return this.brandData.assetDownloadUrl(id);
   }
 
+  @Patch("assets/:id/metadata")
+  updateAssetMetadata(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const employee = this.requirePermission(authorization, "DATA_CENTER_VIEW");
+    return this.brandData.updateAsset(id, {
+      displayName: body.displayName,
+      contentDescription: body.contentDescription,
+      productScope: body.productScope,
+      productIds: body.productIds,
+      scene: body.scene,
+      tags: body.tags,
+    }, employee.name);
+  }
+
   @Post("knowledge")
   createKnowledge(
     @Headers("authorization") authorization: string | undefined,

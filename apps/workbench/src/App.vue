@@ -73,6 +73,16 @@ const assetPreviewVisible = ref(false);
 const assetPreviewLoading = ref(false);
 const assetPreviewUrl = ref("");
 const assetDetail = ref<Row>();
+const assetEditMode = ref(false);
+const assetEditSaving = ref(false);
+const assetEditForm = reactive({
+  displayName: "",
+  productScope: "UNKNOWN",
+  productIds: [] as string[],
+  contentDescription: "",
+  scene: "",
+  classificationTags: [] as string[],
+});
 const knowledgeVisible = ref(false);
 const knowledgeForm = reactive({
   title: "",
@@ -96,12 +106,13 @@ const dataCenter = reactive<Row>({
   videoProjects: [],
   uploadOptions: { products: [], productionPlans: [] },
 });
-const dataCenterTab = ref("assets");
+const dataCenterTab = ref("knowledge");
 const dataCenterFilters = reactive({
   query: "",
   model: "",
   kind: "",
   moduleType: "",
+  type: "",
   minimumScore: "60",
 });
 const videoFactoryForm = reactive({
@@ -118,15 +129,17 @@ const generatingProjectId = ref("");
 let dataCenterRequestId = 0;
 
 const classificationOptions = [
-  { label: "HOOK钩子", value: "HOOK" },
+  { label: "钩子", value: "HOOK" },
   { label: "痛点", value: "PAIN" },
-  { label: "功能", value: "FEATURE" },
-  { label: "教程", value: "TUTORIAL" },
-  { label: "测评", value: "REVIEW" },
-  { label: "故事", value: "STORY" },
+  { label: "使用场景", value: "SCENE" },
+  { label: "功能点", value: "FEATURE" },
+  { label: "用户利益", value: "BENEFIT" },
+  { label: "信任证明", value: "PROOF" },
   { label: "产品演示", value: "DEMO" },
   { label: "引流", value: "TRAFFIC" },
+  { label: "优惠", value: "OFFER" },
   { label: "行动引导", value: "CTA" },
+  { label: "结尾", value: "ENDING" },
 ];
 
 const roleLabels: Record<string, string> = {
@@ -289,6 +302,16 @@ async function loadDataCenter() {
   parameters.set("_", String(Date.now()));
   const result = await api<Row>(`/api/v1/workbench/data-center?${parameters.toString()}`);
   if (requestId === dataCenterRequestId) Object.assign(dataCenter, result);
+}
+
+async function setAssetKind(kind: string) {
+  dataCenterFilters.kind = kind;
+  await loadDataCenter();
+}
+
+async function setKnowledgeType(type: string) {
+  dataCenterFilters.type = type;
+  await loadDataCenter();
 }
 
 function useKeywordInFactory(keyword: Row) {
@@ -543,6 +566,7 @@ async function submitAsset() {
 async function openAssetPreview(row: Row) {
   assetPreviewLoading.value = true;
   assetPreviewUrl.value = "";
+  assetEditMode.value = false;
   assetPreviewVisible.value = true;
   try {
     const [detail, download] = await Promise.all([
@@ -551,11 +575,49 @@ async function openAssetPreview(row: Row) {
     ]);
     assetDetail.value = detail;
     assetPreviewUrl.value = download.url;
+    Object.assign(assetEditForm, {
+      displayName: detail.displayName || detail.fileName || "",
+      productScope: detail.productScope || (detail.products?.length ? "MODEL" : "UNKNOWN"),
+      productIds: (detail.products || []).map((item: Row) => item.productId || item.product?.id || item.id).filter(Boolean),
+      contentDescription: detail.contentDescription || "",
+      scene: detail.scene || "",
+      classificationTags: (detail.tags || [])
+        .filter((item: Row) => (item.tag?.namespace || item.namespace) === "content_classification")
+        .map((item: Row) => item.tag?.code || item.code)
+        .filter(Boolean),
+    });
   } catch (error) {
     assetPreviewVisible.value = false;
     ElMessage.error(error instanceof Error ? error.message : "素材预览加载失败");
   } finally {
     assetPreviewLoading.value = false;
+  }
+}
+
+async function saveAssetMetadata() {
+  if (!assetDetail.value?.id) return;
+  assetEditSaving.value = true;
+  try {
+    const detail = await api<Row>(`/api/v1/workbench/assets/${assetDetail.value.id}/metadata`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        ...assetEditForm,
+        productScope: assetEditForm.productIds.length ? "MODEL" : assetEditForm.productScope,
+        tags: assetEditForm.classificationTags.map((code) => ({
+          namespace: "content_classification",
+          code,
+          label: classificationOptions.find((item) => item.value === code)?.label || code,
+        })),
+      }),
+    });
+    assetDetail.value = detail;
+    assetEditMode.value = false;
+    ElMessage.success("素材分类与标签已保存");
+    await loadDataCenter();
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "素材信息保存失败");
+  } finally {
+    assetEditSaving.value = false;
   }
 }
 
@@ -825,11 +887,19 @@ onMounted(() => void bootstrap());
         </section>
 
         <section class="data-module-nav">
-          <button :class="{ active: dataCenterTab === 'assets' }" @click="dataCenterTab = 'assets'"><el-icon><Files /></el-icon><span>素材库</span><b>{{ dataCenter.summary.assets || 0 }}</b><small>全库检索与调用</small></button>
           <button :class="{ active: dataCenterTab === 'knowledge' }" @click="dataCenterTab = 'knowledge'"><el-icon><Collection /></el-icon><span>品牌知识</span><b>{{ dataCenter.summary.knowledge || 0 }}</b><small>产品、FAQ与SOP</small></button>
+          <button :class="{ active: dataCenterTab === 'assets' }" @click="dataCenterTab = 'assets'"><el-icon><Files /></el-icon><span>素材库</span><b>{{ dataCenter.summary.assets || 0 }}</b><small>全库检索与调用</small></button>
           <button :class="{ active: dataCenterTab === 'keywords' }" @click="dataCenterTab = 'keywords'"><el-icon><Search /></el-icon><span>智能关键词</span><b>{{ dataCenter.summary.keywords || 0 }}</b><small>选题和流量方向</small></button>
           <button :class="{ active: dataCenterTab === 'viral' }" @click="dataCenterTab = 'viral'"><el-icon><DataAnalysis /></el-icon><span>爆款研究</span><b>{{ dataCenter.summary.viralVideos || 0 }}</b><small>结构拆解与仿拍</small></button>
           <button :class="{ active: dataCenterTab === 'videoFactory' }" @click="dataCenterTab = 'videoFactory'"><el-icon><VideoCamera /></el-icon><span>视频工厂</span><b>{{ dataCenter.summary.videoProjects || 0 }}</b><small>脚本与执行包</small></button>
+        </section>
+
+        <section v-if="dataCenterTab === 'assets'" class="data-quick-switch" aria-label="素材类型快速切换">
+          <button v-for="item in [{ label: '全部', value: '' }, { label: '视频', value: 'VIDEO' }, { label: '图片', value: 'IMAGE' }, { label: '音频', value: 'AUDIO' }, { label: '文档', value: 'DOCUMENT' }]" :key="item.value || 'ALL'" :class="{ active: dataCenterFilters.kind === item.value }" @click="setAssetKind(item.value)">{{ item.label }}</button>
+        </section>
+
+        <section v-if="dataCenterTab === 'knowledge'" class="data-quick-switch" aria-label="品牌知识快速切换">
+          <button v-for="item in [{ label: '全部知识', value: '' }, { label: '产品', value: 'PRODUCT' }, { label: '知识 / SOP', value: 'SOP' }, { label: 'FAQ', value: 'FAQ' }, { label: '资质', value: 'CLAIM' }]" :key="item.value || 'ALL'" :class="{ active: dataCenterFilters.type === item.value }" @click="setKnowledgeType(item.value)">{{ item.label }}</button>
         </section>
 
         <section v-if="['assets','knowledge','keywords'].includes(dataCenterTab)" class="section-card data-toolbar">
@@ -845,7 +915,7 @@ onMounted(() => void bootstrap());
               <el-option label="音频" value="AUDIO" />
             </el-select>
             <el-select v-if="dataCenterTab === 'assets'" v-model="dataCenterFilters.moduleType" clearable placeholder="视频模块">
-              <el-option v-for="item in ['HOOK','PAIN','SCENE','FEATURE','BENEFIT','PROOF','DEMO','TRAFFIC','OFFER','CTA','ENDING']" :key="item" :label="item" :value="item" />
+              <el-option v-for="item in classificationOptions" :key="item.value" :label="item.label" :value="item.value" />
             </el-select>
             <el-button type="primary" @click="loadDataCenter">查找</el-button>
           </div>
@@ -1166,9 +1236,34 @@ onMounted(() => void bootstrap());
           <div><dt>上传人</dt><dd>{{ assetDetail.createdByEmployee?.name || assetDetail.discoveredBy || "—" }}</dd></div>
         </dl>
         <div class="preview-actions">
+          <el-button @click="assetEditMode = !assetEditMode">{{ assetEditMode ? "取消编辑" : "编辑分类与标签" }}</el-button>
           <el-button @click="openAssetFile">新窗口打开</el-button>
           <el-button type="primary" @click="openAssetFile">下载原文件</el-button>
         </div>
+        <el-form v-if="assetEditMode" label-position="top" class="asset-edit-form">
+          <el-form-item label="素材名称" class="full"><el-input v-model="assetEditForm.displayName" /></el-form-item>
+          <el-form-item label="产品范围">
+            <el-select v-model="assetEditForm.productScope">
+              <el-option label="具体型号" value="MODEL" />
+              <el-option label="系列通用" value="SERIES" />
+              <el-option label="品牌通用" value="BRAND" />
+              <el-option label="未确认" value="UNKNOWN" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="关联产品">
+            <el-select v-model="assetEditForm.productIds" multiple filterable clearable placeholder="可选择多个型号">
+              <el-option v-for="item in dataCenter.uploadOptions.products" :key="item.id" :label="`${item.modelCode} · ${item.name}`" :value="item.id" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="使用场景"><el-input v-model="assetEditForm.scene" placeholder="如家庭、运动、送礼" /></el-form-item>
+          <el-form-item label="视频模块 / 内容标签">
+            <el-select v-model="assetEditForm.classificationTags" multiple filterable clearable>
+              <el-option v-for="item in classificationOptions" :key="item.value" :label="item.label" :value="item.value" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="内容说明" class="full"><el-input v-model="assetEditForm.contentDescription" type="textarea" :rows="3" /></el-form-item>
+          <div class="full asset-edit-actions"><el-button type="primary" :loading="assetEditSaving" @click="saveAssetMetadata">保存分类与标签</el-button></div>
+        </el-form>
       </div>
     </div>
   </el-drawer>
