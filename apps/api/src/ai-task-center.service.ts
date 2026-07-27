@@ -118,6 +118,31 @@ export class AiTaskCenterService implements OnModuleInit {
       });
     }
     await this.videoFactory.backfillLocalMasterRenderJobs();
+    const completedMasters = await this.prisma.aiTaskOutput.findMany({
+      where: {
+        kind: "VIDEO_MASTER",
+        assetId: { not: null },
+      },
+      select: { aiTaskId: true },
+      distinct: ["aiTaskId"],
+    });
+    const completedTaskIds = completedMasters.map((item) => item.aiTaskId);
+    if (completedTaskIds.length) {
+      await this.prisma.opsTask.updateMany({
+        where: {
+          sourceType: "AI_TASK",
+          sourceId: { in: completedTaskIds },
+          category: "CONTENT_PRODUCTION",
+          status: { not: "COMPLETED" },
+        },
+        data: {
+          status: "COMPLETED",
+          completedAt: new Date(),
+          completedBy: "系统迁移",
+          result: "Codex已完成并上传主成片，无需补拍",
+        },
+      });
+    }
   }
 
   async overview() {

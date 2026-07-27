@@ -42,6 +42,36 @@ function serviceWith(overrides: Record<string, unknown> = {}) {
 }
 
 describe("AiTaskCenterService", () => {
+  it("closes obsolete reshoot tasks after local masters are registered", async () => {
+    const prisma = {
+      aiTaskPolicy: { upsert: vi.fn().mockResolvedValue({}) },
+      aiTaskOutput: {
+        findMany: vi.fn().mockResolvedValue([{ aiTaskId: "task-with-master" }]),
+      },
+      opsTask: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+    };
+    const videoFactory = { backfillLocalMasterRenderJobs: vi.fn().mockResolvedValue(1) };
+    const service = new AiTaskCenterService(
+      prisma as never,
+      {} as never,
+      videoFactory as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await service.onModuleInit();
+
+    expect(videoFactory.backfillLocalMasterRenderJobs).toHaveBeenCalledOnce();
+    expect(prisma.opsTask.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        sourceId: { in: ["task-with-master"] },
+        category: "CONTENT_PRODUCTION",
+      }),
+      data: expect.objectContaining({ status: "COMPLETED" }),
+    }));
+  });
+
   it("creates a budget-approved article task for the Codex runner", async () => {
     const { service, create } = serviceWith();
     const result = await service.createTask({
