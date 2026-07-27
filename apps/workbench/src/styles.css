@@ -161,6 +161,17 @@ main { grid-column: 2; width: min(1240px, calc(100% - 48px)); margin: 24px auto;
 .viral-copy small { color: #939896; }
 .viral-actions { display: flex; gap: 8px; }
 .factory-create { display: grid; gap: 18px; }
+.factory-capabilities { display: grid; gap: 16px; }
+.factory-capability-form { display: grid; grid-template-columns: 1.2fr .7fr 1.2fr 1fr auto; gap: 10px; }
+.factory-script-list, .gap-result-list { display: grid; gap: 8px; }
+.factory-script-list article { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 14px; border: 1px solid #ebe6de; border-radius: 12px; background: #fcfbf8; }
+.factory-script-list article div { display: grid; gap: 3px; }
+.factory-script-list article span { color: #7b827f; font-size: 12px; }
+.gap-analysis-form { display: grid; grid-template-columns: minmax(240px, 1fr) auto; gap: 10px; }
+.gap-result-list .el-checkbox { width: 100%; height: auto; margin: 0; padding: 12px; border: 1px solid #ebe6de; border-radius: 12px; }
+.gap-result-list .el-checkbox__label { display: grid; white-space: normal; }
+.gap-result-list .el-checkbox__label span { color: #747c79; font-size: 12px; }
+.gap-task-action { display: flex; align-items: center; justify-content: space-between; }
 .factory-form { display: grid; grid-template-columns: 140px 1fr 1.2fr 1.5fr 1fr auto; gap: 10px; }
 .factory-context, .shot-summary { padding: 10px 13px; border-radius: 12px; color: #6e4c17; background: #fff4dd; font-size: 13px; }
 .factory-projects { display: grid; gap: 14px; }
@@ -224,6 +235,7 @@ main { grid-column: 2; width: min(1240px, calc(100% - 48px)); margin: 24px auto;
   .viral-actions { grid-column: 1 / -1; }
   .viral-actions .el-button { flex: 1; margin-left: 0; }
   .factory-form { grid-template-columns: 1fr; }
+  .factory-capability-form, .gap-analysis-form { grid-template-columns: 1fr; }
   .factory-project-head, .section-heading { display: grid; }
   .bottom-nav { display: flex; bottom: 8px; width: calc(100% - 16px); justify-content: space-around; border-radius: 18px; }
   .bottom-nav button { min-width: 58px; padding: 8px 6px; }

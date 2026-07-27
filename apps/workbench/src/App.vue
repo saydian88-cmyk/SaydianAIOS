@@ -80,6 +80,7 @@ const dataCenter = reactive<Row>({
   viralKeywords: { keywords: [] },
   viralTrend: { summary: {}, items: [] },
   videoProjects: [],
+  videoScripts: [],
 });
 const dataCenterTab = ref("assets");
 const dataCenterFilters = reactive({
@@ -100,6 +101,13 @@ const videoFactoryForm = reactive({
 });
 const creatingVideoProject = ref(false);
 const generatingProjectId = ref("");
+const generatingVideoScript = ref(false);
+const videoScriptMode = ref("ASSET_FIRST");
+const videoScriptRestriction = ref("NORMAL");
+const analyzingAssetGaps = ref(false);
+const creatingGapTasks = ref(false);
+const assetGaps = ref<Row[]>([]);
+const selectedAssetGapIds = ref<string[]>([]);
 let dataCenterRequestId = 0;
 
 const roleLabels: Record<string, string> = {
@@ -129,6 +137,7 @@ const currentRoles = computed(() => user.value?.roles || []);
 const isLiveHost = computed(() => currentRoles.value.includes("LIVE_HOST"));
 const isOperator = computed(() => currentRoles.value.includes("CONTENT_OPERATOR"));
 const isCollaborator = computed(() => currentRoles.value.some((role) => ["CONTENT_OPERATOR", "VIDEO_SPECIALIST", "DESIGNER"].includes(role)));
+const canGenerateVideoScript = computed(() => currentRoles.value.some((role) => ["CONTENT_OPERATOR", "VIDEO_SPECIALIST"].includes(role)) && can("CONTENT_SUBMIT"));
 const can = (permission: string) => Boolean(user.value?.permissions.includes("*") || user.value?.permissions.includes(permission));
 const canUseDataCenter = computed(() => can("DATA_CENTER_VIEW"));
 const navigation = computed(() => [
@@ -344,6 +353,55 @@ async function createVideoProject() {
     dataCenterTab.value = "videoFactory";
   } finally {
     creatingVideoProject.value = false;
+  }
+}
+
+async function generateWorkbenchVideoScript() {
+  if (videoScriptMode.value === "ASSET_ONLY" && !videoFactoryForm.productModel.trim()) {
+    return ElMessage.warning("生成无需补拍脚本前，请填写产品型号");
+  }
+  generatingVideoScript.value = true;
+  try {
+    const result = await post<Row>("/api/v1/workbench/data-center/video-scripts/generate", {
+      generationMode: videoScriptMode.value,
+      contentRestrictionMode: videoScriptRestriction.value,
+      productModel: videoFactoryForm.productModel,
+      platform: videoFactoryForm.platform,
+      keywordIds: videoFactoryForm.keywordIds,
+    });
+    ElMessage.success(result.created
+      ? (videoScriptMode.value === "ASSET_ONLY" ? "无需补拍脚本已生成，已进入脚本审核" : "视频脚本已生成，已进入脚本审核")
+      : "今天已有同类脚本，没有重复创建");
+    await loadDataCenter();
+    dataCenterTab.value = "videoFactory";
+  } finally {
+    generatingVideoScript.value = false;
+  }
+}
+
+async function analyzeWorkbenchAssetGaps() {
+  if (!videoFactoryForm.productModel.trim()) return ElMessage.warning("请先填写需要分析的产品型号");
+  analyzingAssetGaps.value = true;
+  try {
+    assetGaps.value = await post<Row[]>("/api/v1/workbench/data-center/asset-gaps/analyze", {
+      productModel: videoFactoryForm.productModel,
+    });
+    selectedAssetGapIds.value = assetGaps.value.filter((item) => Number(item.gapCount || 0) > 0).map((item) => item.id);
+    ElMessage.success(assetGaps.value.length ? "缺失素材分析完成，可勾选生成补拍任务" : "当前没有发现缺失素材");
+  } finally {
+    analyzingAssetGaps.value = false;
+  }
+}
+
+async function createWorkbenchGapTasks() {
+  if (!selectedAssetGapIds.value.length) return ElMessage.warning("请先勾选需要补拍的素材");
+  creatingGapTasks.value = true;
+  try {
+    const result = await post<Row>("/api/v1/workbench/data-center/asset-gaps/tasks", { ids: selectedAssetGapIds.value });
+    ElMessage.success(`已生成 ${result.created || 0} 个补拍任务`);
+    selectedAssetGapIds.value = [];
+  } finally {
+    creatingGapTasks.value = false;
   }
 }
 
@@ -883,6 +941,44 @@ onMounted(() => void bootstrap());
         </section>
 
         <section v-else class="video-factory-workspace">
+          <div v-if="canGenerateVideoScript" class="section-card factory-capabilities">
+            <div class="section-heading"><div><h3>视频脚本生成</h3><p>运营和视频专员可直接生成脚本，继续进入现有脚本审核流程。</p></div><el-tag type="success">运营 / 视频专员</el-tag></div>
+            <div class="factory-capability-form">
+              <el-input v-model="videoFactoryForm.productModel" placeholder="产品型号；无需补拍模式必填" />
+              <el-select v-model="videoFactoryForm.platform"><el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" /></el-select>
+              <el-select v-model="videoScriptMode">
+                <el-option label="普通脚本（优先复用素材）" value="ASSET_FIRST" />
+                <el-option label="无需补拍快速成片" value="ASSET_ONLY" />
+              </el-select>
+              <el-select v-model="videoScriptRestriction">
+                <el-option label="普通内容" value="NORMAL" />
+                <el-option label="健康内容受限" value="HEALTH_RESTRICTED" />
+              </el-select>
+              <el-button type="primary" :loading="generatingVideoScript" @click="generateWorkbenchVideoScript">{{ videoScriptMode === "ASSET_ONLY" ? "生成无需补拍脚本" : "生成视频脚本" }}</el-button>
+            </div>
+            <el-alert v-if="videoScriptMode === 'ASSET_ONLY'" title="只使用素材库已有视频素材；素材无法完整覆盖时不会伪造脚本，将明确提示缺少素材。" type="info" :closable="false" />
+            <div v-if="dataCenter.videoScripts?.length" class="factory-script-list">
+              <article v-for="script in dataCenter.videoScripts.slice(0, 6)" :key="script.id">
+                <div><strong>{{ script.topic }}</strong><span>{{ script.productModel || "通用" }} · {{ statusLabels[script.status] || script.status }}</span></div>
+                <el-tag size="small" :type="script.sourceSignals?.[0]?.generationMode === 'ASSET_ONLY' ? 'success' : 'info'">{{ script.sourceSignals?.[0]?.generationMode === "ASSET_ONLY" ? "无需补拍" : "优先复用素材" }}</el-tag>
+              </article>
+            </div>
+          </div>
+
+          <div v-if="canGenerateVideoScript" class="section-card factory-capabilities">
+            <div class="section-heading"><div><h3>AI缺失素材分析</h3><p>按产品型号读取当前素材索引，列出真正缺少的画面，并生成补拍任务。</p></div></div>
+            <div class="gap-analysis-form">
+              <el-input v-model="videoFactoryForm.productModel" placeholder="输入已审核产品型号，如 W9" />
+              <el-button type="primary" :loading="analyzingAssetGaps" @click="analyzeWorkbenchAssetGaps">分析缺失素材</el-button>
+            </div>
+            <el-checkbox-group v-if="assetGaps.length" v-model="selectedAssetGapIds" class="gap-result-list">
+              <el-checkbox v-for="gap in assetGaps" :key="gap.id" :value="gap.id">
+                <strong>{{ gap.category }}</strong><span>{{ gap.assetKind }} · {{ gap.severity }} · {{ gap.recommendation }}</span>
+              </el-checkbox>
+            </el-checkbox-group>
+            <div v-if="assetGaps.length" class="gap-task-action"><span>已选择 {{ selectedAssetGapIds.length }} 项</span><el-button type="primary" :disabled="!selectedAssetGapIds.length" :loading="creatingGapTasks" @click="createWorkbenchGapTasks">生成补拍任务</el-button></div>
+          </div>
+
           <div class="section-card factory-create">
             <div class="section-heading"><div><h3>新建智能视频项目</h3><p>可直接填写主题，也可从关键词或爆款研究一键带入。</p></div><el-tag type="success">员工可用</el-tag></div>
             <div class="factory-form">

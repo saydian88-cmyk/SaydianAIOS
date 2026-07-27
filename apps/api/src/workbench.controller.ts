@@ -14,6 +14,7 @@ import {
 import { FileInterceptor } from "@nestjs/platform-express";
 import { AuthService } from "./auth.service";
 import { BrandDataService } from "./brand-data.service";
+import { ContentService } from "./content.service";
 import { PrismaService } from "./prisma.service";
 import { SmartKeywordService } from "./smart-keyword.service";
 import { VideoFactoryService } from "./video-factory.service";
@@ -33,6 +34,7 @@ export class WorkbenchController {
     private readonly auth: AuthService,
     private readonly workbench: WorkbenchService,
     private readonly brandData: BrandDataService,
+    private readonly content: ContentService,
     private readonly prisma: PrismaService,
     private readonly smartKeywords: SmartKeywordService,
     private readonly viralTrend: ViralTrendService,
@@ -214,7 +216,7 @@ export class WorkbenchController {
   ) {
     const employee = this.requirePermission(authorization, "DATA_CENTER_VIEW");
     const canCurateAssets = employee.permissions.includes("*") || employee.permissions.includes("ASSET_CURATE");
-    const [assets, knowledge, pendingAssets, assetTotal, knowledgeTotal, keywords, viralKeywords, viralTrend, videoProjects] = await Promise.all([
+    const [assets, knowledge, pendingAssets, assetTotal, knowledgeTotal, keywords, viralKeywords, viralTrend, videoProjects, videoScripts] = await Promise.all([
       this.brandData.rankedAssets({
         query: query.query,
         model: query.model,
@@ -259,6 +261,24 @@ export class WorkbenchController {
         platform: query.platform,
         productModel: query.model,
       }).catch(() => []),
+      this.prisma.contentPlan.findMany({
+        where: {
+          kind: "VIDEO",
+          ...(query.model ? { productModel: { contains: query.model, mode: "insensitive" } } : {}),
+        },
+        select: {
+          id: true,
+          productionNo: true,
+          topic: true,
+          productModel: true,
+          status: true,
+          productionStage: true,
+          sourceSignals: true,
+          createdAt: true,
+        },
+        orderBy: { createdAt: "desc" },
+        take: 30,
+      }),
     ]);
     const pending = Array.isArray(pendingAssets) ? pendingAssets : pendingAssets.items;
     return {
@@ -280,6 +300,7 @@ export class WorkbenchController {
       viralKeywords,
       viralTrend,
       videoProjects,
+      videoScripts,
     };
   }
 
@@ -314,6 +335,59 @@ export class WorkbenchController {
       routingMode: "AUTO",
       allowFallback: true,
     }, employee.name);
+  }
+
+  @Post("data-center/video-scripts/generate")
+  generateVideoScript(
+    @Headers("authorization") authorization: string | undefined,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    if (!employee.roles.some((role) => ["CONTENT_OPERATOR", "VIDEO_SPECIALIST"].includes(role))) {
+      throw new ForbiddenException("只有运营和视频专员可以生成视频脚本");
+    }
+    const generationMode = String(body.generationMode || "ASSET_FIRST").toUpperCase();
+    if (!["ASSET_FIRST", "ASSET_ONLY"].includes(generationMode)) {
+      throw new ForbiddenException("脚本生成模式不正确");
+    }
+    const productModel = String(body.productModel || "").trim();
+    if (generationMode === "ASSET_ONLY" && !productModel) {
+      throw new ForbiddenException("无需补拍模式必须选择产品型号");
+    }
+    return this.content.generateDailyVideo(new Date(), employee.name, productModel || undefined, {
+      assetOnly: generationMode === "ASSET_ONLY",
+      restricted: String(body.contentRestrictionMode || "NORMAL") === "HEALTH_RESTRICTED",
+      platform: body.platform === "TIKTOK" ? "TIKTOK" : "DOUYIN",
+      keywordIds: Array.isArray(body.keywordIds) ? body.keywordIds.map(String) : [],
+      force: true,
+    });
+  }
+
+  @Post("data-center/asset-gaps/analyze")
+  analyzeAssetGaps(
+    @Headers("authorization") authorization: string | undefined,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const employee = this.requirePermission(authorization, "ASSET_VIEW");
+    if (!employee.roles.some((role) => ["CONTENT_OPERATOR", "VIDEO_SPECIALIST"].includes(role))) {
+      throw new ForbiddenException("只有运营和视频专员可以分析缺失素材");
+    }
+    return this.brandData.analyzeProductAssetGaps(String(body.productModel || ""), employee.name);
+  }
+
+  @Post("data-center/asset-gaps/tasks")
+  createAssetGapTasks(
+    @Headers("authorization") authorization: string | undefined,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    if (!employee.roles.some((role) => ["CONTENT_OPERATOR", "VIDEO_SPECIALIST"].includes(role))) {
+      throw new ForbiddenException("只有运营和视频专员可以生成补拍任务");
+    }
+    return this.brandData.createSelectedGapTasks(
+      Array.isArray(body.ids) ? body.ids.map(String) : [],
+      employee.name,
+    );
   }
 
   @Get("live/learning")
