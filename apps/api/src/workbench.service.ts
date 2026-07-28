@@ -522,6 +522,7 @@ export class WorkbenchService {
     const pageSize = Math.min(50, Math.max(1, Number(query.pageSize || 20)));
     const received = value(query.scope).toUpperCase() === "RECEIVED";
     const where = {
+      deletedAt: null,
       ...(received
         ? { assigneeEmployeeId: session.employeeId! }
         : { assignedByEmployeeId: session.employeeId! }),
@@ -608,7 +609,7 @@ export class WorkbenchService {
   async reviewTeamTask(session: SessionPayload, id: string, body: Record<string, unknown>) {
     this.requireOperator(session);
     const task = await this.prisma.opsTask.findFirst({
-      where: { id, assignedByEmployeeId: session.employeeId, sourceType: "OPERATOR_COLLAB" },
+      where: { id, deletedAt: null, assignedByEmployeeId: session.employeeId, sourceType: "OPERATOR_COLLAB" },
     });
     if (!task) throw new NotFoundException("只能审核自己安排的运营协作任务");
     return this.reviewTask(id, body, session.name);
@@ -617,7 +618,7 @@ export class WorkbenchService {
   async setTeamTaskUrgency(session: SessionPayload, id: string, urgent: boolean) {
     this.requireOperator(session);
     const task = await this.prisma.opsTask.findFirst({
-      where: { id, assignedByEmployeeId: session.employeeId, sourceType: "OPERATOR_COLLAB" },
+      where: { id, deletedAt: null, assignedByEmployeeId: session.employeeId, sourceType: "OPERATOR_COLLAB" },
     });
     if (!task) throw new NotFoundException("只能调整自己安排的协作任务");
     if (doneStatuses.includes(task.status)) throw new BadRequestException("已完成或已取消的任务不能调整紧急状态");
@@ -651,6 +652,7 @@ export class WorkbenchService {
     const task = await this.prisma.opsTask.findFirst({
       where: {
         id,
+        deletedAt: null,
         OR: [
           { sourceType: "SELF_CREATED", assigneeEmployeeId: session.employeeId },
           { sourceType: "OPERATOR_COLLAB", assignedByEmployeeId: session.employeeId },
@@ -732,6 +734,7 @@ export class WorkbenchService {
     const task = await this.prisma.opsTask.findFirst({
       where: {
         id,
+        deletedAt: null,
         OR: [
           { sourceType: "SELF_CREATED", assigneeEmployeeId: session.employeeId },
           { sourceType: "OPERATOR_COLLAB", assignedByEmployeeId: session.employeeId },
@@ -754,6 +757,91 @@ export class WorkbenchService {
       this.audit(session.name, "TASK_CANCEL", "OpsTask", id, {}),
     ]);
     return updated;
+  }
+
+  async trashCancelledTask(session: SessionPayload, id: string) {
+    const task = await this.prisma.opsTask.findFirst({
+      where: {
+        id,
+        deletedAt: null,
+        status: "CANCELLED",
+        OR: [
+          { sourceType: "SELF_CREATED", assigneeEmployeeId: session.employeeId },
+          { sourceType: "OPERATOR_COLLAB", assignedByEmployeeId: session.employeeId },
+        ],
+      },
+    });
+    if (!task) throw new NotFoundException("只能删除自己已取消的自建任务或协作任务");
+    const deletedAt = new Date();
+    const purgeAfter = new Date(deletedAt.getTime() + 3 * 24 * 60 * 60 * 1000);
+    const updated = await this.prisma.opsTask.update({
+      where: { id },
+      data: { deletedAt, purgeAfter, deletedByEmployeeId: session.employeeId },
+      include: this.taskInclude(),
+    });
+    await Promise.all([
+      this.prisma.operationTaskHistory.create({
+        data: { taskId: id, fromStatus: task.status, toStatus: task.status, action: "TRASH", actor: session.name },
+      }),
+      task.sourceType === "OPERATOR_COLLAB" && task.assigneeEmployeeId
+        ? this.notify(id, task.assigneeEmployeeId, "TEAM_TASK_DELETED", "协作任务已移入回收站", task.title)
+        : Promise.resolve(),
+      this.audit(session.name, "TASK_TRASH", "OpsTask", id, { deletedAt, purgeAfter }),
+    ]);
+    return updated;
+  }
+
+  async taskRecycleBin(session: SessionPayload) {
+    await this.purgeExpiredTasks();
+    const now = new Date();
+    return this.prisma.opsTask.findMany({
+      where: {
+        deletedByEmployeeId: session.employeeId,
+        deletedAt: { not: null },
+        purgeAfter: { gt: now },
+        OR: [
+          { sourceType: "SELF_CREATED", assigneeEmployeeId: session.employeeId },
+          { sourceType: "OPERATOR_COLLAB", assignedByEmployeeId: session.employeeId },
+        ],
+      },
+      include: this.taskInclude(),
+      orderBy: { deletedAt: "desc" },
+      take: 200,
+    });
+  }
+
+  async restoreTask(session: SessionPayload, id: string) {
+    const task = await this.prisma.opsTask.findFirst({
+      where: {
+        id,
+        deletedByEmployeeId: session.employeeId,
+        deletedAt: { not: null },
+        purgeAfter: { gt: new Date() },
+      },
+    });
+    if (!task) throw new NotFoundException("回收站中未找到该任务，或任务已超过恢复期限");
+    const restored = await this.prisma.opsTask.update({
+      where: { id },
+      data: { deletedAt: null, purgeAfter: null, deletedByEmployeeId: null },
+      include: this.taskInclude(),
+    });
+    await Promise.all([
+      this.prisma.operationTaskHistory.create({
+        data: { taskId: id, fromStatus: task.status, toStatus: task.status, action: "RESTORE", actor: session.name },
+      }),
+      task.sourceType === "OPERATOR_COLLAB" && task.assigneeEmployeeId
+        ? this.notify(id, task.assigneeEmployeeId, "TEAM_TASK_RESTORED", "协作任务已从回收站恢复", task.title)
+        : Promise.resolve(),
+      this.audit(session.name, "TASK_RESTORE", "OpsTask", id, {}),
+    ]);
+    return restored;
+  }
+
+  @Cron("0 20 0 * * *")
+  async purgeExpiredTasks() {
+    return this.prisma.opsTask.deleteMany({
+      where: { deletedAt: { not: null }, purgeAfter: { lte: new Date() } },
+    });
   }
 
   async notifications(session: SessionPayload) {
@@ -799,7 +887,7 @@ export class WorkbenchService {
         orderBy: { username: "asc" },
       }),
       this.prisma.taskTemplate.findMany({ include: { role: true }, orderBy: { name: "asc" } }),
-      this.prisma.opsTask.groupBy({ by: ["status"], _count: { _all: true } }),
+      this.prisma.opsTask.groupBy({ by: ["status"], where: { deletedAt: null }, _count: { _all: true } }),
     ]);
     return { roles, employees, adminUsers, templates, taskCounts };
   }
@@ -809,6 +897,7 @@ export class WorkbenchService {
     const assigneeEmployeeId = value(query.assigneeEmployeeId);
     return this.prisma.opsTask.findMany({
       where: {
+        deletedAt: null,
         ...(status ? { status } : {}),
         ...(assigneeEmployeeId ? { assigneeEmployeeId } : {}),
       },
@@ -1005,14 +1094,19 @@ export class WorkbenchService {
   private taskAccess(session: SessionPayload) {
     const roleFilters = session.roles.length ? [{ requiredRoleCode: { in: session.roles } }] : [];
     return {
-      OR: [
-        { assigneeEmployeeId: session.employeeId },
-        { owner: session.name },
+      AND: [
+        { deletedAt: null },
         {
-          AND: [
-            { assigneeEmployeeId: null },
-            { status: "OPEN" },
-            { OR: [...roleFilters, { requiredRoleCode: null }] },
+          OR: [
+            { assigneeEmployeeId: session.employeeId },
+            { owner: session.name },
+            {
+              AND: [
+                { assigneeEmployeeId: null },
+                { status: "OPEN" },
+                { OR: [...roleFilters, { requiredRoleCode: null }] },
+              ],
+            },
           ],
         },
       ],
@@ -1078,7 +1172,7 @@ export class WorkbenchService {
 
   private async ownedTask(session: SessionPayload, id: string, statuses: string[]) {
     const task = await this.prisma.opsTask.findFirst({
-      where: { id, assigneeEmployeeId: session.employeeId, status: { in: statuses } },
+      where: { id, deletedAt: null, assigneeEmployeeId: session.employeeId, status: { in: statuses } },
     });
     if (!task) throw new BadRequestException("任务当前不可执行");
     return task;

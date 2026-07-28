@@ -63,6 +63,7 @@ const taskEditorDocument = (document: unknown, text: unknown) => {
 const selfTaskVisible = ref(false);
 const creatingSelfTask = ref(false);
 const editingSelfTaskId = ref("");
+const copyingSelfTask = ref(false);
 const selfTaskForm = reactive({
   title: "",
   description: "",
@@ -81,6 +82,12 @@ const teamTaskFilters = reactive({ status: "", assigneeEmployeeId: "" });
 const teamTaskVisible = ref(false);
 const creatingTeamTask = ref(false);
 const editingTeamTaskId = ref("");
+const copyingTeamTask = ref(false);
+const taskRecycleBinVisible = ref(false);
+const taskRecycleBinLoading = ref(false);
+const taskRecycleItems = ref<Row[]>([]);
+const trashingTaskId = ref("");
+const restoringTaskId = ref("");
 const inviteVisible = ref(false);
 const reviewVisible = ref(false);
 const reviewTaskRow = ref<Row>();
@@ -187,6 +194,8 @@ const dataCenterFilters = reactive({
 const videoFactoryForm = reactive({
   platform: "DOUYIN",
   voiceoverMode: "VOICEOVER",
+  accountType: "BRAND",
+  estimatedDurationSeconds: 30,
   productModel: "",
   topic: "",
   audience: "",
@@ -195,6 +204,8 @@ const videoFactoryForm = reactive({
   externalVideoIds: [] as string[],
 });
 const creatingVideoProject = ref(false);
+const scriptPackageVisible = ref(false);
+const scriptPackageCandidate = ref<Row>();
 const generatingProjectId = ref("");
 const archivingVideoProjectId = ref("");
 const videoRecycleBinVisible = ref(false);
@@ -577,16 +588,36 @@ async function createTeamTask() {
       await post("/api/v1/workbench/operation-team/tasks", payload);
     }
     teamTaskVisible.value = false;
-    ElMessage.success(editingTeamTaskId.value ? "任务修改已同步通知协作成员" : "任务已推送到协作成员的任务列表");
+    ElMessage.success(editingTeamTaskId.value
+      ? "任务修改已同步通知协作成员"
+      : copyingTeamTask.value
+        ? "任务已复制并重新安排"
+        : "任务已推送到协作成员的任务列表");
     editingTeamTaskId.value = "";
+    copyingTeamTask.value = false;
     await loadOperationTeam();
   } finally {
     creatingTeamTask.value = false;
   }
 }
 
+function openScriptPackage(candidate: Row) {
+  scriptPackageCandidate.value = candidate;
+  scriptPackageVisible.value = true;
+}
+
+function assetCoverageLabel(status?: string) {
+  return ({
+    COVERED: "已有素材覆盖",
+    REWRITABLE: "可以改写",
+    NEED_SHOOT: "需要补拍",
+    PROHIBITED: "禁止制作",
+  } as Record<string, string>)[status || ""] || status || "未判断";
+}
+
 function openTeamTaskCreate() {
   editingTeamTaskId.value = "";
+  copyingTeamTask.value = false;
   Object.assign(teamTaskForm, {
     assigneeEmployeeId: "",
     title: "",
@@ -605,6 +636,7 @@ function openTeamTaskCreate() {
 
 function openTeamTaskEdit(task: Row) {
   editingTeamTaskId.value = task.id;
+  copyingTeamTask.value = false;
   Object.assign(teamTaskForm, {
     assigneeEmployeeId: task.assigneeEmployeeId || task.assignee?.id || "",
     title: task.title || "",
@@ -621,12 +653,68 @@ function openTeamTaskEdit(task: Row) {
   teamTaskVisible.value = true;
 }
 
+function openTeamTaskCopy(task: Row) {
+  openTeamTaskEdit(task);
+  editingTeamTaskId.value = "";
+  copyingTeamTask.value = true;
+  teamTaskForm.recurrenceWeekdays = [];
+}
+
 async function cancelOwnedTask(task: Row, team = false) {
   await post(team
     ? `/api/v1/workbench/operation-team/tasks/${task.id}/cancel`
     : `/api/v1/workbench/tasks/${task.id}/cancel`);
   ElMessage.success(team ? "任务已取消，并已通知协作成员" : "任务已取消");
   await Promise.all([loadTasks(), loadDashboard(), ...(team ? [loadOperationTeam()] : [])]);
+}
+
+async function trashCancelledTask(task: Row) {
+  await ElMessageBox.confirm("删除后任务会进入回收站，3天内可以恢复。确认删除吗？", "删除已取消任务", {
+    confirmButtonText: "删除",
+    cancelButtonText: "暂不删除",
+    type: "warning",
+  });
+  trashingTaskId.value = task.id;
+  try {
+    await post(`/api/v1/workbench/tasks/${task.id}/trash`);
+    ElMessage.success("任务已移入回收站，将保留3天");
+    await Promise.all([loadTasks(), loadDashboard(), loadOperationTeam()]);
+    if (taskRecycleBinVisible.value) await loadTaskRecycleBin();
+  } finally {
+    trashingTaskId.value = "";
+  }
+}
+
+async function loadTaskRecycleBin() {
+  taskRecycleBinLoading.value = true;
+  try {
+    taskRecycleItems.value = await api<Row[]>("/api/v1/workbench/task-recycle-bin");
+  } finally {
+    taskRecycleBinLoading.value = false;
+  }
+}
+
+async function openTaskRecycleBin() {
+  taskRecycleBinVisible.value = true;
+  await loadTaskRecycleBin();
+}
+
+async function restoreRecycledTask(task: Row) {
+  restoringTaskId.value = task.id;
+  try {
+    await post(`/api/v1/workbench/tasks/${task.id}/restore`);
+    ElMessage.success("任务已恢复");
+    await Promise.all([loadTaskRecycleBin(), loadTasks(), loadDashboard(), loadOperationTeam()]);
+  } finally {
+    restoringTaskId.value = "";
+  }
+}
+
+function recycleRemaining(task: Row) {
+  const remaining = new Date(task.purgeAfter).getTime() - Date.now();
+  if (remaining <= 0) return "即将彻底删除";
+  const hours = Math.ceil(remaining / (60 * 60 * 1000));
+  return hours > 24 ? `剩余 ${Math.ceil(hours / 24)} 天` : `剩余 ${hours} 小时`;
 }
 
 function openTeamReview(task: Row) {
@@ -679,6 +767,7 @@ async function invalidateDataCenterSection(section = dataCenterTab.value) {
 
 function openSelfTask() {
   editingSelfTaskId.value = "";
+  copyingSelfTask.value = false;
   Object.assign(selfTaskForm, {
     title: "",
     description: "",
@@ -695,6 +784,7 @@ function openSelfTask() {
 
 function openSelfTaskEdit(task: Row) {
   editingSelfTaskId.value = task.id;
+  copyingSelfTask.value = false;
   Object.assign(selfTaskForm, {
     title: task.title || "",
     description: task.description || "",
@@ -707,6 +797,13 @@ function openSelfTaskEdit(task: Row) {
     recurrenceDueTime: "23:59",
   });
   selfTaskVisible.value = true;
+}
+
+function openSelfTaskCopy(task: Row) {
+  openSelfTaskEdit(task);
+  editingSelfTaskId.value = "";
+  copyingSelfTask.value = true;
+  selfTaskForm.recurrenceWeekdays = [];
 }
 
 function quickDue(target: { dueAt: string }, mode: "TODAY" | "WEEK") {
@@ -722,6 +819,24 @@ function quickDue(target: { dueAt: string }, mode: "TODAY" | "WEEK") {
 function openTaskDetail(task: Row) {
   taskDetail.value = task;
   taskDetailVisible.value = true;
+}
+
+async function copyTaskContent(content: unknown, label: string) {
+  const text = String(content || "").trim();
+  if (!text) return ElMessage.warning(`${label}暂无可复制内容`);
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand("copy");
+    textarea.remove();
+  }
+  ElMessage.success(`${label}已复制`);
 }
 
 function taskAttachments(task?: Row) {
@@ -745,8 +860,15 @@ async function createSelfTask() {
     }
     selfTaskVisible.value = false;
     taskScope.value = "MINE";
-    ElMessage.success(editingSelfTaskId.value ? "任务已修改" : selfTaskForm.recurrenceWeekdays.length ? "每周固定任务已创建" : "任务已添加到“我的任务”");
+    ElMessage.success(editingSelfTaskId.value
+      ? "任务已修改"
+      : copyingSelfTask.value
+        ? "任务已复制并重新添加"
+        : selfTaskForm.recurrenceWeekdays.length
+          ? "每周固定任务已创建"
+          : "任务已添加到“我的任务”");
     editingSelfTaskId.value = "";
+    copyingSelfTask.value = false;
     await Promise.all([loadTasks(), loadDashboard()]);
   } finally {
     creatingSelfTask.value = false;
@@ -855,7 +977,10 @@ function useViralVideoInFactory(video: Row) {
 async function createVideoProject() {
   creatingVideoProject.value = true;
   try {
-    await post("/api/v1/workbench/data-center/video-projects", videoFactoryForm);
+    await post("/api/v1/workbench/data-center/video-projects", {
+      ...videoFactoryForm,
+      contentRestrictionMode: videoScriptRestriction.value,
+    });
     ElMessage.success("已生成3个视频方向，可继续生成拍摄执行包");
     videoFactoryForm.keywordIds = [];
     videoFactoryForm.externalVideoIds = [];
@@ -1829,7 +1954,10 @@ onMounted(() => void bootstrap());
               <el-option v-for="(label, key) in statusLabels" :key="key" :label="label" :value="key" />
             </el-select>
           </div>
-          <el-button type="primary" @click="openSelfTask">新建我的任务</el-button>
+          <div class="task-toolbar-actions">
+            <el-button @click="openTaskRecycleBin">任务回收站</el-button>
+            <el-button type="primary" @click="openSelfTask">新建我的任务</el-button>
+          </div>
         </section>
         <section class="section-card task-list">
           <article v-for="task in tasks" :key="task.id" class="task-card">
@@ -1851,6 +1979,8 @@ onMounted(() => void bootstrap());
               <el-button v-if="task.assigneeEmployeeId === user.id && ['ACCEPTED','IN_PROGRESS','RETURNED'].includes(task.status)" @click="openSubmit(task)">提交成果</el-button>
               <el-button v-if="task.sourceType === 'SELF_CREATED' && !['COMPLETED','CANCELLED','VERIFIED'].includes(task.status)" @click="openSelfTaskEdit(task)">修改</el-button>
               <el-button v-if="task.sourceType === 'SELF_CREATED' && !['COMPLETED','CANCELLED','VERIFIED'].includes(task.status)" type="danger" plain @click="cancelOwnedTask(task)">取消任务</el-button>
+              <el-button v-if="task.sourceType === 'SELF_CREATED' && task.status === 'CANCELLED'" @click="openSelfTaskCopy(task)">复制再次添加</el-button>
+              <el-button v-if="task.sourceType === 'SELF_CREATED' && task.status === 'CANCELLED'" type="danger" plain :loading="trashingTaskId === task.id" @click="trashCancelledTask(task)">删除</el-button>
             </div>
           </article>
           <el-empty v-if="!tasks.length" description="没有符合条件的任务" />
@@ -1864,6 +1994,7 @@ onMounted(() => void bootstrap());
             <h2>运营团队协作</h2>
           </div>
           <div class="team-hero-actions">
+            <el-button @click="openTaskRecycleBin">任务回收站</el-button>
             <el-button v-if="isOperator" @click="inviteVisible = true">邀请协作成员</el-button>
             <el-button v-if="operationTeam.directReports?.length" type="primary" @click="openTeamTaskCreate">安排任务</el-button>
           </div>
@@ -1945,6 +2076,8 @@ onMounted(() => void bootstrap());
               <el-button v-if="!['COMPLETED','CANCELLED','VERIFIED'].includes(task.status)" :type="task.priority === 'URGENT' ? 'danger' : 'default'" @click="setTeamTaskUrgency(task, task.priority !== 'URGENT')">{{ task.priority === "URGENT" ? "取消紧急" : "标记紧急" }}</el-button>
               <el-button v-if="!['COMPLETED','CANCELLED','VERIFIED'].includes(task.status)" @click="openTeamTaskEdit(task)">修改</el-button>
               <el-button v-if="!['COMPLETED','CANCELLED','VERIFIED'].includes(task.status)" type="danger" plain @click="cancelOwnedTask(task, true)">取消任务</el-button>
+              <el-button v-if="task.status === 'CANCELLED'" @click="openTeamTaskCopy(task)">复制再次安排</el-button>
+              <el-button v-if="task.status === 'CANCELLED'" type="danger" plain :loading="trashingTaskId === task.id" @click="trashCancelledTask(task)">删除</el-button>
               <el-button v-if="task.status === 'REVIEW'" type="primary" @click="openTeamReview(task)">审核成果</el-button>
             </div>
           </article>
@@ -2107,6 +2240,8 @@ onMounted(() => void bootstrap());
             <div class="factory-form">
               <el-select v-model="videoFactoryForm.platform" placeholder="目标平台"><el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" /></el-select>
               <el-select v-model="videoFactoryForm.voiceoverMode" placeholder="视频类型"><el-option label="有口播视频" value="VOICEOVER" /><el-option label="无口播视频" value="NO_VOICEOVER" /></el-select>
+              <el-select v-model="videoFactoryForm.accountType" placeholder="账号类型"><el-option label="品牌账号" value="BRAND" /><el-option label="达人账号" value="CREATOR" /><el-option label="员工账号" value="EMPLOYEE" /></el-select>
+              <el-select v-model="videoFactoryForm.estimatedDurationSeconds" placeholder="预计时长"><el-option label="15秒" :value="15" /><el-option label="30秒" :value="30" /><el-option label="60秒" :value="60" /></el-select>
               <el-select v-model="videoFactoryForm.productModel" clearable filterable placeholder="搜索或选择产品型号">
                 <el-option v-for="product in productOptions" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" />
               </el-select>
@@ -2173,7 +2308,8 @@ onMounted(() => void bootstrap());
                   <small>方向 {{ Number(index) + 1 }} · {{ candidate.score || 0 }}分</small>
                   <h4>{{ candidate.topic }}</h4>
                   <p><b>HOOK：</b>{{ candidate.hook }}</p>
-                  <p>{{ candidate.scripts?.zh15 || candidate.outline?.join("；") }}</p>
+                  <p class="candidate-full-script"><b>完整脚本：</b>{{ candidate.scripts?.zh30 || candidate.scripts?.zh15 || candidate.outline?.join("；") }}</p>
+                  <el-button v-if="candidate.scriptPackage" @click="openScriptPackage(candidate)">查看完整脚本包</el-button>
                   <el-button type="primary" plain :loading="generatingProjectId === project.id" @click="generateVideoProject(project, Number(index))">生成拍摄执行包</el-button>
                 </article>
               </div>
@@ -2397,12 +2533,18 @@ onMounted(() => void bootstrap());
         <div><dt>优先级</dt><dd>{{ priorityLabels[taskDetail.priority] || taskDetail.priority }}</dd></div>
         <div><dt>截止时间</dt><dd>{{ formatTime(taskDetail.dueAt) }}</dd></div>
       </dl>
-      <section class="task-detail-section">
-        <h3>任务说明</h3>
+      <section class="task-detail-section task-detail-scroll">
+        <div class="task-detail-section-heading">
+          <h3>任务说明</h3>
+          <el-button size="small" plain @click="copyTaskContent(taskDetail.description, '任务说明')">复制内容</el-button>
+        </div>
         <TaskRichTextContent :document="taskDetail.descriptionDocument" :text="taskDetail.description" />
       </section>
-      <section class="task-detail-section">
-        <h3>期望结果</h3>
+      <section class="task-detail-section task-detail-scroll">
+        <div class="task-detail-section-heading">
+          <h3>期望交付结果</h3>
+          <el-button size="small" plain @click="copyTaskContent(taskDetail.expectedResult, '期望交付结果')">复制内容</el-button>
+        </div>
         <TaskRichTextContent :document="taskDetail.expectedResultDocument" :text="taskDetail.expectedResult" />
       </section>
       <section v-if="taskAttachments(taskDetail).length" class="task-detail-section">
@@ -2432,7 +2574,7 @@ onMounted(() => void bootstrap());
     <template #footer><el-button @click="inviteVisible = false">取消</el-button><el-button type="primary" @click="sendTeamInvite">发送邀请</el-button></template>
   </el-dialog>
 
-  <el-dialog v-model="selfTaskVisible" :title="editingSelfTaskId ? '修改我的任务' : '新建我的任务'" width="min(620px, 92vw)">
+  <el-dialog v-model="selfTaskVisible" :title="editingSelfTaskId ? '修改我的任务' : copyingSelfTask ? '复制并再次添加' : '新建我的任务'" width="min(620px, 92vw)">
     <el-form label-position="top">
       <el-form-item label="任务标题" required><el-input v-model="selfTaskForm.title" placeholder="例如：整理本周待拍视频清单" /></el-form-item>
       <el-form-item label="任务说明"><TaskRichTextEditor v-model="selfTaskForm.descriptionDocument" placeholder="填写需要完成的具体工作" /></el-form-item>
@@ -2453,10 +2595,10 @@ onMounted(() => void bootstrap());
         <p class="muted">选择后会在这些日期自动生成当天任务；不选择则只创建一次。</p>
       </el-form-item>
     </el-form>
-    <template #footer><el-button @click="selfTaskVisible = false">取消</el-button><el-button type="primary" :loading="creatingSelfTask" @click="createSelfTask">{{ editingSelfTaskId ? "保存修改" : "添加到我的任务" }}</el-button></template>
+    <template #footer><el-button @click="selfTaskVisible = false">取消</el-button><el-button type="primary" :loading="creatingSelfTask" @click="createSelfTask">{{ editingSelfTaskId ? "保存修改" : copyingSelfTask ? "确认再次添加" : "添加到我的任务" }}</el-button></template>
   </el-dialog>
 
-  <el-dialog v-model="teamTaskVisible" :title="editingTeamTaskId ? '修改协作任务' : '安排协作任务'" width="min(660px, 92vw)">
+  <el-dialog v-model="teamTaskVisible" :title="editingTeamTaskId ? '修改协作任务' : copyingTeamTask ? '复制并再次安排' : '安排协作任务'" width="min(660px, 92vw)">
     <el-form label-position="top">
       <el-form-item label="协作成员" required><el-select v-model="teamTaskForm.assigneeEmployeeId"><el-option v-for="employee in operationTeam.directReports" :key="employee.id" :label="`${employee.name} · ${collaborationRoleLabel(employee)}`" :value="employee.id" /></el-select></el-form-item>
       <el-form-item label="任务标题" required><el-input v-model="teamTaskForm.title" /></el-form-item>
@@ -2477,7 +2619,26 @@ onMounted(() => void bootstrap());
       </el-form-item>
       <el-form-item label="附件链接（每行一个）"><el-input v-model="teamTaskForm.attachments" type="textarea" :rows="2" /></el-form-item>
     </el-form>
-    <template #footer><el-button @click="teamTaskVisible = false">取消</el-button><el-button type="primary" :loading="creatingTeamTask" @click="createTeamTask">{{ editingTeamTaskId ? "保存并通知" : "安排任务" }}</el-button></template>
+    <template #footer><el-button @click="teamTaskVisible = false">取消</el-button><el-button type="primary" :loading="creatingTeamTask" @click="createTeamTask">{{ editingTeamTaskId ? "保存并通知" : copyingTeamTask ? "确认再次安排" : "安排任务" }}</el-button></template>
+  </el-dialog>
+
+  <el-dialog v-model="taskRecycleBinVisible" title="任务回收站" width="min(720px, 94vw)">
+    <p class="muted">这里只显示你删除的任务。删除后保留3天，超期将自动彻底删除。</p>
+    <div v-loading="taskRecycleBinLoading" class="task-recycle-list">
+      <article v-for="task in taskRecycleItems" :key="task.id" class="task-recycle-item">
+        <div>
+          <div class="task-meta">
+            <el-tag size="small" type="info">{{ task.sourceType === "OPERATOR_COLLAB" ? "协作任务" : "我的任务" }}</el-tag>
+            <span>删除于 {{ formatTime(task.deletedAt) }}</span>
+            <span class="recycle-countdown">{{ recycleRemaining(task) }}</span>
+          </div>
+          <h4>{{ task.title }}</h4>
+          <p class="task-summary">{{ task.description || task.expectedResult || "未填写任务说明" }}</p>
+        </div>
+        <el-button type="primary" plain :loading="restoringTaskId === task.id" @click="restoreRecycledTask(task)">恢复</el-button>
+      </article>
+      <el-empty v-if="!taskRecycleBinLoading && !taskRecycleItems.length" description="回收站暂无任务" />
+    </div>
   </el-dialog>
 
   <el-dialog v-model="reviewVisible" title="审核运营任务成果" width="min(560px, 92vw)">
@@ -2651,6 +2812,74 @@ onMounted(() => void bootstrap());
         <el-alert title="确认后进入平台包装审核；需要调整时可关闭预览并重新生成。" type="info" :closable="false" />
       </div>
     </div>
+  </el-dialog>
+
+  <el-dialog v-model="scriptPackageVisible" title="完整视频脚本包" width="min(980px, 96vw)" class="script-package-dialog">
+    <div v-if="scriptPackageCandidate?.scriptPackage" class="script-package">
+      <section>
+        <h3>基础任务信息</h3>
+        <dl class="script-package-grid">
+          <div><dt>产品型号</dt><dd>{{ scriptPackageCandidate.scriptPackage.basicInfo.productModel }}</dd></div>
+          <div><dt>视频类型</dt><dd>{{ scriptPackageCandidate.scriptPackage.basicInfo.videoType }}</dd></div>
+          <div><dt>发布平台</dt><dd>{{ platformLabel(scriptPackageCandidate.scriptPackage.basicInfo.platform) }}</dd></div>
+          <div><dt>账号类型</dt><dd>{{ scriptPackageCandidate.scriptPackage.basicInfo.accountType }}</dd></div>
+          <div><dt>目标受众</dt><dd>{{ scriptPackageCandidate.scriptPackage.basicInfo.targetAudience }}</dd></div>
+          <div><dt>预计时长</dt><dd>{{ scriptPackageCandidate.scriptPackage.basicInfo.estimatedDurationSeconds }}秒</dd></div>
+          <div><dt>健康内容</dt><dd>{{ scriptPackageCandidate.scriptPackage.basicInfo.healthContentAllowed ? "允许" : "禁止" }}</dd></div>
+        </dl>
+      </section>
+      <section>
+        <h3>内容定位</h3>
+        <p><b>核心主题：</b>{{ scriptPackageCandidate.scriptPackage.positioning.coreTheme }}</p>
+        <p><b>传播目标：</b>{{ scriptPackageCandidate.scriptPackage.positioning.communicationGoal }}</p>
+        <p><b>用户痛点：</b>{{ scriptPackageCandidate.scriptPackage.positioning.userPainPoint }}</p>
+        <p><b>唯一核心卖点：</b>{{ scriptPackageCandidate.scriptPackage.positioning.uniqueSellingPoint }}</p>
+      </section>
+      <section>
+        <h3>黄金三秒钩子</h3>
+        <p><b>钩子文案：</b>{{ scriptPackageCandidate.scriptPackage.goldenHook.copy }}</p>
+        <p><b>类型与画面：</b>{{ scriptPackageCandidate.scriptPackage.goldenHook.type }} · {{ scriptPackageCandidate.scriptPackage.goldenHook.visual }}</p>
+        <p><b>留人理由：</b>{{ scriptPackageCandidate.scriptPackage.goldenHook.retentionReason }}</p>
+        <p><b>开头声音：</b>{{ scriptPackageCandidate.scriptPackage.goldenHook.openingSound }}</p>
+      </section>
+      <section>
+        <h3>逐句口播与镜头需求</h3>
+        <article v-for="(shot, index) in scriptPackageCandidate.scriptPackage.shotRequirements" :key="index" class="script-line-card">
+          <div><b>{{ index + 1 }}. {{ shot.line }}</b><el-tag size="small">{{ assetCoverageLabel(shot.assetStatus) }}</el-tag></div>
+          <p><b>对应画面：</b>{{ shot.visual }}</p>
+          <p><b>画面事实：</b>{{ shot.factualProof }}</p>
+          <p><b>音画匹配：</b>{{ shot.audioVisualRequirement }}</p>
+          <p v-if="scriptPackageCandidate.scriptPackage.voiceoverLines[index]"><b>声音：</b>{{ scriptPackageCandidate.scriptPackage.voiceoverLines[index].tone }} · {{ scriptPackageCandidate.scriptPackage.voiceoverLines[index].speed }} · {{ scriptPackageCandidate.scriptPackage.voiceoverLines[index].emotion }} · 约{{ scriptPackageCandidate.scriptPackage.voiceoverLines[index].durationSeconds }}秒</p>
+        </article>
+      </section>
+      <section>
+        <h3>脚本结构与留人设计</h3>
+        <p v-for="(item, index) in scriptPackageCandidate.scriptPackage.structure" :key="index"><b>{{ item.stage }}：</b>{{ item.content }}（{{ item.purpose }}）</p>
+        <p><b>留人节点：</b>{{ scriptPackageCandidate.scriptPackage.retentionDesign.join("；") }}</p>
+      </section>
+      <section>
+        <h3>字幕、重点文字与声音设计</h3>
+        <p><b>字幕稿：</b>{{ scriptPackageCandidate.scriptPackage.subtitles.join(" / ") }}</p>
+        <p><b>重点文字：</b>{{ scriptPackageCandidate.scriptPackage.emphasisTexts.join("、") }}</p>
+        <p><b>配音与音效：</b>{{ scriptPackageCandidate.scriptPackage.soundDesign.voiceProfile }}；{{ scriptPackageCandidate.scriptPackage.soundDesign.tone }}；{{ scriptPackageCandidate.scriptPackage.soundDesign.speed }}；开头 {{ scriptPackageCandidate.scriptPackage.soundDesign.openingSfx }}；重点 {{ scriptPackageCandidate.scriptPackage.soundDesign.keySfx.join("、") }}；环境声 {{ scriptPackageCandidate.scriptPackage.soundDesign.ambientSound }}</p>
+      </section>
+      <section>
+        <h3>合规检查</h3>
+        <p v-for="(item, index) in scriptPackageCandidate.scriptPackage.complianceChecks" :key="index"><el-tag size="small" :type="item.status === 'BLOCK' ? 'danger' : item.status === 'REVIEW' ? 'warning' : 'success'">{{ item.status }}</el-tag> <b>{{ item.category }}：</b>{{ item.note }}</p>
+      </section>
+      <section>
+        <h3>结尾设计与素材缺口</h3>
+        <p><b>总结：</b>{{ scriptPackageCandidate.scriptPackage.ending.summary }}</p>
+        <p><b>互动：</b>{{ scriptPackageCandidate.scriptPackage.ending.interaction }}</p>
+        <p><b>尾帧：</b>{{ scriptPackageCandidate.scriptPackage.ending.visual }}，保留{{ scriptPackageCandidate.scriptPackage.ending.safeTailSeconds }}秒</p>
+        <article v-for="(gap, index) in scriptPackageCandidate.scriptPackage.materialGaps" :key="index" class="script-gap-card">
+          <b>{{ gap.product }} · {{ gap.action }} · {{ gap.shotSize }}</b>
+          <p>{{ gap.processOrResult }}</p><p><b>补拍方法：</b>{{ gap.shootingMethod }}</p>
+        </article>
+        <el-empty v-if="!scriptPackageCandidate.scriptPackage.materialGaps.length" :image-size="48" description="暂无素材缺口" />
+      </section>
+    </div>
+    <template #footer><el-button type="primary" @click="scriptPackageVisible = false">关闭</el-button></template>
   </el-dialog>
 
   <el-dialog

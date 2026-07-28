@@ -122,6 +122,27 @@ export class WorkbenchController {
     return this.workbench.cancelOwnedTask(this.employee(authorization), id);
   }
 
+  @Post("tasks/:id/trash")
+  trashCancelledTask(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+  ) {
+    return this.workbench.trashCancelledTask(this.employee(authorization), id);
+  }
+
+  @Get("task-recycle-bin")
+  taskRecycleBin(@Headers("authorization") authorization: string | undefined) {
+    return this.workbench.taskRecycleBin(this.employee(authorization));
+  }
+
+  @Post("tasks/:id/restore")
+  restoreTask(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+  ) {
+    return this.workbench.restoreTask(this.employee(authorization), id);
+  }
+
   @Post("tasks/:id/accept")
   accept(@Headers("authorization") authorization: string | undefined, @Param("id") id: string) {
     return this.workbench.accept(this.employee(authorization), id);
@@ -557,6 +578,9 @@ export class WorkbenchController {
     return this.videoFactory.createProject({
       platform: String(body.platform || "DOUYIN"),
       voiceoverMode: String(body.voiceoverMode || "VOICEOVER"),
+      accountType: String(body.accountType || "BRAND"),
+      estimatedDurationSeconds: Number(body.estimatedDurationSeconds || 30),
+      contentRestrictionMode: String(body.contentRestrictionMode || "NORMAL"),
       productModel: body.productModel ? String(body.productModel) : undefined,
       topic: body.topic ? String(body.topic) : undefined,
       audience: body.audience ? String(body.audience) : undefined,
