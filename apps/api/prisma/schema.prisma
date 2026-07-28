@@ -2286,6 +2286,33 @@ model OpsTask {
   @@index([findingId, status])
 }
 
+model TaskRecurrence {
+  id                       String   @id @default(cuid())
+  title                    String
+  description              String?
+  descriptionDocument      Json?
+  expectedResult           String?
+  expectedResultDocument   Json?
+  category                 String   @default("GENERAL")
+  priority                 String   @default("MEDIUM")
+  creatorEmployeeId        String
+  assigneeEmployeeId       String
+  assignedByEmployeeId     String?
+  assignedBy               String?
+  sourceType               String
+  requiredRoleCode         String?
+  weekdays                 Int[]
+  dueTime                  String   @default("23:59")
+  evidence                 Json     @default("{}")
+  active                   Boolean  @default(true)
+  lastGeneratedDate        String?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  @@index([active, assigneeEmployeeId])
+  @@index([creatorEmployeeId, active])
+}
+
 model AdminUser {
   id           String    @id @default(cuid())
   username     String    @unique

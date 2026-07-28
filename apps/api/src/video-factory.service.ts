@@ -13,6 +13,7 @@ type JsonRow = Record<string, unknown>;
 
 type ProjectCreateInput = {
   platform?: string;
+  voiceoverMode?: string;
   productModel?: string;
   topic?: string;
   audience?: string;
@@ -571,6 +572,7 @@ export class VideoFactoryService {
     if (input.assetGapTaskId && !assetGapTask) throw new BadRequestException("补拍任务不存在或已完成");
     return {
       platform,
+      voiceoverMode: input.voiceoverMode === "NO_VOICEOVER" ? "NO_VOICEOVER" : "VOICEOVER",
       product,
       keywords,
       knowledge,
@@ -585,6 +587,7 @@ export class VideoFactoryService {
 
   private fallbackCandidates(context: Awaited<ReturnType<VideoFactoryService["buildContext"]>>): AiVideoCandidate[] {
     const keyword = context.keywords[0]?.keyword || context.topic;
+    const noVoiceover = context.voiceoverMode === "NO_VOICEOVER";
     const patterns = [
       { suffix: "痛点切入", hook: `很多人在选择${keyword}时忽略了这一点` },
       { suffix: "场景体验", hook: `${keyword}在日常场景里到底怎么用` },
@@ -594,8 +597,10 @@ export class VideoFactoryService {
       topic: `${context.topic}·${pattern.suffix}`,
       audience: context.audience,
       objective: context.objective,
-      hook: pattern.hook,
-      outline: ["前三秒Hook", "真实使用场景", "已审核产品价值", "行动引导"],
+      hook: noVoiceover ? `画面字幕：${pattern.hook}` : pattern.hook,
+      outline: noVoiceover
+        ? ["前三秒视觉钩子与大字字幕", "产品动作与使用场景", "卖点字幕卡", "结尾行动引导"]
+        : ["前三秒Hook", "真实使用场景", "已审核产品价值", "行动引导"],
       score: 70 - index,
       scoreBreakdown: { relevance: 80, assetCoverage: context.assets.length ? 80 : 20 },
       assetIds: context.assets.filter((asset) => asset.kind === "VIDEO").slice(0, 3).map((asset) => asset.id),
@@ -607,10 +612,10 @@ export class VideoFactoryService {
       coverTextEn: keyword,
       hashtags: [keyword],
       scripts: {
-        zh15: `${pattern.hook}。结合真实使用场景，展示已审核的产品价值。`,
-        en15: `${keyword}. A real-life look using approved product facts.`,
-        zh30: `${pattern.hook}。通过真实素材说明使用场景、产品价值和操作方式，最后引导查看详情。`,
-        en30: `${keyword}. Show the use case, approved product value and a clear next step with real assets.`,
+        zh15: noVoiceover ? `无口播字幕：${keyword}｜真实场景｜核心卖点｜查看详情` : `${pattern.hook}。结合真实使用场景，展示已审核的产品价值。`,
+        en15: noVoiceover ? `${keyword} | Real scene | Key benefit | Learn more` : `${keyword}. A real-life look using approved product facts.`,
+        zh30: noVoiceover ? `无口播字幕节奏：痛点大字｜产品动作｜功能亮点｜使用场景｜行动引导` : `${pattern.hook}。通过真实素材说明使用场景、产品价值和操作方式，最后引导查看详情。`,
+        en30: noVoiceover ? `Text-only pacing: pain point | product action | key benefit | use case | CTA` : `${keyword}. Show the use case, approved product value and a clear next step with real assets.`,
       },
     }));
   }
@@ -629,6 +634,7 @@ export class VideoFactoryService {
         topic: context.topic,
         audience: context.audience,
         objective: context.objective,
+        voiceoverMode: context.voiceoverMode,
         generationMode: "NORMAL",
       });
     } catch {
@@ -669,6 +675,7 @@ export class VideoFactoryService {
             routingMode: input.routingMode || "AUTO",
             allowFallback: input.allowFallback !== false,
             externalReferencePolicy: "STRUCTURE_ONLY",
+            voiceoverMode: context.voiceoverMode,
           }],
           evidenceIds,
           status: ContentStatus.DRAFT,
@@ -1000,6 +1007,7 @@ export class VideoFactoryService {
     const rows = await this.prisma.contentPlan.findMany({
       where,
       include: {
+        variants: { orderBy: { createdAt: "asc" } },
         videoShots: { orderBy: { sequence: "asc" }, include: { selectedAsset: true, generationJobs: { orderBy: { createdAt: "desc" }, take: 1 } } },
         videoGenerationJobs: { orderBy: { createdAt: "desc" }, take: 10, include: { resolvedModel: { include: { provider: true } } } },
         videoRenderJobs: { orderBy: { createdAt: "desc" }, take: 3, include: { outputAsset: true } },
