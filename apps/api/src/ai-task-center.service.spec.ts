@@ -87,6 +87,29 @@ describe("AiTaskCenterService", () => {
     expect(create.mock.calls[0][0].data.type).toBe("ARTICLE");
   });
 
+  it("does not require a daily budget for zero-cost local Codex tasks", async () => {
+    const { service, create, prisma } = serviceWith();
+    prisma.aiTaskPolicy.upsert.mockResolvedValueOnce({
+      type: "IMAGE",
+      enabled: true,
+      autoExecute: true,
+      dailyBudget: null,
+      maxConcurrency: 1,
+      maxAttempts: 3,
+      timeoutSeconds: 1200,
+    });
+
+    await service.createTask({
+      type: "IMAGE",
+      title: "本地图片任务",
+      estimatedCost: 0,
+      modelPolicy: { strategy: "CODEX_FIRST", allowExternalGeneration: false },
+    }, "测试管理员");
+
+    expect(create.mock.calls[0][0].data.status).toBe("PENDING");
+    expect(create.mock.calls[0][0].data.progressMessage).toBe("等待Codex执行器领取");
+  });
+
   it("creates only two zero-cost daily topic-card batches with ten cards per platform", async () => {
     const prisma = {
       aiTaskPolicy: {

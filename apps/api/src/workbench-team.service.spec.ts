@@ -96,6 +96,7 @@ describe("WorkbenchService operation team", () => {
       take: 5,
       where: {
         AND: expect.arrayContaining([
+          { kind: { in: expect.arrayContaining(["VIDEO_MASTER", "IMAGE_GENERATED", "ARTICLE_PLAN"]) } },
           expect.objectContaining({ OR: expect.arrayContaining([{ mimeType: { startsWith: "video/" } }]) }),
         ]),
       },

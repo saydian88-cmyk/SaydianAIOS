@@ -717,7 +717,13 @@ export class AiTaskCenterService implements OnModuleInit {
     const token = randomBytes(32).toString("base64url");
     const updated = await this.prisma.aiWorkerNode.update({
       where: { id },
-      data: { tokenHash: hash(token), status: "OFFLINE", currentTaskId: null, lastHeartbeatAt: null },
+      data: {
+        tokenHash: hash(token),
+        status: "OFFLINE",
+        currentTaskId: null,
+        currentSkill: null,
+        lastHeartbeatAt: null,
+      },
     });
     await this.audit(actor, "AI_RUNNER_TOKEN_ROTATE", id, { nodeCode: node.nodeCode });
     return { ...updated, tokenHash: undefined, token };
@@ -768,7 +774,14 @@ export class AiTaskCenterService implements OnModuleInit {
       });
       await this.prisma.aiWorkerNode.update({
         where: { id: node.id },
-        data: { status: "BUSY", version: text(body.version) || node.version, currentTaskId: candidate.id, lastHeartbeatAt: new Date(), lastError: null },
+        data: {
+          status: "BUSY",
+          version: text(body.version) || node.version,
+          currentTaskId: candidate.id,
+          currentSkill: null,
+          lastHeartbeatAt: new Date(),
+          lastError: null,
+        },
       });
       const contentPlanId = text(object(candidate.input).existingContentPlanId);
       if (contentPlanId) await this.videoFactory.syncProjectTaskState(contentPlanId, "CLAIMED");
@@ -780,7 +793,13 @@ export class AiTaskCenterService implements OnModuleInit {
     }
     await this.prisma.aiWorkerNode.update({
       where: { id: node.id },
-      data: { status: "ONLINE", version: text(body.version) || node.version, currentTaskId: null, lastHeartbeatAt: new Date() },
+      data: {
+        status: "ONLINE",
+        version: text(body.version) || node.version,
+        currentTaskId: null,
+        currentSkill: null,
+        lastHeartbeatAt: new Date(),
+      },
     });
     return { task: null };
   }
@@ -882,13 +901,23 @@ export class AiTaskCenterService implements OnModuleInit {
           ? false
           : modelPolicy.allowExternalGeneration === true,
         requiredSkill: task.type === "VIDEO"
-          && (text(input.executionMode).toUpperCase() || "FULL_VIDEO") === "FULL_VIDEO"
+          && ["FULL_VIDEO", "SCRIPT_ONLY"].includes(text(input.executionMode).toUpperCase() || "FULL_VIDEO")
           ? "video-editing-from-media-library-share"
           : task.type === "IMAGE"
             ? "imagegen"
             : task.type === "ARTICLE"
               ? "build-health-brand-trust-content"
-              : undefined,
+            : undefined,
+        fallbackOrder: task.type === "VIDEO"
+          && (text(input.executionMode).toUpperCase() || "FULL_VIDEO") === "FULL_VIDEO"
+          ? [
+            "APPROVED_REAL_VIDEO",
+            "PRODUCT_IMAGE_AUXILIARY_OVERLAY",
+            "LOCAL_MEDIA_TOOLS",
+            "EXTERNAL_VISUAL_IF_EXPLICITLY_ALLOWED",
+            "RESHOOT_OPS_TASK",
+          ]
+          : undefined,
         healthContentAllowed: input.healthContentAllowed !== false,
         output: task.type === "VIDEO"
           ? { aspectRatio: "9:16", width: 1080, height: 1920, format: "mp4" }
@@ -910,6 +939,11 @@ export class AiTaskCenterService implements OnModuleInit {
       data: object(body.data),
       savedAt: new Date().toISOString(),
     };
+    const attemptLogs = object(attempt?.logs);
+    const checkpointHistory = [
+      ...(Array.isArray(attemptLogs.checkpoints) ? attemptLogs.checkpoints : []),
+      checkpoint,
+    ].slice(-100);
     await this.prisma.$transaction([
       this.prisma.aiTask.update({
         where: { id },
@@ -923,9 +957,18 @@ export class AiTaskCenterService implements OnModuleInit {
       ...(attempt ? [
         this.prisma.aiTaskAttempt.update({
           where: { id: attempt.id },
-          data: { logs: json({ ...object(attempt.logs), checkpoint }) },
+          data: { logs: json({ ...attemptLogs, checkpoint, checkpoints: checkpointHistory }) },
         }),
       ] : []),
+      this.prisma.aiWorkerNode.update({
+        where: { id: node.id },
+        data: {
+          status: "BUSY",
+          currentTaskId: id,
+          currentSkill: text(object(body.data).currentSkill) || node.currentSkill,
+          lastHeartbeatAt: new Date(),
+        },
+      }),
     ]);
     return { ok: true, checkpoint };
   }
@@ -945,7 +988,12 @@ export class AiTaskCenterService implements OnModuleInit {
       }),
       this.prisma.aiWorkerNode.update({
         where: { id: node.id },
-        data: { status: "BUSY", currentTaskId: id, lastHeartbeatAt: new Date() },
+        data: {
+          status: "BUSY",
+          currentTaskId: id,
+          currentSkill: text(body.currentSkill) || node.currentSkill,
+          lastHeartbeatAt: new Date(),
+        },
       }),
     ]);
     return { ok: true };
@@ -1137,6 +1185,10 @@ export class AiTaskCenterService implements OnModuleInit {
   async runnerComplete(token: string, id: string, body: JsonRecord) {
     const node = await this.runner(token, text(body.nodeCode));
     const task = await this.ensureRunnerTask(node.nodeCode, id);
+    const activeAttempt = await this.prisma.aiTaskAttempt.findFirst({
+      where: { aiTaskId: id, workerNodeId: node.id, status: "RUNNING" },
+      orderBy: { attemptNo: "desc" },
+    });
     const result = object(body.result);
     const domain = await this.finalizeDomain(task, result, `Codex:${node.nodeCode}`);
     const status = domain.status;
@@ -1161,13 +1213,19 @@ export class AiTaskCenterService implements OnModuleInit {
           status: "SUCCEEDED",
           exitCode: number(body.exitCode) ?? 0,
           usage: json(body.usage),
-          logs: json(body.logs),
+          logs: json({ ...object(activeAttempt?.logs), ...object(body.logs) }),
           finishedAt: new Date(),
         },
       }),
       this.prisma.aiWorkerNode.update({
         where: { id: node.id },
-        data: { status: "ONLINE", currentTaskId: null, lastHeartbeatAt: new Date(), lastError: null },
+        data: {
+          status: "ONLINE",
+          currentTaskId: null,
+          currentSkill: null,
+          lastHeartbeatAt: new Date(),
+          lastError: null,
+        },
       }),
     ]);
     const requestedOpsTaskId = text(object(task.input).opsTaskId);
@@ -1210,6 +1268,10 @@ export class AiTaskCenterService implements OnModuleInit {
   async runnerFail(token: string, id: string, body: JsonRecord) {
     const node = await this.runner(token, text(body.nodeCode));
     const task = await this.ensureRunnerTask(node.nodeCode, id);
+    const activeAttempt = await this.prisma.aiTaskAttempt.findFirst({
+      where: { aiTaskId: id, workerNodeId: node.id, status: "RUNNING" },
+      orderBy: { attemptNo: "desc" },
+    });
     const nextRetry = task.retryCount + 1;
     const terminal = nextRetry >= task.maxRetries;
     const message = text(body.error || body.message) || "Codex执行失败";
@@ -1229,11 +1291,23 @@ export class AiTaskCenterService implements OnModuleInit {
       }),
       this.prisma.aiTaskAttempt.updateMany({
         where: { aiTaskId: id, workerNodeId: node.id, status: "RUNNING" },
-        data: { status: "FAILED", failureReason: message, exitCode: number(body.exitCode), logs: json(body.logs), finishedAt: new Date() },
+        data: {
+          status: "FAILED",
+          failureReason: message,
+          exitCode: number(body.exitCode),
+          logs: json({ ...object(activeAttempt?.logs), ...object(body.logs) }),
+          finishedAt: new Date(),
+        },
       }),
       this.prisma.aiWorkerNode.update({
         where: { id: node.id },
-        data: { status: "ERROR", currentTaskId: null, lastHeartbeatAt: new Date(), lastError: message },
+        data: {
+          status: "ERROR",
+          currentTaskId: null,
+          currentSkill: null,
+          lastHeartbeatAt: new Date(),
+          lastError: message,
+        },
       }),
     ]);
     const contentPlanId = text(object(task.input).existingContentPlanId);
@@ -2155,7 +2229,12 @@ export class AiTaskCenterService implements OnModuleInit {
       if (task.lockedBy) {
         await this.prisma.aiWorkerNode.updateMany({
           where: { nodeCode: task.lockedBy },
-          data: { status: "OFFLINE", currentTaskId: null, lastError: "任务心跳超时" },
+          data: {
+            status: "OFFLINE",
+            currentTaskId: null,
+            currentSkill: null,
+            lastError: "任务心跳超时",
+          },
         });
       }
     }

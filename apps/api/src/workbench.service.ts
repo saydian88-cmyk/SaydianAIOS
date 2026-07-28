@@ -10,6 +10,11 @@ import { taskDocumentFields } from "./task-document";
 const openStatuses = ["OPEN", "ACCEPTED", "IN_PROGRESS", "RETURNED", "REVIEW"];
 const doneStatuses = ["COMPLETED", "CANCELLED", "VERIFIED"];
 const collaborationRoleCodes = ["CONTENT_OPERATOR", "VIDEO_SPECIALIST", "DESIGNER"];
+const deliverableOutputKinds = [
+  "VIDEO_MASTER", "VIDEO_OUTPUT", "VIDEO",
+  "IMAGE", "IMAGE_ASSET", "IMAGE_OUTPUT", "IMAGE_GENERATED",
+  "ARTICLE", "ARTICLE_PLAN", "ARTICLE_OUTPUT",
+];
 
 function value(input: unknown) {
   return String(input ?? "").trim();
@@ -135,7 +140,7 @@ export class WorkbenchService {
     const items = await this.prisma.aiTaskOutput.findMany({
       where: {
         AND: [
-          { kind: { notIn: ["OPS_TASK", "VIDEO_PROJECT", "SCRIPT_CANDIDATES"] } },
+          { kind: { in: deliverableOutputKinds } },
           previewable,
           typeWhere,
         ],
@@ -176,7 +181,7 @@ export class WorkbenchService {
     const output = await this.prisma.aiTaskOutput.findFirst({
       where: {
         id: outputId,
-        kind: { notIn: ["OPS_TASK", "VIDEO_PROJECT", "SCRIPT_CANDIDATES"] },
+        kind: { in: deliverableOutputKinds },
       },
       include: { asset: true },
     });
@@ -335,11 +340,32 @@ export class WorkbenchService {
       }),
       this.prisma.aiTask.findFirst({
         where: { sourceType: "WORKBENCH_CONTENT_REQUEST", sourceId: id },
-        select: { id: true, taskNo: true, type: true, status: true, progress: true, progressMessage: true, updatedAt: true },
+        select: {
+          id: true,
+          taskNo: true,
+          type: true,
+          status: true,
+          progress: true,
+          progressMessage: true,
+          estimatedCost: true,
+          modelPolicy: true,
+          updatedAt: true,
+        },
       }),
     ]);
     if (!task) throw new NotFoundException("任务不存在或无权查看");
-    return { ...task, aiRequest };
+    const localCodexWaiting = aiRequest?.status === "WAITING_CONFIRMATION"
+      && Number(aiRequest.estimatedCost || 0) === 0
+      && object(aiRequest.modelPolicy).allowExternalGeneration !== true;
+    return {
+      ...task,
+      aiRequest: aiRequest
+        ? {
+            ...aiRequest,
+            progressMessage: localCodexWaiting ? "等待管理员确认后由Codex执行" : aiRequest.progressMessage,
+          }
+        : null,
+    };
   }
 
   async linkAiRequest(session: SessionPayload, taskId: string, aiTask: { id: string; taskNo: string }) {

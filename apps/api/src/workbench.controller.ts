@@ -158,6 +158,7 @@ export class WorkbenchController {
       sourceId: opsTask.id,
       idempotencyKey: `workbench-content:${opsTask.id}`,
       estimatedCost: 0,
+      executionPolicy: "MANUAL",
       input: {
         opsTaskId: opsTask.id,
         keywordId: body.keywordId || null,
