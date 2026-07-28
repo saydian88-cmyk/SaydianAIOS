@@ -21,6 +21,8 @@ const employees = ref<Row[]>([]);
 const selectedTopicCards = ref<Row[]>([]);
 const topicTable = ref<Row>();
 const selectedTopicCard = ref<Row>();
+const topicCardPreviewUrl = ref("");
+const topicCardPreviewError = ref("");
 const topicCardDrawer = ref(false);
 const topicCardEdit = ref(false);
 const approvalDialog = ref(false);
@@ -126,6 +128,9 @@ const outputs = computed(() => projects.value.flatMap((project) => [
   ...(project.videoGenerationJobs || []).filter((job: Row) => job.outputAsset).map((job: Row) => ({ ...job, project, outputType: "AI镜头" })),
   ...(project.videoRenderJobs || []).filter((job: Row) => job.outputAsset).map((job: Row) => ({ ...job, project, outputType: "最终成片" })),
 ]));
+const topicCardOutput = computed(() =>
+  (selectedTopicCard.value?.videoRenderJobs || []).find((job: Row) => job.outputAsset)?.outputAsset,
+);
 const qualityChecks = computed(() => projects.value.flatMap((project) =>
   (project.videoQualityChecks || []).map((check: Row) => ({ ...check, project })),
 ));
@@ -227,6 +232,16 @@ function topicSelection(rows: Row[]) {
 
 async function openTopicCard(id: string) {
   selectedTopicCard.value = await api<Row>(`/api/v1/video-factory/topic-cards/${id}`);
+  topicCardPreviewUrl.value = "";
+  topicCardPreviewError.value = "";
+  if (topicCardOutput.value?.id) {
+    try {
+      const result = await api<Row>(`/api/v1/video-factory/outputs/${topicCardOutput.value.id}/url`);
+      topicCardPreviewUrl.value = result.url || "";
+    } catch (error) {
+      topicCardPreviewError.value = error instanceof Error ? error.message : "成片地址暂时不可用";
+    }
+  }
   const card = selectedTopicCard.value.topicCard || {};
   Object.assign(topicCardForm, {
     audience: card.audience || "",
@@ -449,6 +464,7 @@ async function reviewOutput(assetId: string, approved: boolean) {
   await run(async () => {
     await post(`/api/v1/video-factory/outputs/${assetId}/review`, { approved });
     await reload();
+    if (selectedTopicCard.value) await openTopicCard(selectedTopicCard.value.id);
     if (selectedProject.value) await openProject(selectedProject.value.id);
   }, approved ? "视频已审核通过" : "视频已退回");
 }
@@ -732,6 +748,28 @@ onBeforeUnmount(() => {
           <article><span>本地预计</span><strong>{{ selectedTopicCard.topicCard?.estimatedCosts?.local || 0 }} {{ selectedTopicCard.topicCard?.estimatedCosts?.currency || 'CNY' }}</strong></article>
           <article><span>外部预计</span><strong>{{ selectedTopicCard.topicCard?.estimatedCosts?.external || 0 }} {{ selectedTopicCard.topicCard?.estimatedCosts?.currency || 'CNY' }}</strong></article>
         </div>
+        <section v-if="topicCardOutput" class="topic-card-preview">
+          <div class="topic-card-preview-head">
+            <div><strong>成片预览</strong><span>{{ topicCardOutput.displayName || topicCardOutput.fileName }}</span></div>
+            <el-tag :type="tagType(topicCardOutput.reviewStatus)">{{ label(topicCardOutput.reviewStatus) }}</el-tag>
+          </div>
+          <video v-if="topicCardPreviewUrl" :src="topicCardPreviewUrl" controls preload="metadata" playsinline />
+          <el-alert v-else :title="topicCardPreviewError || '正在获取成片预览地址'" type="warning" :closable="false" />
+          <div class="topic-card-preview-foot">
+            <span>{{ topicCardOutput.width || '—' }}×{{ topicCardOutput.height || '—' }} · {{ Number(topicCardOutput.durationSeconds || 0).toFixed(1) }}秒</span>
+            <div>
+              <el-button @click="openOutput(topicCardOutput.id)">新窗口查看/下载</el-button>
+              <el-button v-if="topicCardOutput.reviewStatus === 'PENDING'" type="success" @click="reviewOutput(topicCardOutput.id, true)">审核通过</el-button>
+              <el-button v-if="topicCardOutput.reviewStatus === 'PENDING'" type="danger" plain @click="reviewOutput(topicCardOutput.id, false)">退回修改</el-button>
+            </div>
+          </div>
+        </section>
+        <el-alert
+          v-else-if="['VIDEO_REVIEW', 'PLATFORM_PACKAGING'].includes(selectedTopicCard.productionStage)"
+          title="成片正在登记，请刷新后查看预览"
+          type="info"
+          :closable="false"
+        />
         <el-form v-if="topicCardEdit" label-position="top" class="form-grid">
           <el-form-item label="目标人群"><el-input v-model="topicCardForm.audience" /></el-form-item>
           <el-form-item label="核心痛点"><el-input v-model="topicCardForm.pain" /></el-form-item>
@@ -873,6 +911,7 @@ onBeforeUnmount(() => {
 .topic-card-panel { display: grid; gap: 0; }.topic-filters { display: grid; grid-template-columns: repeat(4, minmax(130px, 1fr)) auto auto; gap: 10px; align-items: center; padding: 14px 15px; border-bottom: 1px solid #edf0f5; }.topic-filters label { display: flex; align-items: center; gap: 7px; color: #667085; white-space: nowrap; }
 .topic-compare { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding: 12px 15px; background: #f5f8fc; }.topic-compare article { padding: 12px; border: 1px solid #dfe7f1; border-radius: 10px; background: #fff; }.topic-compare strong, .topic-compare span, .topic-compare small { display: block; }.topic-compare span { margin: 7px 0; color: #a2202b; }
 .topic-card-kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 16px 0; }.topic-card-kpis article { padding: 13px; border: 1px solid #e5eaf2; border-radius: 10px; }.topic-card-kpis span { display: block; color: #7c8797; }.topic-card-kpis strong { display: block; margin-top: 5px; font-size: 20px; }
+.topic-card-preview { display: grid; gap: 12px; margin: 16px 0; padding: 14px; border: 1px solid #dce4ef; border-radius: 14px; background: #f7f9fc; }.topic-card-preview-head, .topic-card-preview-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; }.topic-card-preview-head strong, .topic-card-preview-head span { display: block; }.topic-card-preview-head span, .topic-card-preview-foot > span { margin-top: 3px; color: #7c8797; }.topic-card-preview video { width: min(100%, 420px); max-height: 560px; margin: 0 auto; border-radius: 12px; background: #0d1117; }.topic-card-preview-foot > div { display: flex; gap: 8px; }
 .topic-detail-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }.topic-detail-grid article { padding: 13px; border-radius: 10px; background: #f5f7fb; }.topic-detail-grid span, .topic-detail-grid strong { display: block; }.topic-detail-grid span { margin-bottom: 5px; color: #7c8797; }.detail-copy { color: #536176; line-height: 1.7; }.hook-list { display: grid; gap: 8px; padding-left: 22px; color: #344054; }.structure-flow { display: flex; flex-wrap: wrap; gap: 8px; }.structure-flow span { padding: 7px 10px; border-radius: 999px; color: #23436d; background: #eaf1fb; }
 .model-route { grid-template-columns: 1fr 1fr; }.model-route article { display: grid; grid-template-columns: 150px 1fr auto; align-items: center; gap: 10px; }.two-cards { grid-template-columns: .9fr 1.1fr; }.card-title { display: flex; align-items: center; justify-content: space-between; padding: 12px 15px; border-bottom: 1px solid #edf0f5; }.card-title h4 { margin: 0; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 18px; }.form-grid .full { grid-column: 1 / -1; }.form-tip { display: block; margin-top: 6px; color: #8a94a5; }

@@ -684,10 +684,15 @@ export class VideoFactoryService {
         keywordRelations: { include: { keyword: { include: { cluster: true } } } },
         aiTaskOutputs: { orderBy: { createdAt: "desc" }, include: { aiTask: { select: { taskNo: true, status: true } } } },
         contentAssets: { include: { asset: true } },
+        videoRenderJobs: { orderBy: { createdAt: "desc" }, take: 3, include: { outputAsset: true, qualityChecks: true } },
       },
     });
     if (!plan || !topicCardSignal(plan)) throw new NotFoundException("视频选题卡不存在");
-    return jsonSafe({ ...plan, topicCard: topicCardPayload(plan) });
+    return jsonSafe({
+      ...plan,
+      productionStage: this.projectedProductionStage(plan),
+      topicCard: topicCardPayload(plan),
+    });
   }
 
   async updateTopicCard(id: string, input: JsonRow, actor: string) {

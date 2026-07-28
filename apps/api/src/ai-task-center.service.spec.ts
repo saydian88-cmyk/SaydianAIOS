@@ -191,8 +191,8 @@ describe("AiTaskCenterService", () => {
       id: "task-1",
       taskNo: "AIT-1",
       type: "VIDEO",
-      title: "脚本任务",
-      input: { executionMode: "SCRIPT_ONLY" },
+      title: "完整视频任务",
+      input: { executionMode: "FULL_VIDEO" },
       modelPolicy: { strategy: "CODEX_FIRST", allowExternalGeneration: false },
       inputSnapshots: [{
         id: "snapshot-1",
@@ -252,9 +252,11 @@ describe("AiTaskCenterService", () => {
     const result = await service.runnerPackage(token, task.id, { nodeCode: "windows-codex-01" });
 
     expect(result.execution).toMatchObject({
-      mode: "SCRIPT_ONLY",
+      mode: "FULL_VIDEO",
       strategy: "CODEX_FIRST",
       allowExternalGeneration: false,
+      requiredSkill: "video-editing-from-media-library-share",
+      healthContentAllowed: true,
     });
     expect(result.assets[0]).toMatchObject({
       id: "asset-1",

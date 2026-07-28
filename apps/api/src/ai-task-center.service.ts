@@ -792,6 +792,11 @@ export class AiTaskCenterService implements OnModuleInit {
         mode: text(input.executionMode).toUpperCase() || (task.type === "VIDEO" ? "FULL_VIDEO" : "DEFAULT"),
         strategy: text(modelPolicy.strategy).toUpperCase() || "CODEX_FIRST",
         allowExternalGeneration: modelPolicy.allowExternalGeneration === true,
+        requiredSkill: task.type === "VIDEO"
+          && (text(input.executionMode).toUpperCase() || "FULL_VIDEO") === "FULL_VIDEO"
+          ? "video-editing-from-media-library-share"
+          : undefined,
+        healthContentAllowed: input.healthContentAllowed !== false,
         output: task.type === "VIDEO"
           ? { aspectRatio: "9:16", width: 1080, height: 1920, format: "mp4" }
           : undefined,

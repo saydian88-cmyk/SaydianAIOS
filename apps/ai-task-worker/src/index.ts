@@ -14,7 +14,7 @@ function record(value: unknown): JsonRecord {
 const apiUrl = String(process.env.AI_TASK_API_URL || "https://stest.saydian.cn").replace(/\/+$/, "");
 const runnerToken = String(process.env.AI_TASK_RUNNER_TOKEN || "");
 const nodeCode = String(process.env.AI_TASK_RUNNER_NODE_CODE || "windows-codex-01");
-const runnerVersion = String(process.env.AI_TASK_RUNNER_VERSION || "2.0.0");
+const runnerVersion = String(process.env.AI_TASK_RUNNER_VERSION || "2.1.0");
 const workRoot = resolve(String(process.env.AI_TASK_WORKDIR || join(process.cwd(), ".ai-task-runner")));
 const pollMs = Math.max(2_000, Number(process.env.AI_TASK_POLL_MS || 10_000));
 const codexExecutable = String(process.env.CODEX_EXECUTABLE || (process.platform === "win32" ? "codex.cmd" : "codex"));
@@ -456,9 +456,19 @@ function prompt(taskPackage: JsonRecord) {
     COMPETITOR_ANALYSIS: "分析竞品商品、价格、内容和关键词变化，输出机会及待确认行动，禁止虚构竞品数据。",
     LIVE_ANALYSIS: "完成直播前方案或直播后复盘，输出切片建议、话术调整和下一场行动。",
   };
+  const requiredVideoSkill = type === "VIDEO" && executionMode === "FULL_VIDEO"
+    ? [
+      "本任务必须使用 $video-editing-from-media-library-share 完成正式剪辑，并完整遵循该Skill的初始化、素材只读、镜头连续性、内容禁止库、质检和交付规则。",
+      `先验证本机active-config.json及全部根目录和索引均为ready和在线；health_content_allowed=${execution.healthContentAllowed !== false ? "true" : "false"}。`,
+      "主时间线只能使用真实视频素材。图片、详情图和产品图只能作为绑定underlying_shot_id的短时辅助层，禁止图片轮播、静态图推拉或无关镜头补时长。",
+      "每个功能镜头必须有直接对应画面；任何reshoot缺口都要停止受影响成片渲染，并输出明确补拍清单。",
+      "最终必须输出该Skill质检通过的1080×1920、30fps MP4，并在outputFiles中登记为VIDEO_MASTER。",
+    ].join("\n")
+    : "";
   return [
     "你是赛电总管理后台AI任务中心的Codex执行器。",
     instructions[type] || "按输入快照完成任务。",
+    requiredVideoSkill,
     "必须以提供的JSON快照为事实边界；缺失数据明确写未配置或缺失，不编造数据、认证、费用和执行结果。",
     "优先使用manifest中已审核真实素材。VIDEO任务的每个镜头必须通过selectedAssetIds绑定具体素材ID；缺少素材时写清missingReason、alternativePlan和missingAssets，不得拿文件顺序代替镜头匹配。",
     "输出必须符合output schema。outputFiles只能引用当前任务工作区内真实存在的文件。",
@@ -503,6 +513,32 @@ async function checkpoint(taskId: string, stage: string, progress: number, messa
 
 async function taskPackage(taskId: string) {
   return api<JsonRecord>(`/api/v1/ai-tasks/runner/tasks/${taskId}/package?nodeCode=${encodeURIComponent(nodeCode)}`);
+}
+
+async function verifyVideoSkillRuntime(taskPackageValue: JsonRecord) {
+  const task = record(taskPackageValue.task);
+  const execution = record(taskPackageValue.execution);
+  if (String(task.type || "") !== "VIDEO" || String(execution.mode || "") !== "FULL_VIDEO") return;
+  if (String(execution.requiredSkill || "") !== "video-editing-from-media-library-share") {
+    throw new Error("完整视频任务未指定video-editing-from-media-library-share");
+  }
+  const localAppData = String(process.env.LOCALAPPDATA || "");
+  if (!localAppData) throw new Error("本机LOCALAPPDATA不可用，无法验证视频剪辑Skill");
+  const activePath = join(localAppData, "Codex", "video-editing-from-media-library-share", "active-config.json");
+  const active = record(JSON.parse(await readFile(activePath, "utf8")));
+  const configPath = String(active.config_path || "");
+  if (!configPath) throw new Error("视频剪辑Skill未初始化");
+  const config = record(JSON.parse(await readFile(configPath, "utf8")));
+  if (String(config.skill_name || "") !== "video-editing-from-media-library-share"
+    || String(config.initialization_status || "") !== "ready"
+    || String(active.computer_id || "") !== String(config.computer_id || "")) {
+    throw new Error("视频剪辑Skill本机配置未就绪");
+  }
+  for (const field of ["library_root", "packaging_root", "workspace_root", "output_root", "config_root", "material_index", "packaging_index"]) {
+    const path = String(config[field] || "");
+    if (!path) throw new Error(`视频剪辑Skill缺少${field}`);
+    await stat(path);
+  }
 }
 
 async function downloadInputs(taskPackageValue: JsonRecord, workspace: string) {
@@ -615,6 +651,19 @@ async function renderLocalVideo(result: JsonRecord, taskPackageValue: JsonRecord
   const candidates = Array.isArray(project.scriptCandidates) ? project.scriptCandidates.map(record) : [];
   const selected = candidates.find((item) => item.selected === true) || candidates[0] || {};
   const shots = Array.isArray(selected.shots) ? selected.shots.map(record) : [];
+  if (String(execution.requiredSkill || "") === "video-editing-from-media-library-share") {
+    const missing = Array.isArray(selected.missingAssets) ? selected.missingAssets : [];
+    selected.missingAssets = missing.length ? missing : [{
+      moduleType: "VIDEO_MASTER",
+      description: "指定视频剪辑Skill未产出可上传的主成片",
+      reason: "result.outputFiles中缺少VIDEO_MASTER",
+      alternative: "按Skill补齐真实视频镜头并通过质检后重试；素材不足时生成补拍清单",
+    }];
+    result.project = project;
+    result.outputFiles = existingFiles;
+    result.summary = `${String(result.summary || "")} 指定视频剪辑Skill未产出主成片，未启用旧版自动拼接。`.trim();
+    return result;
+  }
   if (!assets.length) {
     const missing = Array.isArray(selected.missingAssets) ? selected.missingAssets : [];
     selected.missingAssets = missing.length ? missing : [{
@@ -860,6 +909,7 @@ async function execute(claimed: JsonRecord) {
   try {
     await checkpoint(taskId, "PACKAGE", 10, "正在下载任务快照和已审核素材");
     const packaged = await downloadInputs(await taskPackage(taskId), workspace);
+    await verifyVideoSkillRuntime(packaged);
     await checkpoint(taskId, "CODEX", 25, "Codex正在生成结构化结果", {
       assetCount: Array.isArray(packaged.assets) ? packaged.assets.length : 0,
     });

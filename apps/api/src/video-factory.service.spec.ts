@@ -20,6 +20,7 @@ describe("VideoFactoryService model routing", () => {
       },
       contentPlan: {
         findMany: vi.fn(),
+        findUnique: vi.fn(),
       },
       asset: {
         findUnique: vi.fn(),
@@ -109,6 +110,28 @@ describe("VideoFactoryService model routing", () => {
     const result = await service.projects({});
 
     expect(result[0].productionStage).toBe("READY_TO_EDIT");
+  });
+
+  it("returns the review master with a topic card so the admin can preview it", async () => {
+    prisma.contentPlan.findUnique.mockResolvedValue({
+      id: "topic-card-1",
+      productionStage: "VIDEO_REVIEW",
+      sourceSignals: [{ type: "VIDEO_TOPIC_CARD", card: { cardNo: "VTC-1" } }],
+      videoRenderJobs: [{
+        status: "SUCCEEDED",
+        outputAsset: { id: "asset-master", reviewStatus: "PENDING", width: 1080, height: 1920 },
+      }],
+      aiTaskOutputs: [],
+    });
+
+    const result = await service.topicCard("topic-card-1");
+
+    expect(result.productionStage).toBe("VIDEO_REVIEW");
+    expect(result.videoRenderJobs[0].outputAsset).toMatchObject({
+      id: "asset-master",
+      width: 1080,
+      height: 1920,
+    });
   });
 
   it("does not mix the default keyword pool into a viral-reference project", async () => {
