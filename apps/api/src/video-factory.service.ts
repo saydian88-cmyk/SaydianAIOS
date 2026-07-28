@@ -14,6 +14,9 @@ type JsonRow = Record<string, unknown>;
 type ProjectCreateInput = {
   platform?: string;
   voiceoverMode?: string;
+  accountType?: string;
+  estimatedDurationSeconds?: number;
+  contentRestrictionMode?: string;
   productModel?: string;
   topic?: string;
   audience?: string;
@@ -583,6 +586,9 @@ export class VideoFactoryService {
     return {
       platform,
       voiceoverMode: input.voiceoverMode === "NO_VOICEOVER" ? "NO_VOICEOVER" : "VOICEOVER",
+      accountType: String(input.accountType || "BRAND").trim(),
+      estimatedDurationSeconds: Math.max(15, Math.min(60, Number(input.estimatedDurationSeconds) || 30)),
+      contentRestrictionMode: input.contentRestrictionMode === "HEALTH_RESTRICTED" ? "HEALTH_RESTRICTED" : "NORMAL",
       product,
       keywords,
       knowledge,
@@ -621,10 +627,112 @@ export class VideoFactoryService {
       coverTextZh: keyword,
       coverTextEn: keyword,
       hashtags: [keyword],
+      scriptPackage: {
+        basicInfo: {
+          productModel: context.product?.modelCode || keyword,
+          videoType: noVoiceover ? "NO_VOICEOVER" : "VOICEOVER",
+          platform: context.platform,
+          accountType: context.accountType,
+          targetAudience: context.audience,
+          estimatedDurationSeconds: context.estimatedDurationSeconds,
+          healthContentAllowed: context.contentRestrictionMode !== "HEALTH_RESTRICTED",
+        },
+        positioning: {
+          coreTheme: context.topic,
+          communicationGoal: context.objective,
+          userPainPoint: pattern.hook,
+          uniqueSellingPoint: "用真实使用过程展示已审核的产品价值",
+        },
+        goldenHook: {
+          copy: pattern.hook,
+          type: pattern.suffix,
+          visual: "前三秒使用真实场景与产品操作动作，不使用无关外观空镜",
+          retentionReason: "先提出问题，延迟到操作结果出现后再给结论",
+          openingSound: "动作先行音效，随后进入口播或首屏字幕",
+        },
+        voiceoverLines: [
+          { text: pattern.hook, tone: "直接", speed: "稍快", emotion: "好奇", durationSeconds: 3 },
+          { text: `先看${keyword}在真实场景中的进入方式和关键操作。`, tone: "说明", speed: "正常", emotion: "可信", durationSeconds: 7 },
+          { text: "完整展示操作过程和结果画面，再说明已审核的核心价值。", tone: "客观", speed: "正常", emotion: "稳重", durationSeconds: 12 },
+          { text: "结合自己的使用需求判断，想看完整信息可以继续查看详情。", tone: "自然", speed: "稍慢", emotion: "友好", durationSeconds: 8 },
+        ],
+        structure: [
+          { stage: "HOOK", purpose: "提出问题并留人", content: pattern.hook },
+          { stage: "BRIDGE", purpose: "从问题承接到真实场景", content: "展示人物进入使用场景" },
+          { stage: "SELLING_POINT", purpose: "展开唯一核心卖点", content: "展示产品关键操作过程" },
+          { stage: "PROOF", purpose: "用画面提供事实证据", content: "展示操作结果或已审核信息对应画面" },
+          { stage: "RETENTION", purpose: "延迟结论并保持期待", content: "先展示过程，结果在后段出现" },
+          { stage: "ENDING", purpose: "自然收束", content: "总结适用场景并引导查看详情" },
+        ],
+        shotRequirements: [
+          {
+            line: pattern.hook,
+            visual: "真人使用场景中的产品动作近景",
+            assetStatus: context.assets.some((asset) => asset.kind === "VIDEO") ? "COVERED" as const : "NEED_SHOOT" as const,
+            factualProof: "仅证明人物正在真实操作产品，不推断未展示的功能",
+            audioVisualRequirement: "问题口播必须配实际操作动作，不能用包装或佩戴空镜代替",
+          },
+          {
+            line: `先看${keyword}的进入方式和关键操作`,
+            visual: "从功能入口到操作过程的连续视频",
+            assetStatus: context.assets.some((asset) => asset.kind === "VIDEO") ? "REWRITABLE" as const : "NEED_SHOOT" as const,
+            factualProof: "证明画面中真实出现的入口、动作与操作步骤",
+            audioVisualRequirement: "具体功能名称只有在对应界面与过程清楚可见时才能保留",
+          },
+          {
+            line: "完整展示操作过程和结果画面",
+            visual: "操作过程、等待状态与结果页面连续镜头",
+            assetStatus: context.assets.some((asset) => asset.kind === "VIDEO") ? "REWRITABLE" as const : "NEED_SHOOT" as const,
+            factualProof: "只说明画面实际显示的过程和结果，不作诊断或效果推断",
+            audioVisualRequirement: "结果口播必须配结果页面，不能用产品外观镜头替代",
+          },
+          {
+            line: "结合自己的使用需求判断",
+            visual: "产品完整定格与自然使用场景",
+            assetStatus: context.assets.length ? "COVERED" as const : "NEED_SHOOT" as const,
+            factualProof: "证明产品外观与实际使用场景",
+            audioVisualRequirement: "结尾保留完整产品画面和安全尾帧",
+          },
+        ],
+        retentionDesign: ["开头只提出问题，不立即说完结论", "在操作过程后再展示结果", "用信息递进完成卖点说明"],
+        subtitles: [pattern.hook.replace(/[，。！？；：]/g, ""), `先看${keyword}的真实操作过程`, "完整过程和结果画面都要看清", "结合自己的需求再判断"],
+        emphasisTexts: [keyword, "真实操作", "完整过程", "结果画面"],
+        soundDesign: {
+          voiceProfile: noVoiceover ? "无配音，使用屏幕字幕" : "自然可信的成年配音",
+          tone: "客观自然",
+          emotion: "稳重、有亲和力",
+          speed: "正常，重点处稍慢",
+          openingSfx: "操作动作先行音效",
+          keySfx: ["界面切换轻提示音", "结果出现提示音"],
+          ambientSound: "保留轻微真实环境声，不盖过口播",
+        },
+        complianceChecks: [
+          { category: "禁止词与极限词", status: "REVIEW" as const, note: "发布前按当前风险词库再次检查" },
+          { category: "健康功能表达", status: "REVIEW" as const, note: "只使用监测、提醒、参考、健康管理等已审核表达" },
+          { category: "画面事实", status: "PASS" as const, note: "脚本要求以真实操作、过程或结果画面作为证据" },
+        ],
+        ending: {
+          summary: "总结真实使用过程与适用场景",
+          interaction: "你更想先看哪个实际操作？",
+          visual: "产品完整定格，字幕与口播结束后继续保留画面",
+          safeTailSeconds: 1.5,
+        },
+        materialGaps: context.assets.some((asset) => asset.kind === "VIDEO") ? [] : [{
+          product: context.product?.modelCode || keyword,
+          action: "完整进入、操作并查看结果",
+          shotSize: "竖屏中近景与界面近景",
+          processOrResult: "功能操作过程和结果页面",
+          shootingMethod: "1080×1920竖屏连续拍摄，画面稳定，界面清楚，保留前后各1秒",
+        }],
+      },
       scripts: {
-        zh15: noVoiceover ? `无口播字幕：${keyword}｜真实场景｜核心卖点｜查看详情` : `${pattern.hook}。结合真实使用场景，展示已审核的产品价值。`,
+        zh15: noVoiceover
+          ? `0-3秒：大字字幕“${pattern.hook}”；3-8秒：连续展示${keyword}的真实使用动作；8-12秒：字幕说明已审核的核心产品价值；12-15秒：用实际场景收尾并引导查看详情。`
+          : `${pattern.hook}。先从一个真实使用场景切入，再展示${keyword}的实际操作过程和已审核的核心产品价值，最后用清晰结果画面收尾，引导用户继续查看详情。`,
         en15: noVoiceover ? `${keyword} | Real scene | Key benefit | Learn more` : `${keyword}. A real-life look using approved product facts.`,
-        zh30: noVoiceover ? `无口播字幕节奏：痛点大字｜产品动作｜功能亮点｜使用场景｜行动引导` : `${pattern.hook}。通过真实素材说明使用场景、产品价值和操作方式，最后引导查看详情。`,
+        zh30: noVoiceover
+          ? `0-3秒：痛点大字字幕“${pattern.hook}”；3-8秒：展示人物进入真实使用场景；8-16秒：连续展示${keyword}的操作步骤和产品动作；16-23秒：用字幕卡说明已审核的核心价值与适用场景；23-27秒：展示操作结果或使用反馈；27-30秒：产品定格并引导查看详情。`
+          : `${pattern.hook}。很多人真正需要的不是一句宣传，而是看清楚产品在日常场景中如何使用。接下来用真实素材展示${keyword}的进入方式、关键操作和结果画面，再说明已审核的核心产品价值与适用场景。看完完整过程后，再根据自己的需求判断，最后引导查看详情。`,
         en30: noVoiceover ? `Text-only pacing: pain point | product action | key benefit | use case | CTA` : `${keyword}. Show the use case, approved product value and a clear next step with real assets.`,
       },
     }));
@@ -686,6 +794,9 @@ export class VideoFactoryService {
             allowFallback: input.allowFallback !== false,
             externalReferencePolicy: "STRUCTURE_ONLY",
             voiceoverMode: context.voiceoverMode,
+            accountType: context.accountType,
+            estimatedDurationSeconds: context.estimatedDurationSeconds,
+            contentRestrictionMode: context.contentRestrictionMode,
           }],
           evidenceIds,
           status: ContentStatus.DRAFT,

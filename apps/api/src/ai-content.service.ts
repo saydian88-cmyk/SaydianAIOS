@@ -18,6 +18,35 @@ export type AiVideoCandidate = {
   coverTextEn: string;
   hashtags: string[];
   scripts: { zh15: string; en15: string; zh30: string; en30: string };
+  scriptPackage: {
+    basicInfo: {
+      productModel: string;
+      videoType: string;
+      platform: string;
+      accountType: string;
+      targetAudience: string;
+      estimatedDurationSeconds: number;
+      healthContentAllowed: boolean;
+    };
+    positioning: { coreTheme: string; communicationGoal: string; userPainPoint: string; uniqueSellingPoint: string };
+    goldenHook: { copy: string; type: string; visual: string; retentionReason: string; openingSound: string };
+    voiceoverLines: Array<{ text: string; tone: string; speed: string; emotion: string; durationSeconds: number }>;
+    structure: Array<{ stage: string; purpose: string; content: string }>;
+    shotRequirements: Array<{
+      line: string;
+      visual: string;
+      assetStatus: "COVERED" | "REWRITABLE" | "NEED_SHOOT" | "PROHIBITED";
+      factualProof: string;
+      audioVisualRequirement: string;
+    }>;
+    retentionDesign: string[];
+    subtitles: string[];
+    emphasisTexts: string[];
+    soundDesign: { voiceProfile: string; tone: string; emotion: string; speed: string; openingSfx: string; keySfx: string[]; ambientSound: string };
+    complianceChecks: Array<{ category: string; status: "PASS" | "REVIEW" | "BLOCK"; note: string }>;
+    ending: { summary: string; interaction: string; visual: string; safeTailSeconds: number };
+    materialGaps: Array<{ product: string; action: string; shotSize: string; processOrResult: string; shootingMethod: string }>;
+  };
 };
 
 export type AiArticlePackage = {
@@ -108,6 +137,20 @@ function score(value: unknown): number {
   return Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
 }
 
+export function isCompleteVideoCandidate(candidate: AiVideoCandidate): boolean {
+  return candidate.hook.length >= 4
+    && candidate.outline.length >= 3
+    && candidate.scripts.zh15.length >= 40
+    && candidate.scripts.zh30.length >= 70
+    && Boolean(candidate.scriptPackage?.basicInfo?.productModel)
+    && Boolean(candidate.scriptPackage?.positioning?.coreTheme)
+    && Boolean(candidate.scriptPackage?.goldenHook?.visual)
+    && candidate.scriptPackage.voiceoverLines.length >= 3
+    && candidate.scriptPackage.structure.length >= 5
+    && candidate.scriptPackage.shotRequirements.length >= 3
+    && candidate.scriptPackage.complianceChecks.length >= 1;
+}
+
 @Injectable()
 export class AiContentService {
   capabilities() {
@@ -136,14 +179,33 @@ export class AiContentService {
 ${assetPolicy}
 ${restrictionPolicy}
 ${voiceoverPolicy}
-每个候选必须含15秒和30秒中英文脚本、Hook、节奏化镜头大纲、字幕/CTA思路、标题、封面文案和标签。
-返回JSON：{"candidates":[{"topic":"","audience":"","objective":"","hook":"","outline":[],"score":0,"scoreBreakdown":{},"assetIds":[],"referenceIds":[],"missingAssets":[],"titleZh":"","titleEn":"","coverTextZh":"","coverTextEn":"","hashtags":[],"scripts":{"zh15":"","en15":"","zh30":"","en30":""}}]}。
+每个候选必须含15秒和30秒中英文完整脚本、Hook、节奏化镜头大纲、字幕/CTA思路、标题、封面文案和标签，并生成scriptPackage结构化执行脚本。
+严禁只返回一句Hook或把Hook重复当作正文。outline至少3段；zh15至少40个汉字并包含开场、核心内容和结尾引导；zh30至少70个汉字并包含开场、场景或痛点、产品或功能展示、结果或价值、结尾引导。无口播模式也必须给出逐段画面字幕和动作节奏。
+scriptPackage必须包含：
+1.basicInfo：productModel、videoType、platform、accountType、targetAudience、estimatedDurationSeconds、healthContentAllowed。
+2.positioning：coreTheme、communicationGoal、userPainPoint、uniqueSellingPoint，且一条视频只能有一个uniqueSellingPoint。
+3.goldenHook：copy、type、visual、retentionReason、openingSound。
+4.voiceoverLines：逐句text、tone、speed、emotion、durationSeconds；无口播时text填写对应屏幕字幕。
+5.structure：至少含HOOK、BRIDGE、SELLING_POINT、PROOF、RETENTION、ENDING六段，每段提供purpose和content。
+6.shotRequirements：逐句提供line、具体visual、assetStatus（COVERED|REWRITABLE|NEED_SHOOT|PROHIBITED）、factualProof、audioVisualRequirement。不得只凭文件名推断功能；功能口播必须匹配对应操作、过程或结果画面。
+7.retentionDesign、subtitles（无标点、自然语义断句，避免孤字）、emphasisTexts（只列关键词，不重复整句）。
+8.soundDesign：voiceProfile、tone、emotion、speed、openingSfx、keySfx、ambientSound。
+9.complianceChecks：检查禁止词、极限词、健康表达、资质画面和临时禁用内容，status只能PASS|REVIEW|BLOCK。
+10.ending：summary、interaction、visual、safeTailSeconds；结尾必须保留安全尾帧。
+11.materialGaps：product、action、shotSize、processOrResult、shootingMethod，只列真实缺口。
+返回JSON：{"candidates":[{"topic":"","audience":"","objective":"","hook":"","outline":[],"score":0,"scoreBreakdown":{},"assetIds":[],"referenceIds":[],"missingAssets":[],"titleZh":"","titleEn":"","coverTextZh":"","coverTextEn":"","hashtags":[],"scripts":{"zh15":"","en15":"","zh30":"","en30":""},"scriptPackage":{"basicInfo":{"productModel":"","videoType":"","platform":"","accountType":"","targetAudience":"","estimatedDurationSeconds":30,"healthContentAllowed":true},"positioning":{"coreTheme":"","communicationGoal":"","userPainPoint":"","uniqueSellingPoint":""},"goldenHook":{"copy":"","type":"","visual":"","retentionReason":"","openingSound":""},"voiceoverLines":[{"text":"","tone":"","speed":"","emotion":"","durationSeconds":0}],"structure":[{"stage":"HOOK|BRIDGE|SELLING_POINT|PROOF|RETENTION|ENDING","purpose":"","content":""}],"shotRequirements":[{"line":"","visual":"","assetStatus":"COVERED|REWRITABLE|NEED_SHOOT|PROHIBITED","factualProof":"","audioVisualRequirement":""}],"retentionDesign":[],"subtitles":[],"emphasisTexts":[],"soundDesign":{"voiceProfile":"","tone":"","emotion":"","speed":"","openingSfx":"","keySfx":[],"ambientSound":""},"complianceChecks":[{"category":"","status":"PASS|REVIEW|BLOCK","note":""}],"ending":{"summary":"","interaction":"","visual":"","safeTailSeconds":1},"materialGaps":[{"product":"","action":"","shotSize":"","processOrResult":"","shootingMethod":""}]}}]}。
 输入：${JSON.stringify(context)}`,
     );
     const rows = Array.isArray(result.candidates) ? result.candidates.slice(0, 3).map(object) : [];
     if (rows.length !== 3) throw new Error("百炼未返回3个视频候选");
-    return rows.map((row) => {
+    const candidates = rows.map((row) => {
       const scripts = object(row.scripts);
+      const scriptPackage = object(row.scriptPackage);
+      const basicInfo = object(scriptPackage.basicInfo);
+      const positioning = object(scriptPackage.positioning);
+      const goldenHook = object(scriptPackage.goldenHook);
+      const soundDesign = object(scriptPackage.soundDesign);
+      const ending = object(scriptPackage.ending);
       return {
         topic: text(row.topic),
         audience: text(row.audience),
@@ -166,8 +228,87 @@ ${voiceoverPolicy}
           zh30: text(scripts.zh30),
           en30: text(scripts.en30),
         },
+        scriptPackage: {
+          basicInfo: {
+            productModel: text(basicInfo.productModel),
+            videoType: text(basicInfo.videoType),
+            platform: text(basicInfo.platform),
+            accountType: text(basicInfo.accountType),
+            targetAudience: text(basicInfo.targetAudience),
+            estimatedDurationSeconds: Math.max(1, Number(basicInfo.estimatedDurationSeconds) || 30),
+            healthContentAllowed: basicInfo.healthContentAllowed !== false,
+          },
+          positioning: {
+            coreTheme: text(positioning.coreTheme),
+            communicationGoal: text(positioning.communicationGoal),
+            userPainPoint: text(positioning.userPainPoint),
+            uniqueSellingPoint: text(positioning.uniqueSellingPoint),
+          },
+          goldenHook: {
+            copy: text(goldenHook.copy),
+            type: text(goldenHook.type),
+            visual: text(goldenHook.visual),
+            retentionReason: text(goldenHook.retentionReason),
+            openingSound: text(goldenHook.openingSound),
+          },
+          voiceoverLines: (Array.isArray(scriptPackage.voiceoverLines) ? scriptPackage.voiceoverLines : []).map(object).map((item) => ({
+            text: text(item.text),
+            tone: text(item.tone),
+            speed: text(item.speed),
+            emotion: text(item.emotion),
+            durationSeconds: Math.max(0, Number(item.durationSeconds) || 0),
+          })),
+          structure: (Array.isArray(scriptPackage.structure) ? scriptPackage.structure : []).map(object).map((item) => ({
+            stage: text(item.stage),
+            purpose: text(item.purpose),
+            content: text(item.content),
+          })),
+          shotRequirements: (Array.isArray(scriptPackage.shotRequirements) ? scriptPackage.shotRequirements : []).map(object).map((item) => ({
+            line: text(item.line),
+            visual: text(item.visual),
+            assetStatus: (["COVERED", "REWRITABLE", "NEED_SHOOT", "PROHIBITED"].includes(text(item.assetStatus))
+              ? text(item.assetStatus)
+              : "NEED_SHOOT") as "COVERED" | "REWRITABLE" | "NEED_SHOOT" | "PROHIBITED",
+            factualProof: text(item.factualProof),
+            audioVisualRequirement: text(item.audioVisualRequirement),
+          })),
+          retentionDesign: strings(scriptPackage.retentionDesign),
+          subtitles: strings(scriptPackage.subtitles),
+          emphasisTexts: strings(scriptPackage.emphasisTexts),
+          soundDesign: {
+            voiceProfile: text(soundDesign.voiceProfile),
+            tone: text(soundDesign.tone),
+            emotion: text(soundDesign.emotion),
+            speed: text(soundDesign.speed),
+            openingSfx: text(soundDesign.openingSfx),
+            keySfx: strings(soundDesign.keySfx),
+            ambientSound: text(soundDesign.ambientSound),
+          },
+          complianceChecks: (Array.isArray(scriptPackage.complianceChecks) ? scriptPackage.complianceChecks : []).map(object).map((item) => ({
+            category: text(item.category),
+            status: (["PASS", "REVIEW", "BLOCK"].includes(text(item.status)) ? text(item.status) : "REVIEW") as "PASS" | "REVIEW" | "BLOCK",
+            note: text(item.note),
+          })),
+          ending: {
+            summary: text(ending.summary),
+            interaction: text(ending.interaction),
+            visual: text(ending.visual),
+            safeTailSeconds: Math.max(0.5, Number(ending.safeTailSeconds) || 1),
+          },
+          materialGaps: (Array.isArray(scriptPackage.materialGaps) ? scriptPackage.materialGaps : []).map(object).map((item) => ({
+            product: text(item.product),
+            action: text(item.action),
+            shotSize: text(item.shotSize),
+            processOrResult: text(item.processOrResult),
+            shootingMethod: text(item.shootingMethod),
+          })),
+        },
       };
     });
+    if (candidates.some((candidate) => !isCompleteVideoCandidate(candidate))) {
+      throw new Error("AI返回的视频方向缺少完整脚本");
+    }
+    return candidates;
   }
 
   async analyzeVideoAssetCoverage(context: JsonRecord): Promise<AiAssetCoverage> {

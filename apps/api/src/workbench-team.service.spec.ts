@@ -149,4 +149,55 @@ describe("WorkbenchService operation team", () => {
     await expect(target.respondOperatorInvite(operator, "invite-1", { action: "ACCEPT" }))
       .rejects.toThrow("协作关系不能形成循环");
   });
+  it("moves only an owned cancelled task into the three-day recycle bin", async () => {
+    const update = vi.fn().mockResolvedValue({ id: "task-self", status: "CANCELLED" });
+    const target = service({
+      opsTask: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: "task-self",
+          title: "cancelled task",
+          status: "CANCELLED",
+          sourceType: "SELF_CREATED",
+          assigneeEmployeeId: "operator-1",
+        }),
+        update,
+      },
+      operationTaskHistory: { create: vi.fn().mockResolvedValue({}) },
+      auditLog: { create: vi.fn().mockResolvedValue({}) },
+    });
+    await target.trashCancelledTask(operator, "task-self");
+    const data = update.mock.calls[0][0].data;
+    expect(data.deletedByEmployeeId).toBe("operator-1");
+    expect(data.deletedAt).toBeInstanceOf(Date);
+    expect(data.purgeAfter.getTime() - data.deletedAt.getTime()).toBe(3 * 24 * 60 * 60 * 1000);
+  });
+
+  it("rejects deleting a task that has not been cancelled", async () => {
+    const target = service({
+      opsTask: { findFirst: vi.fn().mockResolvedValue(null) },
+    });
+    await expect(target.trashCancelledTask(operator, "task-active")).rejects.toThrow();
+  });
+
+  it("restores only a task deleted by the current employee", async () => {
+    const update = vi.fn().mockResolvedValue({ id: "task-self", status: "CANCELLED" });
+    const target = service({
+      opsTask: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: "task-self",
+          title: "cancelled task",
+          status: "CANCELLED",
+          sourceType: "SELF_CREATED",
+          assigneeEmployeeId: "operator-1",
+        }),
+        update,
+      },
+      operationTaskHistory: { create: vi.fn().mockResolvedValue({}) },
+      auditLog: { create: vi.fn().mockResolvedValue({}) },
+    });
+    await target.restoreTask(operator, "task-self");
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({
+      data: { deletedAt: null, purgeAfter: null, deletedByEmployeeId: null },
+    }));
+  });
 });
