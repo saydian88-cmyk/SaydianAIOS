@@ -757,9 +757,9 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
       <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon class="page-alert" />
 
       <section v-if="active === 'taskCommand'" class="page"><AdminTaskCenter ref="adminTaskCenter" /></section>
-      <section v-if="active === 'aiTasks'" class="page"><AiTaskCenter ref="aiTaskCenter" @navigate="switchPage" /></section>
+      <section v-else-if="active === 'aiTasks'" class="page"><AiTaskCenter ref="aiTaskCenter" @navigate="switchPage" /></section>
 
-      <section v-if="active === 'dashboard'" class="page dashboard-page">
+      <section v-else-if="active === 'dashboard'" class="page dashboard-page">
         <div class="hero-panel">
           <div class="hero-copy">
             <span class="eyebrow">TODAY'S OPERATIONS</span>
@@ -967,7 +967,7 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
         <div class="sop-list" v-else><article v-for="item in sops" :key="item.id"><div><strong>{{ item.kind }} · V{{ item.version }}</strong><el-tag :type="item.status === 'ACTIVE' ? 'success' : 'info'">{{ item.status }}</el-tag></div><p>{{ item.changeNote }}</p><small>生效时间 {{ time(item.effectiveAt) }}</small></article></div>
       </section>
 
-      <SystemConfigCenter v-else ref="systemConfigCenter" />
+      <SystemConfigCenter v-else-if="active === 'integrations'" ref="systemConfigCenter" />
 
       <el-dialog v-model="productionUploadDialog" title="上传对应拍摄素材" width="680px" destroy-on-close>
         <div class="production-upload-context">
