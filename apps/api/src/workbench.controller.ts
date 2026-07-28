@@ -611,6 +611,90 @@ export class WorkbenchController {
     return this.videoFactory.enqueueRender(id, employee.name);
   }
 
+  @Post("data-center/video-projects/:id/archive")
+  archiveVideoProject(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+  ) {
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    if (!employee.roles.some((role) => ["CONTENT_OPERATOR", "VIDEO_SPECIALIST"].includes(role))) {
+      throw new ForbiddenException("只有运营和视频专员可以删除视频项目");
+    }
+    return this.videoFactory.archiveProject(id, employee.name);
+  }
+
+  @Get("data-center/video-projects-recycle-bin")
+  videoProjectRecycleBin(
+    @Headers("authorization") authorization: string | undefined,
+  ) {
+    const employee = this.requirePermission(authorization, "DATA_CENTER_VIEW");
+    if (!employee.roles.some((role) => ["CONTENT_OPERATOR", "VIDEO_SPECIALIST"].includes(role))) {
+      throw new ForbiddenException("只有运营和视频专员可以查看视频项目回收站");
+    }
+    return this.videoFactory.recycledProjects(employee.name);
+  }
+
+  @Post("data-center/video-projects/:id/restore")
+  restoreVideoProject(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+  ) {
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    if (!employee.roles.some((role) => ["CONTENT_OPERATOR", "VIDEO_SPECIALIST"].includes(role))) {
+      throw new ForbiddenException("只有运营和视频专员可以恢复视频项目");
+    }
+    return this.videoFactory.restoreProject(id, employee.name);
+  }
+
+  @Post("data-center/video-projects/:id/review")
+  async reviewVideoProject(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    if (!employee.roles.some((role) => ["CONTENT_OPERATOR", "VIDEO_SPECIALIST"].includes(role))) {
+      throw new ForbiddenException("只有运营和视频专员可以审核成片");
+    }
+    const action = String(body.action || "").trim().toUpperCase();
+    const note = String(body.note || "").trim();
+    const outputAssetId = String(body.outputAssetId || "").trim();
+    if (!["APPROVE", "RETURN"].includes(action)) throw new ForbiddenException("审核动作不正确");
+    if (action === "RETURN" && !note) throw new ForbiddenException("退回时必须填写具体修改说明");
+    const render = outputAssetId
+      ? await this.prisma.videoRenderJob.findFirst({
+        where: { contentPlanId: id, outputAssetId, status: "SUCCEEDED" },
+        include: { outputAsset: true },
+      })
+      : null;
+    if (!render?.outputAsset) throw new ForbiddenException("成片与当前视频项目不匹配");
+    if (render.outputAsset.reviewStatus !== "PENDING") {
+      throw new ForbiddenException("该成片已经完成审核，不能重复提交");
+    }
+    return this.videoFactory.reviewOutput(outputAssetId, action === "APPROVE", employee.name, note);
+  }
+
+  @Post("data-center/video-projects/:id/similar")
+  createSimilarVideoProject(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    if (!employee.roles.some((role) => ["CONTENT_OPERATOR", "VIDEO_SPECIALIST"].includes(role))) {
+      throw new ForbiddenException("只有运营和视频专员可以生成类似视频");
+    }
+    return this.videoFactory.createSimilarProject(id, {
+      outputAssetId: String(body.outputAssetId || "").trim(),
+      replaceHook: Boolean(body.replaceHook),
+      hook: body.hook ? String(body.hook) : undefined,
+      replaceProduct: Boolean(body.replaceProduct),
+      productModel: body.productModel ? String(body.productModel) : undefined,
+      replaceFeature: Boolean(body.replaceFeature),
+      feature: body.feature ? String(body.feature) : undefined,
+    }, employee.name);
+  }
+
   @Post("data-center/video-projects/:id/packaging")
   async generateVideoPackaging(
     @Headers("authorization") authorization: string | undefined,
@@ -633,6 +717,95 @@ export class WorkbenchController {
       await this.videoFactory.reviewOutput(outputAssetId, true, employee.name, "成片预览确认满意并生成平台包装");
     }
     return this.content.generatePackaging(id, employee.name);
+  }
+
+  @Post("data-center/video-projects/:id/manual-publish")
+  async recordWorkbenchManualPublish(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    if (!employee.roles.some((role) => ["CONTENT_OPERATOR", "VIDEO_SPECIALIST"].includes(role))) {
+      throw new ForbiddenException("只有运营和视频专员可以回传发布链接");
+    }
+    const outputAssetId = String(body.outputAssetId || "").trim();
+    const allowedPlatforms = ["DOUYIN", "TIKTOK", "XIAOHONGSHU", "BILIBILI", "WECHAT_CHANNELS", "KUAISHOU"];
+    const records = Array.isArray(body.records) ? body.records as Array<Record<string, unknown>> : [];
+    if (!records.length) throw new ForbiddenException("请至少填写一个平台的发布链接");
+    const normalized = records.map((record) => ({
+      platform: String(record.platform || "").trim().toUpperCase(),
+      remoteUrl: String(record.remoteUrl || "").trim(),
+      publishedAt: record.publishedAt ? String(record.publishedAt) : undefined,
+    }));
+    if (normalized.some((record) => !allowedPlatforms.includes(record.platform))) {
+      throw new ForbiddenException("发布平台不在支持范围内");
+    }
+    if (new Set(normalized.map((record) => record.platform)).size !== normalized.length) {
+      throw new ForbiddenException("同一平台请只填写一条发布记录");
+    }
+    if (normalized.some((record) => !/^https?:\/\/\S+$/i.test(record.remoteUrl))) {
+      throw new ForbiddenException("请填写以 http:// 或 https:// 开头的完整作品链接");
+    }
+    const [render, plan] = await Promise.all([
+      this.prisma.videoRenderJob.findFirst({
+        where: { contentPlanId: id, outputAssetId, status: "SUCCEEDED" },
+        include: { outputAsset: true },
+      }),
+      this.prisma.contentPlan.findUnique({ where: { id }, include: { variants: true } }),
+    ]);
+    if (!render?.outputAsset || render.outputAsset.reviewStatus !== "APPROVED") {
+      throw new ForbiddenException("只有审核通过的成片可以回传发布链接");
+    }
+    if (!plan) throw new ForbiddenException("视频项目不存在");
+    const platformNames: Record<string, string> = {
+      DOUYIN: "抖音", TIKTOK: "TikTok", XIAOHONGSHU: "小红书",
+      BILIBILI: "B站", WECHAT_CHANNELS: "视频号", KUAISHOU: "快手",
+    };
+    const results = [];
+    for (const record of normalized) {
+      const integration = await this.prisma.integration.upsert({
+        where: { kind: record.platform as never },
+        create: {
+          kind: record.platform as never,
+          displayName: platformNames[record.platform] || record.platform,
+          capabilities: ["manual_publish"],
+          message: "已支持手动回传发布链接；自动发布与数据采集需单独配置",
+        },
+        update: {},
+      });
+      const variant = await this.prisma.contentVariant.upsert({
+        where: { contentPlanId_platform: { contentPlanId: id, platform: record.platform as never } },
+        create: {
+          contentPlanId: id,
+          platform: record.platform as never,
+          title: plan.topic,
+          body: plan.hook,
+          mediaType: "VIDEO",
+          packagingStatus: "APPROVED",
+          packagingReviewedBy: employee.name,
+          packagingReviewedAt: new Date(),
+          status: "APPROVED",
+        },
+        update: {
+          packagingStatus: "APPROVED",
+          packagingReviewedBy: employee.name,
+          packagingReviewedAt: new Date(),
+        },
+      });
+      void integration;
+      results.push(await this.content.recordManualPublish(variant.id, employee.name, {
+        remoteUrl: record.remoteUrl,
+        publishedAt: record.publishedAt,
+      }));
+    }
+    await this.prisma.contentPlan.update({
+      where: { id },
+      data: {
+        targetPlatforms: Array.from(new Set([...plan.targetPlatforms, ...normalized.map((record) => record.platform)])) as never,
+      },
+    });
+    return { saved: results.length, platforms: normalized.map((record) => record.platform) };
   }
 
   @Get("data-center/video-projects/:id/packaging/:variantId/cover")

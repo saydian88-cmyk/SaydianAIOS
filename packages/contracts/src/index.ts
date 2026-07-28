@@ -1,6 +1,8 @@
 export const platformKinds = [
   "DOUYIN",
   "TIKTOK",
+  "KUAISHOU",
+  "BILIBILI",
   "AMAZON",
   "SHOPIFY",
   "WECHAT_CHANNELS",

@@ -652,6 +652,8 @@ export class VideoFactoryWorkerService {
       include: { contentPlan: { include: { videoShots: { orderBy: { sequence: "asc" }, include: { selectedAsset: true } } } } },
     });
     if (!job) throw new Error("渲染任务不存在");
+    const renderInput = object(job.input);
+    const revisionFeedback = String(renderInput.revisionFeedback || "").trim();
     const assets = job.contentPlan.videoShots
       .map((shot) => shot.selectedAsset)
       .filter((asset): asset is NonNullable<typeof asset> => Boolean(asset));
@@ -703,6 +705,7 @@ export class VideoFactoryWorkerService {
       await writeFile(briefPath, [
         "---", "workflow: general-video", "flow: automation", "aspect: 9:16", "resolution: 1080x1920", "---",
         `# ${job.contentPlan.topic}`, "", `Hook: ${job.contentPlan.hook || ""}`, `CTA: ${job.contentPlan.objective || ""}`,
+        ...(revisionFeedback ? ["", "## 上一版退回说明（本次必须针对性优化）", revisionFeedback] : []),
         "", "## Approved shot files", ...normalized.map((path, index) => `${index + 1}. ${path}`),
         "", `Subtitle: ${subtitlePath}`, `Output: ${outputPath}`,
       ].join("\n"), "utf8");
