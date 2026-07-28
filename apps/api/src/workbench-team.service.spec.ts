@@ -33,6 +33,61 @@ describe("WorkbenchService operation team", () => {
     })).rejects.toThrow("只能给当前协作成员安排任务");
   });
 
+  it("creates a personal task assigned to the current employee", async () => {
+    const create = vi.fn().mockResolvedValue({
+      id: "task-self",
+      title: "整理素材",
+      status: "ACCEPTED",
+      assigneeEmployeeId: "operator-1",
+    });
+    const target = service({
+      opsTask: { create },
+      operationTaskHistory: { create: vi.fn().mockResolvedValue({}) },
+      taskNotification: { create: vi.fn().mockResolvedValue({}) },
+    });
+    await target.createSelfTask(operator, { title: "整理素材", priority: "HIGH" });
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        title: "整理素材",
+        priority: "HIGH",
+        status: "ACCEPTED",
+        assigneeEmployeeId: "operator-1",
+        sourceType: "SELF_CREATED",
+      }),
+    }));
+  });
+
+  it("completes a personal task without waiting for a reviewer", async () => {
+    const update = vi.fn().mockResolvedValue({ id: "task-self", status: "COMPLETED" });
+    const transaction = vi.fn(async (callback: (tx: Record<string, any>) => Promise<unknown>) => callback({
+      taskSubmission: {
+        aggregate: vi.fn().mockResolvedValue({ _max: { version: null } }),
+        create: vi.fn().mockResolvedValue({ id: "submission-1", version: 1 }),
+      },
+      opsTask: { update },
+      operationTaskHistory: { create: vi.fn().mockResolvedValue({}) },
+      taskNotification: { create: vi.fn().mockResolvedValue({}) },
+    }));
+    const target = service({
+      opsTask: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: "task-self",
+          title: "整理素材",
+          category: "GENERAL",
+          sourceType: "SELF_CREATED",
+          status: "IN_PROGRESS",
+          assigneeEmployeeId: "operator-1",
+          assignedByEmployeeId: null,
+        }),
+      },
+      $transaction: transaction,
+    });
+    await target.submit(operator, "task-self", { summary: "已完成" });
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: "COMPLETED" }),
+    }));
+  });
+
   it("only reviews tasks assigned by the current operator", async () => {
     const target = service({
       opsTask: { findFirst: vi.fn().mockResolvedValue(null) },

@@ -43,6 +43,15 @@ const dashboard = reactive<Row>({
 const tasks = ref<Row[]>([]);
 const taskScope = ref("MINE");
 const taskStatus = ref("");
+const selfTaskVisible = ref(false);
+const creatingSelfTask = ref(false);
+const selfTaskForm = reactive({
+  title: "",
+  description: "",
+  expectedResult: "",
+  priority: "MEDIUM",
+  dueAt: "",
+});
 const operationTeam = reactive<Row>({ supervisor: null, directReports: [], invitations: { incoming: [], outgoing: [] }, operators: [] });
 const teamTasks = ref<Row[]>([]);
 const receivedTeamTasks = ref<Row[]>([]);
@@ -154,6 +163,7 @@ const selectedAssetGapIds = ref<string[]>([]);
 const assetGapVisible = ref(false);
 const assetGapProductModel = ref("");
 let dataCenterRequestId = 0;
+const dataCenterCache = new Map<string, Row>();
 
 const classificationOptions = [
   { label: "钩子", value: "HOOK" },
@@ -403,7 +413,50 @@ async function loadNotices() {
   notices.value = await api<Row[]>("/api/v1/workbench/notifications");
 }
 
-async function loadDataCenter() {
+function dataCenterCacheKey() {
+  return JSON.stringify({
+    section: dataCenterTab.value,
+    ...dataCenterFilters,
+  });
+}
+
+function invalidateDataCenterSection(section = dataCenterTab.value) {
+  for (const key of dataCenterCache.keys()) {
+    if (key.includes(`"section":"${section}"`)) dataCenterCache.delete(key);
+  }
+}
+
+function openSelfTask() {
+  Object.assign(selfTaskForm, {
+    title: "",
+    description: "",
+    expectedResult: "",
+    priority: "MEDIUM",
+    dueAt: "",
+  });
+  selfTaskVisible.value = true;
+}
+
+async function createSelfTask() {
+  if (!selfTaskForm.title.trim()) return ElMessage.warning("请填写任务标题");
+  creatingSelfTask.value = true;
+  try {
+    await post("/api/v1/workbench/tasks", selfTaskForm);
+    selfTaskVisible.value = false;
+    taskScope.value = "MINE";
+    ElMessage.success("任务已添加到“我的任务”");
+    await Promise.all([loadTasks(), loadDashboard()]);
+  } finally {
+    creatingSelfTask.value = false;
+  }
+}
+
+async function loadDataCenter(force = false) {
+  const cacheKey = dataCenterCacheKey();
+  if (!force && dataCenterCache.has(cacheKey)) {
+    Object.assign(dataCenter, dataCenterCache.get(cacheKey));
+    return;
+  }
   const requestId = ++dataCenterRequestId;
   dataCenterLoading.value = true;
   const parameters = new URLSearchParams();
@@ -415,7 +468,10 @@ async function loadDataCenter() {
   parameters.set("_", String(Date.now()));
   try {
     const result = await api<Row>(`/api/v1/workbench/data-center?${parameters.toString()}`);
-    if (requestId === dataCenterRequestId) Object.assign(dataCenter, result);
+    if (requestId === dataCenterRequestId) {
+      dataCenterCache.set(cacheKey, result);
+      Object.assign(dataCenter, result);
+    }
   } finally {
     if (requestId === dataCenterRequestId) dataCenterLoading.value = false;
   }
@@ -428,12 +484,18 @@ async function switchDataCenterTab(tab: string) {
 
 async function setAssetKind(kind: string) {
   dataCenterFilters.kind = kind;
-  await loadDataCenter();
+  await loadDataCenter(true);
 }
 
 async function setKnowledgeType(type: string) {
   dataCenterFilters.type = type;
-  await loadDataCenter();
+  await loadDataCenter(true);
+}
+
+async function refreshDataCenter() {
+  invalidateDataCenterSection();
+  await loadDataCenter(true);
+  ElMessage.success("当前栏目已重新拉取");
 }
 
 function useKeywordInFactory(keyword: Row) {
@@ -470,7 +532,8 @@ async function createVideoProject() {
     videoFactoryForm.keywordIds = [];
     videoFactoryForm.externalVideoIds = [];
     dataCenterTab.value = "videoFactory";
-    await loadDataCenter();
+    invalidateDataCenterSection("videoFactory");
+    await loadDataCenter(true);
   } finally {
     creatingVideoProject.value = false;
   }
@@ -496,7 +559,8 @@ async function generateWorkbenchVideoScript() {
       ? (videoScriptMode.value === "ASSET_ONLY" ? "无需补拍脚本已生成，已进入脚本审核" : "视频脚本已生成，已进入脚本审核")
       : "今天已有同类脚本，没有重复创建");
     dataCenterTab.value = "videoFactory";
-    await loadDataCenter();
+    invalidateDataCenterSection("videoFactory");
+    await loadDataCenter(true);
   } finally {
     generatingVideoScript.value = false;
   }
@@ -534,7 +598,8 @@ async function generateVideoProject(project: Row, candidateIndex = 0) {
     await post(`/api/v1/workbench/data-center/video-projects/${project.id}/generate`, { candidateIndex });
     ElMessage.success("拍摄执行包已生成，缺失镜头已形成补拍要求");
     dataCenterTab.value = "videoFactory";
-    await loadDataCenter();
+    invalidateDataCenterSection("videoFactory");
+    await loadDataCenter(true);
   } finally {
     generatingProjectId.value = "";
   }
@@ -568,7 +633,8 @@ async function generateWorkbenchShot(project: Row, shot: Row) {
       duration: Number(shot.durationSeconds || 5),
     });
     ElMessage.success("AI镜头生成任务已提交，可在这里查看进度");
-    await loadDataCenter();
+    invalidateDataCenterSection("videoFactory");
+    await loadDataCenter(true);
     if (!expandedVideoProjectIds.value.includes(project.id)) {
       expandedVideoProjectIds.value.push(project.id);
     }
@@ -785,7 +851,9 @@ async function submitAsset() {
     } else {
       ElMessage.success("素材批次已进入AI处理流水线");
     }
-    if (active.value === "data") await loadDataCenter();
+    invalidateDataCenterSection("assets");
+    if (lockedShotUpload.value) invalidateDataCenterSection("videoFactory");
+    if (active.value === "data") await loadDataCenter(true);
     else await loadDashboard();
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : "上传失败");
@@ -845,7 +913,8 @@ async function saveAssetMetadata() {
     assetDetail.value = detail;
     assetEditMode.value = false;
     ElMessage.success("素材分类与标签已保存");
-    await loadDataCenter();
+    invalidateDataCenterSection("assets");
+    await loadDataCenter(true);
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : "素材信息保存失败");
   } finally {
@@ -865,6 +934,7 @@ async function submitKnowledge() {
   await post("/api/v1/workbench/knowledge", { ...knowledgeForm });
   knowledgeVisible.value = false;
   ElMessage.success("知识已提交审核");
+  invalidateDataCenterSection("knowledge");
 }
 
 async function readNotice(item: Row) {
@@ -874,6 +944,7 @@ async function readNotice(item: Row) {
 
 function logout() {
   clearToken();
+  dataCenterCache.clear();
   user.value = undefined;
   void loadQr();
 }
@@ -932,6 +1003,7 @@ async function bootstrap() {
     if (getToken()) {
       const identity = await api<Row>("/api/v1/workbench/me");
       if (identity.portal !== "EMPLOYEE_WORKBENCH") throw new Error("请使用企业微信员工身份登录");
+      dataCenterCache.clear();
       user.value = {
         id: identity.employeeId,
         name: identity.name,
@@ -1077,10 +1149,13 @@ onMounted(() => void bootstrap());
 
       <template v-else-if="active === 'tasks'">
         <section class="toolbar section-card">
-          <el-segmented v-model="taskScope" :options="[{label:'我的任务',value:'MINE'},{label:'可领取',value:'AVAILABLE'},{label:'全部相关',value:'ALL'}]" @change="loadTasks" />
-          <el-select v-model="taskStatus" clearable placeholder="全部状态" @change="loadTasks">
-            <el-option v-for="(label, key) in statusLabels" :key="key" :label="label" :value="key" />
-          </el-select>
+          <div class="task-toolbar-filters">
+            <el-segmented v-model="taskScope" :options="[{label:'我的任务',value:'MINE'},{label:'可领取',value:'AVAILABLE'},{label:'全部相关',value:'ALL'}]" @change="loadTasks" />
+            <el-select v-model="taskStatus" clearable placeholder="全部状态" @change="loadTasks">
+              <el-option v-for="(label, key) in statusLabels" :key="key" :label="label" :value="key" />
+            </el-select>
+          </div>
+          <el-button type="primary" @click="openSelfTask">新建我的任务</el-button>
         </section>
         <section class="section-card task-list">
           <article v-for="task in tasks" :key="task.id" class="task-card">
@@ -1204,6 +1279,7 @@ onMounted(() => void bootstrap());
             <p>每位员工都可检索全量可用素材与知识，使用智能关键词、爆款研究和视频工厂直接形成执行方案。</p>
           </div>
           <div class="data-hero-actions">
+            <el-button :loading="dataCenterLoading" @click="refreshDataCenter">重新拉取当前栏目</el-button>
             <el-button v-if="can('ASSET_UPLOAD')" type="primary" @click="openUpload">上传素材</el-button>
             <el-button v-if="can('KNOWLEDGE_SUBMIT')" @click="knowledgeVisible = true">补充知识</el-button>
           </div>
@@ -1230,19 +1306,19 @@ onMounted(() => void bootstrap());
             <el-input v-model="dataCenterFilters.query" clearable placeholder="搜索名称、编号、内容或知识">
               <template #prefix><el-icon><Search /></el-icon></template>
             </el-input>
-            <el-select v-model="dataCenterFilters.model" clearable filterable placeholder="搜索或选择产品型号" @change="loadDataCenter">
+            <el-select v-model="dataCenterFilters.model" clearable filterable placeholder="搜索或选择产品型号">
               <el-option v-for="product in productOptions" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" />
             </el-select>
-            <el-select v-if="dataCenterTab === 'assets'" v-model="dataCenterFilters.kind" clearable placeholder="素材类型" @change="loadDataCenter">
+            <el-select v-if="dataCenterTab === 'assets'" v-model="dataCenterFilters.kind" clearable placeholder="素材类型">
               <el-option label="图片" value="IMAGE" />
               <el-option label="视频" value="VIDEO" />
               <el-option label="文档" value="DOCUMENT" />
               <el-option label="音频" value="AUDIO" />
             </el-select>
-            <el-select v-if="dataCenterTab === 'assets'" v-model="dataCenterFilters.moduleType" clearable placeholder="视频模块" @change="loadDataCenter">
+            <el-select v-if="dataCenterTab === 'assets'" v-model="dataCenterFilters.moduleType" clearable placeholder="视频模块">
               <el-option v-for="item in classificationOptions" :key="item.value" :label="item.label" :value="item.value" />
             </el-select>
-            <el-button type="primary" @click="loadDataCenter">查找</el-button>
+            <el-button type="primary" @click="loadDataCenter(true)">查找</el-button>
           </div>
         </section>
 
@@ -1345,7 +1421,7 @@ onMounted(() => void bootstrap());
                 <el-option label="仅使用已有素材（无需补拍）" value="ASSET_ONLY" />
               </el-select>
               <el-select v-model="videoScriptRestriction">
-                <el-option label="普通内容" value="NORMAL" />
+                <el-option label="无健康限制" value="NORMAL" />
                 <el-option label="健康内容受限" value="HEALTH_RESTRICTED" />
               </el-select>
               <div class="factory-generation-actions">
@@ -1487,6 +1563,21 @@ onMounted(() => void bootstrap());
       <p class="muted">运营、视频专员和设计均可接受邀请；如果对方已有上级运营，会明确替换原关系。</p>
     </el-form>
     <template #footer><el-button @click="inviteVisible = false">取消</el-button><el-button type="primary" @click="sendTeamInvite">发送邀请</el-button></template>
+  </el-dialog>
+
+  <el-dialog v-model="selfTaskVisible" title="新建我的任务" width="min(580px, 92vw)">
+    <el-form label-position="top">
+      <el-form-item label="任务标题" required><el-input v-model="selfTaskForm.title" placeholder="例如：整理本周待拍视频清单" /></el-form-item>
+      <el-form-item label="任务说明"><el-input v-model="selfTaskForm.description" type="textarea" :rows="3" placeholder="填写需要完成的具体工作" /></el-form-item>
+      <el-form-item label="期望结果"><el-input v-model="selfTaskForm.expectedResult" type="textarea" :rows="2" placeholder="填写完成标准或交付内容" /></el-form-item>
+      <div class="team-form-row">
+        <el-form-item label="优先级">
+          <el-select v-model="selfTaskForm.priority"><el-option label="紧急" value="URGENT" /><el-option label="高" value="HIGH" /><el-option label="普通" value="MEDIUM" /><el-option label="低" value="LOW" /></el-select>
+        </el-form-item>
+        <el-form-item label="截止时间"><el-date-picker v-model="selfTaskForm.dueAt" type="datetime" value-format="YYYY-MM-DDTHH:mm:ssZ" /></el-form-item>
+      </div>
+    </el-form>
+    <template #footer><el-button @click="selfTaskVisible = false">取消</el-button><el-button type="primary" :loading="creatingSelfTask" @click="createSelfTask">添加到我的任务</el-button></template>
   </el-dialog>
 
   <el-dialog v-model="teamTaskVisible" title="安排运营协作任务" width="min(620px, 92vw)">

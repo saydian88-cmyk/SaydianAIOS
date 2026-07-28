@@ -96,6 +96,14 @@ export class WorkbenchController {
     return this.workbench.task(this.employee(authorization), id);
   }
 
+  @Post("tasks")
+  createSelfTask(
+    @Headers("authorization") authorization: string | undefined,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.workbench.createSelfTask(this.employee(authorization), body);
+  }
+
   @Post("tasks/:id/accept")
   accept(@Headers("authorization") authorization: string | undefined, @Param("id") id: string) {
     return this.workbench.accept(this.employee(authorization), id);

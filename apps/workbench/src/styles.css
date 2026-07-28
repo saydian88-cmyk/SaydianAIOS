@@ -80,6 +80,7 @@ main { grid-column: 2; width: min(1240px, calc(100% - 48px)); margin: 24px auto;
 .ai-coach p { margin: 5px 0 0; color: #526661; font-size: 12px; }
 .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
 .toolbar .el-select { width: 180px; }
+.task-toolbar-filters { display: flex; align-items: center; gap: 12px; }
 .live-layout { display: grid; gap: 18px; }
 .live-hero { background: radial-gradient(circle at 85% 20%, #f6c25260, transparent 32%), linear-gradient(135deg, #312b20, #171814); }
 .learning-list { display: grid; gap: 10px; }
@@ -272,6 +273,7 @@ main { grid-column: 2; width: min(1240px, calc(100% - 48px)); margin: 24px auto;
   .action-grid { grid-template-columns: repeat(2, 1fr); }
   .toolbar { display: grid; }
   .toolbar .el-select { width: 100%; }
+  .task-toolbar-filters { display: grid; }
   .data-hero { display: block; padding: 16px 18px; }
   .team-hero { display: block; }
   .team-hero-actions { margin-top: 18px; }

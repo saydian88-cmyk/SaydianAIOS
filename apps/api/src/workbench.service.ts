@@ -103,6 +103,18 @@ export class WorkbenchService {
     return this.sortTasks(rows);
   }
 
+  async createSelfTask(session: SessionPayload, body: Record<string, unknown>) {
+    if (!session.employeeId) throw new BadRequestException("当前员工身份不可用");
+    return this.createTask({
+      ...body,
+      assigneeEmployeeId: session.employeeId,
+      owner: session.name,
+      sourceType: "SELF_CREATED",
+      sourceId: null,
+      requiredRoleCode: null,
+    }, session.name);
+  }
+
   async task(session: SessionPayload, id: string) {
     const task = await this.prisma.opsTask.findFirst({
       where: { AND: [{ id }, this.taskAccess(session)] },
@@ -171,6 +183,7 @@ export class WorkbenchService {
       }
     }
     return this.prisma.$transaction(async (tx) => {
+      const submittedStatus = task.sourceType === "SELF_CREATED" ? "COMPLETED" : "REVIEW";
       const latest = await tx.taskSubmission.aggregate({
         where: { taskId: id },
         _max: { version: true },
@@ -190,8 +203,9 @@ export class WorkbenchService {
       const updated = await tx.opsTask.update({
         where: { id },
         data: {
-          status: "REVIEW",
+          status: submittedStatus,
           submittedAt: new Date(),
+          completedAt: submittedStatus === "COMPLETED" ? new Date() : null,
           result: summary,
           returnReason: null,
         },
@@ -200,8 +214,8 @@ export class WorkbenchService {
         data: {
           taskId: id,
           fromStatus: task.status,
-          toStatus: "REVIEW",
-          action: "SUBMIT",
+          toStatus: submittedStatus,
+          action: submittedStatus === "COMPLETED" ? "SELF_COMPLETE" : "SUBMIT",
           actor: session.name,
           note: summary,
           data: { submissionId: submission.id, version: submission.version },
