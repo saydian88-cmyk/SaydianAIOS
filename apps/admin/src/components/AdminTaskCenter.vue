@@ -2,6 +2,8 @@
 import { computed, onMounted, reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
 import { api, patch, post } from "../api";
+import TaskRichTextContent from "./TaskRichTextContent.vue";
+import TaskRichTextEditor from "./TaskRichTextEditor.vue";
 
 type Row = Record<string, any>;
 
@@ -14,15 +16,23 @@ const assignDialog = ref(false);
 const reviewDialog = ref(false);
 const roleDialog = ref(false);
 const selectedTask = ref<Row>();
+const detailDrawer = ref(false);
+const emptyTaskDocument = () => ({ type: "doc", content: [{ type: "paragraph" }] });
+const plainTaskDocument = (text = "") => ({
+  type: "doc",
+  content: text.split(/\r?\n/).map((line) => ({ type: "paragraph", content: line ? [{ type: "text", text: line }] : undefined })),
+});
 const taskForm = reactive({
   title: "",
   description: "",
+  descriptionDocument: emptyTaskDocument(),
   category: "VIDEO",
   priority: "MEDIUM",
   requiredRoleCode: "VIDEO_SPECIALIST",
   assigneeEmployeeId: "",
   dueAt: "",
   expectedResult: "",
+  expectedResultDocument: emptyTaskDocument(),
   taskTemplateId: "",
 });
 const assignForm = reactive({ employeeId: "", dueAt: "" });
@@ -85,12 +95,14 @@ function openTaskDialog() {
   Object.assign(taskForm, {
     title: "",
     description: "",
+    descriptionDocument: emptyTaskDocument(),
     category: "VIDEO",
     priority: "MEDIUM",
     requiredRoleCode: "VIDEO_SPECIALIST",
     assigneeEmployeeId: "",
     dueAt: "",
     expectedResult: "",
+    expectedResultDocument: emptyTaskDocument(),
     taskTemplateId: "",
   });
   taskDialog.value = true;
@@ -101,11 +113,17 @@ function applyTemplate(id: string) {
   if (!template) return;
   taskForm.title = template.name;
   taskForm.description = template.description || "";
+  taskForm.descriptionDocument = plainTaskDocument(template.description || "");
   taskForm.category = template.category;
   taskForm.priority = template.defaultPriority;
   taskForm.requiredRoleCode = template.requiredRoleCode;
   const due = new Date(Date.now() + template.defaultDueHours * 60 * 60 * 1000);
   taskForm.dueAt = due.toISOString().slice(0, 16);
+}
+
+function openDetail(task: Row) {
+  selectedTask.value = task;
+  detailDrawer.value = true;
 }
 
 async function createTask() {
@@ -232,9 +250,10 @@ onMounted(() => void reload());
           <el-table-column label="执行人" width="130"><template #default="{ row }">{{ row.assignee?.name || row.owner || "待领取" }}</template></el-table-column>
           <el-table-column label="状态" width="110"><template #default="{ row }"><el-tag :type="statusType(row.status)">{{ statusLabels[row.status] || row.status }}</el-tag></template></el-table-column>
           <el-table-column label="截止" width="150"><template #default="{ row }">{{ time(row.dueAt) }}</template></el-table-column>
-          <el-table-column label="最近成果" min-width="220"><template #default="{ row }">{{ row.submissions?.[0]?.summary || row.result || "未提交" }}</template></el-table-column>
-          <el-table-column label="操作" width="170" fixed="right">
+          <el-table-column label="最近成果" min-width="220"><template #default="{ row }"><span class="cell-note">{{ row.submissions?.[0]?.summary || row.result || "未提交" }}</span></template></el-table-column>
+          <el-table-column label="操作" width="220" fixed="right">
             <template #default="{ row }">
+              <el-button link @click="openDetail(row)">查看详情</el-button>
               <el-button link type="primary" @click="openAssign(row)">分配</el-button>
               <el-button v-if="row.status === 'REVIEW'" link type="warning" @click="openReview(row)">审核</el-button>
             </template>
@@ -280,6 +299,31 @@ onMounted(() => void reload());
     </el-tabs>
   </section>
 
+  <el-drawer v-model="detailDrawer" title="任务详情" size="min(620px, 92vw)">
+    <template v-if="selectedTask">
+      <div class="detail-header">
+        <div><el-tag :type="statusType(selectedTask.status)">{{ statusLabels[selectedTask.status] || selectedTask.status }}</el-tag><el-tag v-if="selectedTask.priority === 'URGENT'" type="danger">紧急</el-tag></div>
+        <h2>{{ selectedTask.title }}</h2>
+      </div>
+      <dl class="detail-meta">
+        <div><dt>安排人</dt><dd>{{ selectedTask.assignedByEmployee?.name || selectedTask.assignedBy || "管理员" }}</dd></div>
+        <div><dt>执行人</dt><dd>{{ selectedTask.assignee?.name || selectedTask.owner || "待领取" }}</dd></div>
+        <div><dt>岗位</dt><dd>{{ roleLabels[selectedTask.requiredRoleCode] || selectedTask.requiredRoleCode || "通用" }}</dd></div>
+        <div><dt>截止时间</dt><dd>{{ time(selectedTask.dueAt) }}</dd></div>
+      </dl>
+      <section class="detail-section"><h3>任务说明</h3><TaskRichTextContent :document="selectedTask.descriptionDocument" :text="selectedTask.description" /></section>
+      <section class="detail-section"><h3>期望结果</h3><TaskRichTextContent :document="selectedTask.expectedResultDocument" :text="selectedTask.expectedResult" /></section>
+      <section v-if="selectedTask.attachments?.length" class="detail-section">
+        <h3>附件</h3>
+        <a v-for="item in selectedTask.attachments" :key="item.id" :href="item.url || item.fileUrl" target="_blank" rel="noopener noreferrer">{{ item.name || item.fileName || "附件" }}</a>
+      </section>
+      <div class="detail-actions">
+        <el-button type="primary" @click="openAssign(selectedTask)">分配任务</el-button>
+        <el-button v-if="selectedTask.status === 'REVIEW'" type="warning" @click="openReview(selectedTask)">审核成果</el-button>
+      </div>
+    </template>
+  </el-drawer>
+
   <el-dialog v-model="taskDialog" title="创建任务" width="min(720px, 92vw)">
     <el-form label-position="top" class="two-column-form">
       <el-form-item label="从模板创建"><el-select v-model="taskForm.taskTemplateId" clearable @change="applyTemplate"><el-option v-for="item in workspace.templates" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
@@ -289,8 +333,8 @@ onMounted(() => void reload());
       <el-form-item label="直接分配员工"><el-select v-model="taskForm.assigneeEmployeeId" clearable filterable><el-option v-for="employee in workspace.employees" :key="employee.id" :label="employee.name" :value="employee.id" /></el-select></el-form-item>
       <el-form-item label="优先级"><el-select v-model="taskForm.priority"><el-option label="紧急" value="URGENT" /><el-option label="高" value="HIGH" /><el-option label="普通" value="MEDIUM" /><el-option label="低" value="LOW" /></el-select></el-form-item>
       <el-form-item label="截止时间"><el-date-picker v-model="taskForm.dueAt" type="datetime" value-format="YYYY-MM-DDTHH:mm" /></el-form-item>
-      <el-form-item label="任务说明" class="full"><el-input v-model="taskForm.description" type="textarea" :rows="4" /></el-form-item>
-      <el-form-item label="验收结果" class="full"><el-input v-model="taskForm.expectedResult" type="textarea" :rows="3" /></el-form-item>
+      <el-form-item label="任务说明" class="full"><TaskRichTextEditor v-model="taskForm.descriptionDocument" placeholder="填写需要完成的具体工作" /></el-form-item>
+      <el-form-item label="验收结果" class="full"><TaskRichTextEditor v-model="taskForm.expectedResultDocument" placeholder="填写完成标准或交付内容" /></el-form-item>
     </el-form>
     <template #footer><el-button @click="taskDialog = false">取消</el-button><el-button type="primary" @click="createTask">创建并通知</el-button></template>
   </el-dialog>
@@ -345,7 +389,17 @@ onMounted(() => void reload());
 .summary-grid .danger strong { color: #b52b26; }
 .command-tabs { padding: 20px; border: 1px solid #ebe6dd; border-radius: 20px; background: #fff; }
 .filter-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; overflow-x: auto; }
-.cell-note { display: block; margin-top: 5px; color: #8a918e; font-weight: 400; }
+.cell-note { display: -webkit-box; overflow: hidden; margin-top: 5px; color: #8a918e; font-weight: 400; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.detail-header h2 { margin: 12px 0 20px; font-size: 23px; }
+.detail-header .el-tag + .el-tag { margin-left: 6px; }
+.detail-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; overflow: hidden; margin: 0 0 20px; border: 1px solid #ebe6dd; border-radius: 12px; background: #ebe6dd; }
+.detail-meta div { padding: 12px 14px; background: #faf9f6; }
+.detail-meta dt { margin-bottom: 4px; color: #8a918e; font-size: 12px; }
+.detail-meta dd { margin: 0; }
+.detail-section { margin-bottom: 16px; padding: 16px; border: 1px solid #ebe6dd; border-radius: 12px; }
+.detail-section h3 { margin: 0 0 10px; font-size: 15px; }
+.detail-section > a { display: block; margin: 6px 0; color: #2878c8; }
+.detail-actions { position: sticky; bottom: 0; display: flex; gap: 8px; padding: 14px 0; background: #fff; }
 .role-tag { margin: 3px 6px 3px 0; }
 .two-column-form { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
 .two-column-form .full { grid-column: 1 / -1; }

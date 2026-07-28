@@ -15,6 +15,8 @@ import {
   VideoCamera,
 } from "@element-plus/icons-vue";
 import { api, clearToken, getToken, post, setToken, uploadWithProgress } from "./api";
+import TaskRichTextContent from "./components/TaskRichTextContent.vue";
+import TaskRichTextEditor from "./components/TaskRichTextEditor.vue";
 
 type Row = Record<string, any>;
 type SessionUser = {
@@ -43,12 +45,17 @@ const dashboard = reactive<Row>({
 const tasks = ref<Row[]>([]);
 const taskScope = ref("MINE");
 const taskStatus = ref("");
+const taskDetailVisible = ref(false);
+const taskDetail = ref<Row>();
+const emptyTaskDocument = () => ({ type: "doc", content: [{ type: "paragraph" }] });
 const selfTaskVisible = ref(false);
 const creatingSelfTask = ref(false);
 const selfTaskForm = reactive({
   title: "",
   description: "",
+  descriptionDocument: emptyTaskDocument(),
   expectedResult: "",
+  expectedResultDocument: emptyTaskDocument(),
   priority: "MEDIUM",
   dueAt: "",
 });
@@ -60,7 +67,17 @@ const teamTaskVisible = ref(false);
 const inviteVisible = ref(false);
 const reviewVisible = ref(false);
 const reviewTaskRow = ref<Row>();
-const teamTaskForm = reactive({ assigneeEmployeeId: "", title: "", description: "", priority: "MEDIUM", dueAt: "", expectedResult: "", attachments: "" });
+const teamTaskForm = reactive({
+  assigneeEmployeeId: "",
+  title: "",
+  description: "",
+  descriptionDocument: emptyTaskDocument(),
+  priority: "MEDIUM",
+  dueAt: "",
+  expectedResult: "",
+  expectedResultDocument: emptyTaskDocument(),
+  attachments: "",
+});
 const inviteForm = reactive({ recipientEmployeeId: "", relationshipNote: "" });
 const reviewForm = reactive({ action: "APPROVE", note: "" });
 const activeTask = ref<Row>();
@@ -430,11 +447,25 @@ function openSelfTask() {
   Object.assign(selfTaskForm, {
     title: "",
     description: "",
+    descriptionDocument: emptyTaskDocument(),
     expectedResult: "",
+    expectedResultDocument: emptyTaskDocument(),
     priority: "MEDIUM",
     dueAt: "",
   });
   selfTaskVisible.value = true;
+}
+
+function openTaskDetail(task: Row) {
+  taskDetail.value = task;
+  taskDetailVisible.value = true;
+}
+
+function taskAttachments(task?: Row) {
+  if (!task) return [];
+  const records = Array.isArray(task.attachments) ? task.attachments : [];
+  const links = Array.isArray(task.evidence?.attachments) ? task.evidence.attachments : [];
+  return [...records, ...links].map((item) => typeof item === "string" ? { name: item, url: item } : item);
 }
 
 async function createSelfTask() {
@@ -1108,10 +1139,11 @@ onMounted(() => void bootstrap());
                     <span>截止 {{ formatTime(task.dueAt) }}</span>
                   </div>
                   <h4>{{ task.title }}</h4>
-                  <p>{{ task.description || task.expectedResult || "按任务要求完成并提交成果。" }}</p>
+                  <p class="task-summary">{{ task.description || task.expectedResult || "按任务要求完成并提交成果。" }}</p>
                   <p v-if="task.returnReason" class="return-note">修改要求：{{ task.returnReason }}</p>
                 </div>
                 <div class="task-actions">
+                  <el-button @click="openTaskDetail(task)">查看详情</el-button>
                   <el-button v-if="task.status === 'ACCEPTED' || task.status === 'RETURNED'" type="primary" @click="startTask(task)">开始</el-button>
                   <el-button v-if="['ACCEPTED','IN_PROGRESS','RETURNED'].includes(task.status)" @click="openSubmit(task)">提交成果</el-button>
                 </div>
@@ -1167,10 +1199,11 @@ onMounted(() => void bootstrap());
                 <span>截止 {{ formatTime(task.dueAt) }}</span>
               </div>
               <h4>{{ task.title }}</h4>
-              <p>{{ task.description || task.expectedResult || "按任务要求完成并提交成果。" }}</p>
+              <p class="task-summary">{{ task.description || task.expectedResult || "按任务要求完成并提交成果。" }}</p>
               <p v-if="task.returnReason" class="return-note">修改要求：{{ task.returnReason }}</p>
             </div>
             <div class="task-actions">
+              <el-button @click="openTaskDetail(task)">查看详情</el-button>
               <el-button v-if="!task.assigneeEmployeeId && task.status === 'OPEN'" type="primary" @click="acceptTask(task)">领取</el-button>
               <el-button v-if="task.assigneeEmployeeId === user.id && ['ACCEPTED','RETURNED'].includes(task.status)" type="primary" @click="startTask(task)">开始</el-button>
               <el-button v-if="task.assigneeEmployeeId === user.id && ['ACCEPTED','IN_PROGRESS','RETURNED'].includes(task.status)" @click="openSubmit(task)">提交成果</el-button>
@@ -1232,10 +1265,11 @@ onMounted(() => void bootstrap());
                 <span>截止 {{ formatTime(task.dueAt) }}</span>
               </div>
               <h4>{{ task.title }}</h4>
-              <p>{{ task.description || task.expectedResult || "按要求完成并提交成果。" }}</p>
+              <p class="task-summary">{{ task.description || task.expectedResult || "按要求完成并提交成果。" }}</p>
               <p v-if="task.returnReason" class="return-note">修改要求：{{ task.returnReason }}</p>
             </div>
             <div class="task-actions">
+              <el-button @click="openTaskDetail(task)">查看详情</el-button>
               <el-button v-if="['ACCEPTED','RETURNED'].includes(task.status)" type="primary" @click="startTask(task)">开始任务</el-button>
               <el-button v-if="['ACCEPTED','IN_PROGRESS','RETURNED'].includes(task.status)" @click="openSubmit(task)">提交成果</el-button>
             </div>
@@ -1259,10 +1293,11 @@ onMounted(() => void bootstrap());
             <div class="task-main">
               <div class="task-meta"><el-tag v-if="task.priority === 'URGENT'" size="small" type="danger">紧急</el-tag><el-tag size="small" :type="statusType(task.status)">{{ statusLabels[task.status] || task.status }}</el-tag><span>{{ task.assignee?.name }}</span><span>截止 {{ formatTime(task.dueAt) }}</span></div>
               <h4>{{ task.title }}</h4>
-              <p>{{ task.description || task.expectedResult || "按要求完成并提交成果。" }}</p>
-              <p v-if="task.submissions?.[0]"><strong>最新提交：</strong>{{ task.submissions[0].summary }}</p>
+              <p class="task-summary">{{ task.description || task.expectedResult || "按要求完成并提交成果。" }}</p>
+              <p v-if="task.submissions?.[0]" class="task-summary"><strong>最新提交：</strong>{{ task.submissions[0].summary }}</p>
             </div>
             <div class="task-actions">
+              <el-button @click="openTaskDetail(task)">查看详情</el-button>
               <el-button v-if="!['COMPLETED','CANCELLED','VERIFIED'].includes(task.status)" :type="task.priority === 'URGENT' ? 'danger' : 'default'" @click="setTeamTaskUrgency(task, task.priority !== 'URGENT')">{{ task.priority === "URGENT" ? "取消紧急" : "标记紧急" }}</el-button>
               <el-button v-if="task.status === 'REVIEW'" type="primary" @click="openTeamReview(task)">审核成果</el-button>
             </div>
@@ -1552,6 +1587,44 @@ onMounted(() => void bootstrap());
     </nav>
   </div>
 
+  <el-drawer v-model="taskDetailVisible" title="任务详情" size="min(620px, 92vw)" class="task-detail-drawer">
+    <template v-if="taskDetail">
+      <div class="task-detail-header">
+        <div class="task-meta">
+          <el-tag :type="statusType(taskDetail.status)">{{ statusLabels[taskDetail.status] || taskDetail.status }}</el-tag>
+          <el-tag v-if="taskDetail.priority === 'URGENT'" type="danger">紧急</el-tag>
+          <span>{{ taskDetail.taskNo || "自建任务" }}</span>
+        </div>
+        <h2>{{ taskDetail.title }}</h2>
+      </div>
+      <dl class="task-detail-meta">
+        <div><dt>安排人</dt><dd>{{ taskDetail.assignedByEmployee?.name || taskDetail.assignedBy || "本人" }}</dd></div>
+        <div><dt>执行人</dt><dd>{{ taskDetail.assignee?.name || taskDetail.owner || "待领取" }}</dd></div>
+        <div><dt>优先级</dt><dd>{{ priorityLabels[taskDetail.priority] || taskDetail.priority }}</dd></div>
+        <div><dt>截止时间</dt><dd>{{ formatTime(taskDetail.dueAt) }}</dd></div>
+      </dl>
+      <section class="task-detail-section">
+        <h3>任务说明</h3>
+        <TaskRichTextContent :document="taskDetail.descriptionDocument" :text="taskDetail.description" />
+      </section>
+      <section class="task-detail-section">
+        <h3>期望结果</h3>
+        <TaskRichTextContent :document="taskDetail.expectedResultDocument" :text="taskDetail.expectedResult" />
+      </section>
+      <section v-if="taskAttachments(taskDetail).length" class="task-detail-section">
+        <h3>附件</h3>
+        <a v-for="(item, index) in taskAttachments(taskDetail)" :key="item.id || index" :href="item.url || item.fileUrl" target="_blank" rel="noopener noreferrer">{{ item.name || item.fileName || `附件 ${index + 1}` }}</a>
+      </section>
+      <section v-if="taskDetail.returnReason" class="task-detail-section return-note"><h3>退回说明</h3><p>{{ taskDetail.returnReason }}</p></section>
+      <div class="task-detail-actions">
+        <el-button v-if="!taskDetail.assigneeEmployeeId && taskDetail.status === 'OPEN'" type="primary" @click="acceptTask(taskDetail)">领取任务</el-button>
+        <el-button v-if="taskDetail.assigneeEmployeeId === user?.id && ['ACCEPTED','RETURNED'].includes(taskDetail.status)" type="primary" @click="startTask(taskDetail)">开始任务</el-button>
+        <el-button v-if="taskDetail.assigneeEmployeeId === user?.id && ['ACCEPTED','IN_PROGRESS','RETURNED'].includes(taskDetail.status)" @click="openSubmit(taskDetail)">提交成果</el-button>
+        <el-button v-if="taskDetail.assignedByEmployeeId === user?.id && taskDetail.status === 'REVIEW'" type="primary" @click="openTeamReview(taskDetail)">审核成果</el-button>
+      </div>
+    </template>
+  </el-drawer>
+
   <el-dialog v-model="inviteVisible" title="邀请协作成员" width="min(520px, 92vw)">
     <el-form label-position="top">
       <el-form-item label="选择运营" required>
@@ -1568,8 +1641,8 @@ onMounted(() => void bootstrap());
   <el-dialog v-model="selfTaskVisible" title="新建我的任务" width="min(580px, 92vw)">
     <el-form label-position="top">
       <el-form-item label="任务标题" required><el-input v-model="selfTaskForm.title" placeholder="例如：整理本周待拍视频清单" /></el-form-item>
-      <el-form-item label="任务说明"><el-input v-model="selfTaskForm.description" type="textarea" :rows="3" placeholder="填写需要完成的具体工作" /></el-form-item>
-      <el-form-item label="期望结果"><el-input v-model="selfTaskForm.expectedResult" type="textarea" :rows="2" placeholder="填写完成标准或交付内容" /></el-form-item>
+      <el-form-item label="任务说明"><TaskRichTextEditor v-model="selfTaskForm.descriptionDocument" placeholder="填写需要完成的具体工作" /></el-form-item>
+      <el-form-item label="期望结果"><TaskRichTextEditor v-model="selfTaskForm.expectedResultDocument" placeholder="填写完成标准或交付内容" /></el-form-item>
       <div class="team-form-row">
         <el-form-item label="优先级">
           <el-select v-model="selfTaskForm.priority"><el-option label="紧急" value="URGENT" /><el-option label="高" value="HIGH" /><el-option label="普通" value="MEDIUM" /><el-option label="低" value="LOW" /></el-select>
@@ -1584,8 +1657,8 @@ onMounted(() => void bootstrap());
     <el-form label-position="top">
       <el-form-item label="协作成员" required><el-select v-model="teamTaskForm.assigneeEmployeeId"><el-option v-for="employee in operationTeam.directReports" :key="employee.id" :label="`${employee.name} · ${collaborationRoleLabel(employee)}`" :value="employee.id" /></el-select></el-form-item>
       <el-form-item label="任务标题" required><el-input v-model="teamTaskForm.title" /></el-form-item>
-      <el-form-item label="工作要求"><el-input v-model="teamTaskForm.description" type="textarea" :rows="3" /></el-form-item>
-      <el-form-item label="期望交付结果"><el-input v-model="teamTaskForm.expectedResult" type="textarea" :rows="2" /></el-form-item>
+      <el-form-item label="工作要求"><TaskRichTextEditor v-model="teamTaskForm.descriptionDocument" placeholder="填写需要完成的具体工作" /></el-form-item>
+      <el-form-item label="期望交付结果"><TaskRichTextEditor v-model="teamTaskForm.expectedResultDocument" placeholder="填写完成标准或交付内容" /></el-form-item>
       <div class="team-form-row">
         <el-form-item label="优先级"><el-select v-model="teamTaskForm.priority"><el-option label="紧急" value="URGENT" /><el-option label="高" value="HIGH" /><el-option label="普通" value="MEDIUM" /><el-option label="低" value="LOW" /></el-select></el-form-item>
         <el-form-item label="截止时间"><el-date-picker v-model="teamTaskForm.dueAt" type="datetime" value-format="YYYY-MM-DDTHH:mm:ssZ" /></el-form-item>

@@ -2223,6 +2223,7 @@ model OpsTask {
   taskNo             String?   @unique
   title              String
   description        String?
+  descriptionDocument Json?
   category           String
   priority           String
   status             String    @default("OPEN")
@@ -2244,6 +2245,7 @@ model OpsTask {
   currentValue       Float?
   targetValue        Float?
   expectedResult     String?
+  expectedResultDocument Json?
   evidence           Json      @default("{}")
   verification       Json      @default("{}")
   dueAt              DateTime?

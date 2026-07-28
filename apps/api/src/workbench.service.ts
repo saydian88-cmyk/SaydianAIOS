@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import type { SessionPayload } from "./auth.service";
 import { BailianVideoAiProvider } from "./cloud-media.service";
 import { PrismaService } from "./prisma.service";
+import { taskDocumentFields } from "./task-document";
 
 const openStatuses = ["OPEN", "ACCEPTED", "IN_PROGRESS", "RETURNED", "REVIEW"];
 const doneStatuses = ["COMPLETED", "CANCELLED", "VERIFIED"];
@@ -440,11 +441,14 @@ export class WorkbenchService {
     });
     if (!assignee) throw new BadRequestException("只能给当前协作成员安排任务");
     const requiredRoleCode = collaborationRoleCodes.find((code) => assignee.roles.some((item) => item.role.active && item.role.code === code))!;
+    const description = taskDocumentFields(body.descriptionDocument, body.description);
+    const expectedResult = taskDocumentFields(body.expectedResultDocument, body.expectedResult);
     const created = await this.prisma.opsTask.create({
       data: {
         taskNo: `TEAM-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
         title,
-        description: value(body.description) || null,
+        description: description.text || null,
+        descriptionDocument: description.document ? (description.document as Prisma.InputJsonValue) : undefined,
         category: "OPERATOR_COLLAB",
         priority: value(body.priority).toUpperCase() || "MEDIUM",
         status: "ACCEPTED",
@@ -454,7 +458,8 @@ export class WorkbenchService {
         assignedBy: session.name,
         assignedByEmployeeId: session.employeeId,
         sourceType: "OPERATOR_COLLAB",
-        expectedResult: value(body.expectedResult) || null,
+        expectedResult: expectedResult.text || null,
+        expectedResultDocument: expectedResult.document ? (expectedResult.document as Prisma.InputJsonValue) : undefined,
         dueAt: date(body.dueAt),
         acceptedAt: new Date(),
         evidence: (body.attachments && typeof body.attachments === "object" ? { attachments: body.attachments } : {}) as object,
@@ -566,11 +571,14 @@ export class WorkbenchService {
     const title = value(body.title);
     const category = value(body.category) || "GENERAL";
     if (!title) throw new BadRequestException("任务标题不能为空");
+    const description = taskDocumentFields(body.descriptionDocument, body.description);
+    const expectedResult = taskDocumentFields(body.expectedResultDocument, body.expectedResult);
     const created = await this.prisma.opsTask.create({
       data: {
         taskNo: `TASK-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
         title,
-        description: value(body.description) || null,
+        description: description.text || null,
+        descriptionDocument: description.document ? (description.document as Prisma.InputJsonValue) : undefined,
         category,
         priority: value(body.priority).toUpperCase() || "MEDIUM",
         status: value(body.assigneeEmployeeId) ? "ACCEPTED" : "OPEN",
@@ -582,7 +590,8 @@ export class WorkbenchService {
         sourceId: value(body.sourceId) || null,
         platform: value(body.platform) || null,
         productId: value(body.productId) || null,
-        expectedResult: value(body.expectedResult) || null,
+        expectedResult: expectedResult.text || null,
+        expectedResultDocument: expectedResult.document ? (expectedResult.document as Prisma.InputJsonValue) : undefined,
         dueAt: date(body.dueAt),
         taskTemplateId: value(body.taskTemplateId) || null,
         collaborators: Array.isArray(body.collaborators) ? body.collaborators : [],
