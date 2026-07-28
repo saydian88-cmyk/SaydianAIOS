@@ -141,6 +141,9 @@ const videoFactoryForm = reactive({
 });
 const creatingVideoProject = ref(false);
 const generatingProjectId = ref("");
+const generatingShotId = ref("");
+const expandedVideoProjectIds = ref<string[]>([]);
+const lockedShotUpload = ref<Row>();
 const generatingVideoScript = ref(false);
 const videoScriptMode = ref("ASSET_FIRST");
 const videoScriptRestriction = ref("NORMAL");
@@ -535,6 +538,58 @@ async function generateVideoProject(project: Row, candidateIndex = 0) {
   } finally {
     generatingProjectId.value = "";
   }
+}
+
+function toggleVideoProjectShots(projectId: string) {
+  expandedVideoProjectIds.value = expandedVideoProjectIds.value.includes(projectId)
+    ? expandedVideoProjectIds.value.filter((id) => id !== projectId)
+    : [...expandedVideoProjectIds.value, projectId];
+}
+
+function shotStatusText(shot: Row) {
+  if (shot.selectedAssetId) return "已有素材";
+  if (shot.status === "GENERATING") return "AI生成中";
+  if (shot.status === "FAILED") return "生成失败";
+  if (shot.status === "PENDING_REVIEW") return "素材待审核";
+  return "需要补拍";
+}
+
+function shotStatusType(shot: Row) {
+  if (shot.selectedAssetId) return "success";
+  if (shot.status === "GENERATING" || shot.status === "PENDING_REVIEW") return "primary";
+  if (shot.status === "FAILED") return "danger";
+  return "warning";
+}
+
+async function generateWorkbenchShot(project: Row, shot: Row) {
+  generatingShotId.value = shot.id;
+  try {
+    await post(`/api/v1/workbench/data-center/video-shots/${shot.id}/generate`, {
+      duration: Number(shot.durationSeconds || 5),
+    });
+    ElMessage.success("AI镜头生成任务已提交，可在这里查看进度");
+    await loadDataCenter();
+    if (!expandedVideoProjectIds.value.includes(project.id)) {
+      expandedVideoProjectIds.value.push(project.id);
+    }
+  } finally {
+    generatingShotId.value = "";
+  }
+}
+
+async function openShotUpload(project: Row, shot: Row) {
+  await openUpload();
+  lockedShotUpload.value = { project, shot };
+  uploadForm.contentPlanId = project.id;
+  uploadForm.shootRequirementId = shot.requirementKey;
+  uploadForm.contentDescription = shot.description || shot.title || "";
+  const product = productOptions.value.find((item: Row) => item.modelCode === project.productModel);
+  if (product) uploadForm.productIds = [product.id];
+}
+
+function closeUploadDialog() {
+  uploadVisible.value = false;
+  lockedShotUpload.value = undefined;
 }
 
 async function switchPage(page: string) {
@@ -1319,7 +1374,42 @@ onMounted(() => void bootstrap());
                   <el-button type="primary" plain :loading="generatingProjectId === project.id" @click="generateVideoProject(project, Number(index))">生成拍摄执行包</el-button>
                 </article>
               </div>
-              <div v-if="project.videoShots?.length" class="shot-summary">已形成 {{ project.videoShots.length }} 个镜头任务 · {{ project.videoShots.filter((shot: Row) => !shot.selectedAssetId).length }} 个镜头待补拍或生成</div>
+              <div v-if="project.videoShots?.length" class="shot-panel">
+                <button type="button" class="shot-summary" @click="toggleVideoProjectShots(project.id)">
+                  <span>已形成 {{ project.videoShots.length }} 个镜头任务 · {{ project.videoShots.filter((shot: Row) => !shot.selectedAssetId).length }} 个镜头待补拍或生成</span>
+                  <b>{{ expandedVideoProjectIds.includes(project.id) ? "收起镜头任务" : "查看镜头任务" }}</b>
+                </button>
+                <div v-if="expandedVideoProjectIds.includes(project.id)" class="shot-task-list">
+                  <article v-for="(shot, shotIndex) in project.videoShots" :key="shot.id" class="shot-task">
+                    <div class="shot-task-index">{{ shotIndex + 1 }}</div>
+                    <div class="shot-task-copy">
+                      <div class="shot-task-title">
+                        <strong>{{ shot.title || `镜头 ${shotIndex + 1}` }}</strong>
+                        <el-tag size="small" :type="shotStatusType(shot)">{{ shotStatusText(shot) }}</el-tag>
+                      </div>
+                      <p>{{ shot.description || "暂未填写画面要求" }}</p>
+                      <small>建议时长 {{ shot.durationSeconds || 5 }} 秒<span v-if="shot.selectedAsset"> · {{ shot.selectedAsset.displayName || shot.selectedAsset.fileName }}</span></small>
+                      <el-alert
+                        v-if="shot.status === 'FAILED' && shot.generationJobs?.[0]?.failureReason"
+                        :title="shot.generationJobs[0].failureReason"
+                        type="error"
+                        :closable="false"
+                      />
+                    </div>
+                    <div class="shot-task-actions">
+                      <el-button v-if="shot.selectedAsset" @click="openAssetPreview(shot.selectedAsset)">预览素材</el-button>
+                      <el-button v-if="!shot.selectedAssetId && can('ASSET_UPLOAD')" @click="openShotUpload(project, shot)">上传补拍</el-button>
+                      <el-button
+                        v-if="!shot.selectedAssetId && ['OPEN', 'FAILED'].includes(shot.status)"
+                        type="primary"
+                        plain
+                        :loading="generatingShotId === shot.id"
+                        @click="generateWorkbenchShot(project, shot)"
+                      >AI生成</el-button>
+                    </div>
+                  </article>
+                </div>
+              </div>
             </article>
             <el-empty v-if="!dataCenter.videoProjects?.length" description="暂无视频项目，可从关键词、爆款研究或上方表单开始" />
           </div>
@@ -1434,7 +1524,7 @@ onMounted(() => void bootstrap());
     <template #footer><el-button @click="submitVisible = false">取消</el-button><el-button type="primary" @click="submitTask">提交审核</el-button></template>
   </el-dialog>
 
-  <el-dialog v-model="uploadVisible" title="上传素材" width="min(760px, 94vw)" destroy-on-close>
+  <el-dialog v-model="uploadVisible" title="上传素材" width="min(760px, 94vw)" destroy-on-close @closed="lockedShotUpload = undefined">
     <el-upload
       v-model:file-list="uploadFiles"
       drag
@@ -1456,13 +1546,21 @@ onMounted(() => void bootstrap());
       <el-button :loading="uploadAssistState === 'RUNNING'" @click="assistUpload">AI帮我填写</el-button>
     </div>
 
+    <el-alert
+      v-if="lockedShotUpload"
+      class="locked-shot-upload"
+      :title="`补拍素材将自动关联：${lockedShotUpload.project.productionNo || lockedShotUpload.project.topic}`"
+      :description="lockedShotUpload.shot.description || lockedShotUpload.shot.title"
+      type="info"
+      :closable="false"
+    />
     <el-form label-position="top" class="upload-form-grid">
-      <el-form-item label="关联视频生产单">
+      <el-form-item v-if="!lockedShotUpload" label="关联视频生产单">
         <el-select v-model="uploadForm.contentPlanId" clearable filterable placeholder="补拍素材请选择对应生产单" @change="selectProductionPlan">
           <el-option v-for="item in dataCenter.uploadOptions.productionPlans" :key="item.id" :label="`${item.productionNo || '历史内容'} · ${item.topic}`" :value="item.id" />
         </el-select>
       </el-form-item>
-      <el-form-item label="对应补拍项">
+      <el-form-item v-if="!lockedShotUpload" label="对应补拍项">
         <el-select v-model="uploadForm.shootRequirementId" clearable :disabled="!uploadForm.contentPlanId" placeholder="选择这批素材完成的拍摄要求">
           <el-option v-for="item in (selectedProductionPlan?.shootRequirements || []).filter((row: Row) => row.status !== 'DONE')" :key="item.id" :label="item.description" :value="item.id" />
         </el-select>
@@ -1536,7 +1634,7 @@ onMounted(() => void bootstrap());
       <el-progress :percentage="uploadProgress" />
     </div>
     <template #footer>
-      <el-button :disabled="uploading" @click="uploadVisible = false">取消</el-button>
+      <el-button :disabled="uploading" @click="closeUploadDialog">取消</el-button>
       <el-button type="primary" :loading="uploading" @click="submitAsset">{{ uploading ? `${uploadProgress}%` : "确认上传" }}</el-button>
     </template>
   </el-dialog>

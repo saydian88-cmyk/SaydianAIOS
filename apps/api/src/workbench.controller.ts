@@ -517,6 +517,23 @@ export class WorkbenchController {
     }, employee.name);
   }
 
+  @Post("data-center/video-shots/:id/generate")
+  generateVideoShot(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    if (!employee.roles.some((role) => ["CONTENT_OPERATOR", "VIDEO_SPECIALIST"].includes(role))) {
+      throw new ForbiddenException("只有运营和视频专员可以生成视频镜头");
+    }
+    return this.videoFactory.enqueueShot(id, {
+      duration: Number(body.duration || 5),
+      routingMode: "AUTO",
+      allowFallback: true,
+    }, employee.name);
+  }
+
   @Post("data-center/video-scripts/generate")
   generateVideoScript(
     @Headers("authorization") authorization: string | undefined,

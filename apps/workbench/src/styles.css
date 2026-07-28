@@ -184,7 +184,19 @@ main { grid-column: 2; width: min(1240px, calc(100% - 48px)); margin: 24px auto;
 .factory-form { display: grid; grid-template-columns: 140px 1fr 1.2fr 1.5fr 1fr; gap: 10px; }
 .factory-generation-options { display: grid; grid-template-columns: minmax(240px, 1fr) minmax(180px, .7fr) auto; gap: 10px; margin-top: 12px; padding-top: 12px; border-top: 1px solid #ebe7df; }
 .factory-generation-actions { display: flex; gap: 8px; }
-.factory-context, .shot-summary { padding: 10px 13px; border-radius: 12px; color: #6e4c17; background: #fff4dd; font-size: 13px; }
+.factory-context { padding: 10px 13px; border-radius: 12px; color: #6e4c17; background: #fff4dd; font-size: 13px; }
+.shot-panel { display: grid; gap: 10px; }
+.shot-summary { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 11px 14px; border: 0; border-radius: 12px; color: #6e4c17; background: #fff4dd; font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.shot-summary b { color: #a6231f; white-space: nowrap; }
+.shot-task-list { display: grid; gap: 10px; }
+.shot-task { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; align-items: start; gap: 12px; padding: 14px; border: 1px solid #e7e2d9; border-radius: 14px; background: #fcfbf8; }
+.shot-task-index { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 10px; color: #fff; background: #a6231f; font-weight: 800; }
+.shot-task-copy { display: grid; gap: 7px; min-width: 0; }
+.shot-task-title { display: flex; align-items: center; gap: 8px; }
+.shot-task-copy p { margin: 0; color: #5f6966; line-height: 1.6; }
+.shot-task-copy small { color: #8a918e; }
+.shot-task-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.locked-shot-upload { margin-bottom: 14px; }
 .factory-projects { display: grid; gap: 14px; }
 .factory-project { display: grid; gap: 16px; }
 .factory-project-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
@@ -236,6 +248,9 @@ main { grid-column: 2; width: min(1240px, calc(100% - 48px)); margin: 24px auto;
 .asset-edit-actions { display: flex; justify-content: flex-end; }
 
 @media (max-width: 760px) {
+  .shot-task { grid-template-columns: 32px minmax(0, 1fr); }
+  .shot-task-actions { grid-column: 1 / -1; justify-content: flex-start; padding-left: 44px; }
+  .shot-summary { align-items: flex-start; gap: 10px; }
   .workbench { display: block; padding-bottom: 88px; }
   .side-nav { display: none; }
   .topbar { padding: 14px 18px; }
