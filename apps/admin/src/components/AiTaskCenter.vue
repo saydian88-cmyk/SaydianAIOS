@@ -175,6 +175,9 @@ async function load() {
 async function createTask() {
   try {
     const product = products.value.find((item) => item.id === form.productId);
+    if (form.productId && !product) {
+      return ElMessage.warning("请从产品库重新选择产品型号");
+    }
     await post("/api/v1/ai-tasks", {
       ...form,
       ownerEmployeeId: form.ownerEmployeeId || undefined,
@@ -241,6 +244,9 @@ async function submitRevision() {
   try {
     const row = detail.value;
     const product = products.value.find((item) => item.id === reviseForm.productId);
+    if (reviseForm.productId && !product) {
+      return ElMessage.warning("请从产品库重新选择产品型号");
+    }
     await post(`/api/v1/ai-tasks/${row.id}/revise`, {
       ...reviseForm,
       ownerEmployeeId: reviseForm.ownerEmployeeId || null,
@@ -499,7 +505,12 @@ onMounted(load);
         </div>
         <el-form-item label="任务标题"><el-input v-model="form.title" placeholder="留空时按任务类型自动命名" /></el-form-item>
         <div class="form-grid">
-          <el-form-item label="产品型号"><el-select v-model="form.productId" clearable filterable placeholder="从产品库选择"><el-option v-for="item in products" :key="item.id" :label="`${item.modelCode} · ${item.name}`" :value="item.id" /></el-select></el-form-item>
+          <el-form-item label="产品型号（产品库）">
+            <el-select v-model="form.productId" clearable filterable default-first-option placeholder="点击搜索产品型号或名称" no-data-text="产品库暂无可选型号">
+              <el-option v-for="item in products" :key="item.id" :label="`${item.modelCode} · ${item.name}`" :value="item.id" />
+            </el-select>
+            <div class="field-tip">仅可选择品牌数据中心产品库中的型号</div>
+          </el-form-item>
           <el-form-item label="负责人"><el-select v-model="form.ownerEmployeeId" clearable><el-option v-for="item in employees" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
         </div>
         <el-form-item label="审核人"><el-select v-model="form.reviewerEmployeeId" clearable><el-option v-for="item in employees" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
@@ -543,7 +554,12 @@ onMounted(load);
         <el-form-item label="任务标题" required><el-input v-model="reviseForm.title" /></el-form-item>
         <div class="form-grid">
           <el-form-item label="平台"><el-select v-model="reviseForm.platform"><el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" /><el-option label="全平台/经营分析" value="ALL" /></el-select></el-form-item>
-          <el-form-item label="产品型号"><el-select v-model="reviseForm.productId" clearable filterable placeholder="从产品库选择"><el-option v-for="item in products" :key="item.id" :label="`${item.modelCode} · ${item.name}`" :value="item.id" /></el-select></el-form-item>
+          <el-form-item label="产品型号（产品库）">
+            <el-select v-model="reviseForm.productId" clearable filterable default-first-option placeholder="点击搜索产品型号或名称" no-data-text="产品库暂无可选型号">
+              <el-option v-for="item in products" :key="item.id" :label="`${item.modelCode} · ${item.name}`" :value="item.id" />
+            </el-select>
+            <div class="field-tip">仅可选择品牌数据中心产品库中的型号</div>
+          </el-form-item>
         </div>
         <div class="form-grid">
           <el-form-item label="负责人"><el-select v-model="reviseForm.ownerEmployeeId" clearable><el-option v-for="item in employees" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
@@ -627,5 +643,5 @@ onMounted(load);
 </template>
 
 <style scoped>
-.ai-task-center{display:grid;gap:18px}.page-head,.section-head,.output-row{display:flex;align-items:center;justify-content:space-between;gap:16px}.page-head h2,.section-head h3,.config-card h3{margin:0}.page-head p,.config-card p{margin:6px 0 0;color:#64748b}.summary-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px}.summary-card{padding:16px;border:1px solid #e2e8f0;border-radius:12px;background:#fff;display:grid;gap:8px}.summary-card span{font-size:13px;color:#64748b}.summary-card strong{font-size:24px;color:#0f172a}.summary-card strong.compact{font-size:18px}.filters{display:grid;grid-template-columns:180px 180px minmax(220px,1fr) auto;gap:12px;margin-bottom:14px}.settings-grid{display:grid;gap:16px}.settings-actions{text-align:right}.token-box{font-family:Consolas,monospace;word-break:break-all;padding:8px 0;font-weight:700}.config-card{display:grid;grid-template-columns:1fr 1.5fr;gap:30px;border:1px solid #e2e8f0;border-radius:12px;padding:20px}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.detail-actions{display:flex;justify-content:flex-end;margin-bottom:12px}.output-row{border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin:8px 0}.output-row div{display:grid;gap:4px}.output-row span{font-size:12px;color:#64748b}h3{margin:24px 0 12px}pre{max-height:320px;overflow:auto;white-space:pre-wrap;background:#f8fafc;padding:12px;border-radius:8px}.error-text{color:#dc2626;margin-top:6px}@media(max-width:1200px){.summary-grid{grid-template-columns:repeat(3,1fr)}}@media(max-width:760px){.summary-grid,.form-grid,.config-card{grid-template-columns:1fr}.filters{grid-template-columns:1fr}}
+.ai-task-center{display:grid;gap:18px}.page-head,.section-head,.output-row{display:flex;align-items:center;justify-content:space-between;gap:16px}.page-head h2,.section-head h3,.config-card h3{margin:0}.page-head p,.config-card p{margin:6px 0 0;color:#64748b}.summary-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px}.summary-card{padding:16px;border:1px solid #e2e8f0;border-radius:12px;background:#fff;display:grid;gap:8px}.summary-card span{font-size:13px;color:#64748b}.summary-card strong{font-size:24px;color:#0f172a}.summary-card strong.compact{font-size:18px}.filters{display:grid;grid-template-columns:180px 180px minmax(220px,1fr) auto;gap:12px;margin-bottom:14px}.settings-grid{display:grid;gap:16px}.settings-actions{text-align:right}.token-box{font-family:Consolas,monospace;word-break:break-all;padding:8px 0;font-weight:700}.config-card{display:grid;grid-template-columns:1fr 1.5fr;gap:30px;border:1px solid #e2e8f0;border-radius:12px;padding:20px}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.field-tip{width:100%;margin-top:5px;color:#94a3b8;font-size:12px;line-height:1.4}.detail-actions{display:flex;justify-content:flex-end;margin-bottom:12px}.output-row{border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin:8px 0}.output-row div{display:grid;gap:4px}.output-row span{font-size:12px;color:#64748b}h3{margin:24px 0 12px}pre{max-height:320px;overflow:auto;white-space:pre-wrap;background:#f8fafc;padding:12px;border-radius:8px}.error-text{color:#dc2626;margin-top:6px}@media(max-width:1200px){.summary-grid{grid-template-columns:repeat(3,1fr)}}@media(max-width:760px){.summary-grid,.form-grid,.config-card{grid-template-columns:1fr}.filters{grid-template-columns:1fr}}
 </style>
