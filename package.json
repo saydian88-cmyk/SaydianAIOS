@@ -17,6 +17,7 @@
     "db:seed": "pnpm --filter @saidian-ops/api prisma:seed",
     "verify:oss": "pnpm --filter @saidian-ops/api exec tsx ../../scripts/verify-oss.ts",
     "sync:assets-agent": "pnpm --filter @saidian-ops/api exec tsx scripts/local-asset-agent.ts",
+    "sync:packaging-resources": "pnpm --filter @saidian-ops/api exec tsx scripts/packaging-resource-agent.ts",
     "collector:douyin": "pnpm --filter @saidian-ops/douyin-local-collector start",
     "collector:douyin:install": "powershell -NoProfile -ExecutionPolicy Bypass -File apps/douyin-local-collector/scripts/install-windows-task.ps1",
     "ai-task-runner:install": "powershell -NoProfile -ExecutionPolicy Bypass -File apps/api/scripts/install-ai-task-runner.ps1"

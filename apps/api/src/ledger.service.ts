@@ -363,8 +363,11 @@ export class LedgerService {
         errors.push({ row: index + 1, message: "素材编号、路径、哈希、文件名、大小或修改时间无效" });
         continue;
       }
+      const purpose = stringValue(row.purpose).toUpperCase() === "PACKAGING_RESOURCE"
+        ? "PACKAGING_RESOURCE"
+        : "EDITING_FOOTAGE";
       const existing = await this.prisma.asset.findUnique({ where: { sourceKey } });
-      const duplicate = existing ? null : await this.prisma.asset.findFirst({ where: { sha256 }, orderBy: { createdAt: "asc" } });
+      const duplicate = existing ? null : await this.prisma.asset.findFirst({ where: { sha256, purpose }, orderBy: { createdAt: "asc" } });
       if (duplicate) {
         duplicates += 1;
         assetIds.push(duplicate.id);
@@ -374,23 +377,33 @@ export class LedgerService {
       const kind = (["IMAGE", "VIDEO", "AUDIO", "DOCUMENT"].includes(stringValue(row.mediaType).toUpperCase())
         ? stringValue(row.mediaType).toUpperCase()
         : "DOCUMENT") as AssetKind;
+      const packagingCategory = [
+        "BGM", "BRAND_ELEMENT", "FONT", "LICENSE_DOCUMENT", "TEXT_EFFECT",
+        "VIDEO_EFFECT", "STICKER", "SOUND_EFFECT", "OTHER",
+      ].includes(stringValue(row.packagingCategory).toUpperCase())
+        ? stringValue(row.packagingCategory).toUpperCase() as "BGM" | "BRAND_ELEMENT" | "FONT" | "LICENSE_DOCUMENT" | "TEXT_EFFECT" | "VIDEO_EFFECT" | "STICKER" | "SOUND_EFFECT" | "OTHER"
+        : undefined;
+      const rightsStatus = purpose === "PACKAGING_RESOURCE" ? "AUTH_REQUIRED" : "EDIT_ONLY";
       const importedModel = stringValue(row.model) || undefined;
       const asset = await this.prisma.asset.upsert({
         where: { sourceKey },
         create: {
           sourceKey, sourceType: stringValue(row.sourceType) || "LOCAL_AGENT", sourcePath, fileName,
-          extension: stringValue(row.extension), mediaType: kind, kind, sha256,
+          extension: stringValue(row.extension), mediaType: kind, kind, purpose, packagingCategory, sha256,
           sizeBytes: BigInt(sizeBytes), modifiedAt, width: Number(row.width) || undefined, height: Number(row.height) || undefined,
           durationSeconds: Number(row.durationSeconds) || undefined, aspectRatio: stringValue(row.aspectRatio) || undefined,
           assetNo: `SD-${kind}-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${sha256.slice(0, 12).toUpperCase()}`,
           displayName: fileName.replace(/\.[^.]+$/u, ""),
           level: "ORIGINAL", productScope: importedModel ? "MODEL" : "UNKNOWN", processingStatus: "STORED",
-          reviewStatus: "PENDING", availabilityStatus: "INACTIVE", rightsStatus: "EDIT_ONLY",
+          reviewStatus: "PENDING", availabilityStatus: "INACTIVE", rightsStatus,
           originalFileName: fileName, isOriginal: true, model: importedModel, scene: stringValue(row.scene) || undefined, evidenceIds: stringList(row.evidenceIds),
           qualityScore: Number(row.qualityScore) || 0, discoveredBy: actor, storageProvider: "ALIYUN_OSS",
           objectKey: stringValue(row.objectKey) || undefined, objectVersionId: stringValue(row.objectVersionId) || undefined,
           etag: stringValue(row.etag) || undefined, storageUrl: stringValue(row.storageUrl) || undefined,
-          storageSyncedAt: toDate(row.storageSyncedAt) ?? new Date(), sourceSnapshot: row as Prisma.InputJsonValue,
+          storageSyncedAt: toDate(row.storageSyncedAt) ?? new Date(),
+          packagingMetadata: (row.packagingMetadata || {}) as Prisma.InputJsonValue,
+          searchText: stringValue(row.searchText) || undefined,
+          sourceSnapshot: row as Prisma.InputJsonValue,
         },
         update: {
           sha256, sizeBytes: BigInt(sizeBytes), modifiedAt, width: Number(row.width) || undefined, height: Number(row.height) || undefined,
@@ -398,6 +411,9 @@ export class LedgerService {
           model: stringValue(row.model) || undefined, scene: stringValue(row.scene) || undefined, qualityScore: Number(row.qualityScore) || 0,
           storageProvider: "ALIYUN_OSS", objectKey: stringValue(row.objectKey) || undefined, objectVersionId: stringValue(row.objectVersionId) || undefined,
           etag: stringValue(row.etag) || undefined, storageUrl: stringValue(row.storageUrl) || undefined,
+          purpose, packagingCategory,
+          packagingMetadata: (row.packagingMetadata || {}) as Prisma.InputJsonValue,
+          searchText: stringValue(row.searchText) || undefined,
           storageSyncedAt: toDate(row.storageSyncedAt) ?? new Date(), storageError: null, sourceSnapshot: row as Prisma.InputJsonValue,
         },
       });

@@ -114,6 +114,8 @@ const uploadFiles = ref<UploadUserFile[]>([]);
 const uploadTechnicalInfo = ref<Row[]>([]);
 const uploadForm = reactive({
   sourceType: "EMPLOYEE_CAPTURE",
+  purpose: "EDITING_FOOTAGE",
+  packagingCategory: "",
   productScope: "UNKNOWN",
   productIds: [] as string[],
   assetKind: "",
@@ -187,6 +189,8 @@ const dataCenterFilters = reactive({
   query: "",
   model: "",
   kind: "",
+  purpose: "",
+  packagingCategory: "",
   moduleType: "",
   type: "",
   minimumScore: "60",
@@ -929,6 +933,13 @@ async function setAssetKind(kind: string) {
   await loadDataCenter(true);
 }
 
+async function setAssetPurpose(purpose: string) {
+  dataCenterFilters.purpose = purpose;
+  if (purpose !== "PACKAGING_RESOURCE") dataCenterFilters.packagingCategory = "";
+  assetPage.value = 1;
+  await loadDataCenter(true);
+}
+
 async function setKnowledgeType(type: string) {
   dataCenterFilters.type = type;
   await loadDataCenter(true);
@@ -1482,6 +1493,8 @@ async function openUpload() {
   uploadTechnicalInfo.value = [];
   Object.assign(uploadForm, {
     sourceType: "EMPLOYEE_CAPTURE",
+    purpose: "EDITING_FOOTAGE",
+    packagingCategory: "",
     productScope: "UNKNOWN",
     productIds: [],
     assetKind: "",
@@ -1586,6 +1599,9 @@ async function submitAsset() {
   const files = uploadFiles.value.map((item) => item.raw).filter(Boolean) as File[];
   if (!files.length) return ElMessage.warning("请选择素材文件");
   if (files.length > 20) return ElMessage.warning("每批最多20个文件");
+  if (uploadForm.purpose === "PACKAGING_RESOURCE" && !uploadForm.packagingCategory) {
+    return ElMessage.warning("请选择包装资源分类");
+  }
   uploading.value = true;
   uploadProgress.value = 0;
   uploadEta.value = "计算中";
@@ -2112,6 +2128,12 @@ onMounted(() => void bootstrap());
           <button v-for="item in [{ label: '全部', value: '' }, { label: '视频', value: 'VIDEO' }, { label: '图片', value: 'IMAGE' }, { label: '音频', value: 'AUDIO' }, { label: '文档', value: 'DOCUMENT' }]" :key="item.value || 'ALL'" :class="{ active: dataCenterFilters.kind === item.value }" @click="setAssetKind(item.value)">{{ item.label }}</button>
         </section>
 
+        <section v-if="dataCenterTab === 'assets'" class="data-quick-switch" aria-label="资源用途">
+          <button :class="{ active: dataCenterFilters.purpose === '' }" @click="setAssetPurpose('')">全部用途</button>
+          <button :class="{ active: dataCenterFilters.purpose === 'EDITING_FOOTAGE' }" @click="setAssetPurpose('EDITING_FOOTAGE')">剪辑镜头</button>
+          <button :class="{ active: dataCenterFilters.purpose === 'PACKAGING_RESOURCE' }" @click="setAssetPurpose('PACKAGING_RESOURCE')">包装资源</button>
+        </section>
+
         <section v-if="dataCenterTab === 'knowledge'" class="data-quick-switch" aria-label="品牌知识快速切换">
           <button v-for="item in [{ label: '全部知识', value: '' }, { label: '产品', value: 'PRODUCT' }, { label: '知识 / SOP', value: 'KNOWLEDGE_GROUP' }, { label: 'FAQ', value: 'FAQ' }, { label: '资质', value: 'QUALIFICATION' }]" :key="item.value || 'ALL'" :class="{ active: dataCenterFilters.type === item.value }" @click="setKnowledgeType(item.value)">{{ item.label }}</button>
         </section>
@@ -2133,6 +2155,21 @@ onMounted(() => void bootstrap());
             <el-select v-if="dataCenterTab === 'assets'" v-model="dataCenterFilters.moduleType" clearable placeholder="视频模块">
               <el-option v-for="item in classificationOptions" :key="item.value" :label="item.label" :value="item.value" />
             </el-select>
+            <el-select
+              v-if="dataCenterTab === 'assets' && dataCenterFilters.purpose === 'PACKAGING_RESOURCE'"
+              v-model="dataCenterFilters.packagingCategory"
+              clearable
+              placeholder="包装资源分类"
+            >
+              <el-option label="背景音乐 BGM" value="BGM" />
+              <el-option label="音效" value="SOUND_EFFECT" />
+              <el-option label="贴纸素材" value="STICKER" />
+              <el-option label="视频特效" value="VIDEO_EFFECT" />
+              <el-option label="文字特效" value="TEXT_EFFECT" />
+              <el-option label="字体" value="FONT" />
+              <el-option label="品牌元素" value="BRAND_ELEMENT" />
+              <el-option label="授权资料" value="LICENSE_DOCUMENT" />
+            </el-select>
             <el-button type="primary" @click="searchDataCenter">查找</el-button>
           </div>
         </section>
@@ -2153,6 +2190,9 @@ onMounted(() => void bootstrap());
                 <b>{{ asset.grade || "B" }}</b>
               </div>
               <div class="asset-copy">
+                <el-tag v-if="asset.purpose === 'PACKAGING_RESOURCE'" size="small" type="warning">
+                  包装资源 · {{ asset.packagingCategory || "其他" }}
+                </el-tag>
                 <div class="task-meta"><span>{{ asset.kind || "素材" }}</span><span>{{ asset.model || asset.productScope || "通用" }}</span><span>{{ asset.qualityScore || 0 }}分</span></div>
                 <h4>{{ asset.displayName || asset.fileName || asset.assetNo }}</h4>
                 <p>{{ asset.contentDescription || asset.searchText || "已审核可调用素材" }}</p>
@@ -2716,6 +2756,32 @@ onMounted(() => void bootstrap());
           <el-option label="外部参考" value="EXTERNAL_REFERENCE" />
         </el-select>
       </el-form-item>
+      <el-form-item label="资源用途">
+        <el-select v-model="uploadForm.purpose">
+          <el-option label="剪辑镜头素材" value="EDITING_FOOTAGE" />
+          <el-option label="视频包装资源" value="PACKAGING_RESOURCE" />
+        </el-select>
+      </el-form-item>
+      <el-form-item v-if="uploadForm.purpose === 'PACKAGING_RESOURCE'" label="包装资源分类">
+        <el-select v-model="uploadForm.packagingCategory" placeholder="请选择包装资源分类">
+          <el-option label="背景音乐 BGM" value="BGM" />
+          <el-option label="音效" value="SOUND_EFFECT" />
+          <el-option label="贴纸素材" value="STICKER" />
+          <el-option label="视频特效" value="VIDEO_EFFECT" />
+          <el-option label="文字特效" value="TEXT_EFFECT" />
+          <el-option label="字体" value="FONT" />
+          <el-option label="品牌元素" value="BRAND_ELEMENT" />
+          <el-option label="授权资料" value="LICENSE_DOCUMENT" />
+          <el-option label="其他包装资源" value="OTHER" />
+        </el-select>
+      </el-form-item>
+      <el-alert
+        v-if="uploadForm.purpose === 'PACKAGING_RESOURCE'"
+        class="full"
+        type="info"
+        :closable="false"
+        title="包装资源只供字幕、贴纸、特效、音效和 BGM 调用，不参与脚本镜头匹配或补拍分析。"
+      />
       <el-form-item label="内容说明" class="full">
         <el-input v-model="uploadForm.contentDescription" type="textarea" :rows="2" placeholder="可留空，由AI辅助填写" />
       </el-form-item>
