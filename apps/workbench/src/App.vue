@@ -107,6 +107,7 @@ const uploadProgress = ref(0);
 const uploadEta = ref("");
 const uploadStage = ref("");
 const assetPreviewVisible = ref(false);
+const assetPreviewTitle = ref("素材预览");
 const assetPreviewLoading = ref(false);
 const assetPreviewUrl = ref("");
 const assetPreviewPosterUrl = ref("");
@@ -168,6 +169,7 @@ const videoFactoryForm = reactive({
 const creatingVideoProject = ref(false);
 const generatingProjectId = ref("");
 const generatingShotId = ref("");
+const renderingProjectId = ref("");
 const expandedVideoProjectIds = ref<string[]>([]);
 const lockedShotUpload = ref<Row>();
 const generatingVideoScript = ref(false);
@@ -674,6 +676,43 @@ async function generateWorkbenchShot(project: Row, shot: Row) {
   }
 }
 
+function renderStatusText(job: Row) {
+  if (job.status === "SUCCEEDED") return job.outputAsset?.reviewStatus === "APPROVED" ? "审核通过" : job.outputAsset?.reviewStatus === "RETURNED" ? "审核退回" : "成片待审核";
+  if (job.status === "RUNNING") return "AI剪辑中";
+  if (job.status === "RETRY") return "等待重试";
+  if (job.status === "FAILED") return "剪辑失败";
+  if (job.status === "CANCELLED") return "已取消";
+  return "等待剪辑";
+}
+
+function renderStatusType(job: Row) {
+  if (job.status === "FAILED" || job.outputAsset?.reviewStatus === "RETURNED") return "danger";
+  if (job.outputAsset?.reviewStatus === "APPROVED") return "success";
+  if (job.status === "RUNNING" || job.status === "SUCCEEDED") return "primary";
+  return "warning";
+}
+
+function projectReadyToRender(project: Row) {
+  return Boolean(project.videoShots?.length && project.videoShots.every((shot: Row) => shot.status === "DONE" && shot.selectedAssetId));
+}
+
+async function renderWorkbenchProject(project: Row) {
+  renderingProjectId.value = project.id;
+  try {
+    await post(`/api/v1/workbench/data-center/video-projects/${project.id}/render`);
+    ElMessage.success("AI剪辑任务已提交，成片完成后会自动进入待审核状态");
+    invalidateDataCenterSection("videoFactory");
+    await loadDataCenter(true);
+  } finally {
+    renderingProjectId.value = "";
+  }
+}
+
+async function downloadWorkbenchAsset(asset: Row) {
+  const result = await api<{ url: string }>(`/api/v1/workbench/assets/${asset.id}/download-url`);
+  window.open(result.url, "_blank", "noopener,noreferrer");
+}
+
 async function openShotUpload(project: Row, shot: Row) {
   await openUpload();
   lockedShotUpload.value = { project, shot };
@@ -893,8 +932,9 @@ async function submitAsset() {
   }
 }
 
-async function openAssetPreview(row: Row) {
+async function openAssetPreview(row: Row, title = "素材预览") {
   assetPreviewLoading.value = true;
+  assetPreviewTitle.value = title;
   assetPreviewUrl.value = "";
   assetPreviewPosterUrl.value = row.thumbnailUrl || "";
   assetEditMode.value = false;
@@ -1521,6 +1561,46 @@ onMounted(() => void bootstrap());
                   </article>
                 </div>
               </div>
+              <section class="finished-video-panel">
+                <div class="finished-video-head">
+                  <div>
+                    <h4>成片与审核</h4>
+                    <p>镜头齐套后发起 AI 剪辑；成片完成会自动进入审核流程。</p>
+                  </div>
+                  <el-button
+                    v-if="canGenerateVideoScript && projectReadyToRender(project) && !project.videoRenderJobs?.some((job: Row) => ['PENDING','RUNNING','RETRY'].includes(job.status))"
+                    type="primary"
+                    :loading="renderingProjectId === project.id"
+                    @click="renderWorkbenchProject(project)"
+                  >{{ project.videoRenderJobs?.length ? "重新剪辑" : "开始AI剪辑" }}</el-button>
+                </div>
+                <div v-if="project.videoRenderJobs?.length" class="finished-video-list">
+                  <article v-for="(job, jobIndex) in project.videoRenderJobs" :key="job.id" class="finished-video-item">
+                    <div class="finished-video-poster" :class="{ empty: !job.outputAsset?.thumbnailUrl }">
+                      <img v-if="job.outputAsset?.thumbnailUrl" :src="job.outputAsset.thumbnailUrl" :alt="job.outputAsset.displayName || '成片封面'" />
+                      <el-icon v-else><VideoCamera /></el-icon>
+                    </div>
+                    <div class="finished-video-copy">
+                      <div><strong>成片版本 V{{ project.videoRenderJobs.length - Number(jobIndex) }}</strong><el-tag size="small" :type="renderStatusType(job)">{{ renderStatusText(job) }}</el-tag></div>
+                      <p>{{ job.outputAsset?.displayName || job.outputAsset?.fileName || `渲染任务 ${job.id.slice(-6)}` }}</p>
+                      <small>提交于 {{ formatTime(job.createdAt) }}<template v-if="job.finishedAt"> · 完成于 {{ formatTime(job.finishedAt) }}</template></small>
+                      <el-alert v-if="job.failureReason" :title="job.failureReason" type="error" :closable="false" />
+                      <small v-if="job.status === 'SUCCEEDED' && job.outputAsset?.reviewStatus === 'PENDING'" class="review-hint">已提交内容审核，请等待审核结果</small>
+                    </div>
+                    <div class="finished-video-actions">
+                      <el-button v-if="job.outputAsset" @click="openAssetPreview(job.outputAsset, '成片预览')">预览成片</el-button>
+                      <el-button v-if="job.outputAsset" @click="downloadWorkbenchAsset(job.outputAsset)">下载成片</el-button>
+                    </div>
+                  </article>
+                </div>
+                <el-empty v-else :image-size="56" description="暂未生成成片" />
+                <el-alert
+                  v-if="project.videoShots?.length && !projectReadyToRender(project)"
+                  title="镜头素材尚未齐套，完成补拍或AI生成后才能开始剪辑"
+                  type="warning"
+                  :closable="false"
+                />
+              </section>
             </article>
             <el-empty v-if="!dataCenter.videoProjects?.length" description="暂无视频项目，可从关键词、爆款研究或上方表单开始" />
           </div>
@@ -1826,7 +1906,7 @@ onMounted(() => void bootstrap());
     </template>
   </el-dialog>
 
-  <el-drawer v-model="assetPreviewVisible" title="素材预览" size="min(860px, 96vw)" destroy-on-close>
+  <el-drawer v-model="assetPreviewVisible" :title="assetPreviewTitle" size="min(860px, 96vw)" destroy-on-close>
     <div v-loading="assetPreviewLoading" class="employee-asset-preview">
       <template v-if="assetPreviewUrl">
         <img v-if="assetPreviewType === 'image'" :src="assetPreviewUrl" :alt="assetDetail?.displayName || assetDetail?.fileName" />

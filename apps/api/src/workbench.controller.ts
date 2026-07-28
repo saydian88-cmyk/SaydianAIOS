@@ -542,6 +542,18 @@ export class WorkbenchController {
     }, employee.name);
   }
 
+  @Post("data-center/video-projects/:id/render")
+  renderVideoProject(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+  ) {
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    if (!employee.roles.some((role) => ["CONTENT_OPERATOR", "VIDEO_SPECIALIST"].includes(role))) {
+      throw new ForbiddenException("只有运营和视频专员可以发起视频剪辑");
+    }
+    return this.videoFactory.enqueueRender(id, employee.name);
+  }
+
   @Post("data-center/video-scripts/generate")
   generateVideoScript(
     @Headers("authorization") authorization: string | undefined,
