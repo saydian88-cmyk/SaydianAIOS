@@ -2222,6 +2222,24 @@ export class VideoFactoryService {
     return this.project(id);
   }
 
+  private projectedProductionStage(row: {
+    productionStage?: string | null;
+    videoRenderJobs?: Array<{ status?: string | null; outputAsset?: { reviewStatus?: string | null } | null }>;
+    aiTaskOutputs?: Array<{ kind?: string | null; reviewStatus?: string | null; aiTask?: { status?: string | null } | null }>;
+  }) {
+    const render = row.videoRenderJobs?.[0];
+    const master = render?.outputAsset;
+    if (master?.reviewStatus === "APPROVED") return "PLATFORM_PACKAGING";
+    if (master?.reviewStatus === "RETURNED") return "READY_TO_EDIT";
+    if (render?.status === "SUCCEEDED" && master) return "VIDEO_REVIEW";
+    if (render && ["PENDING", "RUNNING", "RETRY"].includes(String(render.status || ""))) return "FACTORY_GENERATING";
+    const taskOutput = row.aiTaskOutputs?.find((output) => output.kind === "VIDEO_MASTER") || row.aiTaskOutputs?.[0];
+    const taskStatus = String(taskOutput?.aiTask?.status || "");
+    if (["CLAIMED", "RUNNING", "QUALITY_CHECK", "UPLOADING", "RETRY"].includes(taskStatus)) return "FACTORY_GENERATING";
+    if (taskOutput?.kind === "VIDEO_MASTER" && taskStatus === "PENDING_REVIEW") return "VIDEO_REVIEW";
+    return row.productionStage || "FACTORY_SCRIPT_READY";
+  }
+
   async projects(query: { status?: string; platform?: string; productModel?: string; page: number; pageSize?: number }): Promise<{ items: unknown[]; total: number; page: number; pageSize: number }>;
   async projects(query: { status?: string; platform?: string; productModel?: string }): Promise<any[]>;
   async projects(query: { status?: string; platform?: string; productModel?: string; page?: number; pageSize?: number }): Promise<any> {
@@ -2251,7 +2269,11 @@ export class VideoFactoryService {
       skip: paged ? (page - 1) * pageSize : undefined,
       take: paged ? pageSize : 100,
     });
-    const items = jsonSafe(rows.map((row) => ({ ...row, topicCard: topicCardPayload(row) })));
+    const items = jsonSafe(rows.map((row) => ({
+      ...row,
+      productionStage: this.projectedProductionStage(row),
+      topicCard: topicCardPayload(row),
+    })));
     if (!paged) return items;
     const total = await this.prisma.contentPlan.count({ where });
     return { items, total, page, pageSize };
@@ -2280,7 +2302,12 @@ export class VideoFactoryService {
       },
     });
     if (!plan) throw new NotFoundException("智能视频项目不存在");
-    return jsonSafe({ ...plan, topicCard: topicCardPayload(plan), scriptCandidates: this.candidates(plan) });
+    return jsonSafe({
+      ...plan,
+      productionStage: this.projectedProductionStage(plan),
+      topicCard: topicCardPayload(plan),
+      scriptCandidates: this.candidates(plan),
+    });
   }
 
   async job(id: string) {

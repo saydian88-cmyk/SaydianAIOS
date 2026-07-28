@@ -94,6 +94,23 @@ describe("VideoFactoryService model routing", () => {
     expect(result[0].videoShots[0].selectedAsset?.sizeBytes).toBe("1024");
   });
 
+  it("projects returned master videos as ready to edit instead of generating", async () => {
+    prisma.contentPlan.findMany.mockResolvedValue([{
+      id: "project-returned",
+      productionStage: "FACTORY_GENERATING",
+      videoRenderJobs: [{
+        status: "SUCCEEDED",
+        outputAsset: { id: "asset-1", reviewStatus: "RETURNED" },
+      }],
+      aiTaskOutputs: [],
+      videoShots: [],
+    }]);
+
+    const result = await service.projects({});
+
+    expect(result[0].productionStage).toBe("READY_TO_EDIT");
+  });
+
   it("does not mix the default keyword pool into a viral-reference project", async () => {
     prisma.product = { findUnique: vi.fn().mockResolvedValue({ id: "product-c1", modelCode: "C1" }) };
     prisma.smartKeyword = { findMany: vi.fn().mockResolvedValue([{ id: "keyword-bp", keyword: "爸妈不愿意测血压" }]) };
