@@ -2,9 +2,10 @@ import { BadRequestException, Injectable, NotFoundException, Optional } from "@n
 import { ContentKind, ContentStatus, IntegrationKind, Prisma } from "@prisma/client";
 import { exec, execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { promisify } from "node:util";
+import sharp from "sharp";
 import { opsConfig } from "./config";
 import { AiArticlePackage, AiContentService, AiVideoCandidate } from "./ai-content.service";
 import { ContentGuardService } from "./content-guard.service";
@@ -36,6 +37,17 @@ export function matchesRestrictedTerms(content: unknown, terms: string[]): boole
     const blocked = term.trim().toLowerCase();
     return blocked.length > 0 && normalized.includes(blocked);
   });
+}
+
+function escapeCoverText(value: string) {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+}
+
+function coverTextLines(value: string, maximum = 10) {
+  const characters = Array.from(value.trim());
+  const lines: string[] = [];
+  while (characters.length && lines.length < 3) lines.push(characters.splice(0, maximum).join(""));
+  return lines.length ? lines : ["赛电智能穿戴"];
 }
 
 type AiShotGeneration = {
@@ -181,7 +193,7 @@ export class ContentService {
     date = new Date(),
     actor = "系统内容引擎",
     productModel?: string,
-    options: { assetOnly?: boolean; restricted?: boolean; platform?: IntegrationKind; keywordIds?: string[]; force?: boolean; topic?: string; audience?: string; objective?: string } = {},
+    options: { assetOnly?: boolean; restricted?: boolean; platform?: IntegrationKind; keywordIds?: string[]; force?: boolean; topic?: string; audience?: string; objective?: string; voiceoverMode?: string } = {},
   ): Promise<{ created: number; selected: string[] }> {
     const planDate = startOfShanghaiDay(date);
     if (!options.assetOnly && !options.restricted && !options.force) {
@@ -208,6 +220,7 @@ export class ContentService {
         objective: String(options.objective || "").trim(),
       },
       contentRestrictionMode: options.restricted ? "HEALTH_RESTRICTED" : "NORMAL",
+      voiceoverMode: options.voiceoverMode === "NO_VOICEOVER" ? "NO_VOICEOVER" : "VOICEOVER",
       restrictedWords: restrictionRules.filter((item) => item.category === "HEALTH_RESTRICTED_WORD").map((item) => item.blockedText),
       restrictedVisuals: restrictionRules.filter((item) => item.category === "HEALTH_RESTRICTED_VISUAL").map((item) => item.blockedText),
       generationGoal: options.assetOnly
@@ -312,6 +325,7 @@ export class ContentService {
             missingAssets: shootRequirements.filter((item) => item.coverage === "MISSING").map((item) => item.description),
             generationMode: options.assetOnly ? "ASSET_ONLY" : "ASSET_FIRST",
             contentRestrictionMode: options.restricted ? "HEALTH_RESTRICTED" : "NORMAL",
+            voiceoverMode: options.voiceoverMode === "NO_VOICEOVER" ? "NO_VOICEOVER" : "VOICEOVER",
             existingAssetCount: assetIds.length,
             missingShotCount: missingCount,
             capturedAt: new Date().toISOString(),
@@ -1260,6 +1274,59 @@ export class ContentService {
     });
   }
 
+  private async generatePackagingCover(planId: string, variantId: string, videoPath: string, coverText: string) {
+    const outputDir = resolve(opsConfig.derivedOutputDir, "covers", planId);
+    await mkdir(outputDir, { recursive: true });
+    const framePath = resolve(outputDir, `${variantId}-frame.jpg`);
+    const coverPath = resolve(outputDir, `${variantId}.jpg`);
+    try {
+      await execFileAsync("ffmpeg", [
+        "-y",
+        "-ss", "00:00:01",
+        "-i", videoPath,
+        "-frames:v", "1",
+        "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
+        framePath,
+      ], { timeout: 120_000, windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
+    } catch {
+      await sharp({
+        create: {
+          width: 1080,
+          height: 1920,
+          channels: 3,
+          background: { r: 24, g: 28, b: 34 },
+        },
+      }).jpeg().toFile(framePath);
+    }
+    const lines = coverTextLines(coverText);
+    const lineHeight = 128;
+    const firstY = 1310 - (lines.length - 1) * (lineHeight / 2);
+    const textNodes = lines.map((line, index) =>
+      `<text x="72" y="${firstY + index * lineHeight}" fill="#fff" font-size="104" font-weight="900" font-family="Noto Sans CJK SC,Microsoft YaHei,sans-serif">${escapeCoverText(line)}</text>`,
+    ).join("");
+    const overlay = Buffer.from(`
+      <svg width="1080" height="1920" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="shade" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="45%" stop-color="#000" stop-opacity="0"/>
+            <stop offset="100%" stop-color="#000" stop-opacity=".9"/>
+          </linearGradient>
+        </defs>
+        <rect width="1080" height="1920" fill="url(#shade)"/>
+        <rect x="72" y="${firstY - 106}" width="116" height="14" rx="7" fill="#ef3124"/>
+        ${textNodes}
+        <text x="76" y="1748" fill="#fff" fill-opacity=".82" font-size="38" font-weight="700" font-family="Noto Sans CJK SC,Microsoft YaHei,sans-serif">SAYDIAN · 赛电智能穿戴</text>
+      </svg>
+    `);
+    await sharp(framePath)
+      .resize(1080, 1920, { fit: "cover" })
+      .composite([{ input: overlay }])
+      .jpeg({ quality: 90, chromaSubsampling: "4:4:4" })
+      .toFile(coverPath);
+    await unlink(framePath).catch(() => undefined);
+    return coverPath;
+  }
+
   async generatePackaging(id: string, actor: string) {
     const plan = await this.prisma.contentPlan.findUnique({ where: { id }, include: { variants: true } });
     if (!plan || plan.kind !== "VIDEO") throw new NotFoundException("视频生产单不存在");
@@ -1291,13 +1358,16 @@ export class ContentService {
       if (restricted && matchesRestrictedTerms(packaging, restrictedTerms)) {
         throw new BadRequestException(`${variant.platform}平台包装仍包含受限内容，请重新生成`);
       }
+      const coverText = packaging.coverText || packaging.title || variant.title || plan.topic;
+      const coverPath = await this.generatePackagingCover(plan.id, variant.id, plan.masterVideoPath!, coverText);
       await this.prisma.contentVariant.update({
         where: { id: variant.id },
         data: {
           title: packaging.title || variant.title,
           body: packaging.body || variant.body,
-          coverSpec: { ...packaging.coverSpec, coverText: packaging.coverText, hashtags: packaging.hashtags },
-          packagingStatus: "WAITING_COVER_PROVIDER",
+          coverSpec: { ...packaging.coverSpec, coverText, hashtags: packaging.hashtags },
+          coverPath,
+          packagingStatus: "PENDING_REVIEW",
           packagedAt: new Date(),
           packagingRejectedReason: null,
         },
@@ -1327,6 +1397,18 @@ export class ContentService {
       if (approved && remaining === 0) await tx.contentPlan.update({ where: { id: variant.contentPlanId }, data: { productionStage: "READY_TO_PUBLISH", status: "APPROVED" } });
     });
     return this.workflow(variant.contentPlanId);
+  }
+
+  async packagingCoverFile(planId: string, variantId: string) {
+    const variant = await this.prisma.contentVariant.findFirst({
+      where: { id: variantId, contentPlanId: planId },
+      select: { id: true, coverPath: true },
+    });
+    if (!variant?.coverPath) throw new NotFoundException("封面尚未生成");
+    await stat(variant.coverPath).catch(() => {
+      throw new NotFoundException("封面文件不存在，请重新生成");
+    });
+    return { path: variant.coverPath, fileName: `${variant.id}.jpg` };
   }
 
   async recordManualPublish(variantId: string, actor: string, input: { remoteUrl?: string; remoteId?: string; publishedAt?: string }) {

@@ -8,13 +8,14 @@ import {
   Patch,
   Post,
   Query,
+  StreamableFile,
   UploadedFile,
   UploadedFiles,
   UseInterceptors,
 } from "@nestjs/common";
 import { FileInterceptor, FilesInterceptor } from "@nestjs/platform-express";
 import { randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { createReadStream, mkdirSync } from "node:fs";
 import { extname, resolve } from "node:path";
 import { diskStorage } from "multer";
 import { AuthService } from "./auth.service";
@@ -102,6 +103,23 @@ export class WorkbenchController {
     @Body() body: Record<string, unknown>,
   ) {
     return this.workbench.createSelfTask(this.employee(authorization), body);
+  }
+
+  @Patch("tasks/:id")
+  updateOwnedTask(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.workbench.updateOwnedTask(this.employee(authorization), id, body);
+  }
+
+  @Post("tasks/:id/cancel")
+  cancelOwnedTask(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+  ) {
+    return this.workbench.cancelOwnedTask(this.employee(authorization), id);
   }
 
   @Post("tasks/:id/accept")
@@ -198,6 +216,23 @@ export class WorkbenchController {
     return this.workbench.setTeamTaskUrgency(this.employee(authorization), id, body.urgent === true);
   }
 
+  @Patch("operation-team/tasks/:id")
+  updateTeamTask(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.workbench.updateOwnedTask(this.employee(authorization), id, body);
+  }
+
+  @Post("operation-team/tasks/:id/cancel")
+  cancelTeamTask(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+  ) {
+    return this.workbench.cancelOwnedTask(this.employee(authorization), id);
+  }
+
   @Get("notifications")
   notifications(@Headers("authorization") authorization?: string) {
     return this.workbench.notifications(this.employee(authorization));
@@ -206,6 +241,14 @@ export class WorkbenchController {
   @Post("notifications/:id/read")
   readNotification(@Headers("authorization") authorization: string | undefined, @Param("id") id: string) {
     return this.workbench.readNotification(this.employee(authorization), id);
+  }
+
+  @Post("notifications/read-all")
+  readAllNotifications(
+    @Headers("authorization") authorization: string | undefined,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.workbench.readAllNotifications(this.employee(authorization), body.ids);
   }
 
   @Post("assets/upload")
@@ -425,6 +468,7 @@ export class WorkbenchController {
             ])
             : Promise.all([
               this.videoFactory.projects({
+                status: query.status,
                 platform: query.platform,
                 productModel: query.model,
                 page: Number(query.page || 1),
@@ -512,6 +556,7 @@ export class WorkbenchController {
     const employee = this.requirePermission(authorization, "DATA_CENTER_VIEW");
     return this.videoFactory.createProject({
       platform: String(body.platform || "DOUYIN"),
+      voiceoverMode: String(body.voiceoverMode || "VOICEOVER"),
       productModel: body.productModel ? String(body.productModel) : undefined,
       topic: body.topic ? String(body.topic) : undefined,
       audience: body.audience ? String(body.audience) : undefined,
@@ -566,6 +611,44 @@ export class WorkbenchController {
     return this.videoFactory.enqueueRender(id, employee.name);
   }
 
+  @Post("data-center/video-projects/:id/packaging")
+  async generateVideoPackaging(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    if (!employee.roles.some((role) => ["CONTENT_OPERATOR", "VIDEO_SPECIALIST"].includes(role))) {
+      throw new ForbiddenException("只有运营和视频专员可以确认成片并生成封面标题");
+    }
+    const outputAssetId = String(body.outputAssetId || "").trim();
+    const render = outputAssetId
+      ? await this.prisma.videoRenderJob.findFirst({
+        where: { contentPlanId: id, outputAssetId },
+        include: { outputAsset: true },
+      })
+      : null;
+    if (!render?.outputAsset) throw new ForbiddenException("成片与当前视频项目不匹配");
+    if (render.outputAsset.reviewStatus !== "APPROVED") {
+      await this.videoFactory.reviewOutput(outputAssetId, true, employee.name, "成片预览确认满意并生成平台包装");
+    }
+    return this.content.generatePackaging(id, employee.name);
+  }
+
+  @Get("data-center/video-projects/:id/packaging/:variantId/cover")
+  async videoPackagingCover(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Param("variantId") variantId: string,
+  ) {
+    this.requirePermission(authorization, "DATA_CENTER_VIEW");
+    const file = await this.content.packagingCoverFile(id, variantId);
+    return new StreamableFile(createReadStream(file.path), {
+      type: "image/jpeg",
+      disposition: `inline; filename="${file.fileName}"`,
+    });
+  }
+
   @Post("data-center/video-scripts/generate")
   generateVideoScript(
     @Headers("authorization") authorization: string | undefined,
@@ -591,6 +674,7 @@ export class WorkbenchController {
       topic: String(body.topic || "").trim(),
       audience: String(body.audience || "").trim(),
       objective: String(body.objective || "").trim(),
+      voiceoverMode: String(body.voiceoverMode || "VOICEOVER"),
       force: true,
     });
   }

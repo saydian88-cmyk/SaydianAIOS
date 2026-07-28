@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import { Cron } from "@nestjs/schedule";
 import { Prisma } from "@prisma/client";
 import type { SessionPayload } from "./auth.service";
 import { BailianVideoAiProvider } from "./cloud-media.service";
@@ -19,6 +20,21 @@ function date(input: unknown) {
   const parsed = new Date(text);
   if (Number.isNaN(parsed.getTime())) throw new BadRequestException("时间格式不正确");
   return parsed;
+}
+
+function endOfToday() {
+  const result = new Date();
+  result.setHours(23, 59, 59, 999);
+  return result;
+}
+
+function taskDueAt(input: unknown) {
+  return date(input) || endOfToday();
+}
+
+function recurrenceWeekdays(input: unknown) {
+  if (!Array.isArray(input)) return [];
+  return Array.from(new Set(input.map(Number).filter((day) => Number.isInteger(day) && day >= 1 && day <= 7))).sort();
 }
 
 @Injectable()
@@ -106,14 +122,115 @@ export class WorkbenchService {
 
   async createSelfTask(session: SessionPayload, body: Record<string, unknown>) {
     if (!session.employeeId) throw new BadRequestException("当前员工身份不可用");
+    const weekdays = recurrenceWeekdays(body.recurrenceWeekdays);
+    if (weekdays.length) {
+      return this.createRecurringTask(session, {
+        ...body,
+        assigneeEmployeeId: session.employeeId,
+        assignedByEmployeeId: session.employeeId,
+        owner: session.name,
+        sourceType: "SELF_CREATED",
+        requiredRoleCode: null,
+      }, weekdays);
+    }
     return this.createTask({
       ...body,
       assigneeEmployeeId: session.employeeId,
+      assignedByEmployeeId: session.employeeId,
       owner: session.name,
       sourceType: "SELF_CREATED",
       sourceId: null,
       requiredRoleCode: null,
     }, session.name);
+  }
+
+  private async createRecurringTask(session: SessionPayload, body: Record<string, unknown>, weekdays: number[]) {
+    const title = value(body.title);
+    if (!title) throw new BadRequestException("任务标题不能为空");
+    const description = taskDocumentFields(body.descriptionDocument, body.description);
+    const expectedResult = taskDocumentFields(body.expectedResultDocument, body.expectedResult);
+    const recurrence = await this.prisma.taskRecurrence.create({
+      data: {
+        title,
+        description: description.text || null,
+        descriptionDocument: description.document ? description.document as Prisma.InputJsonValue : undefined,
+        expectedResult: expectedResult.text || null,
+        expectedResultDocument: expectedResult.document ? expectedResult.document as Prisma.InputJsonValue : undefined,
+        category: value(body.category) || "GENERAL",
+        priority: value(body.priority).toUpperCase() || "MEDIUM",
+        creatorEmployeeId: session.employeeId!,
+        assigneeEmployeeId: value(body.assigneeEmployeeId) || session.employeeId!,
+        assignedByEmployeeId: value(body.assignedByEmployeeId) || session.employeeId!,
+        assignedBy: session.name,
+        sourceType: value(body.sourceType) || "SELF_CREATED",
+        requiredRoleCode: value(body.requiredRoleCode) || null,
+        weekdays,
+        dueTime: /^\d{2}:\d{2}$/.test(value(body.recurrenceDueTime)) ? value(body.recurrenceDueTime) : "23:59",
+        evidence: (body.evidence && typeof body.evidence === "object" ? body.evidence : {}) as object,
+      },
+    });
+    await this.generateRecurringTask(recurrence, new Date());
+    if (recurrence.assignedByEmployeeId !== recurrence.assigneeEmployeeId) {
+      await this.prisma.taskNotification.create({
+        data: {
+          recipientEmployeeId: recurrence.assigneeEmployeeId,
+          type: "RECURRING_TASK_ASSIGNED",
+          title: "收到每周固定任务安排",
+          content: `${title} · 每周 ${weekdays.join("、")}`,
+        },
+      });
+    }
+    await this.audit(session.name, "TASK_RECURRENCE_CREATE", "TaskRecurrence", recurrence.id, { weekdays });
+    return { recurrence, recurring: true };
+  }
+
+  private async generateRecurringTask(recurrence: {
+    id: string; title: string; description: string | null; descriptionDocument: Prisma.JsonValue | null;
+    expectedResult: string | null; expectedResultDocument: Prisma.JsonValue | null; category: string; priority: string;
+    creatorEmployeeId: string; assigneeEmployeeId: string; assignedByEmployeeId: string | null; assignedBy: string | null;
+    sourceType: string; requiredRoleCode: string | null; weekdays: number[]; dueTime: string; evidence: Prisma.JsonValue;
+    lastGeneratedDate: string | null;
+  }, now: Date) {
+    const weekday = now.getDay() === 0 ? 7 : now.getDay();
+    if (!recurrence.weekdays.includes(weekday)) return null;
+    const dateKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    if (recurrence.lastGeneratedDate === dateKey) return null;
+    const [hour, minute] = recurrence.dueTime.split(":").map(Number);
+    const dueAt = new Date(now);
+    dueAt.setHours(Number.isFinite(hour) ? hour : 23, Number.isFinite(minute) ? minute : 59, 59, 999);
+    const task = await this.prisma.opsTask.create({
+      data: {
+        taskNo: `WEEKLY-${dateKey.replace(/-/g, "")}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
+        title: recurrence.title,
+        description: recurrence.description,
+        descriptionDocument: recurrence.descriptionDocument ? recurrence.descriptionDocument as Prisma.InputJsonValue : undefined,
+        expectedResult: recurrence.expectedResult,
+        expectedResultDocument: recurrence.expectedResultDocument ? recurrence.expectedResultDocument as Prisma.InputJsonValue : undefined,
+        category: recurrence.category,
+        priority: recurrence.priority,
+        status: "ACCEPTED",
+        assigneeEmployeeId: recurrence.assigneeEmployeeId,
+        assignedByEmployeeId: recurrence.assignedByEmployeeId,
+        assignedBy: recurrence.assignedBy,
+        sourceType: recurrence.sourceType,
+        sourceId: `${recurrence.id}:${dateKey}`,
+        requiredRoleCode: recurrence.requiredRoleCode,
+        dueAt,
+        acceptedAt: new Date(),
+        evidence: recurrence.evidence as Prisma.InputJsonValue,
+      },
+    });
+    await this.prisma.taskRecurrence.update({ where: { id: recurrence.id }, data: { lastGeneratedDate: dateKey } });
+    if (recurrence.assignedByEmployeeId !== recurrence.assigneeEmployeeId) {
+      await this.notify(task.id, recurrence.assigneeEmployeeId, "RECURRING_TASK_CREATED", "每周固定任务已生成", task.title);
+    }
+    return task;
+  }
+
+  @Cron("0 5 0 * * *", { timeZone: "Asia/Shanghai" })
+  async generateWeeklyTasks() {
+    const recurrences = await this.prisma.taskRecurrence.findMany({ where: { active: true } });
+    for (const recurrence of recurrences) await this.generateRecurringTask(recurrence, new Date());
   }
 
   async task(session: SessionPayload, id: string) {
@@ -443,6 +560,18 @@ export class WorkbenchService {
     const requiredRoleCode = collaborationRoleCodes.find((code) => assignee.roles.some((item) => item.role.active && item.role.code === code))!;
     const description = taskDocumentFields(body.descriptionDocument, body.description);
     const expectedResult = taskDocumentFields(body.expectedResultDocument, body.expectedResult);
+    const weekdays = recurrenceWeekdays(body.recurrenceWeekdays);
+    if (weekdays.length) {
+      return this.createRecurringTask(session, {
+        ...body,
+        assigneeEmployeeId,
+        assignedByEmployeeId: session.employeeId,
+        owner: assignee.name,
+        sourceType: "OPERATOR_COLLAB",
+        requiredRoleCode,
+        evidence: body.attachments && typeof body.attachments === "object" ? { attachments: body.attachments } : {},
+      }, weekdays);
+    }
     const created = await this.prisma.opsTask.create({
       data: {
         taskNo: `TEAM-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
@@ -460,7 +589,7 @@ export class WorkbenchService {
         sourceType: "OPERATOR_COLLAB",
         expectedResult: expectedResult.text || null,
         expectedResultDocument: expectedResult.document ? (expectedResult.document as Prisma.InputJsonValue) : undefined,
-        dueAt: date(body.dueAt),
+        dueAt: taskDueAt(body.dueAt),
         acceptedAt: new Date(),
         evidence: (body.attachments && typeof body.attachments === "object" ? { attachments: body.attachments } : {}) as object,
       },
@@ -518,6 +647,81 @@ export class WorkbenchService {
     return updated;
   }
 
+  async updateOwnedTask(session: SessionPayload, id: string, body: Record<string, unknown>) {
+    const task = await this.prisma.opsTask.findFirst({
+      where: {
+        id,
+        OR: [
+          { sourceType: "SELF_CREATED", assigneeEmployeeId: session.employeeId },
+          { sourceType: "OPERATOR_COLLAB", assignedByEmployeeId: session.employeeId },
+        ],
+      },
+    });
+    if (!task) throw new NotFoundException("只能修改自己的自建任务或自己安排的协作任务");
+    if (doneStatuses.includes(task.status)) throw new BadRequestException("已完成或已取消的任务不能修改");
+    const description = body.descriptionDocument !== undefined || body.description !== undefined
+      ? taskDocumentFields(body.descriptionDocument, body.description)
+      : null;
+    const expectedResult = body.expectedResultDocument !== undefined || body.expectedResult !== undefined
+      ? taskDocumentFields(body.expectedResultDocument, body.expectedResult)
+      : null;
+    const updated = await this.prisma.opsTask.update({
+      where: { id },
+      data: {
+        ...(body.title !== undefined ? { title: value(body.title) || task.title } : {}),
+        ...(description ? {
+          description: description.text || null,
+          descriptionDocument: description.document ? description.document as Prisma.InputJsonValue : Prisma.JsonNull,
+        } : {}),
+        ...(expectedResult ? {
+          expectedResult: expectedResult.text || null,
+          expectedResultDocument: expectedResult.document ? expectedResult.document as Prisma.InputJsonValue : Prisma.JsonNull,
+        } : {}),
+        ...(body.priority !== undefined ? { priority: value(body.priority).toUpperCase() || task.priority } : {}),
+        ...(body.dueAt !== undefined ? { dueAt: taskDueAt(body.dueAt) } : {}),
+      },
+      include: this.taskInclude(),
+    });
+    await Promise.all([
+      this.prisma.operationTaskHistory.create({
+        data: { taskId: id, fromStatus: task.status, toStatus: task.status, action: "UPDATE", actor: session.name },
+      }),
+      task.sourceType === "OPERATOR_COLLAB" && task.assigneeEmployeeId
+        ? this.notify(id, task.assigneeEmployeeId, "TEAM_TASK_UPDATED", "协作任务已修改", updated.title)
+        : Promise.resolve(),
+      this.audit(session.name, "TASK_UPDATE", "OpsTask", id, { dueAt: updated.dueAt, priority: updated.priority }),
+    ]);
+    return updated;
+  }
+
+  async cancelOwnedTask(session: SessionPayload, id: string) {
+    const task = await this.prisma.opsTask.findFirst({
+      where: {
+        id,
+        OR: [
+          { sourceType: "SELF_CREATED", assigneeEmployeeId: session.employeeId },
+          { sourceType: "OPERATOR_COLLAB", assignedByEmployeeId: session.employeeId },
+        ],
+      },
+    });
+    if (!task) throw new NotFoundException("只能取消自己的自建任务或自己安排的协作任务");
+    if (doneStatuses.includes(task.status)) throw new BadRequestException("任务已经结束");
+    const updated = await this.prisma.opsTask.update({
+      where: { id },
+      data: { status: "CANCELLED", completedAt: new Date(), completedBy: session.name },
+    });
+    await Promise.all([
+      this.prisma.operationTaskHistory.create({
+        data: { taskId: id, fromStatus: task.status, toStatus: "CANCELLED", action: "CANCEL", actor: session.name },
+      }),
+      task.sourceType === "OPERATOR_COLLAB" && task.assigneeEmployeeId
+        ? this.notify(id, task.assigneeEmployeeId, "TEAM_TASK_CANCELLED", "协作任务已取消", task.title)
+        : Promise.resolve(),
+      this.audit(session.name, "TASK_CANCEL", "OpsTask", id, {}),
+    ]);
+    return updated;
+  }
+
   async notifications(session: SessionPayload) {
     return this.prisma.taskNotification.findMany({
       where: { recipientEmployeeId: session.employeeId },
@@ -533,6 +737,19 @@ export class WorkbenchService {
     });
     if (!result.count) throw new NotFoundException("消息不存在");
     return { ok: true };
+  }
+
+  async readAllNotifications(session: SessionPayload, ids?: unknown) {
+    const selectedIds = Array.isArray(ids) ? ids.map(String).filter(Boolean) : [];
+    const result = await this.prisma.taskNotification.updateMany({
+      where: {
+        recipientEmployeeId: session.employeeId,
+        readAt: null,
+        ...(selectedIds.length ? { id: { in: selectedIds } } : {}),
+      },
+      data: { readAt: new Date() },
+    });
+    return { ok: true, count: result.count };
   }
 
   async adminOverview() {
@@ -586,13 +803,14 @@ export class WorkbenchService {
         assigneeEmployeeId: value(body.assigneeEmployeeId) || null,
         requiredRoleCode: value(body.requiredRoleCode) || null,
         assignedBy: actor,
+        assignedByEmployeeId: value(body.assignedByEmployeeId) || null,
         sourceType: value(body.sourceType) || "MANUAL",
         sourceId: value(body.sourceId) || null,
         platform: value(body.platform) || null,
         productId: value(body.productId) || null,
         expectedResult: expectedResult.text || null,
         expectedResultDocument: expectedResult.document ? (expectedResult.document as Prisma.InputJsonValue) : undefined,
-        dueAt: date(body.dueAt),
+        dueAt: taskDueAt(body.dueAt),
         taskTemplateId: value(body.taskTemplateId) || null,
         collaborators: Array.isArray(body.collaborators) ? body.collaborators : [],
         evidence: (body.evidence && typeof body.evidence === "object" ? body.evidence : {}) as object,
