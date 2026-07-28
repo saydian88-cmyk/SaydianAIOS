@@ -374,4 +374,33 @@ describe("AiTaskCenterService", () => {
       data: expect.objectContaining({ width: 1080, height: 1920, durationSeconds: 24 }),
     }));
   });
+
+  it("routes task-linked AI notifications to the employee workbench detail", async () => {
+    const notificationCreate = vi.fn().mockResolvedValue({});
+    const send = vi.fn().mockResolvedValue({ configured: false });
+    const service = new AiTaskCenterService(
+      { taskNotification: { create: notificationCreate } } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { send } as never,
+    );
+
+    await service["notify"](
+      "ai-task-1",
+      "employee-1",
+      "AI_TASK_WAITING_INPUT",
+      "AI任务需要补充资料",
+      "已创建补拍任务",
+      "ops-task-1",
+    );
+
+    const targetUrl = new URL(send.mock.calls[0]?.[3] as string);
+    expect(targetUrl.pathname).toBe("/saidian-work/");
+    expect(targetUrl.searchParams.get("taskId")).toBe("ops-task-1");
+    expect(notificationCreate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ aiTaskId: "ai-task-1", taskId: "ops-task-1" }),
+    }));
+  });
 });

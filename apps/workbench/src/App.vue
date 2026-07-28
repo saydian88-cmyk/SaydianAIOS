@@ -1940,7 +1940,8 @@ function openMall() {
 async function startWecomLogin() {
   loginMessage.value = "";
   try {
-    const redirectUri = `${window.location.origin}/saidian-work/`;
+    const pendingTaskId = sessionStorage.getItem("saidian-work-pending-task") || "";
+    const redirectUri = `${window.location.origin}/saidian-work/${pendingTaskId ? `?taskId=${encodeURIComponent(pendingTaskId)}` : ""}`;
     const result = await api<{ url: string }>(
       `/api/v1/auth/wecom/authorize-url?redirectUri=${encodeURIComponent(redirectUri)}`,
     );
@@ -1953,7 +1954,8 @@ async function startWecomLogin() {
 async function loadQr() {
   qrLoading.value = true;
   try {
-    const redirectUri = `${window.location.origin}/saidian-work/?wecom_qr=1`;
+    const pendingTaskId = sessionStorage.getItem("saidian-work-pending-task") || "";
+    const redirectUri = `${window.location.origin}/saidian-work/?wecom_qr=1${pendingTaskId ? `&taskId=${encodeURIComponent(pendingTaskId)}` : ""}`;
     const result = await api<{ url: string }>(
       `/api/v1/auth/wecom/qr-authorize-url?redirectUri=${encodeURIComponent(redirectUri)}`,
     );
@@ -1968,12 +1970,15 @@ async function loadQr() {
 async function bootstrap() {
   try {
     const parameters = new URLSearchParams(window.location.search);
+    const linkedTaskId = parameters.get("taskId") || sessionStorage.getItem("saidian-work-pending-task") || "";
+    const linkedPage = parameters.get("page") || "";
+    if (linkedTaskId) sessionStorage.setItem("saidian-work-pending-task", linkedTaskId);
     const code = parameters.get("code");
     if (code) {
       const result = await post<{ token: string; mallToken?: string; user: SessionUser }>("/api/v1/auth/wecom/login", { code });
       setToken(result.token);
       if (result.mallToken) localStorage.setItem("employee-token", result.mallToken);
-      window.history.replaceState({}, "", "/saidian-work/");
+      window.history.replaceState({}, "", linkedTaskId ? `/saidian-work/?taskId=${encodeURIComponent(linkedTaskId)}` : "/saidian-work/");
     }
     const mallToken = localStorage.getItem("employee-token") || "";
     if (mallToken) {
@@ -1996,7 +2001,22 @@ async function bootstrap() {
       };
       restoreWorkbenchLocation();
       await loadDashboard();
-      if (active.value !== "home") await switchPage(active.value);
+      if (linkedTaskId) {
+        await switchPage("tasks");
+        try {
+          await openTaskDetail({ id: linkedTaskId });
+        } catch (error) {
+          ElMessage.warning(error instanceof Error ? error.message : "对应任务暂不可查看");
+        } finally {
+          sessionStorage.removeItem("saidian-work-pending-task");
+          window.history.replaceState({}, "", "/saidian-work/");
+        }
+      } else if (linkedPage === "messages") {
+        await switchPage("messages");
+        window.history.replaceState({}, "", "/saidian-work/");
+      } else if (active.value !== "home") {
+        await switchPage(active.value);
+      }
     } else {
       await loadQr();
     }

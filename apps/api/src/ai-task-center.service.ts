@@ -10,6 +10,7 @@ import {
 import { createHash, randomBytes } from "node:crypto";
 import { extname } from "node:path";
 import { BrandDataService } from "./brand-data.service";
+import { opsConfig } from "./config";
 import { ContentService } from "./content.service";
 import { OssStorageService } from "./oss-storage.service";
 import { PrismaService } from "./prisma.service";
@@ -1190,10 +1191,18 @@ export class AiTaskCenterService implements OnModuleInit {
         }),
       ]);
     }
+    let linkedOpsTaskId = requestedOpsTaskId || undefined;
+    if (!linkedOpsTaskId && status === "WAITING_INPUT") {
+      linkedOpsTaskId = (await this.prisma.aiTaskOutput.findFirst({
+        where: { aiTaskId: id, opsTaskId: { not: null } },
+        orderBy: { createdAt: "desc" },
+        select: { opsTaskId: true },
+      }))?.opsTaskId || undefined;
+    }
     if (status === "PENDING_REVIEW" && task.reviewerEmployeeId) {
-      await this.notify(id, task.reviewerEmployeeId, "AI_TASK_REVIEW", "AI结果等待审核", task.title);
+      await this.notify(id, task.reviewerEmployeeId, "AI_TASK_REVIEW", "AI结果等待审核", task.title, linkedOpsTaskId);
     } else if (status === "WAITING_INPUT" && task.ownerEmployeeId) {
-      await this.notify(id, task.ownerEmployeeId, "AI_TASK_WAITING_INPUT", "AI任务需要补充资料", domain.message);
+      await this.notify(id, task.ownerEmployeeId, "AI_TASK_WAITING_INPUT", "AI任务需要补充资料", domain.message, linkedOpsTaskId);
     }
     return this.task(id);
   }
@@ -2168,7 +2177,17 @@ export class AiTaskCenterService implements OnModuleInit {
     await this.prisma.taskNotification.create({
       data: { aiTaskId, taskId, recipientEmployeeId: employeeId, channel: "IN_APP", type, title, content },
     });
-    const result = await this.wecom.send(employeeId, title, content, "https://stest.saydian.cn/saidian-admin/");
+    const configuredWorkbenchUrl = new URL(opsConfig.webBaseUrl);
+    const publicUrl = new URL(opsConfig.publicBaseUrl);
+    const workbenchUrl = ["127.0.0.1", "localhost"].includes(configuredWorkbenchUrl.hostname)
+      && !["127.0.0.1", "localhost"].includes(publicUrl.hostname)
+      ? new URL("/saidian-work/", publicUrl)
+      : configuredWorkbenchUrl;
+    workbenchUrl.search = "";
+    workbenchUrl.hash = "";
+    if (taskId) workbenchUrl.searchParams.set("taskId", taskId);
+    else workbenchUrl.searchParams.set("page", "messages");
+    const result = await this.wecom.send(employeeId, title, content, workbenchUrl.toString());
     if (result.configured) {
       await this.prisma.taskNotification.create({
         data: {

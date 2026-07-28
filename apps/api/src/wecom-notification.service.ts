@@ -75,7 +75,7 @@ export class WecomNotificationService {
       const body = [
         `<div class="gray">${title}</div>`,
         `<div class="normal">${content}</div>`,
-        url ? `<div class="highlight"><a href="${url}">进入总管理后台处理</a></div>` : "",
+        url ? `<div class="highlight"><a href="${url}">进入员工工作台处理</a></div>` : "",
       ].filter(Boolean).join("");
       const response = await fetch(`https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token=${encodeURIComponent(accessToken)}`, {
         method: "POST",
@@ -84,7 +84,7 @@ export class WecomNotificationService {
           touser: employee.wecomUserId,
           msgtype: "textcard",
           agentid: Number(config.agentId),
-          textcard: { title, description: body, url: url || "https://stest.saydian.cn/saidian-admin/", btntxt: "查看任务" },
+          textcard: { title, description: body, url: url || "https://stest.saydian.cn/saidian-work/", btntxt: "查看任务" },
           safe: 0,
           enable_id_trans: 0,
           enable_duplicate_check: 1,
