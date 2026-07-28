@@ -436,6 +436,8 @@ export class SystemConfigService {
     const names: Partial<Record<IntegrationKind, string>> = {
       DOUYIN: "抖音",
       TIKTOK: "TikTok",
+      KUAISHOU: "快手",
+      BILIBILI: "B站",
       AMAZON: "Amazon",
       SHOPIFY: "Shopify",
       WECHAT_CHANNELS: "视频号",

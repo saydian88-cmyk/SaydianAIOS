@@ -318,6 +318,8 @@ export class PlatformRegistry {
     for (const [kind, adapter] of configured) this.adapters.set(kind, adapter);
     const unconfigured: Array<[PlatformKind, string]> = [
       ["TIKTOK", "TikTok"],
+      ["KUAISHOU", "快手"],
+      ["BILIBILI", "B站"],
       ["AMAZON", "Amazon"],
       ["SHOPIFY", "Shopify"],
       ["WECHAT_CHANNELS", "视频号"],

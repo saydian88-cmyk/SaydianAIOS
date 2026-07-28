@@ -33,6 +33,16 @@ type GenerateInput = {
   allowFallback?: boolean;
 };
 
+type SimilarVideoInput = {
+  outputAssetId: string;
+  replaceHook?: boolean;
+  hook?: string;
+  replaceProduct?: boolean;
+  productModel?: string;
+  replaceFeature?: boolean;
+  feature?: string;
+};
+
 const PROVIDER_SEEDS = [
   {
     code: "BAILIAN_WAN",
@@ -723,6 +733,98 @@ export class VideoFactoryService {
     return this.project(plan.id);
   }
 
+  async createSimilarProject(id: string, input: SimilarVideoInput, actor: string) {
+    const source = await this.prisma.contentPlan.findUnique({
+      where: { id },
+      include: {
+        videoRenderJobs: {
+          where: { outputAssetId: input.outputAssetId, status: "SUCCEEDED" },
+          include: { outputAsset: true },
+        },
+      },
+    });
+    if (!source || source.kind !== "VIDEO") throw new NotFoundException("智能视频项目不存在");
+    const approvedOutput = source.videoRenderJobs[0]?.outputAsset;
+    if (!approvedOutput || approvedOutput.reviewStatus !== "APPROVED") {
+      throw new BadRequestException("只有审核通过的成片可以生成类似视频");
+    }
+    if (!input.replaceHook && !input.replaceProduct && !input.replaceFeature) {
+      throw new BadRequestException("请至少选择一项需要替换的内容");
+    }
+    const hook = String(input.hook || "").trim();
+    const productModel = String(input.productModel || "").trim();
+    const feature = String(input.feature || "").trim();
+    if (input.replaceHook && !hook) throw new BadRequestException("请填写新的钩子");
+    if (input.replaceProduct && !productModel) throw new BadRequestException("请选择新的产品型号");
+    if (input.replaceFeature && !feature) throw new BadRequestException("请填写新的核心功能");
+
+    const factory = sourceSignals(source).find((item) => item.type === "VIDEO_FACTORY") || {};
+    const selectedIndex = Math.max(0, Number(factory.selectedCandidateIndex || 0));
+    const sourceCandidate = this.candidates(source)[selectedIndex] || this.candidates(source)[0];
+    const targetProductModel = input.replaceProduct ? productModel : source.productModel || undefined;
+    const replacementNotes = [
+      input.replaceHook ? `钩子替换为：${hook}` : "保留原视频钩子逻辑",
+      input.replaceProduct ? `产品替换为：${productModel}` : "保留原产品",
+      input.replaceFeature ? `核心功能替换为：${feature}` : "保留原核心功能",
+      sourceCandidate?.outline?.length ? `保留原成片节奏和镜头结构：${sourceCandidate.outline.join("；")}` : "",
+    ].filter(Boolean);
+    const created = await this.createProject({
+      platform: source.targetPlatforms[0],
+      voiceoverMode: String(factory.voiceoverMode || "VOICEOVER"),
+      productModel: targetProductModel,
+      topic: input.replaceFeature ? feature : source.topic,
+      audience: source.audience || undefined,
+      objective: `基于已审核成片生成相似视频。${replacementNotes.join("；")}`,
+      routingMode: String(factory.routingMode || "AUTO"),
+      requestedModelId: factory.requestedModelId ? String(factory.requestedModelId) : undefined,
+      allowFallback: factory.allowFallback !== false,
+    }, actor);
+
+    const createdSignals = sourceSignals(created);
+    const nextSignals = createdSignals.map((item) => item.type === "VIDEO_FACTORY" ? {
+      ...item,
+      derivedFromProjectId: source.id,
+      derivedFromRenderJobId: source.videoRenderJobs[0].id,
+      derivedFromOutputAssetId: approvedOutput.id,
+      similarityMode: "APPROVED_MASTER",
+      replacements: {
+        hook: input.replaceHook ? hook : null,
+        productModel: input.replaceProduct ? productModel : null,
+        feature: input.replaceFeature ? feature : null,
+      },
+      scriptCandidates: Array.isArray(item.scriptCandidates)
+        ? (item.scriptCandidates as unknown as AiVideoCandidate[]).map((candidate, index) => index === 0 && input.replaceHook
+          ? { ...candidate, hook }
+          : candidate)
+        : item.scriptCandidates,
+    } : item);
+    await this.prisma.contentPlan.update({
+      where: { id: created.id },
+      data: { sourceSignals: nextSignals as Prisma.InputJsonValue },
+    });
+    await this.prisma.auditLog.create({
+      data: {
+        actor,
+        action: "VIDEO_FACTORY_SIMILAR_CREATE",
+        entityType: "ContentPlan",
+        entityId: created.id,
+        before: { sourceProjectId: source.id, outputAssetId: approvedOutput.id },
+        after: { targetProductModel, replaceHook: Boolean(input.replaceHook), replaceProduct: Boolean(input.replaceProduct), replaceFeature: Boolean(input.replaceFeature) },
+      },
+    });
+
+    const generated = await this.generateProject(created.id, {
+      candidateIndex: 0,
+      routingMode: String(factory.routingMode || "AUTO"),
+      requestedModelId: factory.requestedModelId ? String(factory.requestedModelId) : undefined,
+      allowFallback: factory.allowFallback !== false,
+    }, actor);
+    const ready = generated.videoShots?.length
+      && generated.videoShots.every((shot) => shot.status === "DONE" && shot.selectedAssetId);
+    if (ready) await this.enqueueRender(created.id, actor);
+    return this.project(created.id);
+  }
+
   private candidates(plan: { sourceSignals: unknown }): AiVideoCandidate[] {
     const factory = sourceSignals(plan).find((item) => item.type === "VIDEO_FACTORY");
     return Array.isArray(factory?.scriptCandidates) ? factory.scriptCandidates as unknown as AiVideoCandidate[] : [];
@@ -970,6 +1072,15 @@ export class VideoFactoryService {
       || !["COMMERCIAL", "EDIT_ONLY"].includes(shot.selectedAsset.rightsStatus),
     );
     if (invalid.length) throw new BadRequestException(`有${invalid.length}个镜头素材尚未满足审核和使用条件`);
+    const latestReturnedReview = await this.prisma.videoQualityCheck.findFirst({
+      where: { contentPlanId: id, checkType: "FINAL_REVIEW", status: "REJECTED" },
+      orderBy: [{ reviewedAt: "desc" }, { createdAt: "desc" }],
+    });
+    const returnedFindings = Array.isArray(latestReturnedReview?.findings) ? latestReturnedReview.findings : [];
+    const revisionFeedback = returnedFindings
+      .map((item) => String(object(item).message || "").trim())
+      .filter(Boolean)
+      .at(-1) || "";
     const revision = await this.prisma.videoRenderJob.count({ where: { contentPlanId: id } });
     const job = await this.prisma.videoRenderJob.create({
       data: {
@@ -983,12 +1094,148 @@ export class VideoFactoryService {
           shotAssetIds: plan.videoShots.map((shot) => shot.selectedAssetId),
           hook: plan.hook,
           topic: plan.topic,
+          revisionFeedback,
         },
         createdBy: actor,
       },
     });
     await this.prisma.contentPlan.update({ where: { id }, data: { productionStage: "EDITING", masterVideoStatus: "RUNNING" } });
     return job;
+  }
+
+  async archiveProject(id: string, actor: string) {
+    const plan = await this.prisma.contentPlan.findUnique({
+      where: { id },
+      include: {
+        videoGenerationJobs: { where: { status: { in: ["PENDING", "RUNNING", "RETRY"] } }, select: { id: true } },
+        videoRenderJobs: { where: { status: { in: ["PENDING", "RUNNING", "RETRY"] } }, select: { id: true } },
+      },
+    });
+    if (!plan || plan.kind !== "VIDEO" || !sourceSignals(plan).some((item) => item.type === "VIDEO_FACTORY")) {
+      throw new NotFoundException("智能视频项目不存在");
+    }
+    if (![plan.owner, plan.createdBy, plan.assignedTo].filter(Boolean).includes(actor)) {
+      throw new BadRequestException("只能删除自己创建的视频项目");
+    }
+    if (plan.productionStage === "VIDEO_FACTORY_ARCHIVED") return { id, archived: true };
+    if (plan.videoGenerationJobs.length || plan.videoRenderJobs.length) {
+      throw new BadRequestException("项目仍有正在生成或剪辑的任务，请等待任务结束后再删除");
+    }
+    const archivedAt = new Date();
+    const purgeAfter = new Date(archivedAt.getTime() + 3 * 24 * 60 * 60 * 1000);
+    const nextSignals = sourceSignals(plan).map((item) => item.type === "VIDEO_FACTORY" ? {
+      ...item,
+      archivedAt: archivedAt.toISOString(),
+      purgeAfter: purgeAfter.toISOString(),
+      archivedBy: actor,
+      previousProductionStage: plan.productionStage,
+    } : item);
+    await this.prisma.$transaction([
+      this.prisma.contentPlan.update({
+        where: { id },
+        data: {
+          productionStage: "VIDEO_FACTORY_ARCHIVED",
+          sourceSignals: nextSignals as Prisma.InputJsonValue,
+        },
+      }),
+      this.prisma.auditLog.create({
+        data: {
+          actor,
+          action: "VIDEO_FACTORY_PROJECT_ARCHIVE",
+          entityType: "ContentPlan",
+          entityId: id,
+          before: { productionStage: plan.productionStage },
+          after: { productionStage: "VIDEO_FACTORY_ARCHIVED", archivedAt, purgeAfter },
+        },
+      }),
+    ]);
+    return { id, archived: true, purgeAfter };
+  }
+
+  async recycledProjects(actor: string) {
+    const rows = await this.prisma.contentPlan.findMany({
+      where: {
+        kind: "VIDEO",
+        productionStage: "VIDEO_FACTORY_ARCHIVED",
+        sourceSignals: { array_contains: [{ type: "VIDEO_FACTORY" }] },
+        OR: [{ owner: actor }, { createdBy: actor }, { assignedTo: actor }],
+      },
+      orderBy: { updatedAt: "desc" },
+      take: 100,
+    });
+    const now = Date.now();
+    const active: Array<Record<string, unknown>> = [];
+    for (const plan of rows) {
+      const signals = sourceSignals(plan);
+      const factory = signals.find((item) => item.type === "VIDEO_FACTORY") || {};
+      const purgeAfter = new Date(String(factory.purgeAfter || 0)).getTime();
+      if (!purgeAfter || purgeAfter <= now) {
+        const nextSignals = signals.map((item) => item.type === "VIDEO_FACTORY"
+          ? { ...item, purgedAt: new Date().toISOString() }
+          : item);
+        await this.prisma.contentPlan.update({
+          where: { id: plan.id },
+          data: {
+            productionStage: "VIDEO_FACTORY_PURGED",
+            sourceSignals: nextSignals as Prisma.InputJsonValue,
+          },
+        });
+        continue;
+      }
+      active.push({
+        id: plan.id,
+        productionNo: plan.productionNo,
+        topic: plan.topic,
+        productModel: plan.productModel,
+        targetPlatforms: plan.targetPlatforms,
+        archivedAt: factory.archivedAt,
+        purgeAfter: factory.purgeAfter,
+        previousProductionStage: factory.previousProductionStage,
+      });
+    }
+    return active;
+  }
+
+  async restoreProject(id: string, actor: string) {
+    const plan = await this.prisma.contentPlan.findUnique({ where: { id } });
+    if (!plan || plan.kind !== "VIDEO" || plan.productionStage !== "VIDEO_FACTORY_ARCHIVED") {
+      throw new NotFoundException("回收站中的视频项目不存在");
+    }
+    if (![plan.owner, plan.createdBy, plan.assignedTo].filter(Boolean).includes(actor)) {
+      throw new BadRequestException("只能恢复自己删除的视频项目");
+    }
+    const signals = sourceSignals(plan);
+    const factory = signals.find((item) => item.type === "VIDEO_FACTORY") || {};
+    const purgeAfter = new Date(String(factory.purgeAfter || 0)).getTime();
+    if (!purgeAfter || purgeAfter <= Date.now()) {
+      throw new BadRequestException("该项目已超过3天恢复期限");
+    }
+    const previousProductionStage = String(factory.previousProductionStage || "FACTORY_SCRIPT_READY");
+    const nextSignals = signals.map((item) => {
+      if (item.type !== "VIDEO_FACTORY") return item;
+      const { archivedAt: _archivedAt, archivedBy: _archivedBy, purgeAfter: _purgeAfter, previousProductionStage: _previous, ...rest } = item;
+      return rest;
+    });
+    await this.prisma.$transaction([
+      this.prisma.contentPlan.update({
+        where: { id },
+        data: {
+          productionStage: previousProductionStage,
+          sourceSignals: nextSignals as Prisma.InputJsonValue,
+        },
+      }),
+      this.prisma.auditLog.create({
+        data: {
+          actor,
+          action: "VIDEO_FACTORY_PROJECT_RESTORE",
+          entityType: "ContentPlan",
+          entityId: id,
+          before: { productionStage: "VIDEO_FACTORY_ARCHIVED" },
+          after: { productionStage: previousProductionStage },
+        },
+      }),
+    ]);
+    return this.project(id);
   }
 
   async projects(query: { status?: string; platform?: string; productModel?: string; page: number; pageSize?: number }): Promise<{ items: unknown[]; total: number; page: number; pageSize: number }>;
@@ -1000,7 +1247,7 @@ export class VideoFactoryService {
     const where: Prisma.ContentPlanWhereInput = {
       kind: "VIDEO",
       sourceSignals: { array_contains: [{ type: "VIDEO_FACTORY" }] },
-      ...(query.status ? { productionStage: query.status } : {}),
+      productionStage: query.status ? query.status : { not: "VIDEO_FACTORY_ARCHIVED" },
       ...(query.productModel ? { productModel: query.productModel } : {}),
       ...(query.platform ? { targetPlatforms: { has: integrationKind(query.platform) } } : {}),
     };
@@ -1082,6 +1329,10 @@ export class VideoFactoryService {
     if (!generation && !render) throw new BadRequestException("该素材不是视频工厂输出");
     const failedCheck = await this.prisma.videoQualityCheck.findFirst({ where: { assetId, status: "FAILED" } });
     if (approved && failedCheck) throw new BadRequestException("自动质检未通过，不能批准使用");
+    const finalReview = await this.prisma.videoQualityCheck.findFirst({
+      where: { assetId, checkType: "FINAL_REVIEW" },
+      orderBy: { createdAt: "desc" },
+    });
     await this.prisma.$transaction(async (tx) => {
       await tx.asset.update({
         where: { id: assetId },
@@ -1124,10 +1375,31 @@ export class VideoFactoryService {
             : { masterVideoStatus: "RETURNED", productionStage: "EDITING" },
         });
       }
+      const reviewedAt = new Date();
       await tx.videoQualityCheck.updateMany({
         where: { assetId, status: { in: ["PENDING", "REVIEW_REQUIRED"] } },
-        data: { status: approved ? "PASSED" : "REJECTED", reviewedBy: actor, reviewedAt: new Date() },
+        data: { status: approved ? "PASSED" : "REJECTED", reviewedBy: actor, reviewedAt },
       });
+      if (finalReview) {
+        const findings = Array.isArray(finalReview.findings) ? finalReview.findings : [];
+        await tx.videoQualityCheck.update({
+          where: { id: finalReview.id },
+          data: {
+            status: approved ? "PASSED" : "REJECTED",
+            reviewedBy: actor,
+            reviewedAt,
+            findings: [
+              ...findings,
+              {
+                type: approved ? "EMPLOYEE_APPROVAL" : "EMPLOYEE_RETURN",
+                message: note || (approved ? "员工审核通过" : "员工退回修改"),
+                actor,
+                reviewedAt: reviewedAt.toISOString(),
+              },
+            ],
+          },
+        });
+      }
       await tx.auditLog.create({
         data: { actor, action: approved ? "VIDEO_FACTORY_OUTPUT_APPROVE" : "VIDEO_FACTORY_OUTPUT_RETURN", entityType: "Asset", entityId: assetId, after: { note } },
       });

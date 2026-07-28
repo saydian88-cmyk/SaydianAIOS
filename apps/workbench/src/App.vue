@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
-import { ElMessage } from "element-plus";
+import { computed, onMounted, reactive, ref, watch } from "vue";
+import { ElMessage, ElMessageBox } from "element-plus";
 import type { UploadUserFile } from "element-plus";
 import {
   Bell,
@@ -48,6 +48,18 @@ const taskStatus = ref("");
 const taskDetailVisible = ref(false);
 const taskDetail = ref<Row>();
 const emptyTaskDocument = () => ({ type: "doc", content: [{ type: "paragraph" }] });
+const taskEditorDocument = (document: unknown, text: unknown) => {
+  if (document && typeof document === "object" && (document as Row).type === "doc" && Array.isArray((document as Row).content)) {
+    return JSON.parse(JSON.stringify(document));
+  }
+  const content = String(text || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .map((line) => line
+      ? { type: "paragraph", content: [{ type: "text", text: line }] }
+      : { type: "paragraph" });
+  return { type: "doc", content: content.length ? content : [{ type: "paragraph" }] };
+};
 const selfTaskVisible = ref(false);
 const creatingSelfTask = ref(false);
 const editingSelfTaskId = ref("");
@@ -184,12 +196,47 @@ const videoFactoryForm = reactive({
 });
 const creatingVideoProject = ref(false);
 const generatingProjectId = ref("");
+const archivingVideoProjectId = ref("");
+const videoRecycleBinVisible = ref(false);
+const videoRecycleBinLoading = ref(false);
+const videoRecycleProjects = ref<Row[]>([]);
+const restoringVideoProjectId = ref("");
 const generatingShotId = ref("");
 const renderingProjectId = ref("");
 const generatingPackagingProjectId = ref("");
+const videoReviewVisible = ref(false);
+const videoReviewProject = ref<Row>();
+const videoReviewJob = ref<Row>();
+const reviewingVideoAssetId = ref("");
+const videoReviewForm = reactive({ action: "APPROVE", note: "" });
+const similarVideoVisible = ref(false);
+const similarVideoProject = ref<Row>();
+const similarVideoJob = ref<Row>();
+const creatingSimilarVideo = ref(false);
+const similarVideoForm = reactive({
+  replaceHook: true,
+  hook: "",
+  replaceProduct: false,
+  productModel: "",
+  replaceFeature: false,
+  feature: "",
+});
 const packagingPreviewVisible = ref(false);
 const packagingPreviewVariant = ref<Row>();
 const packagingPreviewUrl = ref("");
+const publishLinkVisible = ref(false);
+const publishLinkProject = ref<Row>();
+const publishLinkJob = ref<Row>();
+const savingPublishLink = ref(false);
+const publishPlatformOptions = [
+  { value: "DOUYIN", label: "抖音" },
+  { value: "TIKTOK", label: "TikTok" },
+  { value: "XIAOHONGSHU", label: "小红书" },
+  { value: "BILIBILI", label: "B站" },
+  { value: "WECHAT_CHANNELS", label: "视频号" },
+  { value: "KUAISHOU", label: "快手" },
+];
+const publishLinkRecords = ref<Array<{ platform: string; remoteUrl: string; publishedAt: string }>>([]);
 const expandedVideoProjectIds = ref<string[]>([]);
 const lockedShotUpload = ref<Row>();
 const generatingVideoScript = ref(false);
@@ -324,6 +371,28 @@ const navigation = computed(() => [
   { key: "messages", label: "消息通知", icon: Bell, visible: true },
 ].filter((item) => item.visible));
 const pageTitle = computed(() => navigation.value.find((item) => item.key === active.value)?.label || "员工工作台");
+const workbenchLocationKey = () => user.value ? `saydian-workbench-location:${user.value.id}` : "";
+const validDataCenterTabs = ["knowledge", "assets", "keywords", "viral", "videoFactory"];
+
+function persistWorkbenchLocation() {
+  const key = workbenchLocationKey();
+  if (!key) return;
+  localStorage.setItem(key, JSON.stringify({ page: active.value, dataCenterTab: dataCenterTab.value }));
+}
+
+function restoreWorkbenchLocation() {
+  const key = workbenchLocationKey();
+  if (!key) return;
+  try {
+    const saved = JSON.parse(localStorage.getItem(key) || "{}") as { page?: string; dataCenterTab?: string };
+    if (saved.page && navigation.value.some((item) => item.key === saved.page)) active.value = saved.page;
+    if (saved.dataCenterTab && validDataCenterTabs.includes(saved.dataCenterTab)) dataCenterTab.value = saved.dataCenterTab;
+  } catch {
+    localStorage.removeItem(key);
+  }
+}
+
+watch([active, dataCenterTab], persistWorkbenchLocation);
 const selectedProductionPlan = computed(() => dataCenter.uploadOptions.productionPlans
   ?.find((item: Row) => item.id === uploadForm.contentPlanId));
 const selectedUploadModels = computed(() => dataCenter.uploadOptions.products
@@ -394,7 +463,14 @@ function percent(value?: number | string) {
 }
 
 function platformLabel(value?: string) {
-  return ({ DOUYIN: "抖音", TIKTOK: "TikTok", XIAOHONGSHU: "小红书", WECHAT_CHANNELS: "视频号" } as Record<string, string>)[String(value)] || value || "未设置";
+  return ({
+    DOUYIN: "抖音",
+    TIKTOK: "TikTok",
+    XIAOHONGSHU: "小红书",
+    BILIBILI: "B站",
+    WECHAT_CHANNELS: "视频号",
+    KUAISHOU: "快手",
+  } as Record<string, string>)[String(value)] || value || "未设置";
 }
 
 function projectCandidates(project: Row) {
@@ -533,14 +609,14 @@ function openTeamTaskEdit(task: Row) {
     assigneeEmployeeId: task.assigneeEmployeeId || task.assignee?.id || "",
     title: task.title || "",
     description: task.description || "",
-    descriptionDocument: task.descriptionDocument || emptyTaskDocument(),
+    descriptionDocument: taskEditorDocument(task.descriptionDocument, task.description),
     expectedResult: task.expectedResult || "",
-    expectedResultDocument: task.expectedResultDocument || emptyTaskDocument(),
+    expectedResultDocument: taskEditorDocument(task.expectedResultDocument, task.expectedResult),
     priority: task.priority || "MEDIUM",
     dueAt: task.dueAt || "",
     recurrenceWeekdays: [],
     recurrenceDueTime: "23:59",
-    attachments: (task.evidence?.attachments || []).join("\n"),
+    attachments: taskAttachments(task).map((item) => item.url).filter(Boolean).join("\n"),
   });
   teamTaskVisible.value = true;
 }
@@ -622,9 +698,9 @@ function openSelfTaskEdit(task: Row) {
   Object.assign(selfTaskForm, {
     title: task.title || "",
     description: task.description || "",
-    descriptionDocument: task.descriptionDocument || emptyTaskDocument(),
+    descriptionDocument: taskEditorDocument(task.descriptionDocument, task.description),
     expectedResult: task.expectedResult || "",
-    expectedResultDocument: task.expectedResultDocument || emptyTaskDocument(),
+    expectedResultDocument: taskEditorDocument(task.expectedResultDocument, task.expectedResult),
     priority: task.priority || "MEDIUM",
     dueAt: task.dueAt || "",
     recurrenceWeekdays: [],
@@ -858,6 +934,69 @@ async function generateVideoProject(project: Row, candidateIndex = 0) {
   }
 }
 
+function videoProjectHasActiveJob(project: Row) {
+  const activeStatuses = ["PENDING", "RUNNING", "RETRY"];
+  return project.videoGenerationJobs?.some((job: Row) => activeStatuses.includes(job.status))
+    || project.videoRenderJobs?.some((job: Row) => activeStatuses.includes(job.status));
+}
+
+async function archiveVideoProject(project: Row) {
+  if (videoProjectHasActiveJob(project)) {
+    return ElMessage.warning("该项目仍在生成素材或剪辑，任务结束后才能删除");
+  }
+  await ElMessageBox.confirm(
+    `确认删除“${project.topic}”？项目会从视频工厂隐藏，历史镜头、成片和审核记录仍会安全保留。`,
+    "删除视频项目",
+    { confirmButtonText: "确认删除", cancelButtonText: "取消", type: "warning" },
+  );
+  archivingVideoProjectId.value = project.id;
+  try {
+    await post(`/api/v1/workbench/data-center/video-projects/${project.id}/archive`);
+    ElMessage.success("视频项目已删除");
+    await invalidateDataCenterSection("videoFactory");
+    await loadDataCenter(true);
+    if (videoRecycleBinVisible.value) await loadVideoRecycleBin();
+  } finally {
+    archivingVideoProjectId.value = "";
+  }
+}
+
+async function loadVideoRecycleBin() {
+  videoRecycleBinLoading.value = true;
+  try {
+    videoRecycleProjects.value = await api<Row[]>("/api/v1/workbench/data-center/video-projects-recycle-bin");
+  } finally {
+    videoRecycleBinLoading.value = false;
+  }
+}
+
+async function openVideoRecycleBin() {
+  videoRecycleBinVisible.value = true;
+  await loadVideoRecycleBin();
+}
+
+function recycleRemainingText(project: Row) {
+  const remaining = new Date(project.purgeAfter).getTime() - Date.now();
+  if (remaining <= 0) return "恢复期限已到";
+  const hours = Math.ceil(remaining / (60 * 60 * 1000));
+  if (hours >= 24) return `剩余 ${Math.ceil(hours / 24)} 天`;
+  return `剩余 ${hours} 小时`;
+}
+
+async function restoreVideoProject(project: Row) {
+  restoringVideoProjectId.value = project.id;
+  try {
+    await post(`/api/v1/workbench/data-center/video-projects/${project.id}/restore`);
+    ElMessage.success("视频项目已恢复");
+    await Promise.all([
+      loadVideoRecycleBin(),
+      invalidateDataCenterSection("videoFactory").then(() => loadDataCenter(true)),
+    ]);
+  } finally {
+    restoringVideoProjectId.value = "";
+  }
+}
+
 async function filterVideoProjects() {
   videoProjectPage.value = 1;
   await invalidateDataCenterSection("videoFactory");
@@ -952,6 +1091,91 @@ async function renderWorkbenchProject(project: Row) {
   }
 }
 
+function openVideoReview(project: Row, job: Row, action: "APPROVE" | "RETURN") {
+  videoReviewProject.value = project;
+  videoReviewJob.value = job;
+  videoReviewForm.action = action;
+  videoReviewForm.note = "";
+  videoReviewVisible.value = true;
+}
+
+async function reviewWorkbenchVideo() {
+  const project = videoReviewProject.value;
+  const job = videoReviewJob.value;
+  if (!project?.id || !job?.outputAsset?.id) return;
+  if (videoReviewForm.action === "RETURN" && !videoReviewForm.note.trim()) {
+    return ElMessage.warning("退回成片时请填写具体修改说明");
+  }
+  reviewingVideoAssetId.value = job.outputAsset.id;
+  try {
+    await post(`/api/v1/workbench/data-center/video-projects/${project.id}/review`, {
+      outputAssetId: job.outputAsset.id,
+      action: videoReviewForm.action,
+      note: videoReviewForm.note.trim(),
+    });
+    videoReviewVisible.value = false;
+    ElMessage.success(videoReviewForm.action === "APPROVE"
+      ? "成片审核通过，可以继续生成封面和标题"
+      : "成片已退回，修改说明已同步到后台优化流程");
+    await invalidateDataCenterSection("videoFactory");
+    await loadDataCenter(true);
+  } finally {
+    reviewingVideoAssetId.value = "";
+  }
+}
+
+function openSimilarVideo(project: Row, job: Row) {
+  similarVideoProject.value = project;
+  similarVideoJob.value = job;
+  similarVideoForm.replaceHook = true;
+  similarVideoForm.hook = "";
+  similarVideoForm.replaceProduct = false;
+  similarVideoForm.productModel = project.productModel || "";
+  similarVideoForm.replaceFeature = false;
+  similarVideoForm.feature = "";
+  similarVideoVisible.value = true;
+}
+
+async function createSimilarVideo() {
+  const project = similarVideoProject.value;
+  const outputAssetId = similarVideoJob.value?.outputAsset?.id;
+  if (!project?.id || !outputAssetId) return;
+  if (!similarVideoForm.replaceHook && !similarVideoForm.replaceProduct && !similarVideoForm.replaceFeature) {
+    return ElMessage.warning("请至少选择一项需要替换的内容");
+  }
+  if (similarVideoForm.replaceHook && !similarVideoForm.hook.trim()) return ElMessage.warning("请填写新的钩子");
+  if (similarVideoForm.replaceProduct && !similarVideoForm.productModel) return ElMessage.warning("请选择新的产品型号");
+  if (similarVideoForm.replaceFeature && !similarVideoForm.feature.trim()) return ElMessage.warning("请填写新的核心功能");
+  creatingSimilarVideo.value = true;
+  try {
+    const result = await post<Row>(`/api/v1/workbench/data-center/video-projects/${project.id}/similar`, {
+      outputAssetId,
+      ...similarVideoForm,
+      hook: similarVideoForm.hook.trim(),
+      feature: similarVideoForm.feature.trim(),
+    });
+    similarVideoVisible.value = false;
+    await invalidateDataCenterSection("videoFactory");
+    await loadDataCenter(true);
+    if (result.videoShots?.every((shot: Row) => shot.selectedAssetId)) {
+      ElMessage.success("相似视频项目已生成，素材齐全，已自动进入AI剪辑");
+    } else {
+      ElMessage.success("相似视频项目已生成；缺少的画面已列为补拍或AI生成镜头");
+    }
+  } finally {
+    creatingSimilarVideo.value = false;
+  }
+}
+
+function videoReturnNote(job: Row) {
+  const checks = Array.isArray(job.qualityChecks) ? job.qualityChecks : [];
+  const finalReview = checks.find((item: Row) => item.checkType === "FINAL_REVIEW");
+  const findings = Array.isArray(finalReview?.findings) ? finalReview.findings : [];
+  return [...findings]
+    .reverse()
+    .find((item: Row) => item?.type === "EMPLOYEE_RETURN" && item?.message)?.message || "";
+}
+
 async function generateProjectPackaging(project: Row, job: Row) {
   if (!job.outputAsset?.id || generatingPackagingProjectId.value) return;
   generatingPackagingProjectId.value = project.id;
@@ -965,6 +1189,71 @@ async function generateProjectPackaging(project: Row, job: Row) {
   } finally {
     generatingPackagingProjectId.value = "";
   }
+}
+
+function openPublishLink(project: Row, job: Row) {
+  publishLinkProject.value = project;
+  publishLinkJob.value = job;
+  const published = (project.variants || [])
+    .filter((variant: Row) => variant.manualPublishUrl)
+    .map((variant: Row) => ({
+      platform: variant.platform,
+      remoteUrl: variant.manualPublishUrl,
+      publishedAt: variant.manualPublishedAt || "",
+    }));
+  publishLinkRecords.value = published.length ? published : [{
+    platform: project.targetPlatforms?.[0] || "DOUYIN",
+    remoteUrl: "",
+    publishedAt: "",
+  }];
+  publishLinkVisible.value = true;
+}
+
+function addPublishLinkRecord() {
+  const used = new Set(publishLinkRecords.value.map((record) => record.platform));
+  const next = publishPlatformOptions.find((option) => !used.has(option.value));
+  if (!next) return ElMessage.warning("所有支持的平台都已经添加");
+  publishLinkRecords.value.push({ platform: next.value, remoteUrl: "", publishedAt: "" });
+}
+
+function removePublishLinkRecord(index: number) {
+  if (publishLinkRecords.value.length === 1) return ElMessage.warning("至少保留一条发布记录");
+  publishLinkRecords.value.splice(index, 1);
+}
+
+async function savePublishLink() {
+  const project = publishLinkProject.value;
+  const outputAssetId = publishLinkJob.value?.outputAsset?.id;
+  if (!project?.id || !outputAssetId) return;
+  const records = publishLinkRecords.value.map((record) => ({
+    platform: record.platform,
+    remoteUrl: record.remoteUrl.trim(),
+    publishedAt: record.publishedAt || undefined,
+  }));
+  if (new Set(records.map((record) => record.platform)).size !== records.length) {
+    return ElMessage.warning("同一平台请只添加一条发布记录");
+  }
+  if (records.some((record) => !record.platform || !/^https?:\/\/\S+$/i.test(record.remoteUrl))) {
+    return ElMessage.warning("请为每个平台填写完整作品链接");
+  }
+  savingPublishLink.value = true;
+  try {
+    await post(`/api/v1/workbench/data-center/video-projects/${project.id}/manual-publish`, {
+      outputAssetId,
+      records,
+    });
+    publishLinkVisible.value = false;
+    ElMessage.success("发布链接已回传，系统将按计划跟踪视频数据");
+    await invalidateDataCenterSection("videoFactory");
+    await loadDataCenter(true);
+  } finally {
+    savingPublishLink.value = false;
+  }
+}
+
+function openPublishedVideo(url: string) {
+  if (!/^https?:\/\//i.test(url)) return ElMessage.warning("发布链接不完整");
+  window.open(url, "_blank", "noopener,noreferrer");
 }
 
 async function openPackagingPreview(project: Row, variant: Row) {
@@ -1321,9 +1610,13 @@ async function readAllNotices() {
 }
 
 function logout() {
+  const locationKey = workbenchLocationKey();
+  if (locationKey) localStorage.removeItem(locationKey);
   clearToken();
   dataCenterCache.clear();
   user.value = undefined;
+  active.value = "home";
+  dataCenterTab.value = "knowledge";
   void loadQr();
 }
 
@@ -1388,7 +1681,9 @@ async function bootstrap() {
         roles: identity.roles || [],
         permissions: identity.permissions || [],
       };
+      restoreWorkbenchLocation();
       await loadDashboard();
+      if (active.value !== "home") await switchPage(active.value);
     } else {
       await loadQr();
     }
@@ -1844,21 +2139,34 @@ onMounted(() => void bootstrap());
               <h3>视频方向与脚本</h3>
               <p>最新生成的项目优先显示，每页 {{ videoProjectPageSize }} 条。</p>
             </div>
-            <el-select v-model="videoProjectStatus" clearable placeholder="全部方向状态" @change="filterVideoProjects">
-              <el-option label="方向与脚本已生成" value="FACTORY_SCRIPT_READY" />
-              <el-option label="素材准备中" value="FACTORY_GENERATING" />
-              <el-option label="可进入AI剪辑" value="READY_TO_EDIT" />
-              <el-option label="AI剪辑中" value="EDITING" />
-              <el-option label="成片待审核" value="VIDEO_REVIEW" />
-              <el-option label="包装待审核" value="PACKAGING_REVIEW" />
-            </el-select>
+            <div class="factory-results-actions">
+              <el-select v-model="videoProjectStatus" clearable placeholder="全部方向状态" @change="filterVideoProjects">
+                <el-option label="方向与脚本已生成" value="FACTORY_SCRIPT_READY" />
+                <el-option label="素材准备中" value="FACTORY_GENERATING" />
+                <el-option label="可进入AI剪辑" value="READY_TO_EDIT" />
+                <el-option label="AI剪辑中" value="EDITING" />
+                <el-option label="成片待审核" value="VIDEO_REVIEW" />
+                <el-option label="包装待审核" value="PACKAGING_REVIEW" />
+              </el-select>
+              <el-button v-if="canGenerateVideoScript" @click="openVideoRecycleBin">回收站</el-button>
+            </div>
           </div>
 
           <div class="factory-projects">
             <article v-for="project in dataCenter.videoProjects || []" :key="project.id" class="section-card factory-project">
               <div class="factory-project-head">
                 <div><div class="task-meta"><span>{{ platformLabel(project.targetPlatforms?.[0]) }}</span><span>{{ project.productModel || "品牌通用" }}</span><span>{{ videoVoiceoverLabel(project) }}</span><span>{{ project.productionNo }}</span><span>生成于 {{ formatTime(project.createdAt) }}</span><span v-if="project.updatedAt !== project.createdAt">更新于 {{ formatTime(project.updatedAt) }}</span></div><h3>{{ project.topic }}</h3></div>
-                <el-tag>{{ videoProjectStageLabel(project.productionStage) }}</el-tag>
+                <div class="factory-project-head-actions">
+                  <el-tag>{{ videoProjectStageLabel(project.productionStage) }}</el-tag>
+                  <el-button
+                    v-if="canGenerateVideoScript"
+                    type="danger"
+                    plain
+                    :disabled="videoProjectHasActiveJob(project)"
+                    :loading="archivingVideoProjectId === project.id"
+                    @click="archiveVideoProject(project)"
+                  >删除</el-button>
+                </div>
               </div>
               <div class="candidate-grid">
                 <article v-for="(candidate, index) in projectCandidates(project)" :key="`${project.id}-${index}`">
@@ -1929,13 +2237,44 @@ onMounted(() => void bootstrap());
                       <p>{{ job.outputAsset?.displayName || job.outputAsset?.fileName || `渲染任务 ${job.id.slice(-6)}` }}</p>
                       <small>提交于 {{ formatTime(job.createdAt) }}<template v-if="job.finishedAt"> · 完成于 {{ formatTime(job.finishedAt) }}</template></small>
                       <el-alert v-if="job.failureReason" :title="job.failureReason" type="error" :closable="false" />
+                      <el-alert v-if="videoReturnNote(job)" :title="`退回说明：${videoReturnNote(job)}`" type="warning" :closable="false" />
                       <small v-if="job.status === 'SUCCEEDED' && job.outputAsset?.reviewStatus === 'PENDING'" class="review-hint">已提交内容审核，请等待审核结果</small>
                     </div>
                     <div class="finished-video-actions">
                       <el-button v-if="job.outputAsset" @click="openAssetPreview(job.outputAsset, '成片预览')">预览成片</el-button>
                       <el-button v-if="job.outputAsset" @click="downloadWorkbenchAsset(job.outputAsset)">下载成片</el-button>
                       <el-button
-                        v-if="job.status === 'SUCCEEDED' && job.outputAsset && can('CONTENT_SUBMIT')"
+                        v-if="job.status === 'SUCCEEDED' && job.outputAsset?.reviewStatus === 'APPROVED' && canGenerateVideoScript"
+                        @click="openPublishLink(project, job)"
+                      >{{ project.variants?.some((variant: Row) => variant.manualPublishUrl) ? "更新发布链接" : "回传发布链接" }}</el-button>
+                      <el-button
+                        v-for="variant in project.variants?.filter((item: Row) => item.manualPublishUrl) || []"
+                        :key="`${job.id}-${variant.id}-published`"
+                        type="success"
+                        plain
+                        @click="openPublishedVideo(variant.manualPublishUrl)"
+                      >查看{{ platformLabel(variant.platform) }}作品</el-button>
+                      <template v-if="job.status === 'SUCCEEDED' && job.outputAsset?.reviewStatus === 'PENDING' && canGenerateVideoScript">
+                        <el-button
+                          type="success"
+                          :loading="reviewingVideoAssetId === job.outputAsset.id"
+                          @click="openVideoReview(project, job, 'APPROVE')"
+                        >审核通过</el-button>
+                        <el-button
+                          type="danger"
+                          plain
+                          :loading="reviewingVideoAssetId === job.outputAsset.id"
+                          @click="openVideoReview(project, job, 'RETURN')"
+                        >退回修改</el-button>
+                      </template>
+                      <el-button
+                        v-if="job.status === 'SUCCEEDED' && job.outputAsset?.reviewStatus === 'APPROVED' && canGenerateVideoScript"
+                        type="success"
+                        plain
+                        @click="openSimilarVideo(project, job)"
+                      >一键生成类似视频</el-button>
+                      <el-button
+                        v-if="job.status === 'SUCCEEDED' && job.outputAsset?.reviewStatus === 'APPROVED' && canGenerateVideoScript"
                         type="primary"
                         :loading="generatingPackagingProjectId === project.id"
                         @click="generateProjectPackaging(project, job)"
@@ -2312,6 +2651,164 @@ onMounted(() => void bootstrap());
         <el-alert title="确认后进入平台包装审核；需要调整时可关闭预览并重新生成。" type="info" :closable="false" />
       </div>
     </div>
+  </el-dialog>
+
+  <el-dialog
+    v-model="publishLinkVisible"
+    title="回传已发布视频"
+    width="min(620px, 94vw)"
+    destroy-on-close
+  >
+    <el-alert title="回传后系统会保存作品链接，并按发布后1/3/6/24/72小时及7/30日安排数据跟踪。" type="info" :closable="false" />
+    <div class="publish-link-list">
+      <article v-for="(record, index) in publishLinkRecords" :key="index" class="publish-link-row">
+        <el-form label-position="top" class="publish-link-form">
+          <el-form-item label="实际发布平台" required>
+            <el-select v-model="record.platform" placeholder="选择发布平台">
+              <el-option
+                v-for="option in publishPlatformOptions"
+                :key="option.value"
+                :label="option.label"
+                :value="option.value"
+                :disabled="publishLinkRecords.some((item, itemIndex) => itemIndex !== index && item.platform === option.value)"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="作品链接" required>
+            <el-input v-model="record.remoteUrl" placeholder="https://... 完整作品链接" />
+          </el-form-item>
+          <el-form-item label="发布时间（不填则按现在计算）">
+            <el-date-picker
+              v-model="record.publishedAt"
+              type="datetime"
+              value-format="YYYY-MM-DDTHH:mm:ss"
+              placeholder="选择实际发布时间"
+            />
+          </el-form-item>
+        </el-form>
+        <el-button type="danger" plain @click="removePublishLinkRecord(index)">移除</el-button>
+      </article>
+      <el-button class="add-publish-link" plain @click="addPublishLinkRecord">+ 添加另一个发布平台</el-button>
+    </div>
+    <template #footer>
+      <el-button @click="publishLinkVisible = false">取消</el-button>
+      <el-button type="primary" :loading="savingPublishLink" @click="savePublishLink">保存并开始数据跟踪</el-button>
+    </template>
+  </el-dialog>
+
+  <el-dialog
+    v-model="videoRecycleBinVisible"
+    title="视频项目回收站"
+    width="min(760px, 94vw)"
+    destroy-on-close
+  >
+    <el-alert title="这里只显示你自己删除的视频项目。删除后保留3天，期限内可以恢复。" type="info" :closable="false" />
+    <div v-loading="videoRecycleBinLoading" class="video-recycle-list">
+      <article v-for="project in videoRecycleProjects" :key="project.id" class="video-recycle-item">
+        <div>
+          <div class="task-meta">
+            <span>{{ platformLabel(project.targetPlatforms?.[0]) }}</span>
+            <span>{{ project.productModel || "品牌通用" }}</span>
+            <span>{{ project.productionNo }}</span>
+          </div>
+          <strong>{{ project.topic }}</strong>
+          <small>删除于 {{ formatTime(project.archivedAt) }} · {{ recycleRemainingText(project) }}</small>
+        </div>
+        <el-button
+          type="primary"
+          plain
+          :loading="restoringVideoProjectId === project.id"
+          @click="restoreVideoProject(project)"
+        >恢复项目</el-button>
+      </article>
+      <el-empty v-if="!videoRecycleBinLoading && !videoRecycleProjects.length" description="回收站暂无可恢复的视频项目" />
+    </div>
+    <template #footer><el-button @click="videoRecycleBinVisible = false">关闭</el-button></template>
+  </el-dialog>
+
+  <el-dialog
+    v-model="similarVideoVisible"
+    title="一键生成类似视频"
+    width="min(680px, 94vw)"
+    destroy-on-close
+  >
+    <div class="similar-video-intro">
+      <strong>{{ similarVideoProject?.topic || "当前成片" }}</strong>
+      <p>保留已审核成片的节奏、时长、镜头结构和平台规格，只替换你勾选的内容。</p>
+    </div>
+    <el-form label-position="top" class="similar-video-form">
+      <div class="similar-video-option">
+        <el-checkbox v-model="similarVideoForm.replaceHook">替换钩子</el-checkbox>
+        <el-input
+          v-model="similarVideoForm.hook"
+          :disabled="!similarVideoForm.replaceHook"
+          placeholder="例如：爸妈总说不用买，其实最担心的是这个"
+        />
+      </div>
+      <div class="similar-video-option">
+        <el-checkbox v-model="similarVideoForm.replaceProduct">替换产品</el-checkbox>
+        <el-select
+          v-model="similarVideoForm.productModel"
+          :disabled="!similarVideoForm.replaceProduct"
+          filterable
+          placeholder="搜索或选择产品型号"
+        >
+          <el-option v-for="product in productOptions" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" />
+        </el-select>
+      </div>
+      <div class="similar-video-option">
+        <el-checkbox v-model="similarVideoForm.replaceFeature">替换核心功能</el-checkbox>
+        <el-input
+          v-model="similarVideoForm.feature"
+          :disabled="!similarVideoForm.replaceFeature"
+          placeholder="例如：一键SOS、独立GPS、睡眠监测"
+        />
+      </div>
+    </el-form>
+    <el-alert
+      title="更换产品或功能后，系统会重新匹配素材库。不会把旧产品素材直接套入新视频；缺少的画面会明确列为补拍或AI生成。"
+      type="info"
+      :closable="false"
+    />
+    <template #footer>
+      <el-button @click="similarVideoVisible = false">取消</el-button>
+      <el-button type="primary" :loading="creatingSimilarVideo" @click="createSimilarVideo">确认并一键生成</el-button>
+    </template>
+  </el-dialog>
+
+  <el-dialog
+    v-model="videoReviewVisible"
+    :title="videoReviewForm.action === 'APPROVE' ? '审核通过成片' : '退回成片修改'"
+    width="min(620px, 94vw)"
+    destroy-on-close
+  >
+    <el-alert
+      v-if="videoReviewForm.action === 'RETURN'"
+      title="退回说明会同步到后台，并写入下一次成片任务的优化要求。"
+      type="warning"
+      :closable="false"
+    />
+    <el-form label-position="top" class="video-review-form">
+      <el-form-item label="成片">
+        <strong>{{ videoReviewJob?.outputAsset?.displayName || videoReviewJob?.outputAsset?.fileName || "当前成片" }}</strong>
+      </el-form-item>
+      <el-form-item :label="videoReviewForm.action === 'RETURN' ? '退回说明（必填）' : '审核说明（可选）'">
+        <el-input
+          v-model="videoReviewForm.note"
+          type="textarea"
+          :rows="5"
+          :placeholder="videoReviewForm.action === 'RETURN' ? '请具体说明需要修改的字幕、配音、画面、节奏、产品展示或 CTA 等问题' : '可填写确认意见'"
+        />
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="videoReviewVisible = false">取消</el-button>
+      <el-button
+        :type="videoReviewForm.action === 'APPROVE' ? 'success' : 'danger'"
+        :loading="Boolean(reviewingVideoAssetId)"
+        @click="reviewWorkbenchVideo"
+      >{{ videoReviewForm.action === "APPROVE" ? "确认通过" : "确认退回并同步说明" }}</el-button>
+    </template>
   </el-dialog>
 
   <el-drawer v-model="assetPreviewVisible" :title="assetPreviewTitle" size="min(860px, 96vw)" destroy-on-close>

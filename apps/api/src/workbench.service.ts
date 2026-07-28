@@ -665,9 +665,35 @@ export class WorkbenchService {
     const expectedResult = body.expectedResultDocument !== undefined || body.expectedResult !== undefined
       ? taskDocumentFields(body.expectedResultDocument, body.expectedResult)
       : null;
+    let reassignment: {
+      assigneeEmployeeId: string;
+      owner: string;
+      requiredRoleCode: string;
+    } | null = null;
+    if (task.sourceType === "OPERATOR_COLLAB" && body.assigneeEmployeeId !== undefined) {
+      const assigneeEmployeeId = value(body.assigneeEmployeeId);
+      const assignee = await this.prisma.employee.findFirst({
+        where: {
+          id: assigneeEmployeeId,
+          supervisorEmployeeId: session.employeeId,
+          status: "ACTIVE",
+          roles: { some: { role: { code: { in: collaborationRoleCodes }, active: true } } },
+        },
+        include: { roles: { include: { role: true } } },
+      });
+      if (!assignee) throw new BadRequestException("只能把任务调整给当前协作成员");
+      reassignment = {
+        assigneeEmployeeId,
+        owner: assignee.name,
+        requiredRoleCode: collaborationRoleCodes.find(
+          (code) => assignee.roles.some((item) => item.role.active && item.role.code === code),
+        )!,
+      };
+    }
     const updated = await this.prisma.opsTask.update({
       where: { id },
       data: {
+        ...(reassignment || {}),
         ...(body.title !== undefined ? { title: value(body.title) || task.title } : {}),
         ...(description ? {
           description: description.text || null,
@@ -679,6 +705,9 @@ export class WorkbenchService {
         } : {}),
         ...(body.priority !== undefined ? { priority: value(body.priority).toUpperCase() || task.priority } : {}),
         ...(body.dueAt !== undefined ? { dueAt: taskDueAt(body.dueAt) } : {}),
+        ...(body.attachments !== undefined && Array.isArray(body.attachments)
+          ? { evidence: { attachments: body.attachments.map(value).filter(Boolean) } }
+          : {}),
       },
       include: this.taskInclude(),
     });
@@ -688,6 +717,11 @@ export class WorkbenchService {
       }),
       task.sourceType === "OPERATOR_COLLAB" && task.assigneeEmployeeId
         ? this.notify(id, task.assigneeEmployeeId, "TEAM_TASK_UPDATED", "协作任务已修改", updated.title)
+        : Promise.resolve(),
+      task.sourceType === "OPERATOR_COLLAB"
+        && reassignment
+        && reassignment.assigneeEmployeeId !== task.assigneeEmployeeId
+        ? this.notify(id, reassignment.assigneeEmployeeId, "TEAM_TASK_ASSIGNED", "收到调整后的协作任务", updated.title)
         : Promise.resolve(),
       this.audit(session.name, "TASK_UPDATE", "OpsTask", id, { dueAt: updated.dueAt, priority: updated.priority }),
     ]);
