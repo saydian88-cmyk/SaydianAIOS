@@ -23,8 +23,6 @@ mapfile -t stale_backups < <(find "$base/backups" -maxdepth 1 -type f -name 'pre
 if ((${#stale_backups[@]})); then
   rm -f -- "${stale_backups[@]}"
 fi
-docker container prune -f >/dev/null
-docker image prune -af >/dev/null
 
 if docker compose --env-file "$production_env" --env-file "$images" -f "$compose" ps --status running -q postgres 2>/dev/null | grep -q .; then
   stamp="$(date +%Y%m%d-%H%M%S)"
