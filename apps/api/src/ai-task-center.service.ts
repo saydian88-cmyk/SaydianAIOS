@@ -1059,7 +1059,6 @@ export class AiTaskCenterService implements OnModuleInit {
 
   async createDailyContentTasks(now = new Date(), actor = "系统自动化") {
     const key = dateKey(now);
-    const topicCards = await this.createDailyTopicCardTasks(now, actor);
     const keyword = await this.prisma.smartKeyword.findFirst({
       where: { status: "ACTIVE", contentEnabled: true, grade: { in: ["S", "A"] } },
       include: { product: true },
@@ -1080,7 +1079,7 @@ export class AiTaskCenterService implements OnModuleInit {
       title: `每日智能软文 ${key}`,
       idempotencyKey: `ai-task:daily:article:${key}`,
     }, actor);
-    return { topicCards, article: { id: article.id, status: article.status } };
+    return { article: { id: article.id, status: article.status } };
   }
 
   async createDailyAnalysisTasks(now = new Date(), actor = "系统自动化") {

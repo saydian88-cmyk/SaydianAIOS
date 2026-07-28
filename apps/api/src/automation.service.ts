@@ -15,7 +15,7 @@ export const jobKinds = [
   "IMPORT_BOOTSTRAP", "SYNC_ASSETS", "SYNC_KNOWLEDGE", "CHECK_INTEGRATIONS", "SYNC_SHOP", "GENERATE_CONTENT",
   "SEND_REVIEW_NOTICE", "QUEUE_PUBLISH", "PROCESS_PUBLISH", "SYNC_COMMENTS", "SYNC_LIVE", "SYNC_METRICS",
   "SYNC_JUSHUITAN", "DAILY_REPORT", "WEEKLY_REPORT",
-  "CREATE_AI_ANALYSIS_TASKS", "CREATE_AI_CONTENT_TASKS",
+  "CREATE_AI_ANALYSIS_TASKS", "CREATE_VIDEO_TOPIC_CARDS", "CREATE_AI_CONTENT_TASKS",
 ] as const;
 export type AutomationKind = (typeof jobKinds)[number];
 
@@ -47,7 +47,7 @@ export class AutomationService {
     const key = localDateKey(now);
     const kinds: AutomationKind[] = [
       "IMPORT_BOOTSTRAP", "SYNC_ASSETS", "SYNC_KNOWLEDGE", "CHECK_INTEGRATIONS", "SYNC_SHOP",
-      "SYNC_JUSHUITAN", "CREATE_AI_ANALYSIS_TASKS", "CREATE_AI_CONTENT_TASKS", "SEND_REVIEW_NOTICE",
+      "SYNC_JUSHUITAN", "CREATE_AI_ANALYSIS_TASKS", "CREATE_VIDEO_TOPIC_CARDS", "CREATE_AI_CONTENT_TASKS", "SEND_REVIEW_NOTICE",
       "SYNC_COMMENTS", "SYNC_LIVE", "SYNC_METRICS", "DAILY_REPORT",
     ];
     for (const kind of kinds) await this.enqueue(kind, now, `${key}:${kind}`, { triggeredBy });
@@ -77,6 +77,11 @@ export class AutomationService {
   }
 
   @Cron("0 45 6 * * *", { timeZone: "Asia/Shanghai" })
+  async scheduleVideoTopicCards() {
+    await this.enqueue("CREATE_VIDEO_TOPIC_CARDS", new Date(), localDateKey());
+  }
+
+  @Cron("0 0 7 * * *", { timeZone: "Asia/Shanghai" })
   async scheduleContent() {
     await this.enqueue("CREATE_AI_CONTENT_TASKS", new Date(), localDateKey());
   }
@@ -191,6 +196,7 @@ export class AutomationService {
           : { skipped: true, message: status.message };
       }
       case "CREATE_AI_ANALYSIS_TASKS": return this.aiTasks.createDailyAnalysisTasks(new Date(), actor);
+      case "CREATE_VIDEO_TOPIC_CARDS": return this.aiTasks.createDailyTopicCardTasks(new Date(), actor);
       case "CREATE_AI_CONTENT_TASKS": return this.aiTasks.createDailyContentTasks(new Date(), actor);
       case "DAILY_REPORT": return this.reports.generateDaily();
       case "WEEKLY_REPORT": return this.reports.generateWeekly();
