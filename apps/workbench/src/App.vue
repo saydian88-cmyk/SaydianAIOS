@@ -47,6 +47,8 @@ const taskScope = ref("MINE");
 const taskStatus = ref("");
 const taskDetailVisible = ref(false);
 const taskDetail = ref<Row>();
+const taskDetailLoading = ref(false);
+const taskOutputUrls = reactive<Record<string, string>>({});
 const emptyTaskDocument = () => ({ type: "doc", content: [{ type: "paragraph" }] });
 const taskEditorDocument = (document: unknown, text: unknown) => {
   if (document && typeof document === "object" && (document as Row).type === "doc" && Array.isArray((document as Row).content)) {
@@ -64,7 +66,14 @@ const selfTaskVisible = ref(false);
 const creatingSelfTask = ref(false);
 const editingSelfTaskId = ref("");
 const copyingSelfTask = ref(false);
+const contentTaskOptions = reactive<Row>({ products: [], keywords: [] });
+const contentTaskOptionsLoaded = ref(false);
+const generatingTaskSuggestion = ref(false);
 const selfTaskForm = reactive({
+  contentType: "SHORT_VIDEO",
+  productId: "",
+  keywordId: "",
+  platform: "DOUYIN",
   title: "",
   description: "",
   descriptionDocument: emptyTaskDocument(),
@@ -75,6 +84,11 @@ const selfTaskForm = reactive({
   recurrenceWeekdays: [] as number[],
   recurrenceDueTime: "23:59",
 });
+const filteredTaskKeywords = computed(() => (contentTaskOptions.keywords || []).filter((item: Row) => {
+  if (selfTaskForm.productId && item.productId && item.productId !== selfTaskForm.productId) return false;
+  if (selfTaskForm.platform && String(item.platform) !== selfTaskForm.platform) return false;
+  return true;
+}));
 const operationTeam = reactive<Row>({ supervisor: null, directReports: [], invitations: { incoming: [], outgoing: [] }, operators: [] });
 const teamTasks = ref<Row[]>([]);
 const receivedTeamTasks = ref<Row[]>([]);
@@ -362,6 +376,16 @@ const statusLabels: Record<string, string> = {
   RETURNED: "需修改",
   COMPLETED: "已完成",
   CANCELLED: "已取消",
+  PENDING: "等待执行",
+  WAITING_CONFIRMATION: "等待确认",
+  WAITING_INPUT: "等待资料",
+  CLAIMED: "已领取",
+  RUNNING: "Codex处理中",
+  QUALITY_CHECK: "自动质检",
+  UPLOADING: "上传中",
+  PENDING_REVIEW: "成果待审核",
+  RETRY: "重试中",
+  FAILED: "执行失败",
 };
 const priorityLabels: Record<string, string> = {
   URGENT: "紧急",
@@ -769,10 +793,20 @@ async function invalidateDataCenterSection(section = dataCenterTab.value) {
   await deletePersistentDataCenterSection(section);
 }
 
-function openSelfTask() {
+async function ensureContentTaskOptions() {
+  if (contentTaskOptionsLoaded.value) return;
+  Object.assign(contentTaskOptions, await api<Row>("/api/v1/workbench/task-creation/options"));
+  contentTaskOptionsLoaded.value = true;
+}
+
+async function openSelfTask() {
   editingSelfTaskId.value = "";
   copyingSelfTask.value = false;
   Object.assign(selfTaskForm, {
+    contentType: "SHORT_VIDEO",
+    productId: "",
+    keywordId: "",
+    platform: "DOUYIN",
     title: "",
     description: "",
     descriptionDocument: emptyTaskDocument(),
@@ -784,12 +818,18 @@ function openSelfTask() {
     recurrenceDueTime: "23:59",
   });
   selfTaskVisible.value = true;
+  await ensureContentTaskOptions();
 }
 
-function openSelfTaskEdit(task: Row) {
+async function openSelfTaskEdit(task: Row) {
   editingSelfTaskId.value = task.id;
   copyingSelfTask.value = false;
+  const evidence = task.evidence || {};
   Object.assign(selfTaskForm, {
+    contentType: evidence.contentType || (task.category === "CONTENT_IMAGE" ? "IMAGE" : task.category === "CONTENT_ARTICLE" ? "ARTICLE" : "SHORT_VIDEO"),
+    productId: task.productId || "",
+    keywordId: evidence.keywordId || "",
+    platform: task.platform || "DOUYIN",
     title: task.title || "",
     description: task.description || "",
     descriptionDocument: taskEditorDocument(task.descriptionDocument, task.description),
@@ -801,10 +841,11 @@ function openSelfTaskEdit(task: Row) {
     recurrenceDueTime: "23:59",
   });
   selfTaskVisible.value = true;
+  await ensureContentTaskOptions();
 }
 
-function openSelfTaskCopy(task: Row) {
-  openSelfTaskEdit(task);
+async function openSelfTaskCopy(task: Row) {
+  await openSelfTaskEdit(task);
   editingSelfTaskId.value = "";
   copyingSelfTask.value = true;
   selfTaskForm.recurrenceWeekdays = [];
@@ -820,9 +861,70 @@ function quickDue(target: { dueAt: string }, mode: "TODAY" | "WEEK") {
   target.dueAt = due.toISOString();
 }
 
-function openTaskDetail(task: Row) {
-  taskDetail.value = task;
+async function openTaskDetail(task: Row) {
+  taskDetailLoading.value = true;
   taskDetailVisible.value = true;
+  try {
+    const fullTask = await api<Row>(`/api/v1/workbench/tasks/${task.id}`);
+    taskDetail.value = fullTask;
+    Object.keys(taskOutputUrls).forEach((key) => delete taskOutputUrls[key]);
+    await Promise.all((fullTask.aiTaskOutputs || []).map(async (output: Row) => {
+      if (!output.assetId && !output.url) return;
+      try {
+        const result = await api<Row>(`/api/v1/workbench/tasks/${fullTask.id}/outputs/${output.id}/url`);
+        if (result.url) taskOutputUrls[output.id] = result.url;
+      } catch {
+        // 保留成果文字信息；没有可访问文件时不阻塞详情。
+      }
+    }));
+  } finally {
+    taskDetailLoading.value = false;
+  }
+}
+
+function outputMime(output: Row) {
+  return String(output.mimeType || output.asset?.mediaType || "").toLowerCase();
+}
+
+function isVideoOutput(output: Row) {
+  return outputMime(output).startsWith("video/") || output.kind === "VIDEO_MASTER";
+}
+
+function isImageOutput(output: Row) {
+  return outputMime(output).startsWith("image/") || output.kind === "IMAGE_ASSET";
+}
+
+function isPdfOutput(output: Row) {
+  return outputMime(output) === "application/pdf" || String(output.asset?.extension || "").toLowerCase() === ".pdf";
+}
+
+function outputText(output: Row) {
+  if (output.contentPlan?.variants?.length) {
+    return output.contentPlan.variants.map((item: Row) => `${item.title}\n${item.body}`).join("\n\n");
+  }
+  if (output.report) return `${output.report.summary || ""}\n${JSON.stringify(output.report.sections || [], null, 2)}`;
+  return "";
+}
+
+async function generateTaskSuggestion() {
+  if (!selfTaskForm.productId || !selfTaskForm.keywordId) return ElMessage.warning("请先选择产品和关键词");
+  generatingTaskSuggestion.value = true;
+  try {
+    const suggestion = await post<Row>("/api/v1/workbench/task-creation/suggest", {
+      contentType: selfTaskForm.contentType,
+      productId: selfTaskForm.productId,
+      keywordId: selfTaskForm.keywordId,
+      platform: selfTaskForm.platform,
+    });
+    selfTaskForm.title = suggestion.title || selfTaskForm.title;
+    selfTaskForm.description = suggestion.description || "";
+    selfTaskForm.descriptionDocument = taskEditorDocument(null, suggestion.description);
+    selfTaskForm.expectedResult = suggestion.expectedResult || "";
+    selfTaskForm.expectedResultDocument = taskEditorDocument(null, suggestion.expectedResult);
+    ElMessage.success("已生成选题、推荐和任务提示");
+  } finally {
+    generatingTaskSuggestion.value = false;
+  }
 }
 
 async function copyTaskContent(content: unknown, label: string) {
@@ -854,23 +956,34 @@ async function createSelfTask() {
   if (!selfTaskForm.title.trim()) return ElMessage.warning("请填写任务标题");
   creatingSelfTask.value = true;
   try {
+    const category = selfTaskForm.contentType === "IMAGE"
+      ? "CONTENT_IMAGE"
+      : selfTaskForm.contentType === "ARTICLE"
+        ? "CONTENT_ARTICLE"
+        : "CONTENT_VIDEO";
+    const payload = {
+      ...selfTaskForm,
+      category,
+      evidence: {
+        contentType: selfTaskForm.contentType,
+        keywordId: selfTaskForm.keywordId || null,
+      },
+    };
     if (editingSelfTaskId.value) {
       await api(`/api/v1/workbench/tasks/${editingSelfTaskId.value}`, {
         method: "PATCH",
-        body: JSON.stringify(selfTaskForm),
+        body: JSON.stringify(payload),
       });
     } else {
-      await post("/api/v1/workbench/tasks", selfTaskForm);
+      await post("/api/v1/workbench/task-creation/submit-ai", payload);
     }
     selfTaskVisible.value = false;
     taskScope.value = "MINE";
     ElMessage.success(editingSelfTaskId.value
       ? "任务已修改"
-      : copyingSelfTask.value
-        ? "任务已复制并重新添加"
-        : selfTaskForm.recurrenceWeekdays.length
-          ? "每周固定任务已创建"
-          : "任务已添加到“我的任务”");
+        : copyingSelfTask.value
+        ? "任务已复制并提交AI任务中心"
+        : "任务已提交后台AI任务中心");
     editingSelfTaskId.value = "";
     copyingSelfTask.value = false;
     await Promise.all([loadTasks(), loadDashboard()]);
@@ -1729,12 +1842,17 @@ async function submitKnowledge() {
 }
 
 async function readNotice(item: Row) {
-  if (!item.readAt) await post(`/api/v1/workbench/notifications/${item.id}/read`);
+  const result = !item.readAt || (!item.taskId && item.aiTaskId)
+    ? await post<Row>(`/api/v1/workbench/notifications/${item.id}/read`)
+    : { taskId: item.taskId };
   item.readAt = new Date().toISOString();
-  if (item.taskId) {
-    const task = await api<Row>(`/api/v1/workbench/tasks/${item.taskId}`);
+  const taskId = item.taskId || result.taskId;
+  if (taskId) {
+    const task = await api<Row>(`/api/v1/workbench/tasks/${taskId}`);
     await switchPage(task.sourceType === "OPERATOR_COLLAB" ? "team" : "tasks");
-    openTaskDetail(task);
+    await openTaskDetail(task);
+  } else if (item.aiTaskId) {
+    ElMessage.info("该AI任务尚未形成可查看的员工成果");
   }
 }
 
@@ -2557,7 +2675,8 @@ onMounted(() => void bootstrap());
     </nav>
   </div>
 
-  <el-drawer v-model="taskDetailVisible" title="任务详情" size="min(620px, 92vw)" class="task-detail-drawer">
+  <el-drawer v-model="taskDetailVisible" title="任务详情" size="min(680px, 94vw)" class="task-detail-drawer">
+    <div v-loading="taskDetailLoading">
     <template v-if="taskDetail">
       <div class="task-detail-header">
         <div class="task-meta">
@@ -2573,6 +2692,14 @@ onMounted(() => void bootstrap());
         <div><dt>优先级</dt><dd>{{ priorityLabels[taskDetail.priority] || taskDetail.priority }}</dd></div>
         <div><dt>截止时间</dt><dd>{{ formatTime(taskDetail.dueAt) }}</dd></div>
       </dl>
+      <el-alert
+        v-if="taskDetail.aiRequest"
+        :title="`后台AI任务：${taskDetail.aiRequest.taskNo} · ${statusLabels[taskDetail.aiRequest.status] || taskDetail.aiRequest.status}`"
+        :description="`${taskDetail.aiRequest.progress || 0}% · ${taskDetail.aiRequest.progressMessage || '等待Codex处理'}`"
+        type="info"
+        :closable="false"
+        show-icon
+      />
       <section class="task-detail-section task-detail-scroll">
         <div class="task-detail-section-heading">
           <h3>任务说明</h3>
@@ -2591,14 +2718,41 @@ onMounted(() => void bootstrap());
         <h3>附件</h3>
         <a v-for="(item, index) in taskAttachments(taskDetail)" :key="item.id || index" :href="item.url || item.fileUrl" target="_blank" rel="noopener noreferrer">{{ item.name || item.fileName || `附件 ${index + 1}` }}</a>
       </section>
+      <section v-if="taskDetail.aiTaskOutputs?.length" class="task-detail-section ai-result-section">
+        <h3>AI成果与文件</h3>
+        <article v-for="output in taskDetail.aiTaskOutputs" :key="output.id" class="task-output-card">
+          <div class="task-output-heading">
+            <div><strong>{{ output.title }}</strong><span>{{ output.kind }} · {{ output.reviewStatus === "APPROVED" ? "已审核" : output.reviewStatus }}</span></div>
+            <a v-if="taskOutputUrls[output.id]" :href="taskOutputUrls[output.id]" target="_blank" rel="noopener noreferrer">预览/下载</a>
+          </div>
+          <video v-if="isVideoOutput(output) && taskOutputUrls[output.id]" :src="taskOutputUrls[output.id]" controls playsinline preload="metadata" />
+          <img v-else-if="isImageOutput(output) && taskOutputUrls[output.id]" :src="taskOutputUrls[output.id]" :alt="output.title" />
+          <iframe v-else-if="isPdfOutput(output) && taskOutputUrls[output.id]" :src="taskOutputUrls[output.id]" :title="output.title" />
+          <pre v-else-if="outputText(output)">{{ outputText(output) }}</pre>
+          <p v-else class="muted">成果已记录，当前没有可直接预览的文件。</p>
+        </article>
+      </section>
+      <section v-if="taskDetail.submissions?.length" class="task-detail-section">
+        <h3>反馈与提交记录</h3>
+        <article v-for="submission in taskDetail.submissions" :key="submission.id" class="feedback-row">
+          <strong>{{ submission.employee?.name || "执行人" }} · 第{{ submission.version }}次</strong>
+          <p>{{ submission.summary }}</p>
+          <span>{{ formatTime(submission.createdAt) }}</span>
+        </article>
+      </section>
       <section v-if="taskDetail.returnReason" class="task-detail-section return-note"><h3>退回说明</h3><p>{{ taskDetail.returnReason }}</p></section>
       <div class="task-detail-actions">
+        <el-button
+          v-if="(taskDetail.sourceType === 'SELF_CREATED' && taskDetail.assigneeEmployeeId === user?.id) || (taskDetail.sourceType === 'OPERATOR_COLLAB' && taskDetail.assignedByEmployeeId === user?.id)"
+          @click="taskDetailVisible = false; taskDetail.sourceType === 'SELF_CREATED' ? openSelfTaskEdit(taskDetail) : openTeamTaskEdit(taskDetail)"
+        >编辑任务</el-button>
         <el-button v-if="!taskDetail.assigneeEmployeeId && taskDetail.status === 'OPEN'" type="primary" @click="acceptTask(taskDetail)">领取任务</el-button>
         <el-button v-if="taskDetail.assigneeEmployeeId === user?.id && ['ACCEPTED','RETURNED'].includes(taskDetail.status)" type="primary" @click="startTask(taskDetail)">开始任务</el-button>
-        <el-button v-if="taskDetail.assigneeEmployeeId === user?.id && ['ACCEPTED','IN_PROGRESS','RETURNED'].includes(taskDetail.status)" @click="openSubmit(taskDetail)">提交成果</el-button>
+        <el-button v-if="taskDetail.assigneeEmployeeId === user?.id && ['ACCEPTED','IN_PROGRESS','RETURNED'].includes(taskDetail.status)" @click="openSubmit(taskDetail)">反馈/提交成果</el-button>
         <el-button v-if="taskDetail.assignedByEmployeeId === user?.id && taskDetail.status === 'REVIEW'" type="primary" @click="openTeamReview(taskDetail)">审核成果</el-button>
       </div>
     </template>
+    </div>
   </el-drawer>
 
   <el-dialog v-model="inviteVisible" title="邀请协作成员" width="min(520px, 92vw)">
@@ -2616,6 +2770,29 @@ onMounted(() => void bootstrap());
 
   <el-dialog v-model="selfTaskVisible" :title="editingSelfTaskId ? '修改我的任务' : copyingSelfTask ? '复制并再次添加' : '新建我的任务'" width="min(620px, 92vw)">
     <el-form label-position="top">
+      <el-form-item label="内容任务类型" required>
+        <el-radio-group v-model="selfTaskForm.contentType">
+          <el-radio-button value="SHORT_VIDEO">短视频</el-radio-button>
+          <el-radio-button value="IMAGE">图片</el-radio-button>
+          <el-radio-button value="ARTICLE">软文</el-radio-button>
+        </el-radio-group>
+      </el-form-item>
+      <div class="team-form-row">
+        <el-form-item label="产品" required>
+          <el-select v-model="selfTaskForm.productId" filterable placeholder="选择产品">
+            <el-option v-for="item in contentTaskOptions.products || []" :key="item.id" :label="`${item.modelCode} · ${item.name}`" :value="item.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="平台">
+          <el-select v-model="selfTaskForm.platform"><el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" /><el-option label="全平台" value="ALL" /></el-select>
+        </el-form-item>
+      </div>
+      <el-form-item label="智能关键词" required>
+        <el-select v-model="selfTaskForm.keywordId" filterable placeholder="选择关键词后生成选题">
+          <el-option v-for="item in filteredTaskKeywords" :key="item.id" :label="`${item.keyword} · ${item.grade || 'C'}级 · ${Math.round(Number(item.opportunityScore || 0))}分`" :value="item.id" />
+        </el-select>
+      </el-form-item>
+      <el-button class="suggest-task-button" type="primary" plain :loading="generatingTaskSuggestion" @click="generateTaskSuggestion">智能生成选题、推荐与提示</el-button>
       <el-form-item label="任务标题" required><el-input v-model="selfTaskForm.title" placeholder="例如：整理本周待拍视频清单" /></el-form-item>
       <el-form-item label="任务说明"><TaskRichTextEditor v-model="selfTaskForm.descriptionDocument" placeholder="填写需要完成的具体工作" /></el-form-item>
       <el-form-item label="期望结果"><TaskRichTextEditor v-model="selfTaskForm.expectedResultDocument" placeholder="填写完成标准或交付内容" /></el-form-item>
@@ -2628,12 +2805,7 @@ onMounted(() => void bootstrap());
           <div class="date-shortcuts"><el-button size="small" @click="quickDue(selfTaskForm, 'TODAY')">今日</el-button><el-button size="small" @click="quickDue(selfTaskForm, 'WEEK')">本周内</el-button></div>
         </el-form-item>
       </div>
-      <el-form-item v-if="!editingSelfTaskId" label="每周固定任务（可选）">
-        <el-checkbox-group v-model="selfTaskForm.recurrenceWeekdays">
-          <el-checkbox-button v-for="item in [{v:1,l:'周一'},{v:2,l:'周二'},{v:3,l:'周三'},{v:4,l:'周四'},{v:5,l:'周五'},{v:6,l:'周六'},{v:7,l:'周日'}]" :key="item.v" :value="item.v">{{ item.l }}</el-checkbox-button>
-        </el-checkbox-group>
-        <p class="muted">选择后会在这些日期自动生成当天任务；不选择则只创建一次。</p>
-      </el-form-item>
+      <el-alert v-if="!editingSelfTaskId" title="提交后会同步进入总管理后台 AI任务中心，由Codex处理；审核后的成果会回到本任务详情。" type="info" :closable="false" show-icon />
     </el-form>
     <template #footer><el-button @click="selfTaskVisible = false">取消</el-button><el-button type="primary" :loading="creatingSelfTask" @click="createSelfTask">{{ editingSelfTaskId ? "保存修改" : copyingSelfTask ? "确认再次添加" : "添加到我的任务" }}</el-button></template>
   </el-dialog>

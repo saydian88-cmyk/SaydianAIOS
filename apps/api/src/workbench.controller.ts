@@ -19,6 +19,7 @@ import { createReadStream, mkdirSync } from "node:fs";
 import { extname, resolve } from "node:path";
 import { diskStorage } from "multer";
 import { AuthService } from "./auth.service";
+import { AiTaskCenterService } from "./ai-task-center.service";
 import { BrandDataService } from "./brand-data.service";
 import { ContentService } from "./content.service";
 import { PrismaService } from "./prisma.service";
@@ -54,6 +55,7 @@ export class WorkbenchController {
   constructor(
     private readonly auth: AuthService,
     private readonly workbench: WorkbenchService,
+    private readonly aiTasks: AiTaskCenterService,
     private readonly brandData: BrandDataService,
     private readonly content: ContentService,
     private readonly prisma: PrismaService,
@@ -92,9 +94,79 @@ export class WorkbenchController {
     return this.workbench.tasks(this.employee(authorization), query);
   }
 
+  @Get("task-creation/options")
+  contentTaskOptions(@Headers("authorization") authorization?: string) {
+    this.employee(authorization);
+    return this.workbench.contentTaskOptions();
+  }
+
+  @Post("task-creation/suggest")
+  contentTaskSuggestion(
+    @Headers("authorization") authorization: string | undefined,
+    @Body() body: Record<string, unknown>,
+  ) {
+    this.employee(authorization);
+    return this.workbench.contentTaskSuggestion(body);
+  }
+
+  @Post("task-creation/submit-ai")
+  async submitAiContentTask(
+    @Headers("authorization") authorization: string | undefined,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const employee = this.employee(authorization);
+    const contentType = String(body.contentType || "").toUpperCase();
+    const type = contentType === "IMAGE" ? "IMAGE" : contentType === "ARTICLE" ? "ARTICLE" : "VIDEO";
+    const category = type === "IMAGE" ? "CONTENT_IMAGE" : type === "ARTICLE" ? "CONTENT_ARTICLE" : "CONTENT_VIDEO";
+    const opsTask = await this.workbench.createSelfTask(employee, {
+      ...body,
+      recurrenceWeekdays: [],
+      category,
+      sourceType: "SELF_CREATED",
+      evidence: {
+        ...(body.evidence && typeof body.evidence === "object" ? body.evidence as object : {}),
+        contentType,
+        keywordId: body.keywordId || null,
+      },
+    }) as Record<string, any>;
+    const aiTask = await this.aiTasks.createTask({
+      type,
+      title: opsTask.title,
+      instructions: [opsTask.description, opsTask.expectedResult].filter(Boolean).join("\n\n"),
+      platform: opsTask.platform,
+      productId: opsTask.productId,
+      ownerEmployeeId: employee.employeeId,
+      sourceType: "WORKBENCH_CONTENT_REQUEST",
+      sourceId: opsTask.id,
+      idempotencyKey: `workbench-content:${opsTask.id}`,
+      estimatedCost: 0,
+      input: {
+        opsTaskId: opsTask.id,
+        keywordId: body.keywordId || null,
+        contentType,
+        executionMode: type === "VIDEO" ? "FULL_VIDEO" : undefined,
+      },
+      modelPolicy: {
+        strategy: "CODEX_FIRST",
+        allowExternalGeneration: false,
+      },
+    }, employee.name);
+    await this.workbench.linkAiRequest(employee, opsTask.id, aiTask);
+    return { task: opsTask, aiTask };
+  }
+
   @Get("tasks/:id")
   task(@Headers("authorization") authorization: string | undefined, @Param("id") id: string) {
     return this.workbench.task(this.employee(authorization), id);
+  }
+
+  @Get("tasks/:id/outputs/:outputId/url")
+  taskOutputUrl(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Param("outputId") outputId: string,
+  ) {
+    return this.workbench.taskOutputUrl(this.employee(authorization), id, outputId);
   }
 
   @Post("tasks")

@@ -13,7 +13,7 @@ const operator = {
 };
 
 function service(prisma: Record<string, unknown>) {
-  return new WorkbenchService(prisma as never, {} as never);
+  return new WorkbenchService(prisma as never, {} as never, {} as never);
 }
 
 describe("WorkbenchService operation team", () => {
@@ -54,6 +54,61 @@ describe("WorkbenchService operation team", () => {
         assigneeEmployeeId: "operator-1",
         sourceType: "SELF_CREATED",
       }),
+    }));
+  });
+
+  it("builds a grounded content suggestion from the selected product and keyword", async () => {
+    const target = service({
+      product: {
+        findUnique: vi.fn().mockResolvedValue({ id: "p1", modelCode: "E8", name: "心电健康手表", metadata: {} }),
+      },
+      smartKeyword: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "k1",
+          keyword: "健康数据入口",
+          platform: "DOUYIN",
+          market: "CN",
+          audience: "首次使用E8的用户",
+          pain: "分不清多个数据入口",
+          scene: "开箱首次连接",
+          opportunityScore: 92,
+        }),
+      },
+    });
+    const result = await target.contentTaskSuggestion({
+      contentType: "SHORT_VIDEO",
+      productId: "p1",
+      keywordId: "k1",
+      platform: "DOUYIN",
+    });
+    expect(result.title).toContain("E8");
+    expect(result.description).toContain("健康数据入口");
+    expect(result.expectedResult).toContain("3个Hook");
+  });
+
+  it("resolves an AI approval notification to its employee task", async () => {
+    const updateMany = vi.fn()
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({ count: 1 });
+    const target = service({
+      taskNotification: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: "notice-1",
+          taskId: null,
+          aiTaskId: "ai-1",
+          recipientEmployeeId: "operator-1",
+        }),
+        updateMany,
+      },
+      opsTask: {
+        findFirst: vi.fn().mockResolvedValue({ id: "task-ai-1" }),
+      },
+      aiTaskOutput: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+    });
+    const result = await target.readNotification(operator, "notice-1");
+    expect(result).toEqual({ ok: true, taskId: "task-ai-1" });
+    expect(updateMany).toHaveBeenLastCalledWith(expect.objectContaining({
+      data: { taskId: "task-ai-1" },
     }));
   });
 

@@ -262,6 +262,20 @@ export class AiTaskCenterController {
     return this.tasks.start(id, this.actor(authorization, "AI_TASK_MANAGE", requestedActor));
   }
 
+  @Post(":id/revise")
+  revise(
+    @Headers("authorization") authorization: string | undefined,
+    @Headers("x-ops-actor") requestedActor: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.tasks.revise(
+      id,
+      body,
+      this.actor(authorization, "AI_TASK_MANAGE", requestedActor),
+    );
+  }
+
   @Post(":id/cancel")
   cancel(
     @Headers("authorization") authorization: string | undefined,

@@ -388,12 +388,66 @@ export class AiTaskCenterService implements OnModuleInit {
         ...(body.reviewerEmployeeId !== undefined ? { reviewerEmployeeId: text(body.reviewerEmployeeId) || null } : {}),
         ...(body.dueAt !== undefined ? { dueAt: body.dueAt ? new Date(text(body.dueAt)) : null } : {}),
         ...(body.budgetLimit !== undefined ? { budgetLimit: number(body.budgetLimit) ?? null } : {}),
+        ...(body.estimatedCost !== undefined ? { estimatedCost: number(body.estimatedCost) ?? null } : {}),
+        ...(body.platform !== undefined ? { platform: text(body.platform) || null } : {}),
+        ...(body.productId !== undefined ? { productId: text(body.productId) || null } : {}),
+        ...(body.productModel !== undefined ? { productModel: text(body.productModel) || null } : {}),
+        ...(body.autoExecute !== undefined ? { executionPolicy: body.autoExecute === false ? "MANUAL" : "AUTO_WITHIN_BUDGET" } : {}),
         ...(body.modelPolicy !== undefined ? { modelPolicy: json(body.modelPolicy) } : {}),
+        ...(body.input !== undefined ? { input: json({ ...object(before.input), ...object(body.input) }) } : {}),
       },
       include: this.includeTask(true),
     });
     await this.audit(actor, "AI_TASK_UPDATE", id, { before: before.status, fields: Object.keys(body) });
     return updated;
+  }
+
+  async revise(id: string, body: JsonRecord, actor: string) {
+    const before = await this.ensureTask(id);
+    if (["CLAIMED", "RUNNING", "UPLOADING", "QUALITY_CHECK"].includes(before.status)) {
+      throw new BadRequestException("任务执行中，不能重新编辑");
+    }
+    const updated = await this.updateTask(id, body, actor);
+    const revisionInput = {
+      ...object(updated.input),
+      revisionAt: new Date().toISOString(),
+      revisionBy: actor,
+    };
+    await this.prisma.$transaction([
+      this.prisma.aiTask.update({
+        where: { id },
+        data: {
+          input: json(revisionInput),
+          output: json({}),
+          status: "PENDING",
+          progress: 0,
+          progressMessage: "参数已修改，等待Codex重新执行",
+          failureReason: null,
+          retryCount: 0,
+          lockedAt: null,
+          lockedBy: null,
+          heartbeatAt: null,
+          startedAt: null,
+          finishedAt: null,
+          reviewedAt: null,
+          reviewedBy: null,
+          reviewNote: null,
+        },
+      }),
+      this.prisma.aiTaskInputSnapshot.create({
+        data: {
+          aiTaskId: id,
+          kind: "TASK_REVISION",
+          sourceType: "ADMIN_EDIT",
+          sourceId: id,
+          checksum: hash(JSON.stringify(revisionInput)),
+          payload: json(revisionInput),
+          missingFields: [],
+        },
+      }),
+    ]);
+    await this.audit(actor, "AI_TASK_REVISE", id, { fromStatus: before.status, fields: Object.keys(body) });
+    return this.task(id);
   }
 
   async start(id: string, actor: string) {
@@ -518,7 +572,14 @@ export class AiTaskCenterService implements OnModuleInit {
       where: { id },
       data: { status: "COMPLETED", progress: 100, progressMessage: "审核通过，任务完成", reviewedAt: new Date(), reviewedBy: actor, reviewNote: note || null, finishedAt: new Date() },
     });
-    if (task.ownerEmployeeId) await this.notify(id, task.ownerEmployeeId, "AI_TASK_APPROVED", "AI任务审核通过", task.title);
+    if (task.ownerEmployeeId) {
+      const opsTask = await this.convertToOpsTask(id, {
+        category: "AI_DELIVERY",
+        expectedResult: "查看AI成果，可预览或下载文件；如需调整请提交反馈。",
+        skipNotification: true,
+      }, actor);
+      await this.notify(id, task.ownerEmployeeId, "AI_TASK_APPROVED", "AI任务审核通过", task.title, opsTask?.id || undefined);
+    }
     await this.audit(actor, "AI_TASK_REVIEW_APPROVE", id, { note });
     return this.task(id);
   }
@@ -526,9 +587,28 @@ export class AiTaskCenterService implements OnModuleInit {
   async convertToOpsTask(id: string, body: JsonRecord, actor: string) {
     const task = await this.prisma.aiTask.findUnique({ where: { id }, include: { outputs: true } });
     if (!task) throw new NotFoundException("AI任务不存在");
-    const linked = task.outputs.find((item) => item.opsTaskId);
-    if (linked?.opsTaskId) {
-      return this.prisma.opsTask.findUnique({ where: { id: linked.opsTaskId } });
+    const requestedOpsTaskId = text(object(task.input).opsTaskId);
+    const existing = requestedOpsTaskId
+      ? await this.prisma.opsTask.findUnique({ where: { id: requestedOpsTaskId } })
+      : await this.prisma.opsTask.findFirst({ where: { sourceType: "AI_TASK", sourceId: task.id } });
+    if (existing) {
+      await this.prisma.aiTaskOutput.updateMany({
+        where: { aiTaskId: id, kind: { not: "OPS_TASK" }, opsTaskId: null },
+        data: { opsTaskId: existing.id },
+      });
+      await this.prisma.opsTask.update({
+        where: { id: existing.id },
+        data: {
+          result: "AI成果已生成并审核通过，可在任务详情中预览或下载。",
+          evidence: json({
+            ...object(existing.evidence),
+            aiTaskId: id,
+            aiTaskNo: task.taskNo,
+            outputIds: task.outputs.map((item) => item.id),
+          }),
+        },
+      });
+      return existing;
     }
     const opsTask = await this.prisma.opsTask.create({
       data: {
@@ -537,7 +617,7 @@ export class AiTaskCenterService implements OnModuleInit {
         description: text(body.description) || text(object(task.output).summary) || task.instructions,
         category: text(body.category) || this.opsCategory(task.type),
         priority: text(body.priority).toUpperCase() || task.priority,
-        status: text(body.assigneeEmployeeId) ? "ACCEPTED" : "OPEN",
+        status: text(body.assigneeEmployeeId) || task.ownerEmployeeId ? "ACCEPTED" : "OPEN",
         assigneeEmployeeId: text(body.assigneeEmployeeId) || task.ownerEmployeeId,
         requiredRoleCode: text(body.requiredRoleCode) || this.requiredRole(task.type),
         assignedBy: actor,
@@ -553,9 +633,13 @@ export class AiTaskCenterService implements OnModuleInit {
     const output = await this.prisma.aiTaskOutput.create({
       data: { aiTaskId: id, kind: "OPS_TASK", title: opsTask.title, opsTaskId: opsTask.id, reviewStatus: "APPROVED" },
     });
-    if (opsTask.assigneeEmployeeId) {
+    await this.prisma.aiTaskOutput.updateMany({
+      where: { aiTaskId: id, kind: { not: "OPS_TASK" } },
+      data: { opsTaskId: opsTask.id },
+    });
+    if (opsTask.assigneeEmployeeId && body.skipNotification !== true) {
       await this.prisma.taskNotification.create({
-        data: { taskId: opsTask.id, recipientEmployeeId: opsTask.assigneeEmployeeId, type: "ASSIGNED", title: "收到AI分析改进任务", content: opsTask.title },
+        data: { taskId: opsTask.id, aiTaskId: id, recipientEmployeeId: opsTask.assigneeEmployeeId, type: "ASSIGNED", title: "收到AI成果任务", content: opsTask.title },
       });
     }
     await this.audit(actor, "AI_TASK_TO_OPS_TASK", id, { opsTaskId: opsTask.id, outputId: output.id });
@@ -875,6 +959,7 @@ export class AiTaskCenterService implements OnModuleInit {
   async runnerOutput(token: string, id: string, body: JsonRecord, file?: UploadFile) {
     const node = await this.runner(token, text(body.nodeCode));
     const task = await this.ensureRunnerTask(node.nodeCode, id);
+    const requestedOpsTaskId = text(object(task.input).opsTaskId) || undefined;
     if (!file) {
       return this.prisma.aiTaskOutput.create({
         data: {
@@ -882,6 +967,7 @@ export class AiTaskCenterService implements OnModuleInit {
           kind: text(body.kind) || "STRUCTURED_RESULT",
           title: text(body.title) || task.title,
           mimeType: text(body.mimeType) || "application/json",
+          opsTaskId: requestedOpsTaskId,
           reviewStatus: "PENDING",
           metadata: json(body.metadata),
         },
@@ -972,6 +1058,7 @@ export class AiTaskCenterService implements OnModuleInit {
       mimeType: file.mimetype,
       url: stored.storageUrl,
       assetId: asset.id,
+      opsTaskId: requestedOpsTaskId,
       metadata: json(body.metadata),
     };
     return existingOutput
@@ -1074,6 +1161,27 @@ export class AiTaskCenterService implements OnModuleInit {
         data: { status: "ONLINE", currentTaskId: null, lastHeartbeatAt: new Date(), lastError: null },
       }),
     ]);
+    const requestedOpsTaskId = text(object(task.input).opsTaskId);
+    if (requestedOpsTaskId) {
+      await this.prisma.$transaction([
+        this.prisma.aiTaskOutput.updateMany({
+          where: { aiTaskId: id, kind: { not: "OPS_TASK" } },
+          data: { opsTaskId: requestedOpsTaskId },
+        }),
+        this.prisma.opsTask.update({
+          where: { id: requestedOpsTaskId },
+          data: {
+            result: domain.message,
+            evidence: json({
+              ...object((await this.prisma.opsTask.findUnique({ where: { id: requestedOpsTaskId }, select: { evidence: true } }))?.evidence),
+              aiTaskId: id,
+              aiTaskNo: task.taskNo,
+              aiStatus: status,
+            }),
+          },
+        }),
+      ]);
+    }
     if (status === "PENDING_REVIEW" && task.reviewerEmployeeId) {
       await this.notify(id, task.reviewerEmployeeId, "AI_TASK_REVIEW", "AI结果等待审核", task.title);
     } else if (status === "WAITING_INPUT" && task.ownerEmployeeId) {
@@ -2048,15 +2156,16 @@ export class AiTaskCenterService implements OnModuleInit {
     };
   }
 
-  private async notify(aiTaskId: string, employeeId: string, type: string, title: string, content: string) {
+  private async notify(aiTaskId: string, employeeId: string, type: string, title: string, content: string, taskId?: string) {
     await this.prisma.taskNotification.create({
-      data: { aiTaskId, recipientEmployeeId: employeeId, channel: "IN_APP", type, title, content },
+      data: { aiTaskId, taskId, recipientEmployeeId: employeeId, channel: "IN_APP", type, title, content },
     });
     const result = await this.wecom.send(employeeId, title, content, "https://stest.saydian.cn/saidian-admin/");
     if (result.configured) {
       await this.prisma.taskNotification.create({
         data: {
           aiTaskId,
+          taskId,
           recipientEmployeeId: employeeId,
           channel: "WECOM",
           type,

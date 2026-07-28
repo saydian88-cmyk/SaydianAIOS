@@ -3,6 +3,7 @@ import { Cron } from "@nestjs/schedule";
 import { Prisma } from "@prisma/client";
 import type { SessionPayload } from "./auth.service";
 import { BailianVideoAiProvider } from "./cloud-media.service";
+import { OssStorageService } from "./oss-storage.service";
 import { PrismaService } from "./prisma.service";
 import { taskDocumentFields } from "./task-document";
 
@@ -12,6 +13,10 @@ const collaborationRoleCodes = ["CONTENT_OPERATOR", "VIDEO_SPECIALIST", "DESIGNE
 
 function value(input: unknown) {
   return String(input ?? "").trim();
+}
+
+function object(input: unknown): Record<string, unknown> {
+  return input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : {};
 }
 
 function date(input: unknown) {
@@ -42,6 +47,7 @@ export class WorkbenchService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly bailian: BailianVideoAiProvider,
+    private readonly oss: OssStorageService,
   ) {}
 
   async dashboard(session: SessionPayload) {
@@ -234,12 +240,140 @@ export class WorkbenchService {
   }
 
   async task(session: SessionPayload, id: string) {
-    const task = await this.prisma.opsTask.findFirst({
-      where: { AND: [{ id }, this.taskAccess(session)] },
-      include: this.taskInclude(true),
-    });
+    const [task, aiRequest] = await Promise.all([
+      this.prisma.opsTask.findFirst({
+        where: { AND: [{ id }, this.taskAccess(session)] },
+        include: this.taskInclude(true),
+      }),
+      this.prisma.aiTask.findFirst({
+        where: { sourceType: "WORKBENCH_CONTENT_REQUEST", sourceId: id },
+        select: { id: true, taskNo: true, type: true, status: true, progress: true, progressMessage: true, updatedAt: true },
+      }),
+    ]);
     if (!task) throw new NotFoundException("任务不存在或无权查看");
-    return task;
+    return { ...task, aiRequest };
+  }
+
+  async linkAiRequest(session: SessionPayload, taskId: string, aiTask: { id: string; taskNo: string }) {
+    const task = await this.prisma.opsTask.findFirst({
+      where: { id: taskId, sourceType: "SELF_CREATED", assigneeEmployeeId: session.employeeId },
+    });
+    if (!task) throw new NotFoundException("员工任务不存在");
+    return this.prisma.opsTask.update({
+      where: { id: taskId },
+      data: {
+        evidence: {
+          ...object(task.evidence),
+          aiTaskId: aiTask.id,
+          aiTaskNo: aiTask.taskNo,
+          requestedAt: new Date().toISOString(),
+        },
+        result: "已提交AI任务中心，等待Codex处理。",
+      },
+    });
+  }
+
+  async contentTaskOptions() {
+    const [products, keywords] = await Promise.all([
+      this.prisma.product.findMany({
+        select: { id: true, modelCode: true, name: true, category: true, status: true },
+        orderBy: [{ category: "asc" }, { modelCode: "asc" }],
+        take: 120,
+      }),
+      this.prisma.smartKeyword.findMany({
+        where: { status: "ACTIVE", contentEnabled: true },
+        select: {
+          id: true,
+          keyword: true,
+          platform: true,
+          market: true,
+          audience: true,
+          pain: true,
+          scene: true,
+          opportunityScore: true,
+          grade: true,
+          productId: true,
+        },
+        orderBy: [{ pinned: "desc" }, { opportunityScore: "desc" }],
+        take: 160,
+      }),
+    ]);
+    return { products, keywords };
+  }
+
+  async contentTaskSuggestion(body: Record<string, unknown>) {
+    const contentType = value(body.contentType).toUpperCase();
+    if (!["SHORT_VIDEO", "IMAGE", "ARTICLE"].includes(contentType)) {
+      throw new BadRequestException("请选择短视频、图片或软文");
+    }
+    const [product, keyword] = await Promise.all([
+      value(body.productId)
+        ? this.prisma.product.findUnique({ where: { id: value(body.productId) }, select: { id: true, modelCode: true, name: true, metadata: true } })
+        : null,
+      value(body.keywordId)
+        ? this.prisma.smartKeyword.findUnique({
+          where: { id: value(body.keywordId) },
+          select: { id: true, keyword: true, platform: true, market: true, audience: true, pain: true, scene: true, reason: true, opportunityScore: true },
+        })
+        : null,
+    ]);
+    const productName = product ? `${product.modelCode} ${product.name}` : "赛电产品";
+    const keywordText = keyword?.keyword || value(body.keyword) || "目标用户核心需求";
+    const audience = keyword?.audience || "目标用户";
+    const pain = keyword?.pain || "用户最关心的问题";
+    const scene = keyword?.scene || "真实使用场景";
+    const platform = value(body.platform) || String(keyword?.platform || "DOUYIN");
+    const labels: Record<string, string> = {
+      SHORT_VIDEO: "短视频",
+      IMAGE: "图片",
+      ARTICLE: "软文",
+    };
+    const deliverables: Record<string, string> = {
+      SHORT_VIDEO: "输出1套选题说明、3个Hook、完整脚本、分镜、素材建议和补拍缺口。",
+      IMAGE: "输出1套图片创意、画面构图、主文案、尺寸要求、现有素材建议和生成提示。",
+      ARTICLE: "输出1个选题、标题候选、内容提纲、平台正文、配图建议和审核提示。",
+    };
+    const title = `${productName}｜${keywordText}｜${labels[contentType]}`;
+    const description = [
+      `围绕“${keywordText}”为${productName}制作${labels[contentType]}。`,
+      `目标人群：${audience}；核心问题：${pain}；建议场景：${scene}；平台：${platform}。`,
+      contentType === "SHORT_VIDEO"
+        ? "优先使用素材库已审核真实素材，先做Hook、痛点、产品证明和CTA；不足再生成，仍不足再反馈补拍。"
+        : contentType === "IMAGE"
+          ? "优先使用产品白底图、场景图和品牌视觉资产，明确主次信息与平台尺寸。"
+          : "必须引用已审核品牌知识、产品事实、FAQ和用户真实问题，分别适配平台语气。",
+    ].join("\n");
+    return {
+      title,
+      description,
+      expectedResult: deliverables[contentType],
+      recommendation: {
+        topic: `${audience}在${scene}下如何解决“${pain}”`,
+        keyword: keywordText,
+        product: productName,
+        platform,
+        opportunityScore: Number(keyword?.opportunityScore || 0),
+      },
+      promptHints: [
+        `主关键词：${keywordText}`,
+        `目标人群：${audience}`,
+        `痛点：${pain}`,
+        `场景：${scene}`,
+        `产品：${productName}`,
+      ],
+    };
+  }
+
+  async taskOutputUrl(session: SessionPayload, taskId: string, outputId: string) {
+    await this.task(session, taskId);
+    const output = await this.prisma.aiTaskOutput.findFirst({
+      where: { id: outputId, opsTaskId: taskId },
+      include: { asset: true },
+    });
+    if (!output) throw new NotFoundException("任务成果不存在或无权查看");
+    if (output.asset?.objectKey) return { url: this.oss.signedDownloadUrl(output.asset.objectKey, 1_800) };
+    if (output.url) return { url: output.url };
+    throw new NotFoundException("任务成果暂无可预览文件");
   }
 
   async accept(session: SessionPayload, id: string) {
@@ -692,25 +826,38 @@ export class WorkbenchService {
         )!,
       };
     }
+    let evidenceUpdate: Prisma.InputJsonValue | undefined;
+    if (body.evidence !== undefined && body.evidence && typeof body.evidence === "object") {
+      evidenceUpdate = JSON.parse(JSON.stringify({ ...object(task.evidence), ...object(body.evidence) })) as Prisma.InputJsonValue;
+    }
+    if (body.attachments !== undefined && Array.isArray(body.attachments)) {
+      evidenceUpdate = JSON.parse(JSON.stringify({
+        ...object(task.evidence),
+        ...object(body.evidence),
+        attachments: body.attachments.map(value).filter(Boolean),
+      })) as Prisma.InputJsonValue;
+    }
+    const updateData: Prisma.OpsTaskUncheckedUpdateInput = {
+      ...(reassignment || {}),
+      ...(body.title !== undefined ? { title: value(body.title) || task.title } : {}),
+      ...(description ? {
+        description: description.text || null,
+        descriptionDocument: description.document ? description.document as Prisma.InputJsonValue : Prisma.JsonNull,
+      } : {}),
+      ...(expectedResult ? {
+        expectedResult: expectedResult.text || null,
+        expectedResultDocument: expectedResult.document ? expectedResult.document as Prisma.InputJsonValue : Prisma.JsonNull,
+      } : {}),
+      ...(body.priority !== undefined ? { priority: value(body.priority).toUpperCase() || task.priority } : {}),
+      ...(body.dueAt !== undefined ? { dueAt: taskDueAt(body.dueAt) } : {}),
+      ...(body.category !== undefined ? { category: value(body.category) || task.category } : {}),
+      ...(body.platform !== undefined ? { platform: value(body.platform) || null } : {}),
+      ...(body.productId !== undefined ? { productId: value(body.productId) || null } : {}),
+      ...(evidenceUpdate ? { evidence: evidenceUpdate } : {}),
+    };
     const updated = await this.prisma.opsTask.update({
       where: { id },
-      data: {
-        ...(reassignment || {}),
-        ...(body.title !== undefined ? { title: value(body.title) || task.title } : {}),
-        ...(description ? {
-          description: description.text || null,
-          descriptionDocument: description.document ? description.document as Prisma.InputJsonValue : Prisma.JsonNull,
-        } : {}),
-        ...(expectedResult ? {
-          expectedResult: expectedResult.text || null,
-          expectedResultDocument: expectedResult.document ? expectedResult.document as Prisma.InputJsonValue : Prisma.JsonNull,
-        } : {}),
-        ...(body.priority !== undefined ? { priority: value(body.priority).toUpperCase() || task.priority } : {}),
-        ...(body.dueAt !== undefined ? { dueAt: taskDueAt(body.dueAt) } : {}),
-        ...(body.attachments !== undefined && Array.isArray(body.attachments)
-          ? { evidence: { attachments: body.attachments.map(value).filter(Boolean) } }
-          : {}),
-      },
+      data: updateData,
       include: this.taskInclude(),
     });
     await Promise.all([
@@ -853,12 +1000,26 @@ export class WorkbenchService {
   }
 
   async readNotification(session: SessionPayload, id: string) {
+    const notification = await this.prisma.taskNotification.findFirst({
+      where: { id, recipientEmployeeId: session.employeeId },
+    });
+    if (!notification) throw new NotFoundException("消息不存在");
     const result = await this.prisma.taskNotification.updateMany({
       where: { id, recipientEmployeeId: session.employeeId },
       data: { readAt: new Date() },
     });
     if (!result.count) throw new NotFoundException("消息不存在");
-    return { ok: true };
+    let taskId: string | undefined = notification.taskId || undefined;
+    if (!taskId && notification.aiTaskId) {
+      taskId = await this.ensureAiDeliveryTask(notification.aiTaskId, session.employeeId!, session.name);
+      if (taskId) {
+        await this.prisma.taskNotification.updateMany({
+          where: { aiTaskId: notification.aiTaskId, recipientEmployeeId: session.employeeId },
+          data: { taskId },
+        });
+      }
+    }
+    return { ok: true, taskId };
   }
 
   async readAllNotifications(session: SessionPayload, ids?: unknown) {
@@ -1201,9 +1362,54 @@ export class WorkbenchService {
     });
   }
 
+  private async ensureAiDeliveryTask(aiTaskId: string, employeeId: string, actor: string) {
+    const existing = await this.prisma.opsTask.findFirst({
+      where: { sourceType: "AI_TASK", sourceId: aiTaskId, assigneeEmployeeId: employeeId },
+    });
+    if (existing) {
+      await this.prisma.aiTaskOutput.updateMany({
+        where: { aiTaskId, kind: { not: "OPS_TASK" }, opsTaskId: null },
+        data: { opsTaskId: existing.id },
+      });
+      return existing.id;
+    }
+    const aiTask = await this.prisma.aiTask.findFirst({
+      where: { id: aiTaskId, ownerEmployeeId: employeeId, status: "COMPLETED" },
+      include: { outputs: true },
+    });
+    if (!aiTask || !aiTask.outputs.length) return undefined;
+    const task = await this.prisma.opsTask.create({
+      data: {
+        taskNo: `TASK-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
+        title: aiTask.title,
+        description: aiTask.instructions || value((aiTask.output as Record<string, unknown>)?.summary) || "AI任务已完成，请查看成果。",
+        category: "AI_DELIVERY",
+        priority: aiTask.priority,
+        status: "ACCEPTED",
+        owner: actor,
+        assigneeEmployeeId: employeeId,
+        assignedBy: "AI任务中心",
+        sourceType: "AI_TASK",
+        sourceId: aiTask.id,
+        platform: aiTask.platform,
+        productId: aiTask.productId,
+        expectedResult: "查看AI成果，可预览或下载文件；如需调整请提交反馈。",
+        dueAt: aiTask.dueAt || endOfToday(),
+        acceptedAt: new Date(),
+        evidence: { aiTaskNo: aiTask.taskNo, outputIds: aiTask.outputs.map((item) => item.id) },
+      },
+    });
+    await this.prisma.aiTaskOutput.updateMany({
+      where: { aiTaskId, kind: { not: "OPS_TASK" } },
+      data: { opsTaskId: task.id },
+    });
+    return task.id;
+  }
+
   private taskInclude(full = false) {
     return {
       assignee: { select: { id: true, name: true, role: true, department: { select: { name: true } } } },
+      assignedByEmployee: { select: { id: true, name: true } },
       template: true,
       attachments: { orderBy: { createdAt: "desc" as const } },
       submissions: full
@@ -1211,6 +1417,38 @@ export class WorkbenchService {
         : { orderBy: { version: "desc" as const }, take: 1 },
       reviews: full ? { orderBy: { createdAt: "desc" as const } } : false,
       history: full ? { orderBy: { createdAt: "desc" as const } } : false,
+      aiTaskOutputs: full ? {
+        orderBy: { createdAt: "desc" as const },
+        include: {
+          asset: {
+            select: {
+              id: true,
+              assetNo: true,
+              displayName: true,
+              fileName: true,
+              extension: true,
+              mediaType: true,
+              kind: true,
+              width: true,
+              height: true,
+              durationSeconds: true,
+              objectKey: true,
+              storageUrl: true,
+            },
+          },
+          contentPlan: {
+            select: {
+              id: true,
+              topic: true,
+              kind: true,
+              status: true,
+              variants: { select: { id: true, platform: true, title: true, body: true } },
+            },
+          },
+          report: { select: { id: true, title: true, kind: true, summary: true, sections: true, actions: true } },
+          aiTask: { select: { id: true, taskNo: true, type: true, status: true } },
+        },
+      } : false,
     };
   }
 

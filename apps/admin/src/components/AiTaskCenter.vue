@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { api, patch, post } from "../api";
+import { api, post } from "../api";
 
 type Row = Record<string, any>;
 const emit = defineEmits<{ navigate: [key: string] }>();
@@ -38,6 +38,8 @@ const createVisible = ref(false);
 const runnerVisible = ref(false);
 const runnerToken = ref("");
 const reviewVisible = ref(false);
+const reviseVisible = ref(false);
+const revising = ref(false);
 const reviewAction = ref<"APPROVE" | "RETURN">("APPROVE");
 const reviewNote = ref("");
 const filters = reactive({ type: "", platform: "", keyword: "" });
@@ -45,6 +47,19 @@ const form = reactive<Row>({
   type: "VIDEO",
   title: "",
   platform: "DOUYIN",
+  productModel: "",
+  instructions: "",
+  ownerEmployeeId: "",
+  reviewerEmployeeId: "",
+  estimatedCost: 0,
+  budgetLimit: 0,
+  autoExecute: true,
+  executionMode: "FULL_VIDEO",
+  allowExternalGeneration: false,
+});
+const reviseForm = reactive<Row>({
+  title: "",
+  platform: "",
   productModel: "",
   instructions: "",
   ownerEmployeeId: "",
@@ -168,6 +183,54 @@ async function createTask() {
 async function showDetail(row: Row) {
   detail.value = await api<Row>(`/api/v1/ai-tasks/${row.id}`);
   detailVisible.value = true;
+}
+
+function openRevise() {
+  if (!detail.value) return;
+  const input = detail.value.input || {};
+  const modelPolicy = detail.value.modelPolicy || {};
+  Object.assign(reviseForm, {
+    title: detail.value.title || "",
+    platform: detail.value.platform || "ALL",
+    productModel: detail.value.productModel || "",
+    instructions: detail.value.instructions || "",
+    ownerEmployeeId: detail.value.ownerEmployeeId || "",
+    reviewerEmployeeId: detail.value.reviewerEmployeeId || "",
+    estimatedCost: Number(detail.value.estimatedCost || 0),
+    budgetLimit: Number(detail.value.budgetLimit || 0),
+    autoExecute: detail.value.executionPolicy !== "MANUAL",
+    executionMode: input.executionMode || "FULL_VIDEO",
+    allowExternalGeneration: Boolean(modelPolicy.allowExternalGeneration),
+  });
+  reviseVisible.value = true;
+}
+
+async function submitRevision() {
+  if (!detail.value || !reviseForm.title.trim()) return ElMessage.warning("请填写任务标题");
+  revising.value = true;
+  try {
+    const row = detail.value;
+    await post(`/api/v1/ai-tasks/${row.id}/revise`, {
+      ...reviseForm,
+      ownerEmployeeId: reviseForm.ownerEmployeeId || null,
+      reviewerEmployeeId: reviseForm.reviewerEmployeeId || null,
+      productModel: reviseForm.productModel || null,
+      input: row.type === "VIDEO" ? { executionMode: reviseForm.executionMode } : {},
+      modelPolicy: {
+        ...(row.modelPolicy || {}),
+        strategy: "CODEX_FIRST",
+        allowExternalGeneration: row.type === "VIDEO" && Boolean(reviseForm.allowExternalGeneration),
+      },
+    });
+    reviseVisible.value = false;
+    ElMessage.success("参数已修改，任务已重新进入AI任务中心");
+    await load();
+    await showDetail(row);
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "重新提交失败");
+  } finally {
+    revising.value = false;
+  }
 }
 
 async function action(row: Row, name: "start" | "cancel" | "retry") {
@@ -400,6 +463,7 @@ onMounted(load);
           <el-form-item label="产品型号"><el-input v-model="form.productModel" placeholder="可选" /></el-form-item>
           <el-form-item label="负责人"><el-select v-model="form.ownerEmployeeId" clearable><el-option v-for="item in employees" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
         </div>
+        <el-form-item label="审核人"><el-select v-model="form.reviewerEmployeeId" clearable><el-option v-for="item in employees" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
         <el-form-item label="任务要求"><el-input v-model="form.instructions" type="textarea" :rows="4" /></el-form-item>
         <div v-if="form.type === 'VIDEO'" class="form-grid">
           <el-form-item label="视频任务模式"><el-radio-group v-model="form.executionMode"><el-radio-button value="FULL_VIDEO">生成完整视频</el-radio-button><el-radio-button value="SCRIPT_ONLY">仅生成脚本</el-radio-button></el-radio-group></el-form-item>
@@ -428,8 +492,41 @@ onMounted(load);
       <template #footer><el-button @click="reviewVisible = false">取消</el-button><el-button :type="reviewAction === 'APPROVE' ? 'success' : 'danger'" @click="submitReview">确认</el-button></template>
     </el-dialog>
 
+    <el-dialog v-model="reviseVisible" title="编辑参数并重新执行" width="640px">
+      <el-form label-position="top">
+        <el-form-item label="任务标题" required><el-input v-model="reviseForm.title" /></el-form-item>
+        <div class="form-grid">
+          <el-form-item label="平台"><el-select v-model="reviseForm.platform"><el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" /><el-option label="全平台/经营分析" value="ALL" /></el-select></el-form-item>
+          <el-form-item label="产品型号"><el-input v-model="reviseForm.productModel" clearable /></el-form-item>
+        </div>
+        <div class="form-grid">
+          <el-form-item label="负责人"><el-select v-model="reviseForm.ownerEmployeeId" clearable><el-option v-for="item in employees" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
+          <el-form-item label="审核人"><el-select v-model="reviseForm.reviewerEmployeeId" clearable><el-option v-for="item in employees" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
+        </div>
+        <el-form-item label="任务要求"><el-input v-model="reviseForm.instructions" type="textarea" :rows="5" /></el-form-item>
+        <div v-if="detail?.type === 'VIDEO'" class="form-grid">
+          <el-form-item label="视频任务模式"><el-radio-group v-model="reviseForm.executionMode"><el-radio-button value="FULL_VIDEO">生成完整视频</el-radio-button><el-radio-button value="SCRIPT_ONLY">仅生成脚本</el-radio-button></el-radio-group></el-form-item>
+          <el-form-item label="外部视觉模型"><el-switch v-model="reviseForm.allowExternalGeneration" active-text="本地能力不足时允许调用" /></el-form-item>
+        </div>
+        <div class="form-grid">
+          <el-form-item label="预计费用"><el-input-number v-model="reviseForm.estimatedCost" :min="0" :precision="2" /></el-form-item>
+          <el-form-item label="单任务预算上限"><el-input-number v-model="reviseForm.budgetLimit" :min="0" :precision="2" /></el-form-item>
+        </div>
+        <el-checkbox v-model="reviseForm.autoExecute">预算及能力可用时自动执行</el-checkbox>
+      </el-form>
+      <template #footer><el-button @click="reviseVisible = false">取消</el-button><el-button type="primary" :loading="revising" @click="submitRevision">保存并重新进入执行队列</el-button></template>
+    </el-dialog>
+
     <el-drawer v-model="detailVisible" title="AI任务详情" size="58%">
       <template v-if="detail">
+        <div class="detail-actions">
+          <el-button
+            v-if="!runningStatuses.includes(detail.status)"
+            type="primary"
+            plain
+            @click="openRevise"
+          >编辑参数并再次执行</el-button>
+        </div>
         <el-descriptions :column="2" border>
           <el-descriptions-item label="任务编号">{{ detail.taskNo }}</el-descriptions-item>
           <el-descriptions-item label="状态">{{ statusLabel(detail.status) }}</el-descriptions-item>
@@ -466,5 +563,5 @@ onMounted(load);
 </template>
 
 <style scoped>
-.ai-task-center{display:grid;gap:18px}.page-head,.section-head,.output-row{display:flex;align-items:center;justify-content:space-between;gap:16px}.page-head h2,.section-head h3,.config-card h3{margin:0}.page-head p,.config-card p{margin:6px 0 0;color:#64748b}.summary-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px}.summary-card{padding:16px;border:1px solid #e2e8f0;border-radius:12px;background:#fff;display:grid;gap:8px}.summary-card span{font-size:13px;color:#64748b}.summary-card strong{font-size:24px;color:#0f172a}.summary-card strong.compact{font-size:18px}.filters{display:grid;grid-template-columns:180px 180px minmax(220px,1fr) auto;gap:12px;margin-bottom:14px}.settings-grid{display:grid;gap:16px}.settings-actions{text-align:right}.token-box{font-family:Consolas,monospace;word-break:break-all;padding:8px 0;font-weight:700}.config-card{display:grid;grid-template-columns:1fr 1.5fr;gap:30px;border:1px solid #e2e8f0;border-radius:12px;padding:20px}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.output-row{border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin:8px 0}.output-row div{display:grid;gap:4px}.output-row span{font-size:12px;color:#64748b}h3{margin:24px 0 12px}pre{max-height:320px;overflow:auto;white-space:pre-wrap;background:#f8fafc;padding:12px;border-radius:8px}.error-text{color:#dc2626;margin-top:6px}@media(max-width:1200px){.summary-grid{grid-template-columns:repeat(3,1fr)}}@media(max-width:760px){.summary-grid,.form-grid,.config-card{grid-template-columns:1fr}.filters{grid-template-columns:1fr}}
+.ai-task-center{display:grid;gap:18px}.page-head,.section-head,.output-row{display:flex;align-items:center;justify-content:space-between;gap:16px}.page-head h2,.section-head h3,.config-card h3{margin:0}.page-head p,.config-card p{margin:6px 0 0;color:#64748b}.summary-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px}.summary-card{padding:16px;border:1px solid #e2e8f0;border-radius:12px;background:#fff;display:grid;gap:8px}.summary-card span{font-size:13px;color:#64748b}.summary-card strong{font-size:24px;color:#0f172a}.summary-card strong.compact{font-size:18px}.filters{display:grid;grid-template-columns:180px 180px minmax(220px,1fr) auto;gap:12px;margin-bottom:14px}.settings-grid{display:grid;gap:16px}.settings-actions{text-align:right}.token-box{font-family:Consolas,monospace;word-break:break-all;padding:8px 0;font-weight:700}.config-card{display:grid;grid-template-columns:1fr 1.5fr;gap:30px;border:1px solid #e2e8f0;border-radius:12px;padding:20px}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.detail-actions{display:flex;justify-content:flex-end;margin-bottom:12px}.output-row{border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin:8px 0}.output-row div{display:grid;gap:4px}.output-row span{font-size:12px;color:#64748b}h3{margin:24px 0 12px}pre{max-height:320px;overflow:auto;white-space:pre-wrap;background:#f8fafc;padding:12px;border-radius:8px}.error-text{color:#dc2626;margin-top:6px}@media(max-width:1200px){.summary-grid{grid-template-columns:repeat(3,1fr)}}@media(max-width:760px){.summary-grid,.form-grid,.config-card{grid-template-columns:1fr}.filters{grid-template-columns:1fr}}
 </style>
