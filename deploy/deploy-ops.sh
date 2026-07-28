@@ -18,6 +18,14 @@ previous_admin="$(grep '^OPS_ADMIN_IMAGE=' "$images" 2>/dev/null | cut -d= -f2- 
 previous_workbench="$(grep '^OPS_WORKBENCH_IMAGE=' "$images" 2>/dev/null | cut -d= -f2- || true)"
 previous_workbench="${previous_workbench:-$workbench_image}"
 
+find "$base/backups" -type f -name 'predeploy-*.dump' -mtime +14 -delete
+mapfile -t stale_backups < <(find "$base/backups" -maxdepth 1 -type f -name 'predeploy-*.dump' -printf '%T@ %p\n' | sort -nr | tail -n +4 | cut -d' ' -f2-)
+if ((${#stale_backups[@]})); then
+  rm -f -- "${stale_backups[@]}"
+fi
+docker container prune -f >/dev/null
+docker image prune -af >/dev/null
+
 if docker compose --env-file "$production_env" --env-file "$images" -f "$compose" ps --status running -q postgres 2>/dev/null | grep -q .; then
   stamp="$(date +%Y%m%d-%H%M%S)"
   docker compose --env-file "$production_env" --env-file "$images" -f "$compose" exec -T postgres sh -c \
@@ -32,6 +40,16 @@ docker image inspect "$workbench_image" >/dev/null 2>&1 || docker pull "$workben
 docker compose --env-file "$production_env" --env-file "$images" -f "$compose" up -d postgres
 docker compose --env-file "$production_env" --env-file "$images" -f "$compose" run --rm --user root ops-api \
   sh -c 'mkdir -p data/upload-inbox data/derived data/bootstrap && chown -R 1001:1001 data'
+failed_migrations="$(
+  docker compose --env-file "$production_env" --env-file "$images" -f "$compose" exec -T postgres sh -c \
+    'PGPASSWORD="$POSTGRES_PASSWORD" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT migration_name FROM \"_prisma_migrations\" WHERE finished_at IS NULL AND rolled_back_at IS NULL"' \
+    || true
+)"
+while IFS= read -r failed_migration; do
+  [[ -n "$failed_migration" ]] || continue
+  docker compose --env-file "$production_env" --env-file "$images" -f "$compose" run --rm ops-api \
+    node node_modules/prisma/build/index.js migrate resolve --rolled-back "$failed_migration"
+done <<< "$failed_migrations"
 docker compose --env-file "$production_env" --env-file "$images" -f "$compose" run --rm ops-api \
   node node_modules/prisma/build/index.js migrate deploy
 docker compose --env-file "$production_env" --env-file "$images" -f "$compose" run --rm ops-api \
