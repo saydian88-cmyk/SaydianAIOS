@@ -86,6 +86,22 @@ describe("WorkbenchService operation team", () => {
     expect(result.expectedResult).toContain("3个Hook");
   });
 
+  it("returns the latest previewable system outputs for the employee library", async () => {
+    const findMany = vi.fn().mockResolvedValue([{ id: "output-1", kind: "VIDEO_MASTER", title: "E8主成片" }]);
+    const target = service({ aiTaskOutput: { findMany } });
+    const result = await target.outputs({ type: "VIDEO", limit: "5" });
+    expect(result.items).toHaveLength(1);
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
+      orderBy: { createdAt: "desc" },
+      take: 5,
+      where: {
+        AND: expect.arrayContaining([
+          expect.objectContaining({ OR: expect.arrayContaining([{ mimeType: { startsWith: "video/" } }]) }),
+        ]),
+      },
+    }));
+  });
+
   it("resolves an AI approval notification to its employee task", async () => {
     const updateMany = vi.fn()
       .mockResolvedValueOnce({ count: 1 })

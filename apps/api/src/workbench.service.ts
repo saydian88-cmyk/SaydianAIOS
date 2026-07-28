@@ -98,6 +98,94 @@ export class WorkbenchService {
     };
   }
 
+  async outputs(query: Record<string, string | undefined>) {
+    const type = value(query.type).toUpperCase();
+    const limit = Math.min(Math.max(Number(query.limit) || 30, 1), 60);
+    const previewable = {
+      OR: [
+        { url: { not: null } },
+        { assetId: { not: null } },
+        { contentPlanId: { not: null } },
+        { reportId: { not: null } },
+      ],
+    };
+    const typeWhere = type === "VIDEO"
+      ? {
+          OR: [
+            { mimeType: { startsWith: "video/" } },
+            { kind: { in: ["VIDEO_MASTER", "VIDEO_OUTPUT", "VIDEO"] } },
+          ],
+        }
+      : type === "IMAGE"
+        ? {
+            OR: [
+              { mimeType: { startsWith: "image/" } },
+              { kind: { in: ["IMAGE", "IMAGE_ASSET", "IMAGE_OUTPUT"] } },
+            ],
+          }
+        : type === "ARTICLE"
+          ? {
+              OR: [
+                { mimeType: { startsWith: "text/" } },
+                { mimeType: "application/pdf" },
+                { kind: { in: ["ARTICLE", "ARTICLE_OUTPUT", "REPORT"] } },
+              ],
+            }
+          : {};
+    const items = await this.prisma.aiTaskOutput.findMany({
+      where: {
+        AND: [
+          { kind: { notIn: ["OPS_TASK", "VIDEO_PROJECT", "SCRIPT_CANDIDATES"] } },
+          previewable,
+          typeWhere,
+        ],
+      },
+      include: {
+        aiTask: {
+          select: { id: true, taskNo: true, title: true, type: true, platform: true, status: true },
+        },
+        asset: {
+          select: {
+            id: true,
+            displayName: true,
+            fileName: true,
+            extension: true,
+            mediaType: true,
+            width: true,
+            height: true,
+            durationSeconds: true,
+            reviewStatus: true,
+          },
+        },
+        contentPlan: {
+          select: {
+            id: true,
+            topic: true,
+            variants: { select: { title: true, body: true, platform: true }, orderBy: { createdAt: "asc" } },
+          },
+        },
+        report: { select: { id: true, title: true, summary: true, sections: true } },
+      },
+      orderBy: { createdAt: "desc" },
+      take: limit,
+    });
+    return { items };
+  }
+
+  async outputUrl(outputId: string) {
+    const output = await this.prisma.aiTaskOutput.findFirst({
+      where: {
+        id: outputId,
+        kind: { notIn: ["OPS_TASK", "VIDEO_PROJECT", "SCRIPT_CANDIDATES"] },
+      },
+      include: { asset: true },
+    });
+    if (!output) throw new NotFoundException("成品不存在");
+    if (output.asset?.objectKey) return { url: this.oss.signedDownloadUrl(output.asset.objectKey, 1_800) };
+    if (output.url) return { url: output.url };
+    throw new NotFoundException("成品暂无可预览文件");
+  }
+
   async tasks(session: SessionPayload, query: Record<string, string | undefined>) {
     const status = value(query.status).toUpperCase();
     const scope = value(query.scope).toUpperCase();

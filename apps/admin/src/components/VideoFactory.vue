@@ -28,6 +28,9 @@ const topicCardEdit = ref(false);
 const approvalDialog = ref(false);
 const selectedProject = ref<Row>();
 const detailDrawer = ref(false);
+const outputPreviewDialog = ref(false);
+const selectedOutput = ref<Row>();
+const outputPreviewUrl = ref("");
 const createDialog = ref(false);
 const providerDialog = ref(false);
 const modelDialog = ref(false);
@@ -455,9 +458,28 @@ async function renderProject(row: Row) {
 
 async function openOutput(assetId: string) {
   await run(async () => {
+    selectedOutput.value = outputs.value.find((item: Row) => item.outputAsset?.id === assetId)
+      || { outputAsset: { id: assetId } };
+    outputPreviewUrl.value = "";
+    outputPreviewDialog.value = true;
     const result = await api<Row>(`/api/v1/video-factory/outputs/${assetId}/url`);
-    window.open(result.url, "_blank", "noopener,noreferrer");
+    outputPreviewUrl.value = result.url;
   });
+}
+
+function recreateFromOutput(row?: Row) {
+  const project = row?.project;
+  resetCreate();
+  if (project) {
+    createForm.platform = project.platform || "DOUYIN";
+    createForm.productModel = project.productModel || "";
+    createForm.topic = project.topic || row?.outputAsset?.displayName || "";
+    createForm.audience = project.audience || "";
+    createForm.objective = project.objective || "基于现有成片调整参数后重新创作";
+    createForm.keywordIds = (project.keywordBindings || []).map((item: Row) => item.keywordId).filter(Boolean);
+  }
+  outputPreviewDialog.value = false;
+  createDialog.value = true;
 }
 
 async function reviewOutput(assetId: string, approved: boolean) {
@@ -688,7 +710,7 @@ onBeforeUnmount(() => {
         <el-table-column label="时长" width="90"><template #default="scope">{{ Number(scope.row.outputAsset.durationSeconds || 0).toFixed(1) }}s</template></el-table-column>
         <el-table-column label="编码/帧率" width="135"><template #default="scope">{{ scope.row.outputAsset.sourceSnapshot?.metadata?.codec || '—' }}<small>{{ scope.row.outputAsset.sourceSnapshot?.metadata?.frameRate || '—' }}</small></template></el-table-column>
         <el-table-column label="素材来源" min-width="150"><template #default="scope">{{ scope.row.outputAsset.sourceSnapshot?.metadata?.source || scope.row.renderer || '—' }}<small>{{ scope.row.outputAsset.sourceSnapshot?.metadata?.usedAssetIds?.length || 0 }}项素材</small></template></el-table-column>
-        <el-table-column label="操作" width="220"><template #default="scope"><el-button link type="primary" @click="openOutput(scope.row.outputAsset.id)">查看/下载</el-button><el-button v-if="scope.row.outputAsset.reviewStatus === 'PENDING'" link type="success" @click="reviewOutput(scope.row.outputAsset.id, true)">通过</el-button><el-button v-if="scope.row.outputAsset.reviewStatus === 'PENDING'" link type="danger" @click="reviewOutput(scope.row.outputAsset.id, false)">退回</el-button></template></el-table-column>
+        <el-table-column label="操作" width="200"><template #default="scope"><el-button link type="primary" @click="openOutput(scope.row.outputAsset.id)">预览</el-button><el-button v-if="scope.row.outputAsset.reviewStatus === 'PENDING'" link type="success" @click="reviewOutput(scope.row.outputAsset.id, true)">通过</el-button><el-button v-if="scope.row.outputAsset.reviewStatus === 'PENDING'" link type="danger" @click="reviewOutput(scope.row.outputAsset.id, false)">退回</el-button></template></el-table-column>
       </el-table>
     </div>
 
@@ -758,7 +780,7 @@ onBeforeUnmount(() => {
           <div class="topic-card-preview-foot">
             <span>{{ topicCardOutput.width || '—' }}×{{ topicCardOutput.height || '—' }} · {{ Number(topicCardOutput.durationSeconds || 0).toFixed(1) }}秒</span>
             <div>
-              <el-button @click="openOutput(topicCardOutput.id)">新窗口查看/下载</el-button>
+              <el-button @click="openOutput(topicCardOutput.id)">预览成片</el-button>
               <el-button v-if="topicCardOutput.reviewStatus === 'PENDING'" type="success" @click="reviewOutput(topicCardOutput.id, true)">审核通过</el-button>
               <el-button v-if="topicCardOutput.reviewStatus === 'PENDING'" type="danger" plain @click="reviewOutput(topicCardOutput.id, false)">退回修改</el-button>
             </div>
@@ -822,6 +844,24 @@ onBeforeUnmount(() => {
         <el-alert type="info" :closable="false" title="确认后进入AI任务中心；完整视频优先复用已审核真实素材，再使用本地工具补齐。" />
       </el-form>
       <template #footer><el-button @click="approvalDialog = false">取消</el-button><el-button type="primary" @click="approveTopicCard">确认并创建任务</el-button></template>
+    </el-dialog>
+
+    <el-dialog v-model="outputPreviewDialog" title="成片预览" width="min(760px, 92vw)" destroy-on-close>
+      <div v-if="selectedOutput" class="output-preview-dialog">
+        <video v-if="outputPreviewUrl" :src="outputPreviewUrl" controls playsinline preload="metadata" />
+        <el-empty v-else description="正在获取成片预览" :image-size="72" />
+        <div class="output-preview-meta">
+          <div>
+            <strong>{{ selectedOutput.outputAsset?.displayName || selectedOutput.outputAsset?.fileName || '视频成片' }}</strong>
+            <span>{{ selectedOutput.project?.topic || '视频工厂成片' }}</span>
+          </div>
+          <el-tag :type="tagType(selectedOutput.outputAsset?.reviewStatus)">{{ label(selectedOutput.outputAsset?.reviewStatus) }}</el-tag>
+        </div>
+      </div>
+      <template #footer>
+        <el-button v-if="outputPreviewUrl" tag="a" :href="outputPreviewUrl" target="_blank">下载成片</el-button>
+        <el-button type="primary" @click="recreateFromOutput(selectedOutput)">调整参数重新创作</el-button>
+      </template>
     </el-dialog>
 
     <el-dialog v-model="createDialog" title="一键生成智能视频" width="820px" destroy-on-close>
@@ -912,6 +952,7 @@ onBeforeUnmount(() => {
 .topic-compare { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding: 12px 15px; background: #f5f8fc; }.topic-compare article { padding: 12px; border: 1px solid #dfe7f1; border-radius: 10px; background: #fff; }.topic-compare strong, .topic-compare span, .topic-compare small { display: block; }.topic-compare span { margin: 7px 0; color: #a2202b; }
 .topic-card-kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 16px 0; }.topic-card-kpis article { padding: 13px; border: 1px solid #e5eaf2; border-radius: 10px; }.topic-card-kpis span { display: block; color: #7c8797; }.topic-card-kpis strong { display: block; margin-top: 5px; font-size: 20px; }
 .topic-card-preview { display: grid; gap: 12px; margin: 16px 0; padding: 14px; border: 1px solid #dce4ef; border-radius: 14px; background: #f7f9fc; }.topic-card-preview-head, .topic-card-preview-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; }.topic-card-preview-head strong, .topic-card-preview-head span { display: block; }.topic-card-preview-head span, .topic-card-preview-foot > span { margin-top: 3px; color: #7c8797; }.topic-card-preview video { width: min(100%, 420px); max-height: 560px; margin: 0 auto; border-radius: 12px; background: #0d1117; }.topic-card-preview-foot > div { display: flex; gap: 8px; }
+.output-preview-dialog { display: grid; gap: 14px; }.output-preview-dialog video { width: min(100%, 420px); max-height: 620px; margin: 0 auto; border-radius: 14px; background: #0d1117; }.output-preview-meta { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px; border-radius: 12px; background: #f5f7fb; }.output-preview-meta strong, .output-preview-meta span { display: block; }.output-preview-meta span { margin-top: 4px; color: #7c8797; }
 .topic-detail-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }.topic-detail-grid article { padding: 13px; border-radius: 10px; background: #f5f7fb; }.topic-detail-grid span, .topic-detail-grid strong { display: block; }.topic-detail-grid span { margin-bottom: 5px; color: #7c8797; }.detail-copy { color: #536176; line-height: 1.7; }.hook-list { display: grid; gap: 8px; padding-left: 22px; color: #344054; }.structure-flow { display: flex; flex-wrap: wrap; gap: 8px; }.structure-flow span { padding: 7px 10px; border-radius: 999px; color: #23436d; background: #eaf1fb; }
 .model-route { grid-template-columns: 1fr 1fr; }.model-route article { display: grid; grid-template-columns: 150px 1fr auto; align-items: center; gap: 10px; }.two-cards { grid-template-columns: .9fr 1.1fr; }.card-title { display: flex; align-items: center; justify-content: space-between; padding: 12px 15px; border-bottom: 1px solid #edf0f5; }.card-title h4 { margin: 0; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 18px; }.form-grid .full { grid-column: 1 / -1; }.form-tip { display: block; margin-top: 6px; color: #8a94a5; }

@@ -42,6 +42,13 @@ const dashboard = reactive<Row>({
   notices: [],
   quickActions: [],
 });
+const latestOutputs = ref<Row[]>([]);
+const outputLibrary = ref<Row[]>([]);
+const outputCategory = ref("VIDEO");
+const outputLibraryLoading = ref(false);
+const outputPreviewVisible = ref(false);
+const outputPreview = ref<Row>();
+const outputPreviewUrl = ref("");
 const tasks = ref<Row[]>([]);
 const taskScope = ref("MINE");
 const taskStatus = ref("");
@@ -404,6 +411,7 @@ const canUseDataCenter = computed(() => can("DATA_CENTER_VIEW"));
 const navigation = computed(() => [
   { key: "home", label: "今日工作", icon: House, visible: true },
   { key: "tasks", label: "任务中心", icon: DocumentChecked, visible: true },
+  { key: "outputs", label: "成品库", icon: Files, visible: true },
   { key: "team", label: "团队协作", icon: DocumentChecked, visible: isCollaborator.value },
   { key: "data", label: "数据中心", icon: Files, visible: canUseDataCenter.value },
   { key: "live", label: "直播学习", icon: VideoCamera, visible: isLiveHost.value },
@@ -533,6 +541,51 @@ async function loadDashboard() {
     Object.assign(dashboard, await api<Row>("/api/v1/workbench/dashboard"));
   } finally {
     loading.value = false;
+  }
+  void loadLatestOutputs();
+}
+
+async function loadLatestOutputs() {
+  try {
+    const result = await api<Row>("/api/v1/workbench/outputs?limit=5");
+    latestOutputs.value = result.items || [];
+  } catch {
+    latestOutputs.value = [];
+  }
+}
+
+async function loadOutputLibrary(category = outputCategory.value) {
+  outputCategory.value = category;
+  outputLibraryLoading.value = true;
+  try {
+    const result = await api<Row>(`/api/v1/workbench/outputs?type=${category}&limit=60`);
+    outputLibrary.value = result.items || [];
+  } finally {
+    outputLibraryLoading.value = false;
+  }
+}
+
+async function openOutputLibrary(category: string) {
+  active.value = "outputs";
+  await loadOutputLibrary(category);
+}
+
+function outputCategoryLabel(output: Row) {
+  if (isVideoOutput(output)) return "视频";
+  if (isImageOutput(output)) return "图片";
+  return "软文";
+}
+
+async function openSystemOutput(output: Row) {
+  outputPreview.value = output;
+  outputPreviewUrl.value = "";
+  outputPreviewVisible.value = true;
+  if (!output.assetId && !output.url) return;
+  try {
+    const result = await api<Row>(`/api/v1/workbench/outputs/${output.id}/url`);
+    outputPreviewUrl.value = result.url || "";
+  } catch {
+    // 软文和报告可直接使用结构化内容预览。
   }
 }
 
@@ -1551,6 +1604,7 @@ async function switchPage(page: string) {
   active.value = page;
   if (page === "home") await loadDashboard();
   if (page === "tasks") await loadTasks();
+  if (page === "outputs") await loadOutputLibrary();
   if (page === "team") await loadOperationTeam();
   if (page === "data") await loadDataCenter();
   if (page === "live") await loadLive();
@@ -2025,6 +2079,33 @@ onMounted(() => void bootstrap());
           <article class="danger"><span>已逾期</span><strong>{{ dashboard.summary.overdue || 0 }}</strong></article>
         </section>
 
+        <section class="section-card latest-output-section">
+          <div class="section-title">
+            <div><p class="eyebrow">LATEST CREATIONS</p><h3>全系统最新成品</h3></div>
+            <el-button link type="primary" @click="openOutputLibrary('VIDEO')">进入成品库</el-button>
+          </div>
+          <div v-if="latestOutputs.length" class="latest-output-grid">
+            <button v-for="output in latestOutputs" :key="output.id" class="latest-output-card" @click="openSystemOutput(output)">
+              <span class="latest-output-icon">
+                <el-icon><VideoCamera v-if="isVideoOutput(output)" /><Files v-else /></el-icon>
+              </span>
+              <span class="latest-output-copy">
+                <strong>{{ output.title }}</strong>
+                <small>{{ outputCategoryLabel(output) }} · {{ output.aiTask?.platform ? platformLabel(output.aiTask.platform) : '全平台' }}</small>
+                <em>{{ formatTime(output.createdAt) }}</em>
+              </span>
+              <span class="latest-output-action">预览</span>
+            </button>
+          </div>
+          <el-empty v-else description="暂无可预览成品" :image-size="64" />
+          <div class="output-library-nav">
+            <strong>成品库</strong>
+            <button @click="openOutputLibrary('VIDEO')"><el-icon><VideoCamera /></el-icon><span>视频</span></button>
+            <button @click="openOutputLibrary('IMAGE')"><el-icon><Files /></el-icon><span>图片</span></button>
+            <button @click="openOutputLibrary('ARTICLE')"><el-icon><DocumentChecked /></el-icon><span>软文</span></button>
+          </div>
+        </section>
+
         <section class="home-grid">
           <article class="section-card">
             <div class="section-title">
@@ -2077,6 +2158,36 @@ onMounted(() => void bootstrap());
               <el-empty v-else description="暂无可领取任务" :image-size="60" />
             </article>
           </div>
+        </section>
+      </template>
+
+      <template v-else-if="active === 'outputs'">
+        <section class="toolbar section-card output-library-toolbar">
+          <div>
+            <p class="eyebrow">CREATION LIBRARY</p>
+            <h2>成品库</h2>
+          </div>
+          <el-radio-group v-model="outputCategory" @change="loadOutputLibrary(String($event))">
+            <el-radio-button value="VIDEO">视频</el-radio-button>
+            <el-radio-button value="IMAGE">图片</el-radio-button>
+            <el-radio-button value="ARTICLE">软文</el-radio-button>
+          </el-radio-group>
+        </section>
+        <section v-loading="outputLibraryLoading" class="section-card">
+          <div v-if="outputLibrary.length" class="output-library-grid">
+            <button v-for="output in outputLibrary" :key="output.id" class="output-library-card" @click="openSystemOutput(output)">
+              <span class="output-library-cover">
+                <el-icon><VideoCamera v-if="isVideoOutput(output)" /><Files v-else /></el-icon>
+                <em>{{ outputCategoryLabel(output) }}</em>
+              </span>
+              <span class="output-library-copy">
+                <strong>{{ output.title }}</strong>
+                <small>{{ output.aiTask?.taskNo }} · {{ output.aiTask?.platform ? platformLabel(output.aiTask.platform) : '全平台' }}</small>
+                <span>{{ formatTime(output.createdAt) }}</span>
+              </span>
+            </button>
+          </div>
+          <el-empty v-else description="该分类暂无成品" />
         </section>
       </template>
 
@@ -2394,7 +2505,7 @@ onMounted(() => void bootstrap());
 
         <section v-else v-loading="dataCenterLoading" class="video-factory-workspace">
           <div class="section-card factory-create">
-            <div class="section-heading"><div><h3>新建智能视频项目</h3><p>统一选择素材使用方式、内容限制和生成结果，也可从关键词或爆款研究一键带入。</p></div><el-tag type="success">运营 / 视频专员</el-tag></div>
+            <div class="section-heading"><div><h3>新建智能视频项目</h3><p>Hook（勾子）吸引注意、中间展示产品或解决痛点、最后一个清晰的CTA（行动号召）。</p></div><el-tag type="success">运营 / 视频专员</el-tag></div>
             <div class="factory-form">
               <el-select v-model="videoFactoryForm.platform" placeholder="目标平台"><el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" /></el-select>
               <el-select v-model="videoFactoryForm.voiceoverMode" placeholder="视频类型"><el-option label="有口播视频" value="VOICEOVER" /><el-option label="无口播视频" value="NO_VOICEOVER" /></el-select>
@@ -2668,6 +2779,7 @@ onMounted(() => void bootstrap());
     <nav class="bottom-nav">
       <button :class="{active: active === 'home'}" @click="switchPage('home')"><el-icon><House /></el-icon><span>今日</span></button>
       <button :class="{active: active === 'tasks'}" @click="switchPage('tasks')"><el-icon><DocumentChecked /></el-icon><span>任务</span></button>
+      <button :class="{active: active === 'outputs'}" @click="switchPage('outputs')"><el-icon><Files /></el-icon><span>成品</span></button>
       <button v-if="isCollaborator" :class="{active: active === 'team'}" @click="switchPage('team')"><el-icon><DocumentChecked /></el-icon><span>协作</span></button>
       <button v-if="canUseDataCenter" :class="{active: active === 'data'}" @click="switchPage('data')"><el-icon><Files /></el-icon><span>数据</span></button>
       <button v-if="isLiveHost" :class="{active: active === 'live'}" @click="switchPage('live')"><el-icon><VideoCamera /></el-icon><span>直播</span></button>
@@ -2754,6 +2866,24 @@ onMounted(() => void bootstrap());
     </template>
     </div>
   </el-drawer>
+
+  <el-dialog v-model="outputPreviewVisible" title="成品预览" width="min(820px, 94vw)" destroy-on-close>
+    <article v-if="outputPreview" class="system-output-preview">
+      <div class="system-output-preview-head">
+        <div><strong>{{ outputPreview.title }}</strong><span>{{ outputCategoryLabel(outputPreview) }} · {{ formatTime(outputPreview.createdAt) }}</span></div>
+        <el-tag>{{ outputPreview.reviewStatus === "APPROVED" ? "已审核" : outputPreview.reviewStatus }}</el-tag>
+      </div>
+      <video v-if="isVideoOutput(outputPreview) && outputPreviewUrl" :src="outputPreviewUrl" controls playsinline preload="metadata" />
+      <img v-else-if="isImageOutput(outputPreview) && outputPreviewUrl" :src="outputPreviewUrl" :alt="outputPreview.title" />
+      <iframe v-else-if="isPdfOutput(outputPreview) && outputPreviewUrl" :src="outputPreviewUrl" :title="outputPreview.title" />
+      <pre v-else-if="outputText(outputPreview)">{{ outputText(outputPreview) }}</pre>
+      <el-empty v-else description="该成品暂无可直接预览的文件" :image-size="72" />
+    </article>
+    <template #footer>
+      <el-button v-if="outputPreviewUrl" tag="a" :href="outputPreviewUrl" target="_blank">下载</el-button>
+      <el-button type="primary" @click="outputPreviewVisible = false">完成</el-button>
+    </template>
+  </el-dialog>
 
   <el-dialog v-model="inviteVisible" title="邀请协作成员" width="min(520px, 92vw)">
     <el-form label-position="top">

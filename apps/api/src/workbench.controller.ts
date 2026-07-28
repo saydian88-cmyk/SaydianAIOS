@@ -86,6 +86,24 @@ export class WorkbenchController {
     return this.workbench.dashboard(this.employee(authorization));
   }
 
+  @Get("outputs")
+  outputs(
+    @Headers("authorization") authorization: string | undefined,
+    @Query() query: Record<string, string | undefined>,
+  ) {
+    this.employee(authorization);
+    return this.workbench.outputs(query);
+  }
+
+  @Get("outputs/:outputId/url")
+  outputUrl(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("outputId") outputId: string,
+  ) {
+    this.employee(authorization);
+    return this.workbench.outputUrl(outputId);
+  }
+
   @Get("tasks")
   tasks(
     @Headers("authorization") authorization: string | undefined,

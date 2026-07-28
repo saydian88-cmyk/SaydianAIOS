@@ -32,6 +32,7 @@ const tasks = ref<Row[]>([]);
 const policies = ref<Row[]>([]);
 const runners = ref<Row[]>([]);
 const employees = ref<Row[]>([]);
+const products = ref<Row[]>([]);
 const detail = ref<Row>();
 const detailVisible = ref(false);
 const createVisible = ref(false);
@@ -47,7 +48,13 @@ const form = reactive<Row>({
   type: "VIDEO",
   title: "",
   platform: "DOUYIN",
+  productId: "",
   productModel: "",
+  audience: "",
+  painPoint: "",
+  keyword: "",
+  recommendedScene: "",
+  hook: "",
   instructions: "",
   ownerEmployeeId: "",
   reviewerEmployeeId: "",
@@ -60,7 +67,13 @@ const form = reactive<Row>({
 const reviseForm = reactive<Row>({
   title: "",
   platform: "",
+  productId: "",
   productModel: "",
+  audience: "",
+  painPoint: "",
+  keyword: "",
+  recommendedScene: "",
+  hook: "",
   instructions: "",
   ownerEmployeeId: "",
   reviewerEmployeeId: "",
@@ -136,19 +149,21 @@ function time(value?: string) {
 async function load() {
   loading.value = true;
   try {
-    const [summary, taskRows, policyRows, runnerRows, ledger, wecomStatus] = await Promise.all([
+    const [summary, taskRows, policyRows, runnerRows, ledger, wecomStatus, productRows] = await Promise.all([
       api<Row>("/api/v1/ai-tasks/overview"),
       api<Row[]>("/api/v1/ai-tasks"),
       api<Row[]>("/api/v1/ai-tasks/policies"),
       api<Row[]>("/api/v1/ai-tasks/runners"),
       api<Row>("/api/v1/ledger"),
       api<Row>("/api/v1/ai-tasks/notifications/wecom"),
+      api<Row[]>("/api/v1/brand-data/products"),
     ]);
     overview.value = summary;
     tasks.value = taskRows;
     policies.value = policyRows.map((row) => ({ ...row }));
     runners.value = runnerRows;
     employees.value = ledger.employees || [];
+    products.value = productRows || [];
     Object.assign(wecom, wecomStatus, { appSecret: "" });
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : "AI任务中心加载失败");
@@ -159,14 +174,23 @@ async function load() {
 
 async function createTask() {
   try {
+    const product = products.value.find((item) => item.id === form.productId);
     await post("/api/v1/ai-tasks", {
       ...form,
       ownerEmployeeId: form.ownerEmployeeId || undefined,
       reviewerEmployeeId: form.reviewerEmployeeId || undefined,
-      productModel: form.productModel || undefined,
+      productId: form.productId || undefined,
+      productModel: product?.modelCode || undefined,
       estimatedCost: Number(form.estimatedCost || 0),
       budgetLimit: Number(form.budgetLimit || 0),
-      input: form.type === "VIDEO" ? { executionMode: form.executionMode } : {},
+      input: {
+        ...(form.type === "VIDEO" ? { executionMode: form.executionMode } : {}),
+        audience: form.audience || undefined,
+        painPoint: form.painPoint || undefined,
+        keyword: form.keyword || undefined,
+        recommendedScene: form.recommendedScene || undefined,
+        hook: form.hook || undefined,
+      },
       modelPolicy: {
         strategy: "CODEX_FIRST",
         allowExternalGeneration: form.type === "VIDEO" && Boolean(form.allowExternalGeneration),
@@ -192,7 +216,13 @@ function openRevise() {
   Object.assign(reviseForm, {
     title: detail.value.title || "",
     platform: detail.value.platform || "ALL",
+    productId: detail.value.productId || "",
     productModel: detail.value.productModel || "",
+    audience: input.audience || "",
+    painPoint: input.painPoint || "",
+    keyword: input.keyword || "",
+    recommendedScene: input.recommendedScene || "",
+    hook: input.hook || "",
     instructions: detail.value.instructions || "",
     ownerEmployeeId: detail.value.ownerEmployeeId || "",
     reviewerEmployeeId: detail.value.reviewerEmployeeId || "",
@@ -210,12 +240,21 @@ async function submitRevision() {
   revising.value = true;
   try {
     const row = detail.value;
+    const product = products.value.find((item) => item.id === reviseForm.productId);
     await post(`/api/v1/ai-tasks/${row.id}/revise`, {
       ...reviseForm,
       ownerEmployeeId: reviseForm.ownerEmployeeId || null,
       reviewerEmployeeId: reviseForm.reviewerEmployeeId || null,
-      productModel: reviseForm.productModel || null,
-      input: row.type === "VIDEO" ? { executionMode: reviseForm.executionMode } : {},
+      productId: reviseForm.productId || null,
+      productModel: product?.modelCode || null,
+      input: {
+        ...(row.type === "VIDEO" ? { executionMode: reviseForm.executionMode } : {}),
+        audience: reviseForm.audience || null,
+        painPoint: reviseForm.painPoint || null,
+        keyword: reviseForm.keyword || null,
+        recommendedScene: reviseForm.recommendedScene || null,
+        hook: reviseForm.hook || null,
+      },
       modelPolicy: {
         ...(row.modelPolicy || {}),
         strategy: "CODEX_FIRST",
@@ -460,10 +499,17 @@ onMounted(load);
         </div>
         <el-form-item label="任务标题"><el-input v-model="form.title" placeholder="留空时按任务类型自动命名" /></el-form-item>
         <div class="form-grid">
-          <el-form-item label="产品型号"><el-input v-model="form.productModel" placeholder="可选" /></el-form-item>
+          <el-form-item label="产品型号"><el-select v-model="form.productId" clearable filterable placeholder="从产品库选择"><el-option v-for="item in products" :key="item.id" :label="`${item.modelCode} · ${item.name}`" :value="item.id" /></el-select></el-form-item>
           <el-form-item label="负责人"><el-select v-model="form.ownerEmployeeId" clearable><el-option v-for="item in employees" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
         </div>
         <el-form-item label="审核人"><el-select v-model="form.reviewerEmployeeId" clearable><el-option v-for="item in employees" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
+        <div class="form-grid">
+          <el-form-item label="目标用户（可选）"><el-input v-model="form.audience" placeholder="例如：为父母购买健康手表的子女" /></el-form-item>
+          <el-form-item label="核心痛点（可选）"><el-input v-model="form.painPoint" placeholder="例如：不会区分健康数据入口" /></el-form-item>
+          <el-form-item label="关键词（可选）"><el-input v-model="form.keyword" placeholder="主关键词或关键词簇" /></el-form-item>
+          <el-form-item label="推荐场景（可选）"><el-input v-model="form.recommendedScene" placeholder="例如：首次连接手机与查看数据" /></el-form-item>
+        </div>
+        <el-form-item label="Hook（可选）"><el-input v-model="form.hook" placeholder="视频前三秒或内容开场提示" /></el-form-item>
         <el-form-item label="任务要求"><el-input v-model="form.instructions" type="textarea" :rows="4" /></el-form-item>
         <div v-if="form.type === 'VIDEO'" class="form-grid">
           <el-form-item label="视频任务模式"><el-radio-group v-model="form.executionMode"><el-radio-button value="FULL_VIDEO">生成完整视频</el-radio-button><el-radio-button value="SCRIPT_ONLY">仅生成脚本</el-radio-button></el-radio-group></el-form-item>
@@ -497,12 +543,19 @@ onMounted(load);
         <el-form-item label="任务标题" required><el-input v-model="reviseForm.title" /></el-form-item>
         <div class="form-grid">
           <el-form-item label="平台"><el-select v-model="reviseForm.platform"><el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" /><el-option label="全平台/经营分析" value="ALL" /></el-select></el-form-item>
-          <el-form-item label="产品型号"><el-input v-model="reviseForm.productModel" clearable /></el-form-item>
+          <el-form-item label="产品型号"><el-select v-model="reviseForm.productId" clearable filterable placeholder="从产品库选择"><el-option v-for="item in products" :key="item.id" :label="`${item.modelCode} · ${item.name}`" :value="item.id" /></el-select></el-form-item>
         </div>
         <div class="form-grid">
           <el-form-item label="负责人"><el-select v-model="reviseForm.ownerEmployeeId" clearable><el-option v-for="item in employees" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
           <el-form-item label="审核人"><el-select v-model="reviseForm.reviewerEmployeeId" clearable><el-option v-for="item in employees" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
         </div>
+        <div class="form-grid">
+          <el-form-item label="目标用户（可选）"><el-input v-model="reviseForm.audience" /></el-form-item>
+          <el-form-item label="核心痛点（可选）"><el-input v-model="reviseForm.painPoint" /></el-form-item>
+          <el-form-item label="关键词（可选）"><el-input v-model="reviseForm.keyword" /></el-form-item>
+          <el-form-item label="推荐场景（可选）"><el-input v-model="reviseForm.recommendedScene" /></el-form-item>
+        </div>
+        <el-form-item label="Hook（可选）"><el-input v-model="reviseForm.hook" /></el-form-item>
         <el-form-item label="任务要求"><el-input v-model="reviseForm.instructions" type="textarea" :rows="5" /></el-form-item>
         <div v-if="detail?.type === 'VIDEO'" class="form-grid">
           <el-form-item label="视频任务模式"><el-radio-group v-model="reviseForm.executionMode"><el-radio-button value="FULL_VIDEO">生成完整视频</el-radio-button><el-radio-button value="SCRIPT_ONLY">仅生成脚本</el-radio-button></el-radio-group></el-form-item>
@@ -532,6 +585,17 @@ onMounted(load);
           <el-descriptions-item label="状态">{{ statusLabel(detail.status) }}</el-descriptions-item>
           <el-descriptions-item label="类型">{{ typeLabel(detail.type) }}</el-descriptions-item>
           <el-descriptions-item label="费用">预计 ¥{{ Number(detail.estimatedCost || 0).toFixed(2) }} / 实际 ¥{{ Number(detail.actualCost || 0).toFixed(2) }}</el-descriptions-item>
+          <el-descriptions-item label="平台">{{ detail.platform || "未设置" }}</el-descriptions-item>
+          <el-descriptions-item label="产品">{{ detail.productModel || "未选择" }}</el-descriptions-item>
+          <el-descriptions-item label="负责人">{{ detail.ownerEmployee?.name || "未指定" }}</el-descriptions-item>
+          <el-descriptions-item label="审核人">{{ detail.reviewerEmployee?.name || "未指定" }}</el-descriptions-item>
+          <el-descriptions-item label="目标用户">{{ detail.input?.audience || "未设置" }}</el-descriptions-item>
+          <el-descriptions-item label="核心痛点">{{ detail.input?.painPoint || "未设置" }}</el-descriptions-item>
+          <el-descriptions-item label="关键词">{{ detail.input?.keyword || "未设置" }}</el-descriptions-item>
+          <el-descriptions-item label="推荐场景">{{ detail.input?.recommendedScene || "未设置" }}</el-descriptions-item>
+          <el-descriptions-item label="Hook" :span="2">{{ detail.input?.hook || "未设置" }}</el-descriptions-item>
+          <el-descriptions-item v-if="detail.type === 'VIDEO'" label="执行模式">{{ detail.input?.executionMode === "SCRIPT_ONLY" ? "仅生成脚本" : "生成完整视频" }}</el-descriptions-item>
+          <el-descriptions-item v-if="detail.type === 'VIDEO'" label="外部视觉模型">{{ detail.modelPolicy?.allowExternalGeneration ? "允许" : "不允许" }}</el-descriptions-item>
           <el-descriptions-item label="进度" :span="2">{{ detail.progress || 0 }}% · {{ detail.progressMessage || "未开始" }}</el-descriptions-item>
           <el-descriptions-item label="任务要求" :span="2">{{ detail.instructions || "按输入数据自动执行" }}</el-descriptions-item>
           <el-descriptions-item label="缺失输入" :span="2">{{ (detail.missingInputs || []).join("、") || "无" }}</el-descriptions-item>
