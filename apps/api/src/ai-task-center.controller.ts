@@ -182,6 +182,15 @@ export class AiTaskCenterController {
     return this.tasks.runnerOutput(this.runnerToken(authorization), id, normalized, file);
   }
 
+  @Post("runner/output-metadata/:taskNo")
+  outputMetadata(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("taskNo") taskNo: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.tasks.runnerOutputMetadata(this.runnerToken(authorization), taskNo, body);
+  }
+
   @Post("runner/tasks/:id/complete")
   complete(
     @Headers("authorization") authorization: string | undefined,

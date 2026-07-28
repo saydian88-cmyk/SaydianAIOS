@@ -568,7 +568,47 @@ async function renderLocalVideo(result: JsonRecord, taskPackageValue: JsonRecord
   const execution = record(taskPackageValue.execution);
   if (String(task.type || "") !== "VIDEO" || String(execution.mode || "") !== "FULL_VIDEO") return result;
   const existingFiles = Array.isArray(result.outputFiles) ? result.outputFiles.map(record) : [];
-  if (existingFiles.some((item) => String(item.kind || "") === "VIDEO_MASTER")) return result;
+  const existingMaster = existingFiles.find((item) => String(item.kind || "") === "VIDEO_MASTER");
+  if (existingMaster) {
+    const masterPath = resolve(workspace, String(existingMaster.path || ""));
+    const masterRelativePath = relative(workspace, masterPath);
+    if (existingMaster.path && !masterRelativePath.startsWith("..") && !isAbsolute(masterRelativePath)) {
+      const project = record(result.project);
+      const candidates = Array.isArray(project.scriptCandidates) ? project.scriptCandidates.map(record) : [];
+      const selected = candidates.find((item) => item.selected === true) || candidates[0] || {};
+      const shots = Array.isArray(selected.shots) ? selected.shots.map(record) : [];
+      const usedAssetIds = new Set(
+        shots.flatMap((shot) => Array.isArray(shot.selectedAssetIds) ? shot.selectedAssetIds.map(String) : []),
+      );
+      try {
+        const probe = await execFileAsync(ffprobeExecutable, [
+          "-v", "error",
+          "-select_streams", "v:0",
+          "-show_entries", "stream=width,height,codec_name,avg_frame_rate:format=duration",
+          "-of", "json",
+          masterPath,
+        ], { timeout: 60_000, windowsHide: true, maxBuffer: 2 * 1024 * 1024 });
+        const parsed = JSON.parse(probe.stdout) as JsonRecord;
+        const stream = Array.isArray(parsed.streams) ? record(parsed.streams[0]) : {};
+        const format = record(parsed.format);
+        const metadata = record(existingMaster.metadata);
+        existingMaster.metadata = {
+          ...metadata,
+          width: Number(stream.width || 0),
+          height: Number(stream.height || 0),
+          durationSeconds: Number(format.duration || 0),
+          codec: String(stream.codec_name || ""),
+          frameRate: String(stream.avg_frame_rate || ""),
+          aspectRatio: Number(stream.width) && Number(stream.height) ? `${stream.width}:${stream.height}` : "9:16",
+          usedAssetIds: Array.from(usedAssetIds),
+        };
+        result.outputFiles = existingFiles;
+      } catch {
+        // 保留Codex原始输出，上传端仍会记录已有元数据。
+      }
+    }
+    return result;
+  }
   const assets = (Array.isArray(taskPackageValue.assets) ? taskPackageValue.assets.map(record) : [])
     .filter((asset) => ["VIDEO", "IMAGE"].includes(String(asset.kind || "")) && asset.workspacePath);
   const project = record(result.project);

@@ -894,61 +894,143 @@ export class AiTaskCenterService implements OnModuleInit {
       sourceType: "AI_TASK",
       category: "derived",
     });
-    const kind = file.mimetype.startsWith("video/") ? "VIDEO" : file.mimetype.startsWith("image/") ? "IMAGE" : file.mimetype.startsWith("audio/") ? "AUDIO" : "DOCUMENT";
+    const kind = (
+      file.mimetype.startsWith("video/") ? "VIDEO"
+      : file.mimetype.startsWith("image/") ? "IMAGE"
+      : file.mimetype.startsWith("audio/") ? "AUDIO"
+      : "DOCUMENT"
+    ) as "VIDEO" | "IMAGE" | "AUDIO" | "DOCUMENT";
     const metadata = object(body.metadata);
     const width = number(metadata.width);
     const height = number(metadata.height);
     const durationSeconds = number(metadata.durationSeconds);
-    const asset = await this.prisma.asset.create({
-      data: {
-        sourceKey: `AI_TASK:${id}:${sha256}`,
-        sourceType: "AI_GENERATED",
-        sourcePath: `oss://${stored.objectKey}`,
-        fileName: file.originalname,
-        originalFileName: file.originalname,
-        extension,
-        mediaType: file.mimetype,
-        kind,
-        assetNo: `AST-AI-${dateKey().replace(/-/g, "")}-${randomBytes(3).toString("hex").toUpperCase()}`,
-        displayName: text(body.title) || task.title,
-        level: "AI_GENERATED",
-        productScope: task.productId || task.productModel ? "MODEL" : "UNKNOWN",
-        processingStatus: "READY_FOR_REVIEW",
-        reviewStatus: "PENDING",
-        availabilityStatus: "INACTIVE",
-        rightsStatus: "AUTH_REQUIRED",
-        sha256,
-        sizeBytes: file.size,
-        modifiedAt: new Date(),
-        ...(width && width > 0 ? { width: Math.round(width) } : {}),
-        ...(height && height > 0 ? { height: Math.round(height) } : {}),
-        ...(durationSeconds && durationSeconds > 0 ? { durationSeconds } : {}),
-        ...(width && height ? { aspectRatio: `${Math.round(width)}:${Math.round(height)}` } : {}),
-        status: "PENDING",
-        qualityScore: 0,
-        storageProvider: "ALIYUN_OSS",
-        objectKey: stored.objectKey,
-        objectVersionId: stored.objectVersionId,
-        etag: stored.etag,
-        storageUrl: stored.storageUrl,
-        storageSyncedAt: stored.uploadedAt,
-        discoveredBy: `Codex AI任务 ${task.taskNo}`,
-        sourceSnapshot: json({ aiTaskId: id, nodeCode: node.nodeCode, metadata }),
-        ...(task.productId ? { products: { create: { productId: task.productId, scope: "MODEL", confidence: 1, confirmed: true } } } : {}),
-      },
-    });
-    return this.prisma.aiTaskOutput.create({
-      data: {
+    const sourceKey = `AI_TASK:${id}:${sha256}`;
+    const existingAsset = await this.prisma.asset.findUnique({ where: { sourceKey } });
+    const assetData = {
+      sourcePath: `oss://${stored.objectKey}`,
+      fileName: file.originalname,
+      originalFileName: file.originalname,
+      extension,
+      mediaType: file.mimetype,
+      kind,
+      displayName: text(body.title) || task.title,
+      sha256,
+      sizeBytes: file.size,
+      modifiedAt: new Date(),
+      ...(width && width > 0 ? { width: Math.round(width) } : {}),
+      ...(height && height > 0 ? { height: Math.round(height) } : {}),
+      ...(durationSeconds && durationSeconds > 0 ? { durationSeconds } : {}),
+      ...(width && height ? { aspectRatio: `${Math.round(width)}:${Math.round(height)}` } : {}),
+      storageProvider: "ALIYUN_OSS",
+      objectKey: stored.objectKey,
+      objectVersionId: stored.objectVersionId,
+      etag: stored.etag,
+      storageUrl: stored.storageUrl,
+      storageSyncedAt: stored.uploadedAt,
+      sourceSnapshot: json({
+        ...object(existingAsset?.sourceSnapshot),
         aiTaskId: id,
-        kind: text(body.kind) || `${kind}_OUTPUT`,
-        title: text(body.title) || task.title,
-        mimeType: file.mimetype,
-        url: stored.storageUrl,
-        assetId: asset.id,
-        reviewStatus: "PENDING",
-        metadata: json(body.metadata),
-      },
+        nodeCode: node.nodeCode,
+        metadata,
+      }),
+    };
+    const asset = existingAsset
+      ? await this.prisma.asset.update({
+        where: { id: existingAsset.id },
+        data: assetData,
+      })
+      : await this.prisma.asset.create({
+        data: {
+          sourceKey,
+          sourceType: "AI_GENERATED",
+          ...assetData,
+          assetNo: `AST-AI-${dateKey().replace(/-/g, "")}-${randomBytes(3).toString("hex").toUpperCase()}`,
+          level: "AI_GENERATED",
+          productScope: task.productId || task.productModel ? "MODEL" : "UNKNOWN",
+          processingStatus: "READY_FOR_REVIEW",
+          reviewStatus: "PENDING",
+          availabilityStatus: "INACTIVE",
+          rightsStatus: "AUTH_REQUIRED",
+          status: "PENDING",
+          qualityScore: 0,
+          discoveredBy: `Codex AI任务 ${task.taskNo}`,
+          ...(task.productId ? { products: { create: { productId: task.productId, scope: "MODEL", confidence: 1, confirmed: true } } } : {}),
+        },
+      });
+    const outputKind = text(body.kind) || `${kind}_OUTPUT`;
+    const existingOutput = await this.prisma.aiTaskOutput.findFirst({
+      where: { aiTaskId: id, kind: outputKind, assetId: asset.id },
+      orderBy: { createdAt: "desc" },
     });
+    const outputData = {
+      title: text(body.title) || task.title,
+      mimeType: file.mimetype,
+      url: stored.storageUrl,
+      assetId: asset.id,
+      metadata: json(body.metadata),
+    };
+    return existingOutput
+      ? this.prisma.aiTaskOutput.update({
+        where: { id: existingOutput.id },
+        data: outputData,
+      })
+      : this.prisma.aiTaskOutput.create({
+        data: {
+          aiTaskId: id,
+          kind: outputKind,
+          reviewStatus: "PENDING",
+          ...outputData,
+        },
+      });
+  }
+
+  async runnerOutputMetadata(token: string, taskNo: string, body: JsonRecord) {
+    const node = await this.runner(token, text(body.nodeCode));
+    const task = await this.prisma.aiTask.findUnique({ where: { taskNo } });
+    if (!task) throw new NotFoundException("AI任务不存在");
+    const kind = text(body.kind) || "VIDEO_MASTER";
+    const output = await this.prisma.aiTaskOutput.findFirst({
+      where: { aiTaskId: task.id, kind },
+      orderBy: { createdAt: "desc" },
+      include: { asset: true },
+    });
+    if (!output) throw new NotFoundException("AI任务成片不存在");
+    if (!output.assetId || !output.asset) throw new NotFoundException("AI任务成片素材不存在");
+    const metadata: JsonRecord = {
+      ...object(output.metadata),
+      ...object(body.metadata),
+      repairedBy: `Codex:${node.nodeCode}`,
+      repairedAt: new Date().toISOString(),
+    };
+    const width = number(metadata.width);
+    const height = number(metadata.height);
+    const durationSeconds = number(metadata.durationSeconds);
+    const [updatedOutput, updatedAsset] = await this.prisma.$transaction([
+      this.prisma.aiTaskOutput.update({
+        where: { id: output.id },
+        data: { metadata: json(metadata) },
+      }),
+      this.prisma.asset.update({
+        where: { id: output.assetId },
+        data: {
+          ...(width && width > 0 ? { width: Math.round(width) } : {}),
+          ...(height && height > 0 ? { height: Math.round(height) } : {}),
+          ...(durationSeconds && durationSeconds > 0 ? { durationSeconds } : {}),
+          ...(width && height ? { aspectRatio: `${Math.round(width)}:${Math.round(height)}` } : {}),
+          sourceSnapshot: json({
+            ...object(output.asset?.sourceSnapshot),
+            metadata,
+          }),
+        },
+      }),
+    ]);
+    return {
+      ok: true,
+      taskNo,
+      outputId: updatedOutput.id,
+      assetId: updatedAsset.id,
+      metadata,
+    };
   }
 
   async runnerComplete(token: string, id: string, body: JsonRecord) {

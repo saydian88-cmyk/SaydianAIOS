@@ -295,4 +295,63 @@ describe("AiTaskCenterService", () => {
     expect(listed.outputs[0].asset?.sizeBytes).toBe("1495435");
     expect(detailed.outputs[0].asset?.sizeBytes).toBe("1495435");
   });
+
+  it("repairs legacy video metadata without changing review state", async () => {
+    const token = "runner-secret";
+    const outputUpdate = vi.fn().mockResolvedValue({ id: "output-1", reviewStatus: "APPROVED" });
+    const assetUpdate = vi.fn().mockResolvedValue({ id: "asset-1", reviewStatus: "APPROVED" });
+    const prisma = {
+      aiWorkerNode: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "node-1",
+          nodeCode: "windows-codex-01",
+          tokenHash: createHash("sha256").update(token).digest("hex"),
+        }),
+      },
+      aiTask: {
+        findUnique: vi.fn().mockResolvedValue({ id: "task-1", taskNo: "AIT-1" }),
+      },
+      aiTaskOutput: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: "output-1",
+          aiTaskId: "task-1",
+          assetId: "asset-1",
+          reviewStatus: "APPROVED",
+          metadata: { source: "CODEX_LOCAL_FFMPEG" },
+          asset: { id: "asset-1", reviewStatus: "APPROVED", sourceSnapshot: {} },
+        }),
+        update: outputUpdate,
+      },
+      asset: { update: assetUpdate },
+      $transaction: vi.fn(async (operations: Array<Promise<unknown>>) => Promise.all(operations)),
+    };
+    const service = new AiTaskCenterService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    const result = await service.runnerOutputMetadata(token, "AIT-1", {
+      nodeCode: "windows-codex-01",
+      kind: "VIDEO_MASTER",
+      metadata: {
+        width: 1080,
+        height: 1920,
+        durationSeconds: 24,
+        codec: "h264",
+        frameRate: "30/1",
+        usedAssetIds: ["asset-source-1"],
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, outputId: "output-1", assetId: "asset-1" });
+    expect(outputUpdate.mock.calls[0]?.[0].data).not.toHaveProperty("reviewStatus");
+    expect(assetUpdate.mock.calls[0]?.[0].data).not.toHaveProperty("reviewStatus");
+    expect(assetUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ width: 1080, height: 1920, durationSeconds: 24 }),
+    }));
+  });
 });
