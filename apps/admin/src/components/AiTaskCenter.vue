@@ -604,8 +604,8 @@ onMounted(load);
           <el-descriptions-item label="费用">预计 ¥{{ Number(detail.estimatedCost || 0).toFixed(2) }} / 实际 ¥{{ Number(detail.actualCost || 0).toFixed(2) }}</el-descriptions-item>
           <el-descriptions-item label="平台">{{ detail.platform || "未设置" }}</el-descriptions-item>
           <el-descriptions-item label="产品">{{ detail.productModel || "未选择" }}</el-descriptions-item>
-          <el-descriptions-item label="负责人">{{ detail.ownerEmployee?.name || "未指定" }}</el-descriptions-item>
-          <el-descriptions-item label="审核人">{{ detail.reviewerEmployee?.name || "未指定" }}</el-descriptions-item>
+          <el-descriptions-item label="负责人">{{ detail.owner?.name || "未指定" }}</el-descriptions-item>
+          <el-descriptions-item label="审核人">{{ detail.reviewer?.name || "未指定" }}</el-descriptions-item>
           <el-descriptions-item label="目标用户">{{ detail.input?.audience || "未设置" }}</el-descriptions-item>
           <el-descriptions-item label="核心痛点">{{ detail.input?.painPoint || "未设置" }}</el-descriptions-item>
           <el-descriptions-item label="关键词">{{ detail.input?.keyword || "未设置" }}</el-descriptions-item>
@@ -637,6 +637,15 @@ onMounted(load);
             <div v-if="item.logs?.checkpoint?.message">{{ item.logs.checkpoint.message }}</div>
           </el-timeline-item>
         </el-timeline>
+
+        <h3>通知回执</h3>
+        <el-empty v-if="!(detail.notifications || []).length" description="尚无通知记录" />
+        <div v-for="item in detail.notifications || []" :key="item.id" class="output-row">
+          <div>
+            <strong>{{ item.title }}</strong>
+            <span>{{ item.channel }} · {{ item.channel === "WECOM" ? (item.sentAt ? "已发送" : "发送失败") : "已记录" }} · {{ time(item.sentAt || item.createdAt) }}</span>
+          </div>
+        </div>
 
         <h3>结果与文件</h3>
         <el-empty v-if="!(detail.outputs || []).length" description="尚无输出" />
