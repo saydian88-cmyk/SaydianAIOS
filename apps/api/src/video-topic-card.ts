@@ -144,7 +144,7 @@ export const VIDEO_RECIPES = [
 
 export const DEFAULT_VIDEO_POLICY_CONFIG = {
   dailyMainOutput: 1,
-  topicCardPolicyVersion: "v2.0",
+  topicCardPolicyVersion: "v2.1",
   dailyTopicCards: {
     DOUYIN: 10,
     TIKTOK: 10,
@@ -160,4 +160,3 @@ export function normalizeTopicText(value: unknown) {
     .replaceAll("园型", "圆形")
     .replace(/[\s\-_—–·•，。！？、；：,.!?;:()[\]{}'"“”‘’]+/gu, "");
 }
-

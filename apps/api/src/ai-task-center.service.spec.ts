@@ -93,7 +93,7 @@ describe("AiTaskCenterService", () => {
         upsert: vi.fn().mockResolvedValue({
           type: "VIDEO",
           config: {
-            topicCardPolicyVersion: "v2.0",
+            topicCardPolicyVersion: "v2.1",
             dailyTopicCards: { DOUYIN: 10, TIKTOK: 10 },
           },
         }),

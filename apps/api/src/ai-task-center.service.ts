@@ -45,6 +45,19 @@ function text(value: unknown) {
   return String(value ?? "").trim();
 }
 
+function clippedText(value: unknown, maxLength: number) {
+  const valueText = text(value);
+  return valueText.length > maxLength ? `${valueText.slice(0, maxLength)}…` : valueText;
+}
+
+function compactJsonText(value: unknown, maxLength: number) {
+  try {
+    return clippedText(JSON.stringify(value ?? {}), maxLength);
+  } catch {
+    return "";
+  }
+}
+
 function number(value: unknown) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
@@ -178,6 +191,9 @@ export class AiTaskCenterService implements OnModuleInit {
         const config = {
           ...DEFAULT_VIDEO_POLICY_CONFIG,
           ...current,
+          topicCardPolicyVersion: text(current.topicCardPolicyVersion) === "v2.0"
+            ? DEFAULT_VIDEO_POLICY_CONFIG.topicCardPolicyVersion
+            : text(current.topicCardPolicyVersion) || DEFAULT_VIDEO_POLICY_CONFIG.topicCardPolicyVersion,
           dailyTopicCards: { ...DEFAULT_VIDEO_POLICY_CONFIG.dailyTopicCards, ...object(current.dailyTopicCards) },
           videoRecipes: Array.isArray(current.videoRecipes) && current.videoRecipes.length
             ? current.videoRecipes
@@ -1582,6 +1598,90 @@ export class AiTaskCenterService implements OnModuleInit {
         const modules = Array.isArray(item.moduleSummary) ? item.moduleSummary : [];
         return modules.length > 0 || Object.keys(object(item.analysis)).length > 0;
       });
+      const topicProducts = products.map((item) => ({
+        id: item.id,
+        name: item.name,
+        modelCode: item.modelCode,
+        category: item.category,
+        evidenceIds: item.evidenceIds,
+        skus: item.skus.map((sku) => ({
+          skuCode: sku.skuCode,
+          name: sku.name,
+          attributes: compactJsonText(sku.attributes, 500),
+        })),
+      }));
+      const topicKeywords = keywords.map((item) => ({
+        id: item.id,
+        keyword: item.keyword,
+        normalizedKeyword: item.normalizedKeyword,
+        type: item.type,
+        priority: item.priority,
+        reason: clippedText(item.reason, 300),
+        audience: clippedText(item.audience, 180),
+        pain: clippedText(item.pain, 180),
+        scene: clippedText(item.scene, 180),
+        opportunityScore: item.opportunityScore,
+        grade: item.grade,
+        product: item.product,
+        cluster: item.cluster ? {
+          id: item.cluster.id,
+          name: item.cluster.name,
+          audienceTerms: item.cluster.audienceTerms,
+          painTerms: item.cluster.painTerms,
+          valueTerms: item.cluster.valueTerms,
+          sceneTerms: item.cluster.sceneTerms,
+          hookTerms: item.cluster.hookTerms,
+        } : null,
+        latestSnapshot: item.snapshots[0] ? {
+          demandScore: item.snapshots[0].demandScore,
+          trendScore: item.snapshots[0].trendScore,
+          contentGapScore: item.snapshots[0].contentGapScore,
+          commercialIntentScore: item.snapshots[0].commercialIntentScore,
+          opportunityScore: item.snapshots[0].opportunityScore,
+          trendStage: item.snapshots[0].trendStage,
+        } : null,
+        sources: item.sources.map((source) => ({
+          sourceType: source.sourceType,
+          sourceLabel: clippedText(source.sourceLabel, 120),
+          observedAt: source.observedAt,
+        })),
+      }));
+      const topicFaqs = faqs.map((item) => ({
+        id: item.id,
+        question: clippedText(item.standardQuestion, 260),
+        shortAnswer: clippedText(item.shortAnswer, 500),
+        detailedAnswer: clippedText(item.detailedAnswer, 800),
+        category: item.category,
+        intent: item.intent,
+        frequency: item.frequency,
+        product: item.product,
+      }));
+      const topicReferences = usableReferences.slice(0, 30).map((item) => ({
+        id: item.id,
+        platform: item.platform,
+        accountName: clippedText(item.accountName, 120),
+        title: clippedText(item.title, 260),
+        description: clippedText(item.description, 600),
+        publishedAt: item.publishedAt,
+        transcriptExcerpt: clippedText(item.transcript, 1_200),
+        reusableStructure: compactJsonText(item.moduleSummary, 2_400),
+        analysisSummary: compactJsonText(item.analysis, 2_400),
+        latestMetrics: compactJsonText(item.metrics[0], 1_000),
+      }));
+      const topicAssets = assets.slice(0, 80).map((item) => ({
+        id: item.id,
+        assetNo: item.assetNo,
+        displayName: item.displayName,
+        kind: item.kind,
+        model: item.model,
+        scene: item.scene,
+        mediaType: item.mediaType,
+        description: clippedText(item.contentDescription, 320),
+        qualityScore: item.qualityScore,
+        rightsStatus: item.rightsStatus,
+        products: item.products.map((relation) => relation.product),
+        tags: item.tags.slice(0, 12).map((relation) => relation.tag.label),
+      }));
       const missingFields: string[] = [];
       if (!products.length) missingFields.push("已审核产品资料");
       if (!keywords.length) missingFields.push("可用于选题的智能关键词");
@@ -1591,12 +1691,12 @@ export class AiTaskCenterService implements OnModuleInit {
           executionMode: "TOPIC_CARD_BATCH",
           platform,
           market,
-          products,
-          keywords,
+          products: topicProducts,
+          keywords: topicKeywords,
           knowledge,
-          faqs,
-          externalVideos: usableReferences,
-          assets,
+          faqs: topicFaqs,
+          externalVideos: topicReferences,
+          assets: topicAssets,
           historicalContent,
           videoRecipes: VIDEO_RECIPES,
           opportunityWeights: {
@@ -1614,6 +1714,7 @@ export class AiTaskCenterService implements OnModuleInit {
             exactCount: Math.max(1, Math.min(30, Math.round(number(baseInput.cardCount) || 10))),
             manualApprovalRequired: true,
             externalVisualModelsAllowed: false,
+            inputScope: "high-relevance summaries only",
           },
         },
         missingFields,
