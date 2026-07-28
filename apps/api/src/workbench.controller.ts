@@ -145,6 +145,12 @@ export class WorkbenchController {
         ...(body.evidence && typeof body.evidence === "object" ? body.evidence as object : {}),
         contentType,
         keywordId: body.keywordId || null,
+        targetAudience: body.targetAudience || null,
+        corePain: body.corePain || null,
+        recommendedScene: body.recommendedScene || null,
+        hook: body.hook || null,
+        materialStrategy: body.materialStrategy || null,
+        executionMode: body.executionMode || null,
       },
     }) as Record<string, any>;
     const aiTask = await this.aiTasks.createTask({
@@ -154,6 +160,7 @@ export class WorkbenchController {
       platform: opsTask.platform,
       productId: opsTask.productId,
       ownerEmployeeId: employee.employeeId,
+      reviewerEmployeeId: body.reviewerId || null,
       sourceType: "WORKBENCH_CONTENT_REQUEST",
       sourceId: opsTask.id,
       idempotencyKey: `workbench-content:${opsTask.id}`,
@@ -163,7 +170,13 @@ export class WorkbenchController {
         opsTaskId: opsTask.id,
         keywordId: body.keywordId || null,
         contentType,
-        executionMode: type === "VIDEO" ? "FULL_VIDEO" : undefined,
+        targetAudience: body.targetAudience || null,
+        corePain: body.corePain || null,
+        keyword: body.keyword || null,
+        recommendedScene: body.recommendedScene || null,
+        hook: body.hook || null,
+        materialStrategy: body.materialStrategy || "REAL_ASSET_FIRST",
+        executionMode: type === "VIDEO" ? String(body.executionMode || "FULL_VIDEO") : undefined,
       },
       modelPolicy: {
         strategy: "CODEX_FIRST",
@@ -177,6 +190,17 @@ export class WorkbenchController {
   @Get("tasks/:id")
   task(@Headers("authorization") authorization: string | undefined, @Param("id") id: string) {
     return this.workbench.task(this.employee(authorization), id);
+  }
+
+  @Post("tasks/:id/ai-feedback")
+  async requestAiRevision(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const employee = this.employee(authorization);
+    const request = await this.workbench.requestAiRevision(employee, id, String(body.note || ""));
+    return this.aiTasks.requestRevision(request.aiTaskId, request.note, employee.name);
   }
 
   @Get("tasks/:id/outputs/:outputId/url")
@@ -197,20 +221,45 @@ export class WorkbenchController {
   }
 
   @Patch("tasks/:id")
-  updateOwnedTask(
+  async updateOwnedTask(
     @Headers("authorization") authorization: string | undefined,
     @Param("id") id: string,
     @Body() body: Record<string, unknown>,
   ) {
-    return this.workbench.updateOwnedTask(this.employee(authorization), id, body);
+    const employee = this.employee(authorization);
+    const updated = await this.workbench.updateOwnedTask(employee, id, body) as Record<string, any>;
+    const evidence = updated.evidence && typeof updated.evidence === "object" ? updated.evidence as Record<string, unknown> : {};
+    const aiTaskId = String(evidence.aiTaskId || "");
+    if (aiTaskId && ["CONTENT_VIDEO", "CONTENT_IMAGE", "CONTENT_ARTICLE"].includes(String(updated.category))) {
+      await this.aiTasks.updateTask(aiTaskId, {
+        title: updated.title,
+        instructions: [updated.description, updated.expectedResult].filter(Boolean).join("\n\n"),
+        platform: updated.platform,
+        productId: updated.productId,
+        input: {
+          keywordId: evidence.keywordId || null,
+          targetAudience: evidence.targetAudience || null,
+          corePain: evidence.corePain || null,
+          recommendedScene: evidence.recommendedScene || null,
+          hook: evidence.hook || null,
+          executionMode: evidence.executionMode || null,
+          materialStrategy: evidence.materialStrategy || null,
+        },
+      }, employee.name);
+    }
+    return this.workbench.task(employee, id);
   }
 
   @Post("tasks/:id/cancel")
-  cancelOwnedTask(
+  async cancelOwnedTask(
     @Headers("authorization") authorization: string | undefined,
     @Param("id") id: string,
   ) {
-    return this.workbench.cancelOwnedTask(this.employee(authorization), id);
+    const employee = this.employee(authorization);
+    const updated = await this.workbench.cancelOwnedTask(employee, id) as Record<string, any>;
+    const evidence = updated.evidence && typeof updated.evidence === "object" ? updated.evidence as Record<string, unknown> : {};
+    if (evidence.aiTaskId) await this.aiTasks.cancel(String(evidence.aiTaskId), employee.name);
+    return updated;
   }
 
   @Post("tasks/:id/trash")

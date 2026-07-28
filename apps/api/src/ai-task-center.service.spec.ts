@@ -31,6 +31,8 @@ function serviceWith(overrides: Record<string, unknown> = {}) {
     operationAnalysisRun: { findFirst: vi.fn().mockResolvedValue(null) },
     storeMetricSnapshot: { findMany: vi.fn().mockResolvedValue([]) },
     productMetricSnapshot: { findMany: vi.fn().mockResolvedValue([]) },
+    aiTaskOutput: { findFirst: vi.fn().mockResolvedValue(null), updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
+    opsTask: { findUnique: vi.fn().mockResolvedValue(null) },
     auditLog: { create: vi.fn().mockResolvedValue({}) },
     ...overrides,
   };
@@ -170,7 +172,7 @@ describe("AiTaskCenterService", () => {
     expect(create.mock.calls[0][0].data.progressMessage).toContain("店铺经营快照");
   });
 
-  it("requires confirmation when the daily budget is not configured", async () => {
+  it("runs a local article task without a configured daily budget", async () => {
     const { service, create } = serviceWith({
       aiTaskPolicy: {
         upsert: vi.fn().mockResolvedValue({
@@ -190,8 +192,8 @@ describe("AiTaskCenterService", () => {
       idempotencyKey: "article:no-budget",
     }, "系统自动化");
 
-    expect(create.mock.calls[0][0].data.status).toBe("WAITING_CONFIRMATION");
-    expect(create.mock.calls[0][0].data.progressMessage).toContain("每日预算未配置");
+    expect(create.mock.calls[0][0].data.status).toBe("PENDING");
+    expect(create.mock.calls[0][0].data.progressMessage).toContain("Codex");
   });
 
   it("returns the existing task for the same idempotency key", async () => {
@@ -399,10 +401,10 @@ describe("AiTaskCenterService", () => {
   });
 
   it("routes task-linked AI notifications to the employee workbench detail", async () => {
-    const notificationCreate = vi.fn().mockResolvedValue({});
+    const notificationUpsert = vi.fn().mockResolvedValue({});
     const send = vi.fn().mockResolvedValue({ configured: false });
     const service = new AiTaskCenterService(
-      { taskNotification: { create: notificationCreate } } as never,
+      { taskNotification: { upsert: notificationUpsert } } as never,
       {} as never,
       {} as never,
       {} as never,
@@ -422,8 +424,8 @@ describe("AiTaskCenterService", () => {
     const targetUrl = new URL(send.mock.calls[0]?.[3] as string);
     expect(targetUrl.pathname).toBe("/saidian-work/");
     expect(targetUrl.searchParams.get("taskId")).toBe("ops-task-1");
-    expect(notificationCreate).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ aiTaskId: "ai-task-1", taskId: "ops-task-1" }),
+    expect(notificationUpsert).toHaveBeenCalledWith(expect.objectContaining({
+      create: expect.objectContaining({ aiTaskId: "ai-task-1", taskId: "ops-task-1", channel: "IN_APP" }),
     }));
   });
 });

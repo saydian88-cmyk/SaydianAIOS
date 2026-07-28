@@ -43,7 +43,7 @@ describe("WorkbenchService operation team", () => {
     const target = service({
       opsTask: { create },
       operationTaskHistory: { create: vi.fn().mockResolvedValue({}) },
-      taskNotification: { create: vi.fn().mockResolvedValue({}) },
+      taskNotification: { upsert: vi.fn().mockResolvedValue({}) },
     });
     await target.createSelfTask(operator, { title: "整理素材", priority: "HIGH" });
     expect(create).toHaveBeenCalledWith(expect.objectContaining({
@@ -87,17 +87,33 @@ describe("WorkbenchService operation team", () => {
   });
 
   it("returns the latest previewable system outputs for the employee library", async () => {
-    const findMany = vi.fn().mockResolvedValue([{ id: "output-1", kind: "VIDEO_MASTER", title: "E8主成片" }]);
+    const findMany = vi.fn().mockResolvedValue([{
+      id: "output-1",
+      kind: "VIDEO_MASTER",
+      title: "E8主成片",
+      reviewStatus: "APPROVED",
+      metadata: { isFinal: true, version: 1 },
+      asset: {
+        reviewStatus: "APPROVED",
+        availabilityStatus: "ACTIVE",
+        objectKey: "videos/e8.mp4",
+        width: 1080,
+        height: 1920,
+        durationSeconds: 18,
+      },
+      contentPlan: null,
+    }]);
     const target = service({ aiTaskOutput: { findMany } });
     const result = await target.outputs({ type: "VIDEO", limit: "5" });
     expect(result.items).toHaveLength(1);
     expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
       orderBy: { createdAt: "desc" },
-      take: 5,
+      take: 20,
       where: {
         AND: expect.arrayContaining([
-          { kind: { in: expect.arrayContaining(["VIDEO_MASTER", "IMAGE_GENERATED", "ARTICLE_PLAN"]) } },
-          expect.objectContaining({ OR: expect.arrayContaining([{ mimeType: { startsWith: "video/" } }]) }),
+          { kind: { in: expect.arrayContaining(["VIDEO_MASTER", "IMAGE_OUTPUT", "ARTICLE_OUTPUT"]) } },
+          { reviewStatus: "APPROVED" },
+          { kind: "VIDEO_MASTER" },
         ]),
       },
     }));
@@ -111,22 +127,17 @@ describe("WorkbenchService operation team", () => {
       taskNotification: {
         findFirst: vi.fn().mockResolvedValue({
           id: "notice-1",
-          taskId: null,
+          taskId: "task-ai-1",
           aiTaskId: "ai-1",
           recipientEmployeeId: "operator-1",
+          channel: "IN_APP",
         }),
         updateMany,
       },
-      opsTask: {
-        findFirst: vi.fn().mockResolvedValue({ id: "task-ai-1" }),
-      },
-      aiTaskOutput: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
     });
     const result = await target.readNotification(operator, "notice-1");
     expect(result).toEqual({ ok: true, taskId: "task-ai-1" });
-    expect(updateMany).toHaveBeenLastCalledWith(expect.objectContaining({
-      data: { taskId: "task-ai-1" },
-    }));
+    expect(updateMany).toHaveBeenCalledOnce();
   });
 
   it("completes a personal task without waiting for a reviewer", async () => {

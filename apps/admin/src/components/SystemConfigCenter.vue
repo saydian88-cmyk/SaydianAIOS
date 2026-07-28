@@ -66,6 +66,12 @@ const businessIntegrations = computed(() =>
     !["ALIYUN_OSS", "LOCAL_ASSET", "WECOM_DRIVE", "HELP_CENTER", "EVIDENCE_WORKBOOK"].includes(item.kind),
   ),
 );
+const activeIntegrations = computed(() => activeTab.value === "storage" ? storageIntegrations.value : businessIntegrations.value);
+const integrationSections = computed(() => [
+  { key: "connected", title: "已连接", description: "当前可以正常使用", rows: activeIntegrations.value.filter((item: Row) => item.state === "HEALTHY") },
+  { key: "attention", title: "需要处理", description: "资料已保存但仍需验证或修复", rows: activeIntegrations.value.filter((item: Row) => ["CONFIGURED", "DEGRADED", "ERROR"].includes(item.state)) },
+  { key: "optional", title: "可选配置", description: "业务需要时再连接", rows: activeIntegrations.value.filter((item: Row) => item.state === "UNCONFIGURED") },
+].filter((section) => section.rows.length));
 
 function stateLabel(value?: string) {
   return {
@@ -339,7 +345,6 @@ defineExpose({ reload });
         <el-table :data="groups.bootstrap || []" size="small">
           <el-table-column prop="name" label="配置" min-width="180" />
           <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag :type="row.configured ? 'success' : 'danger'">{{ row.configured ? "已配置" : "未配置" }}</el-tag></template></el-table-column>
-          <el-table-column prop="value" label="公开值" min-width="260"><template #default="{ row }">{{ row.value || "不回传" }}</template></el-table-column>
         </el-table>
       </div>
     </template>
@@ -349,15 +354,18 @@ defineExpose({ reload });
         <strong>{{ activeTab === "storage" ? "文件与素材连接" : "平台连接" }}</strong>
         <span>选择需要使用的平台，点击“去连接”，保存后再点“检查连接”即可。</span>
       </div>
-      <div class="integration-grid">
-        <article v-for="item in activeTab === 'storage' ? storageIntegrations : businessIntegrations" :key="item.id">
-          <div class="integration-icon"><el-icon><Connection /></el-icon></div>
-          <div class="integration-copy">
-            <div><h3>{{ item.displayName }}</h3><el-tag :type="stateType(item.state)">{{ stateLabel(item.state) }}</el-tag></div>
-            <p>{{ connectionMessage(item) }}</p>
-            <div class="row-actions"><el-button type="primary" plain @click="openIntegration(item)">{{ connectionAction(item) }}</el-button><el-button @click="checkIntegration(item)">检查连接</el-button></div>
-          </div>
-        </article>
+      <div v-for="section in integrationSections" :key="section.key" class="connection-section">
+        <div class="connection-section-head"><strong>{{ section.title }}</strong><span>{{ section.description }}</span></div>
+        <div class="integration-grid">
+          <article v-for="item in section.rows" :key="item.id">
+            <div class="integration-icon"><el-icon><Connection /></el-icon></div>
+            <div class="integration-copy">
+              <div><h3>{{ item.displayName }}</h3><el-tag :type="stateType(item.state)">{{ stateLabel(item.state) }}</el-tag></div>
+              <p>{{ connectionMessage(item) }}</p>
+              <div class="row-actions"><el-button type="primary" plain @click="openIntegration(item)">{{ connectionAction(item) }}</el-button><el-button v-if="item.state !== 'UNCONFIGURED'" @click="checkIntegration(item)">检查连接</el-button></div>
+            </div>
+          </article>
+        </div>
       </div>
     </template>
 
@@ -406,7 +414,7 @@ defineExpose({ reload });
         <el-table-column prop="type" label="任务类型" min-width="180" />
         <el-table-column label="启用" width="90"><template #default="{ row }"><el-switch v-model="row.enabled" /></template></el-table-column>
         <el-table-column label="自动执行" width="100"><template #default="{ row }"><el-switch v-model="row.autoExecute" /></template></el-table-column>
-        <el-table-column label="每日预算" width="140"><template #default="{ row }"><el-input-number v-model="row.dailyBudget" :min="0" controls-position="right" /></template></el-table-column>
+        <el-table-column label="外部付费预算" width="150"><template #default="{ row }"><el-input-number v-model="row.dailyBudget" :min="0" controls-position="right" /></template></el-table-column>
         <el-table-column label="并发" width="110"><template #default="{ row }"><el-input-number v-model="row.maxConcurrency" :min="1" :max="20" /></template></el-table-column>
         <el-table-column label="重试" width="110"><template #default="{ row }"><el-input-number v-model="row.maxAttempts" :min="1" :max="10" /></template></el-table-column>
         <el-table-column label="超时(秒)" width="150"><template #default="{ row }"><el-input-number v-model="row.timeoutSeconds" :min="60" /></template></el-table-column>
@@ -489,5 +497,5 @@ defineExpose({ reload });
 </template>
 
 <style scoped>
-.system-config{display:grid;gap:18px}.page-head,.head-actions,.section-head,.row-actions{display:flex;align-items:center;justify-content:space-between;gap:12px}.page-head h2,.section-head h3,.integration-copy h3{margin:0}.page-head p,.section-head p,.integration-copy p,.config-card p,.skill-grid p{margin:6px 0 0;color:#64748b}.eyebrow{font-size:12px;letter-spacing:.14em;color:#ef4444}.summary-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}.summary-grid article{display:grid;gap:7px;padding:18px;border:1px solid #e2e8f0;border-radius:14px;background:#fff}.summary-grid span,.summary-grid small{color:#64748b}.summary-grid strong{font-size:25px}.summary-grid strong.compact{font-size:18px}.config-card{display:grid;grid-template-columns:1fr 2fr;gap:24px;padding:20px;border:1px solid #e2e8f0;border-radius:14px;background:#fff}.config-card>div:first-child{display:flex;gap:12px}.plain-guide{display:flex;align-items:center;gap:12px;padding:14px 16px;border-radius:12px;background:#eff6ff;color:#1e3a5f}.plain-guide span{color:#52677f}.integration-grid,.skill-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.integration-grid article,.skill-grid article{display:flex;gap:14px;padding:18px;border:1px solid #e2e8f0;border-radius:14px;background:#fff}.skill-grid article{display:grid}.skill-grid article>div{display:flex;align-items:center;justify-content:space-between;gap:8px}.skill-grid small{color:#94a3b8}.provider-head{margin-top:8px}.integration-icon{display:grid;place-items:center;width:40px;height:40px;border-radius:10px;background:#eff6ff;color:#2563eb}.integration-copy{min-width:0;flex:1}.integration-copy>div:first-child{display:flex;align-items:center;justify-content:space-between;gap:8px}.integration-copy p{min-height:42px}.row-actions{justify-content:flex-start;margin-top:14px}.save-row{text-align:right;margin-top:14px}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.token-box{padding:10px;font-family:Consolas,monospace;word-break:break-all}.head-actions{justify-content:flex-end}@media(max-width:1200px){.summary-grid{grid-template-columns:repeat(3,1fr)}.integration-grid,.skill-grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:760px){.summary-grid,.integration-grid,.skill-grid,.config-card,.form-grid{grid-template-columns:1fr}.page-head,.section-head,.plain-guide{align-items:flex-start;flex-direction:column}}
+.system-config{display:grid;gap:18px}.page-head,.head-actions,.section-head,.row-actions{display:flex;align-items:center;justify-content:space-between;gap:12px}.page-head h2,.section-head h3,.integration-copy h3{margin:0}.page-head p,.section-head p,.integration-copy p,.config-card p,.skill-grid p{margin:6px 0 0;color:#64748b}.eyebrow{font-size:12px;letter-spacing:.14em;color:#ef4444}.summary-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}.summary-grid article{display:grid;gap:7px;padding:18px;border:1px solid #e2e8f0;border-radius:14px;background:#fff}.summary-grid span,.summary-grid small{color:#64748b}.summary-grid strong{font-size:25px}.summary-grid strong.compact{font-size:18px}.config-card{display:grid;grid-template-columns:1fr 2fr;gap:24px;padding:20px;border:1px solid #e2e8f0;border-radius:14px;background:#fff}.config-card>div:first-child{display:flex;gap:12px}.plain-guide{display:flex;align-items:center;gap:12px;padding:14px 16px;border-radius:12px;background:#eff6ff;color:#1e3a5f}.plain-guide span{color:#52677f}.connection-section{display:grid;gap:10px}.connection-section-head{display:flex;align-items:baseline;gap:10px}.connection-section-head span{color:#64748b;font-size:13px}.integration-grid,.skill-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.integration-grid article,.skill-grid article{display:flex;gap:14px;padding:18px;border:1px solid #e2e8f0;border-radius:14px;background:#fff}.skill-grid article{display:grid}.skill-grid article>div{display:flex;align-items:center;justify-content:space-between;gap:8px}.skill-grid small{color:#94a3b8}.provider-head{margin-top:8px}.integration-icon{display:grid;place-items:center;width:40px;height:40px;border-radius:10px;background:#eff6ff;color:#2563eb}.integration-copy{min-width:0;flex:1}.integration-copy>div:first-child{display:flex;align-items:center;justify-content:space-between;gap:8px}.integration-copy p{min-height:42px}.row-actions{justify-content:flex-start;margin-top:14px}.save-row{text-align:right;margin-top:14px}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.token-box{padding:10px;font-family:Consolas,monospace;word-break:break-all}.head-actions{justify-content:flex-end}@media(max-width:1200px){.summary-grid{grid-template-columns:repeat(3,1fr)}.integration-grid,.skill-grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:760px){.summary-grid,.integration-grid,.skill-grid,.config-card,.form-grid{grid-template-columns:1fr}.page-head,.section-head,.plain-guide{align-items:flex-start;flex-direction:column}}
 </style>

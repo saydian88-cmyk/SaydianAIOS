@@ -59,6 +59,7 @@ nav { display: grid; gap: 7px; margin-top: 22px; }
 .connection-state { display: flex; align-items: center; gap: 7px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 20px; background: #fff; color: #62656a; font-size: 12px; }
 .connection-state i { width: 7px; height: 7px; border-radius: 50%; }
 .connection-state .good { background: #35a767; box-shadow: 0 0 0 4px rgba(53,167,103,.12); }
+.connection-state .warn { background: #d89b25; box-shadow: 0 0 0 4px rgba(216,155,37,.12); }
 .connection-state .bad { background: var(--brand); box-shadow: 0 0 0 4px rgba(217,45,32,.12); }
 .avatar { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 50%; color: white; background: var(--ink); font-size: 12px; }
 .page { max-width: 1480px; margin: 0 auto; padding-top: 28px; }

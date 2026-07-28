@@ -312,11 +312,15 @@ export class AiTaskCenterService implements OnModuleInit {
     const estimatedCost = number(body.estimatedCost);
     const budgetLimit = number(body.budgetLimit);
     const modelPolicy = object(body.modelPolicy);
-    const localZeroCost = (estimatedCost || 0) === 0
-      && (body.skipPaidBudget === true || text(modelPolicy.strategy).toUpperCase() === "CODEX_FIRST")
-      && modelPolicy.allowExternalGeneration !== true;
-    const budgetState = localZeroCost
-      ? { allowed: true, message: "本地Codex零付费模型任务" }
+    const requestedExecutionClass = text(body.executionClass || modelPolicy.executionClass).toUpperCase();
+    const executionClass = requestedExecutionClass === "EXTERNAL_PAID"
+      ? "EXTERNAL_PAID"
+      : ["STORE_ANALYSIS", "COMPETITOR_ANALYSIS", "LIVE_ANALYSIS"].includes(type)
+        ? "ANALYSIS"
+        : "CODEX_SKILL";
+    const usesPaidExternal = executionClass === "EXTERNAL_PAID" && modelPolicy.allowExternalGeneration === true;
+    const budgetState = !usesPaidExternal
+      ? { allowed: true, message: executionClass === "ANALYSIS" ? "本地Codex分析任务" : "本地Codex Skill任务" }
       : await this.budgetState(type, policy.dailyBudget, estimatedCost, budgetLimit);
     const executionMode = text(object(body.input).executionMode).toUpperCase();
     const missingRequired = snapshot.missingFields.length > 0
@@ -345,8 +349,8 @@ export class AiTaskCenterService implements OnModuleInit {
         productModel: text(body.productModel) || null,
         ownerEmployeeId: text(body.ownerEmployeeId) || null,
         reviewerEmployeeId: text(body.reviewerEmployeeId) || null,
-        modelPolicy: json(body.modelPolicy),
-        input: json({ ...object(body.input), budgetState }),
+        modelPolicy: json({ ...modelPolicy, executionClass }),
+        input: json({ ...object(body.input), executionClass, budgetState }),
         estimatedCost,
         budgetLimit,
         maxRetries: policy.maxAttempts,
@@ -373,7 +377,10 @@ export class AiTaskCenterService implements OnModuleInit {
       include: this.includeTask(true),
     });
     await this.audit(actor, "AI_TASK_CREATE", task.id, { type, status, sourceType, sourceId });
-    if (task.ownerEmployeeId) await this.notify(task.id, task.ownerEmployeeId, "AI_TASK_CREATED", "AI任务已创建", task.title);
+    const sourceOpsTaskId = await this.syncSourceOpsTask(task, status, task.progressMessage || undefined);
+    if (task.ownerEmployeeId) {
+      await this.notify(task.id, task.ownerEmployeeId, "AI_TASK_CREATED", "AI任务已创建", task.title, sourceOpsTaskId);
+    }
     return { ...task, duplicate: false };
   }
 
@@ -451,6 +458,50 @@ export class AiTaskCenterService implements OnModuleInit {
       }),
     ]);
     await this.audit(actor, "AI_TASK_REVISE", id, { fromStatus: before.status, fields: Object.keys(body) });
+    await this.syncSourceOpsTask({ ...updated, input: revisionInput }, "PENDING", "参数已修改，等待Codex重新执行");
+    return this.task(id);
+  }
+
+  async requestRevision(id: string, note: string, actor: string) {
+    const task = await this.ensureTask(id);
+    const feedback = text(note);
+    if (!feedback) throw new BadRequestException("请填写修改反馈");
+    if (["CLAIMED", "RUNNING", "UPLOADING", "QUALITY_CHECK"].includes(task.status)) {
+      throw new BadRequestException("任务执行中，请等待本次执行结束后再反馈");
+    }
+    const input = object(task.input);
+    const feedbackHistory = Array.isArray(input.feedbackHistory) ? input.feedbackHistory : [];
+    await this.prisma.$transaction([
+      this.prisma.aiTask.update({
+        where: { id },
+        data: {
+          status: "WAITING_CONFIRMATION",
+          progress: 0,
+          progressMessage: "收到修改反馈，等待管理员确认",
+          reviewNote: feedback,
+          input: json({
+            ...input,
+            feedbackHistory: [...feedbackHistory, { note: feedback, actor, createdAt: new Date().toISOString() }],
+          }),
+          lockedAt: null,
+          lockedBy: null,
+          heartbeatAt: null,
+        },
+      }),
+      this.prisma.aiTaskInputSnapshot.create({
+        data: {
+          aiTaskId: id,
+          kind: "REVISION_REQUEST",
+          sourceType: "WORKBENCH_FEEDBACK",
+          sourceId: text(input.opsTaskId) || task.sourceId,
+          checksum: hash(feedback),
+          payload: json({ note: feedback, actor }),
+          missingFields: [],
+        },
+      }),
+    ]);
+    await this.syncSourceOpsTask(task, "WAITING_CONFIRMATION", "修改反馈已提交，等待管理员确认。");
+    await this.audit(actor, "AI_TASK_REVISION_REQUEST", id, { note: feedback });
     return this.task(id);
   }
 
@@ -476,6 +527,7 @@ export class AiTaskCenterService implements OnModuleInit {
         heartbeatAt: null,
       },
     });
+    await this.syncSourceOpsTask(updated, "PENDING", updated.progressMessage || undefined);
     await this.audit(actor, "AI_TASK_START", id, { fromStatus: task.status });
     return updated;
   }
@@ -487,6 +539,7 @@ export class AiTaskCenterService implements OnModuleInit {
       where: { id },
       data: { status: "CANCELLED", finishedAt: new Date(), progressMessage: "任务已取消", lockedAt: null, lockedBy: null },
     });
+    await this.syncSourceOpsTask(updated, "CANCELLED", "任务已取消");
     const projectId = text(object(task.input).existingContentPlanId);
     if (projectId) await this.videoFactory.syncProjectTaskState(projectId, "CANCELLED");
     await this.audit(actor, "AI_TASK_CANCEL", id, { fromStatus: task.status });
@@ -510,6 +563,7 @@ export class AiTaskCenterService implements OnModuleInit {
         heartbeatAt: null,
       },
     });
+    await this.syncSourceOpsTask(updated, "RETRY", "正在准备重新执行");
     await this.audit(actor, "AI_TASK_RETRY", id, { retryCount: task.retryCount + 1 });
     return updated;
   }
@@ -531,7 +585,8 @@ export class AiTaskCenterService implements OnModuleInit {
       ]);
       const projectId = text(object(task.input).existingContentPlanId);
       if (projectId) await this.videoFactory.syncProjectTaskState(projectId, "RETURNED");
-      if (task.ownerEmployeeId) await this.notify(id, task.ownerEmployeeId, "AI_TASK_RETURNED", "AI任务被退回", note);
+      const sourceOpsTaskId = await this.syncSourceOpsTask(task, "RETURNED", note);
+      if (task.ownerEmployeeId) await this.notify(id, task.ownerEmployeeId, "AI_TASK_RETURNED", "AI任务被退回", note, sourceOpsTaskId);
       await this.audit(actor, "AI_TASK_REVIEW_RETURN", id, { note });
       return this.task(id);
     }
@@ -562,11 +617,13 @@ export class AiTaskCenterService implements OnModuleInit {
             where: { id },
             data: { status: "RUNNING", progress: 75, progressMessage: "镜头已审核，正在生成主成片", reviewedAt: new Date(), reviewedBy: actor, reviewNote: note || null },
           });
+          await this.syncSourceOpsTask(task, "RUNNING", "镜头已审核，正在生成主成片");
           await this.audit(actor, "AI_TASK_VIDEO_RENDER_START", id, { contentPlanId: project });
           return this.task(id);
         } catch (error) {
           const message = error instanceof Error ? error.message : "视频渲染尚未就绪";
           await this.prisma.aiTask.update({ where: { id }, data: { status: "RUNNING", progressMessage: message } });
+          await this.syncSourceOpsTask(task, "RUNNING", "视频正在处理中，请稍后查看进度");
           return this.task(id);
         }
       }
@@ -576,13 +633,9 @@ export class AiTaskCenterService implements OnModuleInit {
       where: { id },
       data: { status: "COMPLETED", progress: 100, progressMessage: "审核通过，任务完成", reviewedAt: new Date(), reviewedBy: actor, reviewNote: note || null, finishedAt: new Date() },
     });
+    const sourceOpsTaskId = await this.syncSourceOpsTask(task, "COMPLETED", "AI成果已审核通过，可在原任务中查看。");
     if (task.ownerEmployeeId) {
-      const opsTask = await this.convertToOpsTask(id, {
-        category: "AI_DELIVERY",
-        expectedResult: "查看AI成果，可预览或下载文件；如需调整请提交反馈。",
-        skipNotification: true,
-      }, actor);
-      await this.notify(id, task.ownerEmployeeId, "AI_TASK_APPROVED", "AI任务审核通过", task.title, opsTask?.id || undefined);
+      await this.notify(id, task.ownerEmployeeId, "AI_TASK_APPROVED", "AI任务审核通过", task.title, sourceOpsTaskId);
     }
     await this.audit(actor, "AI_TASK_REVIEW_APPROVE", id, { note });
     return this.task(id);
@@ -788,6 +841,7 @@ export class AiTaskCenterService implements OnModuleInit {
       });
       const contentPlanId = text(object(candidate.input).existingContentPlanId);
       if (contentPlanId) await this.videoFactory.syncProjectTaskState(contentPlanId, "CLAIMED");
+      await this.syncSourceOpsTask(candidate, "CLAIMED", "Codex已领取任务，正在处理");
       return {
         task: await this.task(candidate.id),
         attemptId: attempt.id,
@@ -1021,15 +1075,24 @@ export class AiTaskCenterService implements OnModuleInit {
     const task = await this.ensureRunnerTask(node.nodeCode, id);
     const requestedOpsTaskId = text(object(task.input).opsTaskId) || undefined;
     if (!file) {
+      const outputKind = text(body.kind) || "STRUCTURED_RESULT";
+      const version = (await this.prisma.aiTaskOutput.count({
+        where: { aiTaskId: id, kind: outputKind },
+      })) + 1;
       return this.prisma.aiTaskOutput.create({
         data: {
           aiTaskId: id,
-          kind: text(body.kind) || "STRUCTURED_RESULT",
+          kind: outputKind,
           title: text(body.title) || task.title,
           mimeType: text(body.mimeType) || "application/json",
           opsTaskId: requestedOpsTaskId,
           reviewStatus: "PENDING",
-          metadata: json(body.metadata),
+          metadata: json({
+            ...object(body.metadata),
+            version,
+            isFinal: ["ARTICLE", "ARTICLE_OUTPUT"].includes(outputKind),
+            previewKind: ["ARTICLE", "ARTICLE_OUTPUT"].includes(outputKind) ? "ARTICLE" : "DOCUMENT",
+          }),
         },
       });
     }
@@ -1113,13 +1176,27 @@ export class AiTaskCenterService implements OnModuleInit {
       where: { aiTaskId: id, kind: outputKind, assetId: asset.id },
       orderBy: { createdAt: "desc" },
     });
+    const version = existingOutput
+      ? number(object(existingOutput.metadata).version) || 1
+      : (await this.prisma.aiTaskOutput.count({ where: { aiTaskId: id, kind: outputKind } })) + 1;
+    const isFinal = outputKind === "VIDEO_MASTER"
+      || ["IMAGE", "IMAGE_OUTPUT", "IMAGE_MASTER", "ARTICLE", "ARTICLE_OUTPUT"].includes(outputKind);
     const outputData = {
       title: text(body.title) || task.title,
       mimeType: file.mimetype,
       url: stored.storageUrl,
       assetId: asset.id,
       opsTaskId: requestedOpsTaskId,
-      metadata: json(body.metadata),
+      metadata: json({
+        ...metadata,
+        version,
+        isFinal,
+        previewKind: kind,
+        width: width || undefined,
+        height: height || undefined,
+        durationSeconds: durationSeconds || undefined,
+        sizeBytes: file.size,
+      }),
     };
     return existingOutput
       ? this.prisma.aiTaskOutput.update({
@@ -1252,7 +1329,8 @@ export class AiTaskCenterService implements OnModuleInit {
         }),
       ]);
     }
-    let linkedOpsTaskId = requestedOpsTaskId || undefined;
+    let linkedOpsTaskId = await this.syncSourceOpsTask(task, status, domain.message);
+    linkedOpsTaskId ||= requestedOpsTaskId || undefined;
     if (!linkedOpsTaskId && status === "WAITING_INPUT") {
       linkedOpsTaskId = (await this.prisma.aiTaskOutput.findFirst({
         where: { aiTaskId: id, opsTaskId: { not: null } },
@@ -1315,7 +1393,11 @@ export class AiTaskCenterService implements OnModuleInit {
     ]);
     const contentPlanId = text(object(task.input).existingContentPlanId);
     if (contentPlanId && terminal) await this.videoFactory.syncProjectTaskState(contentPlanId, "FAILED");
-    if (terminal && task.ownerEmployeeId) await this.notify(id, task.ownerEmployeeId, "AI_TASK_FAILED", "AI任务执行失败", message);
+    const employeeMessage = terminal ? "AI执行未完成，请在任务详情中查看处理建议。" : "AI执行暂未完成，系统正在自动重试。";
+    const linkedOpsTaskId = await this.syncSourceOpsTask(task, terminal ? "FAILED" : "RETRY", employeeMessage);
+    if (terminal && task.ownerEmployeeId) {
+      await this.notify(id, task.ownerEmployeeId, "AI_TASK_FAILED", "AI任务执行未完成", employeeMessage, linkedOpsTaskId);
+    }
     return this.task(id);
   }
 
@@ -2255,9 +2337,102 @@ export class AiTaskCenterService implements OnModuleInit {
     };
   }
 
+  private async sourceOpsTaskId(task: {
+    id: string;
+    sourceType?: string | null;
+    sourceId?: string | null;
+    input?: Prisma.JsonValue | null;
+  }) {
+    const requested = text(object(task.input).opsTaskId)
+      || (task.sourceType === "WORKBENCH_CONTENT_REQUEST" ? text(task.sourceId) : "");
+    if (requested) {
+      const exists = await this.prisma.opsTask.findUnique({ where: { id: requested }, select: { id: true } });
+      if (exists) return exists.id;
+    }
+    return (await this.prisma.aiTaskOutput.findFirst({
+      where: { aiTaskId: task.id, opsTaskId: { not: null }, kind: { not: "OPS_TASK" } },
+      orderBy: { createdAt: "desc" },
+      select: { opsTaskId: true },
+    }))?.opsTaskId || undefined;
+  }
+
+  private async syncSourceOpsTask(
+    task: {
+      id: string;
+      taskNo?: string | null;
+      sourceType?: string | null;
+      sourceId?: string | null;
+      input?: Prisma.JsonValue | null;
+    },
+    aiStatus: AiTaskStatus,
+    message?: string,
+  ) {
+    const opsTaskId = await this.sourceOpsTaskId(task);
+    if (!opsTaskId) return undefined;
+    const current = await this.prisma.opsTask.findUnique({
+      where: { id: opsTaskId },
+      select: { evidence: true, status: true },
+    });
+    if (!current) return undefined;
+    const opsStatus = aiStatus === "WAITING_CONFIRMATION"
+      ? "ACCEPTED"
+      : ["PENDING", "CLAIMED", "RUNNING", "QUALITY_CHECK", "UPLOADING", "RETRY"].includes(aiStatus)
+        ? "IN_PROGRESS"
+        : aiStatus === "PENDING_REVIEW"
+          ? "REVIEW"
+          : ["WAITING_INPUT", "RETURNED", "FAILED"].includes(aiStatus)
+            ? "RETURNED"
+            : aiStatus === "COMPLETED"
+              ? "COMPLETED"
+              : aiStatus === "CANCELLED"
+                ? "CANCELLED"
+                : current.status;
+    const now = new Date();
+    await this.prisma.$transaction([
+      this.prisma.aiTaskOutput.updateMany({
+        where: { aiTaskId: task.id, kind: { not: "OPS_TASK" } },
+        data: { opsTaskId },
+      }),
+      this.prisma.opsTask.update({
+        where: { id: opsTaskId },
+        data: {
+          status: opsStatus,
+          result: message || undefined,
+          evidence: json({
+            ...object(current.evidence),
+            aiTaskId: task.id,
+            aiTaskNo: task.taskNo,
+            aiStatus,
+            aiUpdatedAt: now.toISOString(),
+          }),
+          ...(opsStatus === "IN_PROGRESS" ? { startedAt: now } : {}),
+          ...(opsStatus === "REVIEW" ? { submittedAt: now, reviewAt: now } : {}),
+          ...(["RETURNED"].includes(opsStatus) ? { returnedAt: now, returnReason: message || "请补充资料或查看处理建议" } : {}),
+          ...(opsStatus === "COMPLETED" ? { completedAt: now, completedBy: "AI任务中心", returnReason: null } : {}),
+        },
+      }),
+    ]);
+    return opsTaskId;
+  }
+
   private async notify(aiTaskId: string, employeeId: string, type: string, title: string, content: string, taskId?: string) {
-    await this.prisma.taskNotification.create({
-      data: { aiTaskId, taskId, recipientEmployeeId: employeeId, channel: "IN_APP", type, title, content },
+    const safeContent = this.employeeMessage(content);
+    const eventKey = `${aiTaskId}:${type}:${taskId || "NO_TASK"}`;
+    await this.prisma.taskNotification.upsert({
+      where: { recipientEmployeeId_channel_eventKey: { recipientEmployeeId: employeeId, channel: "IN_APP", eventKey } },
+      create: {
+        aiTaskId,
+        taskId,
+        recipientEmployeeId: employeeId,
+        channel: "IN_APP",
+        eventKey,
+        targetType: taskId ? "OPS_TASK" : "AI_TASK",
+        targetId: taskId || aiTaskId,
+        type,
+        title,
+        content: safeContent,
+      },
+      update: { title, content: safeContent, taskId, targetType: taskId ? "OPS_TASK" : "AI_TASK", targetId: taskId || aiTaskId },
     });
     const configuredWorkbenchUrl = new URL(opsConfig.webBaseUrl);
     const publicUrl = new URL(opsConfig.publicBaseUrl);
@@ -2269,21 +2444,42 @@ export class AiTaskCenterService implements OnModuleInit {
     workbenchUrl.hash = "";
     if (taskId) workbenchUrl.searchParams.set("taskId", taskId);
     else workbenchUrl.searchParams.set("page", "messages");
-    const result = await this.wecom.send(employeeId, title, content, workbenchUrl.toString());
+    const result = await this.wecom.send(employeeId, title, safeContent, workbenchUrl.toString());
     if (result.configured) {
-      await this.prisma.taskNotification.create({
-        data: {
+      await this.prisma.taskNotification.upsert({
+        where: { recipientEmployeeId_channel_eventKey: { recipientEmployeeId: employeeId, channel: "WECOM", eventKey } },
+        create: {
           aiTaskId,
           taskId,
           recipientEmployeeId: employeeId,
           channel: "WECOM",
+          eventKey,
+          targetType: taskId ? "OPS_TASK" : "AI_TASK",
+          targetId: taskId || aiTaskId,
           type,
           title,
-          content: result.sent ? content : `${content}｜${result.message || "发送失败"}`,
+          content: result.sent ? safeContent : `${safeContent}｜${result.message || "发送失败"}`,
           sentAt: result.sent ? new Date() : null,
+        },
+        update: {
+          title,
+          content: result.sent ? safeContent : `${safeContent}｜${result.message || "发送失败"}`,
+          sentAt: result.sent ? new Date() : null,
+          taskId,
+          targetType: taskId ? "OPS_TASK" : "AI_TASK",
+          targetId: taskId || aiTaskId,
         },
       });
     }
+  }
+
+  private employeeMessage(message: string) {
+    const value = text(message);
+    if (!value) return "任务状态已更新，请进入任务详情查看。";
+    if (/(\n\s+at\s|stack|traceback|schema|jsonl|timeout|manager|exception|error:)/i.test(value)) {
+      return "AI处理暂未完成，请进入任务详情查看处理建议或等待系统重试。";
+    }
+    return clippedText(value, 240);
   }
 
   private async audit(actor: string, action: string, entityId: string, after: unknown) {

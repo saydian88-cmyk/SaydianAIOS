@@ -42,7 +42,6 @@ const dashboard = ref<Dashboard>();
 const integrations = ref<Integration[]>([]);
 const content = ref<ContentPlan[]>([]);
 const contentFilter = ref<"ALL" | "PENDING_APPROVAL" | "APPROVED" | "PUBLISHED">("ALL");
-const assetOnlyProductModel = ref("");
 const contentRestrictionMode = ref<"NORMAL" | "HEALTH_RESTRICTED">("NORMAL");
 const brandDataCenter = ref<{ reload: () => Promise<void> }>();
 const operationAnalysis = ref<{ reload: () => Promise<void> }>();
@@ -96,6 +95,16 @@ const filteredContent = computed(() => contentFilter.value === "ALL"
   ? content.value
   : content.value.filter((item) => item.status === contentFilter.value));
 const configuredCount = computed(() => integrations.value.filter((item) => item.state !== "UNCONFIGURED").length);
+const connectionSummary = computed(() => {
+  if (!dashboard.value) return { label: "正在检查服务", state: "pending" };
+  const healthy = dashboard.value.integrations.healthy ?? 0;
+  const unhealthy = dashboard.value.integrations.error ?? 0;
+  const unconfigured = dashboard.value.integrations.unconfigured ?? 0;
+  return {
+    label: `核心服务正常 ${healthy} 项 · 异常 ${unhealthy} 项 · 未配置 ${unconfigured} 项`,
+    state: unhealthy ? "bad" : unconfigured ? "warn" : "good",
+  };
+});
 
 function time(value?: string) {
   if (!value) return "未记录";
@@ -222,15 +231,6 @@ async function generateContent() {
     active.value = "content";
     await loadActive();
   }, "今日选题已生成");
-}
-
-async function generateAssetOnlyVideo() {
-  if (!assetOnlyProductModel.value) return ElMessage.warning("请先选择需要快速成片的产品型号");
-  await withLoading(async () => {
-    await post("/api/v1/content/asset-only-video/generate", { productModel: assetOnlyProductModel.value, contentRestrictionMode: contentRestrictionMode.value });
-    contentFilter.value = "PENDING_APPROVAL";
-    await loadActive();
-  }, "无需补拍脚本已生成，审核通过后可直接启动AI剪辑");
 }
 
 async function approve(item: ContentPlan) {
@@ -745,7 +745,7 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
         <div><small>{{ todayLabel }}</small><h1>{{ pageTitle }}</h1></div>
         <div class="top-actions">
           <span class="employee-identity"><small>管理后台账号</small><strong>{{ actorInput }}</strong></span>
-          <span class="connection-state"><i :class="error ? 'bad' : 'good'"></i>{{ error ? '连接异常' : '数据已连接' }}</span>
+          <span class="connection-state"><i :class="error ? 'bad' : connectionSummary.state"></i>{{ error ? '连接异常' : connectionSummary.label }}</span>
           <el-button :icon="Refresh" circle @click="withLoading(loadActive)" aria-label="刷新当前页面" />
           <el-dropdown>
             <div class="avatar">{{ actorInput.slice(0, 2) }}</div>
@@ -824,15 +824,9 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
 
       <section v-else-if="active === 'content'" class="page">
         <div class="section-heading">
-          <div><span class="eyebrow">CONTENT COMMAND</span><h2>今日内容审核台</h2><p>普通生成优先复用已有素材；快速成片模式只生成无需补拍的脚本。</p></div>
+          <div><span class="eyebrow">CONTENT REVIEW</span><h2>今日内容审核台</h2><p>这里只审核内容；新增视频、图片和软文统一进入AI任务中心。</p></div>
           <div class="content-generate-actions">
-            <el-select v-model="contentRestrictionMode" style="width: 190px">
-              <el-option label="普通脚本" value="NORMAL" />
-              <el-option label="健康内容受限脚本" value="HEALTH_RESTRICTED" />
-            </el-select>
-            <el-select v-model="assetOnlyProductModel" clearable filterable placeholder="快速成片产品型号"><el-option v-for="product in ledger.products.filter(product => product.status === 'READY')" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" /></el-select>
-            <el-button @click="generateAssetOnlyVideo">生成无需补拍脚本</el-button>
-            <el-button type="primary" :icon="DocumentChecked" @click="generateContent">生成今日候选</el-button>
+            <el-button type="primary" :icon="DocumentChecked" @click="switchPage('aiTasks')">创建AI任务</el-button>
           </div>
         </div>
         <div class="summary-strip content-filters" role="tablist" aria-label="内容状态筛选">
@@ -927,7 +921,7 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
           { label: `归因 ${ledger.attributions.length}`, value: 'attributions' },
           { label: `数据源 ${ledger.sourceHealth.length}`, value: 'sources' },
         ]" />
-        <div class="table-panel" v-if="ledgerSubTab === 'employees'"><el-table :data="ledger.employees" stripe height="560"><el-table-column prop="name" label="员工" width="140" /><el-table-column prop="employeeNo" label="员工编号" width="130"><template #default="scope">{{ scope.row.employeeNo || '未配置' }}</template></el-table-column><el-table-column label="部门" width="150"><template #default="scope">{{ scope.row.department?.name || '未分配' }}</template></el-table-column><el-table-column prop="role" label="岗位/角色" min-width="180" /><el-table-column prop="wecomUserId" label="企微身份" min-width="180"><template #default="scope">{{ scope.row.wecomUserId || '未配置' }}</template></el-table-column><el-table-column label="权限" width="120"><template #default="scope">{{ scope.row.isSuperAdmin ? '超级管理员' : '普通员工' }}</template></el-table-column><el-table-column label="状态" width="100"><template #default="scope"><el-tag :type="scope.row.status === 'ACTIVE' ? 'success' : 'info'">{{ scope.row.status }}</el-tag></template></el-table-column><el-table-column label="操作" width="130" fixed="right"><template #default="scope"><el-button link type="primary" @click="openLedgerForm('employees', scope.row)">编辑</el-button><el-button link type="danger" @click="archiveLedger('employees', scope.row)">删除</el-button></template></el-table-column></el-table></div>
+        <div class="table-panel" v-if="ledgerSubTab === 'employees'"><el-table :data="ledger.employees" stripe height="560"><el-table-column prop="name" label="员工" width="140" /><el-table-column prop="employeeNo" label="员工编号" width="130"><template #default="scope">{{ scope.row.employeeNo || '未配置' }}</template></el-table-column><el-table-column label="部门" width="150"><template #default="scope">{{ scope.row.department?.name || '未分配' }}</template></el-table-column><el-table-column prop="role" label="岗位/角色" min-width="180" /><el-table-column prop="wecomUserId" label="企微身份" min-width="180"><template #default="scope">{{ scope.row.wecomUserId || '未配置' }}</template></el-table-column><el-table-column label="权限" width="120"><template #default="scope">{{ scope.row.isSuperAdmin ? '超级管理员' : '普通员工' }}</template></el-table-column><el-table-column label="状态" width="100"><template #default="scope"><el-tag :type="scope.row.status === 'ACTIVE' ? 'success' : 'info'">{{ statusLabel(scope.row.status) }}</el-tag></template></el-table-column><el-table-column label="操作" width="130" fixed="right"><template #default="scope"><el-button link type="primary" @click="openLedgerForm('employees', scope.row)">编辑</el-button><el-button link type="danger" @click="archiveLedger('employees', scope.row)">删除</el-button></template></el-table-column></el-table></div>
         <div class="table-panel" v-else-if="ledgerSubTab === 'products'"><el-table :data="ledger.products" stripe height="560"><el-table-column prop="modelCode" label="型号" width="130" /><el-table-column prop="name" label="产品" min-width="220" /><el-table-column prop="category" label="分类" min-width="180" /><el-table-column label="SKU" min-width="240"><template #default="scope">{{ scope.row.skus?.length ? scope.row.skus.map((i: AnyRow) => i.skuCode).join('、') : '未配置' }}</template></el-table-column><el-table-column label="状态" width="100"><template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template></el-table-column><el-table-column label="操作" width="130" fixed="right"><template #default="scope"><el-button link type="primary" @click="openLedgerForm('products', scope.row)">编辑</el-button><el-button link type="danger" @click="archiveLedger('products', scope.row)">删除</el-button></template></el-table-column></el-table></div>
         <div class="table-panel" v-else-if="ledgerSubTab === 'accounts'"><el-table :data="ledger.accounts" stripe height="560"><el-table-column label="平台" width="120"><template #default="scope">{{ scope.row.integration?.displayName || '未获取' }}</template></el-table-column><el-table-column prop="accountName" label="账号" min-width="180" /><el-table-column prop="externalAccountId" label="平台账号编号" min-width="180" /><el-table-column prop="region" label="区域" width="90" /><el-table-column label="负责人" width="130"><template #default="scope">{{ scope.row.ownerEmployee?.name || '待分配' }}</template></el-table-column><el-table-column label="能力状态" min-width="260"><template #default="scope"><span v-if="Object.keys(scope.row.capabilityStatus || {}).length">{{ Object.entries(scope.row.capabilityStatus).map(([k,v]) => `${k}:${statusLabel(String(v))}`).join('；') }}</span><span v-else>未配置</span></template></el-table-column><el-table-column label="状态" width="110"><template #default="scope"><el-tag :type="statusType(scope.row.state)">{{ statusLabel(scope.row.state) }}</el-tag></template></el-table-column><el-table-column label="操作" width="130" fixed="right"><template #default="scope"><el-button link type="primary" @click="openLedgerForm('accounts', scope.row)">编辑</el-button><el-button link type="danger" @click="archiveLedger('accounts', scope.row)">删除</el-button></template></el-table-column></el-table></div>
         <div class="table-panel" v-else-if="ledgerSubTab === 'stores'"><el-table :data="ledger.stores" stripe height="560"><el-table-column label="平台" width="120"><template #default="scope">{{ scope.row.platformAccount?.integration?.displayName || '未获取' }}</template></el-table-column><el-table-column label="账号" width="160"><template #default="scope">{{ scope.row.platformAccount?.accountName || '未获取' }}</template></el-table-column><el-table-column prop="name" label="店铺" min-width="200" /><el-table-column prop="externalStoreId" label="平台店铺编号" min-width="180" /><el-table-column prop="region" label="区域" width="90" /><el-table-column label="负责人" width="130"><template #default="scope">{{ scope.row.ownerEmployee?.name || '待分配' }}</template></el-table-column><el-table-column label="状态" width="110"><template #default="scope"><el-tag :type="statusType(scope.row.state)">{{ statusLabel(scope.row.state) }}</el-tag></template></el-table-column><el-table-column label="操作" width="130" fixed="right"><template #default="scope"><el-button link type="primary" @click="openLedgerForm('stores', scope.row)">编辑</el-button><el-button link type="danger" @click="archiveLedger('stores', scope.row)">删除</el-button></template></el-table-column></el-table></div>

@@ -81,6 +81,14 @@ const selfTaskForm = reactive({
   productId: "",
   keywordId: "",
   platform: "DOUYIN",
+  targetAudience: "",
+  corePain: "",
+  recommendedScene: "",
+  hook: "",
+  executionMode: "FULL_VIDEO",
+  materialStrategy: "REAL_ASSET_FIRST",
+  sourceKeywordIds: [] as string[],
+  sourceExternalVideoIds: [] as string[],
   title: "",
   description: "",
   descriptionDocument: emptyTaskDocument(),
@@ -228,7 +236,6 @@ const videoFactoryForm = reactive({
   keywordIds: [] as string[],
   externalVideoIds: [] as string[],
 });
-const creatingVideoProject = ref(false);
 const scriptPackageVisible = ref(false);
 const scriptPackageCandidate = ref<Row>();
 const generatingProjectId = ref("");
@@ -275,7 +282,6 @@ const publishPlatformOptions = [
 const publishLinkRecords = ref<Array<{ platform: string; remoteUrl: string; publishedAt: string }>>([]);
 const expandedVideoProjectIds = ref<string[]>([]);
 const lockedShotUpload = ref<Row>();
-const generatingVideoScript = ref(false);
 const videoScriptMode = ref("ASSET_FIRST");
 const videoScriptRestriction = ref("NORMAL");
 const analyzingAssetGaps = ref(false);
@@ -589,6 +595,27 @@ async function openSystemOutput(output: Row) {
   }
 }
 
+async function recreateSystemOutput() {
+  const output = outputPreview.value;
+  if (!output) return;
+  outputPreviewVisible.value = false;
+  await openSelfTask();
+  const input = output.aiTask?.input || {};
+  const contentType = isVideoOutput(output) ? "SHORT_VIDEO" : isImageOutput(output) ? "IMAGE" : "ARTICLE";
+  Object.assign(selfTaskForm, {
+    contentType,
+    productId: output.aiTask?.productId || "",
+    platform: output.aiTask?.platform || "DOUYIN",
+    targetAudience: input.targetAudience || input.audience || "",
+    corePain: input.corePain || input.painPoint || "",
+    recommendedScene: input.recommendedScene || input.scene || "",
+    hook: input.hook || "",
+    title: `${output.title} · 重新创作`,
+    description: output.aiTask?.instructions || `基于已审核成果“${output.title}”调整参数后重新创作。`,
+  });
+  selfTaskForm.descriptionDocument = taskEditorDocument(null, selfTaskForm.description);
+}
+
 async function loadTasks() {
   loading.value = true;
   try {
@@ -860,6 +887,14 @@ async function openSelfTask() {
     productId: "",
     keywordId: "",
     platform: "DOUYIN",
+    targetAudience: "",
+    corePain: "",
+    recommendedScene: "",
+    hook: "",
+    executionMode: "FULL_VIDEO",
+    materialStrategy: "REAL_ASSET_FIRST",
+    sourceKeywordIds: [],
+    sourceExternalVideoIds: [],
     title: "",
     description: "",
     descriptionDocument: emptyTaskDocument(),
@@ -883,6 +918,14 @@ async function openSelfTaskEdit(task: Row) {
     productId: task.productId || "",
     keywordId: evidence.keywordId || "",
     platform: task.platform || "DOUYIN",
+    targetAudience: evidence.targetAudience || "",
+    corePain: evidence.corePain || "",
+    recommendedScene: evidence.recommendedScene || "",
+    hook: evidence.hook || "",
+    executionMode: evidence.executionMode || "FULL_VIDEO",
+    materialStrategy: evidence.materialStrategy || "REAL_ASSET_FIRST",
+    sourceKeywordIds: evidence.sourceKeywordIds || [],
+    sourceExternalVideoIds: evidence.sourceExternalVideoIds || [],
     title: task.title || "",
     description: task.description || "",
     descriptionDocument: taskEditorDocument(task.descriptionDocument, task.description),
@@ -921,8 +964,7 @@ async function openTaskDetail(task: Row) {
     const fullTask = await api<Row>(`/api/v1/workbench/tasks/${task.id}`);
     taskDetail.value = fullTask;
     Object.keys(taskOutputUrls).forEach((key) => delete taskOutputUrls[key]);
-    await Promise.all((fullTask.aiTaskOutputs || []).map(async (output: Row) => {
-      if (!output.assetId && !output.url) return;
+    await Promise.all((fullTask.projection?.deliverables || []).map(async (output: Row) => {
       try {
         const result = await api<Row>(`/api/v1/workbench/tasks/${fullTask.id}/outputs/${output.id}/url`);
         if (result.url) taskOutputUrls[output.id] = result.url;
@@ -939,12 +981,16 @@ function outputMime(output: Row) {
   return String(output.mimeType || output.asset?.mediaType || "").toLowerCase();
 }
 
+function isAiContentTask(task?: Row) {
+  return Boolean(task && task.sourceType === "SELF_CREATED" && ["CONTENT_VIDEO", "CONTENT_IMAGE", "CONTENT_ARTICLE"].includes(task.category));
+}
+
 function isVideoOutput(output: Row) {
-  return outputMime(output).startsWith("video/") || output.kind === "VIDEO_MASTER";
+  return output.previewKind === "VIDEO" || outputMime(output).startsWith("video/") || output.kind === "VIDEO_MASTER";
 }
 
 function isImageOutput(output: Row) {
-  return outputMime(output).startsWith("image/") || output.kind === "IMAGE_ASSET";
+  return output.previewKind === "IMAGE" || outputMime(output).startsWith("image/") || ["IMAGE", "IMAGE_ASSET", "IMAGE_OUTPUT", "IMAGE_GENERATED"].includes(output.kind);
 }
 
 function isPdfOutput(output: Row) {
@@ -974,6 +1020,10 @@ async function generateTaskSuggestion() {
     selfTaskForm.descriptionDocument = taskEditorDocument(null, suggestion.description);
     selfTaskForm.expectedResult = suggestion.expectedResult || "";
     selfTaskForm.expectedResultDocument = taskEditorDocument(null, suggestion.expectedResult);
+    selfTaskForm.targetAudience = suggestion.targetAudience || selfTaskForm.targetAudience;
+    selfTaskForm.corePain = suggestion.corePain || selfTaskForm.corePain;
+    selfTaskForm.recommendedScene = suggestion.recommendedScene || selfTaskForm.recommendedScene;
+    selfTaskForm.hook = suggestion.hook || selfTaskForm.hook;
     ElMessage.success("已生成选题、推荐和任务提示");
   } finally {
     generatingTaskSuggestion.value = false;
@@ -1020,6 +1070,14 @@ async function createSelfTask() {
       evidence: {
         contentType: selfTaskForm.contentType,
         keywordId: selfTaskForm.keywordId || null,
+        targetAudience: selfTaskForm.targetAudience || null,
+        corePain: selfTaskForm.corePain || null,
+        recommendedScene: selfTaskForm.recommendedScene || null,
+        hook: selfTaskForm.hook || null,
+        executionMode: selfTaskForm.executionMode,
+        materialStrategy: selfTaskForm.materialStrategy,
+        sourceKeywordIds: selfTaskForm.sourceKeywordIds,
+        sourceExternalVideoIds: selfTaskForm.sourceExternalVideoIds,
       },
     };
     if (editingSelfTaskId.value) {
@@ -1129,72 +1187,63 @@ async function changeDataCenterPage(page: number) {
   await loadDataCenter();
 }
 
-function useKeywordInFactory(keyword: Row) {
-  dataCenterTab.value = "videoFactory";
-  void loadDataCenter();
-  videoFactoryForm.platform = keyword.platform || "DOUYIN";
-  videoFactoryForm.productModel = keyword.product?.modelCode || "";
-  videoFactoryForm.topic = keyword.keyword || "";
-  videoFactoryForm.audience = keyword.audience || "";
-  videoFactoryForm.keywordIds = [keyword.id];
-  videoFactoryForm.externalVideoIds = [];
+async function useKeywordInFactory(keyword: Row) {
+  await openSelfTask();
+  const product = (contentTaskOptions.products || []).find((item: Row) => item.id === keyword.productId || item.modelCode === keyword.product?.modelCode);
+  Object.assign(selfTaskForm, {
+    contentType: "SHORT_VIDEO",
+    productId: product?.id || "",
+    keywordId: keyword.id || "",
+    platform: keyword.platform || "DOUYIN",
+    targetAudience: keyword.audience || "",
+    corePain: keyword.pain || "",
+    recommendedScene: keyword.scene || "",
+    hook: keyword.hook || "",
+    sourceKeywordIds: keyword.id ? [keyword.id] : [],
+    sourceExternalVideoIds: [],
+    title: `${product?.modelCode || "产品"} ${keyword.keyword || "关键词"}短视频`,
+    description: `围绕“${keyword.keyword || ""}”创建短视频内容任务。`,
+  });
+  selfTaskForm.descriptionDocument = taskEditorDocument(null, selfTaskForm.description);
 }
 
-function useViralVideoInFactory(video: Row) {
-  dataCenterTab.value = "videoFactory";
-  void loadDataCenter();
-  videoFactoryForm.platform = video.platform || "DOUYIN";
-  videoFactoryForm.productModel = video.keywordHits?.find((item: Row) => item.keyword?.product)?.keyword?.product?.modelCode || "";
-  videoFactoryForm.topic = video.title || "爆款结构仿拍";
-  videoFactoryForm.audience = "";
-  videoFactoryForm.keywordIds = (video.keywordHits || []).map((item: Row) => item.keywordId || item.keyword?.id).filter(Boolean);
-  videoFactoryForm.externalVideoIds = [video.id];
+async function useViralVideoInFactory(video: Row) {
+  await openSelfTask();
+  const keywordIds = (video.keywordHits || []).map((item: Row) => item.keywordId || item.keyword?.id).filter(Boolean);
+  const modelCode = video.keywordHits?.find((item: Row) => item.keyword?.product)?.keyword?.product?.modelCode || "";
+  const product = (contentTaskOptions.products || []).find((item: Row) => item.modelCode === modelCode);
+  Object.assign(selfTaskForm, {
+    contentType: "SHORT_VIDEO",
+    productId: product?.id || "",
+    keywordId: keywordIds[0] || "",
+    platform: video.platform || "DOUYIN",
+    sourceKeywordIds: keywordIds,
+    sourceExternalVideoIds: [video.id],
+    title: `${modelCode || "产品"} 爆款结构短视频`,
+    description: `参考“${video.title || "爆款视频"}”的Hook、节奏、镜头结构和CTA创建赛电版本，不复制竞品品牌、价格或承诺。`,
+  });
+  selfTaskForm.descriptionDocument = taskEditorDocument(null, selfTaskForm.description);
 }
 
-async function createVideoProject() {
-  creatingVideoProject.value = true;
-  try {
-    await post("/api/v1/workbench/data-center/video-projects", {
-      ...videoFactoryForm,
-      contentRestrictionMode: videoScriptRestriction.value,
-    });
-    ElMessage.success("已生成3个视频方向，可继续生成拍摄执行包");
-    videoFactoryForm.keywordIds = [];
-    videoFactoryForm.externalVideoIds = [];
-    dataCenterTab.value = "videoFactory";
-    await invalidateDataCenterSection("videoFactory");
-    await loadDataCenter(true);
-  } finally {
-    creatingVideoProject.value = false;
-  }
-}
-
-async function generateWorkbenchVideoScript() {
-  if (videoScriptMode.value === "ASSET_ONLY" && !videoFactoryForm.productModel.trim()) {
-    return ElMessage.warning("生成无需补拍脚本前，请填写产品型号");
-  }
-  generatingVideoScript.value = true;
-  try {
-    const result = await post<Row>("/api/v1/workbench/data-center/video-scripts/generate", {
-      generationMode: videoScriptMode.value,
-      contentRestrictionMode: videoScriptRestriction.value,
-      productModel: videoFactoryForm.productModel,
-      platform: videoFactoryForm.platform,
-      keywordIds: videoFactoryForm.keywordIds,
-      topic: videoFactoryForm.topic,
-      audience: videoFactoryForm.audience,
-      objective: videoFactoryForm.objective,
-      voiceoverMode: videoFactoryForm.voiceoverMode,
-    });
-    ElMessage.success(result.created
-      ? (videoScriptMode.value === "ASSET_ONLY" ? "无需补拍脚本已生成，已进入脚本审核" : "视频脚本已生成，已进入脚本审核")
-      : "今天已有同类脚本，没有重复创建");
-    dataCenterTab.value = "videoFactory";
-    await invalidateDataCenterSection("videoFactory");
-    await loadDataCenter(true);
-  } finally {
-    generatingVideoScript.value = false;
-  }
+async function openVideoFactoryTask(executionMode: "SCRIPT_ONLY" | "FULL_VIDEO") {
+  await openSelfTask();
+  const product = (contentTaskOptions.products || []).find((item: Row) => item.modelCode === videoFactoryForm.productModel);
+  Object.assign(selfTaskForm, {
+    contentType: "SHORT_VIDEO",
+    productId: product?.id || "",
+    keywordId: videoFactoryForm.keywordIds[0] || "",
+    platform: videoFactoryForm.platform,
+    targetAudience: videoFactoryForm.audience,
+    executionMode,
+    materialStrategy: videoScriptMode.value === "ASSET_ONLY" ? "APPROVED_ASSET_ONLY" : "REAL_ASSET_FIRST",
+    sourceKeywordIds: [...videoFactoryForm.keywordIds],
+    sourceExternalVideoIds: [...videoFactoryForm.externalVideoIds],
+    title: `${videoFactoryForm.productModel || "产品"} ${videoFactoryForm.topic || "短视频内容"}`,
+    description: `主题：${videoFactoryForm.topic || "待完善"}；目标：${videoFactoryForm.objective || "内容传播与转化"}；视频类型：${videoFactoryForm.voiceoverMode === "NO_VOICEOVER" ? "无口播" : "有口播"}。`,
+    expectedResult: executionMode === "SCRIPT_ONLY" ? "输出3套脚本候选、主方案、分镜、素材建议和缺口清单。" : "输出可预览的9:16主成片、脚本、分镜和素材使用记录。",
+  });
+  selfTaskForm.descriptionDocument = taskEditorDocument(null, selfTaskForm.description);
+  selfTaskForm.expectedResultDocument = taskEditorDocument(null, selfTaskForm.expectedResult);
 }
 
 async function analyzeWorkbenchAssetGaps() {
@@ -1635,7 +1684,15 @@ function openSubmit(task: Row) {
 
 async function submitTask() {
   if (!activeTask.value || !submitForm.summary.trim()) {
-    ElMessage.warning("请填写任务成果说明");
+    ElMessage.warning(isAiContentTask(activeTask.value) ? "请填写需要修改的内容" : "请填写任务成果说明");
+    return;
+  }
+  if (isAiContentTask(activeTask.value)) {
+    await post(`/api/v1/workbench/tasks/${activeTask.value.id}/ai-feedback`, { note: submitForm.summary });
+    submitVisible.value = false;
+    ElMessage.success("修改反馈已提交，等待管理员确认");
+    await Promise.all([loadDashboard(), loadTasks()]);
+    if (taskDetailVisible.value) await openTaskDetail(activeTask.value);
     return;
   }
   await post(`/api/v1/workbench/tasks/${activeTask.value.id}/submit`, {
@@ -2146,8 +2203,8 @@ onMounted(() => void bootstrap());
                 </div>
                 <div class="task-actions">
                   <el-button @click="openTaskDetail(task)">查看详情</el-button>
-                  <el-button v-if="task.status === 'ACCEPTED' || task.status === 'RETURNED'" type="primary" @click="startTask(task)">开始</el-button>
-                  <el-button v-if="['ACCEPTED','IN_PROGRESS','RETURNED'].includes(task.status)" @click="openSubmit(task)">提交成果</el-button>
+                  <el-button v-if="!isAiContentTask(task) && (task.status === 'ACCEPTED' || task.status === 'RETURNED')" type="primary" @click="startTask(task)">开始</el-button>
+                  <el-button v-if="!isAiContentTask(task) && ['ACCEPTED','IN_PROGRESS','RETURNED'].includes(task.status)" @click="openSubmit(task)">提交成果</el-button>
                 </div>
               </article>
             </div>
@@ -2240,9 +2297,9 @@ onMounted(() => void bootstrap());
             <div class="task-actions">
               <el-button @click="openTaskDetail(task)">查看详情</el-button>
               <el-button v-if="!task.assigneeEmployeeId && task.status === 'OPEN'" type="primary" @click="acceptTask(task)">领取</el-button>
-              <el-button v-if="task.assigneeEmployeeId === user.id && ['ACCEPTED','RETURNED'].includes(task.status)" type="primary" @click="startTask(task)">开始</el-button>
-              <el-button v-if="task.assigneeEmployeeId === user.id && ['ACCEPTED','IN_PROGRESS','RETURNED'].includes(task.status)" @click="openSubmit(task)">提交成果</el-button>
-              <el-button v-if="task.sourceType === 'SELF_CREATED' && !['COMPLETED','CANCELLED','VERIFIED'].includes(task.status)" @click="openSelfTaskEdit(task)">修改</el-button>
+              <el-button v-if="!isAiContentTask(task) && task.assigneeEmployeeId === user.id && ['ACCEPTED','RETURNED'].includes(task.status)" type="primary" @click="startTask(task)">开始</el-button>
+              <el-button v-if="!isAiContentTask(task) && task.assigneeEmployeeId === user.id && ['ACCEPTED','IN_PROGRESS','RETURNED'].includes(task.status)" @click="openSubmit(task)">提交成果</el-button>
+              <el-button v-if="task.sourceType === 'SELF_CREATED' && (!isAiContentTask(task) || task.status === 'ACCEPTED') && !['COMPLETED','CANCELLED','VERIFIED'].includes(task.status)" @click="openSelfTaskEdit(task)">修改</el-button>
               <el-button v-if="task.sourceType === 'SELF_CREATED' && !['COMPLETED','CANCELLED','VERIFIED'].includes(task.status)" type="danger" plain @click="cancelOwnedTask(task)">取消任务</el-button>
               <el-button v-if="task.sourceType === 'SELF_CREATED' && task.status === 'CANCELLED'" @click="openSelfTaskCopy(task)">复制再次添加</el-button>
               <el-button v-if="task.sourceType === 'SELF_CREATED' && task.status === 'CANCELLED'" type="danger" plain :loading="trashingTaskId === task.id" @click="trashCancelledTask(task)">删除</el-button>
@@ -2488,7 +2545,7 @@ onMounted(() => void bootstrap());
               <h4>{{ keyword.keyword }}</h4>
               <p>{{ keyword.reason || [keyword.audience, keyword.pain, keyword.scene].filter(Boolean).join(" · ") || "可用于内容选题与平台搜索" }}</p>
               <div class="keyword-score"><span>机会分</span><strong>{{ Number(keyword.opportunityScore || 0).toFixed(0) }}</strong></div>
-              <el-button type="primary" plain @click="useKeywordInFactory(keyword)">用于视频</el-button>
+              <el-button type="primary" plain @click="useKeywordInFactory(keyword)">创建内容任务</el-button>
             </article>
           </div>
           <el-empty v-if="!dataCenter.keywords?.items?.length" description="当前没有符合条件的关键词" />
@@ -2516,7 +2573,7 @@ onMounted(() => void bootstrap());
               </div>
               <div class="viral-actions">
                 <el-button v-if="video.sourceUrl" @click="openExternal(video.sourceUrl)">查看原视频</el-button>
-                <el-button type="primary" @click="useViralVideoInFactory(video)">生成仿拍方案</el-button>
+                <el-button type="primary" @click="useViralVideoInFactory(video)">创建赛电版本任务</el-button>
               </div>
             </article>
             <el-empty v-if="!dataCenter.viralTrend?.items?.length" description="暂无12小时爆款数据，等待采集任务同步" />
@@ -2548,8 +2605,8 @@ onMounted(() => void bootstrap());
                 <el-option label="健康内容受限" value="HEALTH_RESTRICTED" />
               </el-select>
               <div class="factory-generation-actions">
-                <el-button :loading="creatingVideoProject" @click="createVideoProject">生成3个视频方向</el-button>
-                <el-button type="primary" :loading="generatingVideoScript" @click="generateWorkbenchVideoScript">{{ videoScriptMode === "ASSET_ONLY" ? "直接生成无需补拍脚本" : "直接生成视频脚本" }}</el-button>
+                <el-button @click="openVideoFactoryTask('SCRIPT_ONLY')">创建脚本任务</el-button>
+                <el-button type="primary" @click="openVideoFactoryTask('FULL_VIDEO')">创建完整视频任务</el-button>
               </div>
             </div>
             <el-alert v-if="videoScriptMode === 'ASSET_ONLY'" title="项目只使用素材库已有视频素材；不能完整覆盖时会明确提示缺少素材，不会生成需要补拍的脚本。" type="info" :closable="false" />
@@ -2825,9 +2882,9 @@ onMounted(() => void bootstrap());
         <div><dt>截止时间</dt><dd>{{ formatTime(taskDetail.dueAt) }}</dd></div>
       </dl>
       <el-alert
-        v-if="taskDetail.aiRequest"
-        :title="`后台AI任务：${taskDetail.aiRequest.taskNo} · ${statusLabels[taskDetail.aiRequest.status] || taskDetail.aiRequest.status}`"
-        :description="`${taskDetail.aiRequest.progress || 0}% · ${taskDetail.aiRequest.progressMessage || '等待Codex处理'}`"
+        v-if="taskDetail.projection?.aiTask"
+        :title="`${taskDetail.projection.displayStatus} · ${taskDetail.projection.currentPhase}`"
+        :description="`${taskDetail.projection.aiTask.progress || 0}% · ${taskDetail.projection.aiTask.progressMessage || '等待Codex处理'} · 下一步：${taskDetail.projection.nextAction}`"
         type="info"
         :closable="false"
         show-icon
@@ -2850,11 +2907,11 @@ onMounted(() => void bootstrap());
         <h3>附件</h3>
         <a v-for="(item, index) in taskAttachments(taskDetail)" :key="item.id || index" :href="item.url || item.fileUrl" target="_blank" rel="noopener noreferrer">{{ item.name || item.fileName || `附件 ${index + 1}` }}</a>
       </section>
-      <section v-if="taskDetail.aiTaskOutputs?.length" class="task-detail-section ai-result-section">
-        <h3>AI成果与文件</h3>
-        <article v-for="output in taskDetail.aiTaskOutputs" :key="output.id" class="task-output-card">
+      <section v-if="taskDetail.projection?.deliverables?.length" class="task-detail-section ai-result-section">
+        <h3>审核通过的成果</h3>
+        <article v-for="output in taskDetail.projection.deliverables" :key="output.id" class="task-output-card">
           <div class="task-output-heading">
-            <div><strong>{{ output.title }}</strong><span>{{ output.kind }} · {{ output.reviewStatus === "APPROVED" ? "已审核" : output.reviewStatus }}</span></div>
+            <div><strong>{{ output.title }}</strong><span>{{ output.previewKind === "VIDEO" ? "视频" : output.previewKind === "IMAGE" ? "图片" : output.previewKind === "ARTICLE" ? "软文" : "文档" }} · 第{{ output.version }}版 · 已审核</span></div>
             <a v-if="taskOutputUrls[output.id]" :href="taskOutputUrls[output.id]" target="_blank" rel="noopener noreferrer">预览/下载</a>
           </div>
           <video v-if="isVideoOutput(output) && taskOutputUrls[output.id]" :src="taskOutputUrls[output.id]" controls playsinline preload="metadata" />
@@ -2875,12 +2932,13 @@ onMounted(() => void bootstrap());
       <section v-if="taskDetail.returnReason" class="task-detail-section return-note"><h3>退回说明</h3><p>{{ taskDetail.returnReason }}</p></section>
       <div class="task-detail-actions">
         <el-button
-          v-if="(taskDetail.sourceType === 'SELF_CREATED' && taskDetail.assigneeEmployeeId === user?.id) || (taskDetail.sourceType === 'OPERATOR_COLLAB' && taskDetail.assignedByEmployeeId === user?.id)"
+          v-if="((taskDetail.sourceType === 'SELF_CREATED' && taskDetail.assigneeEmployeeId === user?.id) || (taskDetail.sourceType === 'OPERATOR_COLLAB' && taskDetail.assignedByEmployeeId === user?.id)) && (!isAiContentTask(taskDetail) || taskDetail.aiRequest?.status === 'WAITING_CONFIRMATION')"
           @click="taskDetailVisible = false; taskDetail.sourceType === 'SELF_CREATED' ? openSelfTaskEdit(taskDetail) : openTeamTaskEdit(taskDetail)"
         >编辑任务</el-button>
         <el-button v-if="!taskDetail.assigneeEmployeeId && taskDetail.status === 'OPEN'" type="primary" @click="acceptTask(taskDetail)">领取任务</el-button>
-        <el-button v-if="taskDetail.assigneeEmployeeId === user?.id && ['ACCEPTED','RETURNED'].includes(taskDetail.status)" type="primary" @click="startTask(taskDetail)">开始任务</el-button>
-        <el-button v-if="taskDetail.assigneeEmployeeId === user?.id && ['ACCEPTED','IN_PROGRESS','RETURNED'].includes(taskDetail.status)" @click="openSubmit(taskDetail)">反馈/提交成果</el-button>
+        <el-button v-if="!isAiContentTask(taskDetail) && taskDetail.assigneeEmployeeId === user?.id && ['ACCEPTED','RETURNED'].includes(taskDetail.status)" type="primary" @click="startTask(taskDetail)">开始任务</el-button>
+        <el-button v-if="!isAiContentTask(taskDetail) && taskDetail.assigneeEmployeeId === user?.id && ['ACCEPTED','IN_PROGRESS','RETURNED'].includes(taskDetail.status)" @click="openSubmit(taskDetail)">提交成果</el-button>
+        <el-button v-if="isAiContentTask(taskDetail) && ['COMPLETED','RETURNED','FAILED'].includes(taskDetail.aiRequest?.status)" @click="openSubmit(taskDetail)">反馈修改</el-button>
         <el-button v-if="taskDetail.assignedByEmployeeId === user?.id && taskDetail.status === 'REVIEW'" type="primary" @click="openTeamReview(taskDetail)">审核成果</el-button>
       </div>
     </template>
@@ -2901,6 +2959,7 @@ onMounted(() => void bootstrap());
     </article>
     <template #footer>
       <el-button v-if="outputPreviewUrl" tag="a" :href="outputPreviewUrl" target="_blank">下载</el-button>
+      <el-button @click="recreateSystemOutput">调整参数重新创作</el-button>
       <el-button type="primary" @click="outputPreviewVisible = false">完成</el-button>
     </template>
   </el-dialog>
@@ -2943,6 +3002,22 @@ onMounted(() => void bootstrap());
         </el-select>
       </el-form-item>
       <el-button class="suggest-task-button" type="primary" plain :loading="generatingTaskSuggestion" @click="generateTaskSuggestion">智能生成选题、推荐与提示</el-button>
+      <div class="team-form-row">
+        <el-form-item label="目标用户"><el-input v-model="selfTaskForm.targetAudience" placeholder="例如：为父母选购健康手表的子女" /></el-form-item>
+        <el-form-item label="核心痛点"><el-input v-model="selfTaskForm.corePain" placeholder="例如：入口多，不清楚如何查看数据" /></el-form-item>
+      </div>
+      <div class="team-form-row">
+        <el-form-item label="推荐场景"><el-input v-model="selfTaskForm.recommendedScene" placeholder="例如：家庭首次连接与日常查看" /></el-form-item>
+        <el-form-item label="Hook（可选）"><el-input v-model="selfTaskForm.hook" placeholder="例如：界面很多，先分清这三类入口" /></el-form-item>
+      </div>
+      <div v-if="selfTaskForm.contentType === 'SHORT_VIDEO'" class="team-form-row">
+        <el-form-item label="视频任务模式">
+          <el-select v-model="selfTaskForm.executionMode"><el-option label="生成完整视频" value="FULL_VIDEO" /><el-option label="仅生成脚本" value="SCRIPT_ONLY" /></el-select>
+        </el-form-item>
+        <el-form-item label="素材策略">
+          <el-select v-model="selfTaskForm.materialStrategy"><el-option label="优先使用已审核真实素材" value="REAL_ASSET_FIRST" /><el-option label="仅使用指定素材" value="ASSIGNED_ONLY" /></el-select>
+        </el-form-item>
+      </div>
       <el-form-item label="任务标题" required><el-input v-model="selfTaskForm.title" placeholder="例如：整理本周待拍视频清单" /></el-form-item>
       <el-form-item label="任务说明"><TaskRichTextEditor v-model="selfTaskForm.descriptionDocument" placeholder="填写需要完成的具体工作" /></el-form-item>
       <el-form-item label="期望结果"><TaskRichTextEditor v-model="selfTaskForm.expectedResultDocument" placeholder="填写完成标准或交付内容" /></el-form-item>
@@ -3011,16 +3086,16 @@ onMounted(() => void bootstrap());
     <template #footer><el-button @click="reviewVisible = false">取消</el-button><el-button type="primary" @click="reviewTeamTask">确认</el-button></template>
   </el-dialog>
 
-  <el-dialog v-model="submitVisible" title="提交任务成果" width="min(560px, 92vw)">
+  <el-dialog v-model="submitVisible" :title="isAiContentTask(activeTask) ? '反馈修改' : '提交任务成果'" width="min(560px, 92vw)">
     <el-form label-position="top">
-      <el-form-item label="成果说明" required><el-input v-model="submitForm.summary" type="textarea" :rows="4" placeholder="说明完成了什么、产出位置和需要审核的重点" /></el-form-item>
-      <el-form-item label="关联素材编号"><el-input v-model="submitForm.assetId" placeholder="例如 SD-VIDEO-..." /></el-form-item>
-      <template v-if="activeTask?.category?.startsWith('LIVE')">
+      <el-form-item :label="isAiContentTask(activeTask) ? '修改要求' : '成果说明'" required><el-input v-model="submitForm.summary" type="textarea" :rows="4" :placeholder="isAiContentTask(activeTask) ? '说明需要修改的参数、文案、画面或输出版本' : '说明完成了什么、产出位置和需要审核的重点'" /></el-form-item>
+      <el-form-item v-if="!isAiContentTask(activeTask)" label="关联素材编号"><el-input v-model="submitForm.assetId" placeholder="例如 SD-VIDEO-..." /></el-form-item>
+      <template v-if="!isAiContentTask(activeTask) && activeTask?.category?.startsWith('LIVE')">
         <el-form-item label="直播关键数据"><el-input v-model="submitForm.metrics" type="textarea" :rows="3" placeholder="在线、停留、点击、成交等" /></el-form-item>
         <el-form-item label="下一场优化动作"><el-input v-model="submitForm.improvements" type="textarea" :rows="3" /></el-form-item>
       </template>
     </el-form>
-    <template #footer><el-button @click="submitVisible = false">取消</el-button><el-button type="primary" @click="submitTask">提交审核</el-button></template>
+    <template #footer><el-button @click="submitVisible = false">取消</el-button><el-button type="primary" @click="submitTask">{{ isAiContentTask(activeTask) ? "提交修改反馈" : "提交审核" }}</el-button></template>
   </el-dialog>
 
   <el-dialog v-model="uploadVisible" title="上传素材" width="min(760px, 94vw)" destroy-on-close @closed="lockedShotUpload = undefined">

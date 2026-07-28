@@ -35,6 +35,9 @@ const employees = ref<Row[]>([]);
 const products = ref<Row[]>([]);
 const detail = ref<Row>();
 const detailVisible = ref(false);
+const outputPreview = ref<Row>();
+const outputPreviewUrl = ref("");
+const outputPreviewVisible = ref(false);
 const createVisible = ref(false);
 const runnerVisible = ref(false);
 const runnerToken = ref("");
@@ -60,7 +63,7 @@ const form = reactive<Row>({
   reviewerEmployeeId: "",
   estimatedCost: 0,
   budgetLimit: 0,
-  autoExecute: true,
+  autoExecute: false,
   executionMode: "FULL_VIDEO",
   allowExternalGeneration: false,
 });
@@ -189,7 +192,9 @@ async function createTask() {
       input: {
         ...(form.type === "VIDEO" ? { executionMode: form.executionMode } : {}),
         audience: form.audience || undefined,
+        targetAudience: form.audience || undefined,
         painPoint: form.painPoint || undefined,
+        corePain: form.painPoint || undefined,
         keyword: form.keyword || undefined,
         recommendedScene: form.recommendedScene || undefined,
         hook: form.hook || undefined,
@@ -197,6 +202,7 @@ async function createTask() {
       modelPolicy: {
         strategy: "CODEX_FIRST",
         allowExternalGeneration: form.type === "VIDEO" && Boolean(form.allowExternalGeneration),
+        executionClass: form.type === "VIDEO" && form.allowExternalGeneration ? "EXTERNAL_PAID" : ["STORE_ANALYSIS", "COMPETITOR_ANALYSIS", "LIVE_ANALYSIS"].includes(form.type) ? "ANALYSIS" : "CODEX_SKILL",
       },
     });
     createVisible.value = false;
@@ -221,8 +227,8 @@ function openRevise() {
     platform: detail.value.platform || "ALL",
     productId: detail.value.productId || "",
     productModel: detail.value.productModel || "",
-    audience: input.audience || "",
-    painPoint: input.painPoint || "",
+    audience: input.targetAudience || input.audience || "",
+    painPoint: input.corePain || input.painPoint || "",
     keyword: input.keyword || "",
     recommendedScene: input.recommendedScene || "",
     hook: input.hook || "",
@@ -256,7 +262,9 @@ async function submitRevision() {
       input: {
         ...(row.type === "VIDEO" ? { executionMode: reviseForm.executionMode } : {}),
         audience: reviseForm.audience || null,
+        targetAudience: reviseForm.audience || null,
         painPoint: reviseForm.painPoint || null,
+        corePain: reviseForm.painPoint || null,
         keyword: reviseForm.keyword || null,
         recommendedScene: reviseForm.recommendedScene || null,
         hook: reviseForm.hook || null,
@@ -265,6 +273,7 @@ async function submitRevision() {
         ...(row.modelPolicy || {}),
         strategy: "CODEX_FIRST",
         allowExternalGeneration: row.type === "VIDEO" && Boolean(reviseForm.allowExternalGeneration),
+        executionClass: row.type === "VIDEO" && reviseForm.allowExternalGeneration ? "EXTERNAL_PAID" : ["STORE_ANALYSIS", "COMPETITOR_ANALYSIS", "LIVE_ANALYSIS"].includes(row.type) ? "ANALYSIS" : "CODEX_SKILL",
       },
     });
     reviseVisible.value = false;
@@ -370,12 +379,29 @@ async function saveWecom() {
 }
 
 async function openOutput(output: Row) {
+  outputPreview.value = output;
+  outputPreviewUrl.value = "";
+  outputPreviewVisible.value = true;
   try {
-    const result = await api<Row>(`/api/v1/ai-tasks/outputs/${output.id}/url`);
-    window.open(result.url, "_blank", "noopener,noreferrer");
+    if (output.assetId || output.url) {
+      const result = await api<Row>(`/api/v1/ai-tasks/outputs/${output.id}/url`);
+      outputPreviewUrl.value = result.url || "";
+    }
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : "文件暂不可下载");
+    if (!output.contentPlan?.variants?.length) ElMessage.error(error instanceof Error ? error.message : "文件暂不可预览");
   }
+}
+
+function previewKind(output?: Row) {
+  if (!output) return "DOCUMENT";
+  if (output.kind === "VIDEO_MASTER" || String(output.mimeType || output.asset?.mediaType || "").startsWith("video/")) return "VIDEO";
+  if (String(output.mimeType || output.asset?.mediaType || "").startsWith("image/") || ["IMAGE", "IMAGE_ASSET", "IMAGE_OUTPUT", "IMAGE_GENERATED"].includes(output.kind)) return "IMAGE";
+  if (["ARTICLE", "ARTICLE_OUTPUT"].includes(output.kind) || output.contentPlan?.variants?.length) return "ARTICLE";
+  return "DOCUMENT";
+}
+
+function previewText(output?: Row) {
+  return (output?.contentPlan?.variants || []).map((item: Row) => `${item.title}\n\n${item.body}`).join("\n\n");
 }
 
 defineExpose({ reload: load });
@@ -527,11 +553,11 @@ onMounted(load);
           <el-form-item label="视频任务模式"><el-radio-group v-model="form.executionMode"><el-radio-button value="FULL_VIDEO">生成完整视频</el-radio-button><el-radio-button value="SCRIPT_ONLY">仅生成脚本</el-radio-button></el-radio-group></el-form-item>
           <el-form-item label="外部视觉模型"><el-switch v-model="form.allowExternalGeneration" active-text="本地能力不足时允许调用" /></el-form-item>
         </div>
-        <div class="form-grid">
+        <div v-if="form.type === 'VIDEO' && form.allowExternalGeneration" class="form-grid">
           <el-form-item label="预计费用"><el-input-number v-model="form.estimatedCost" :min="0" :precision="2" /></el-form-item>
           <el-form-item label="单任务预算上限"><el-input-number v-model="form.budgetLimit" :min="0" :precision="2" /></el-form-item>
         </div>
-        <el-form-item><el-checkbox v-model="form.autoExecute">预算及模型可用时自动执行</el-checkbox></el-form-item>
+        <el-alert title="创建后先由管理员确认；本地Codex Skill任务确认后直接执行，无需配置预算。" type="info" :closable="false" />
       </el-form>
       <template #footer><el-button @click="createVisible = false">取消</el-button><el-button type="primary" @click="createTask">创建</el-button></template>
     </el-dialog>
@@ -578,11 +604,11 @@ onMounted(load);
           <el-form-item label="视频任务模式"><el-radio-group v-model="reviseForm.executionMode"><el-radio-button value="FULL_VIDEO">生成完整视频</el-radio-button><el-radio-button value="SCRIPT_ONLY">仅生成脚本</el-radio-button></el-radio-group></el-form-item>
           <el-form-item label="外部视觉模型"><el-switch v-model="reviseForm.allowExternalGeneration" active-text="本地能力不足时允许调用" /></el-form-item>
         </div>
-        <div class="form-grid">
+        <div v-if="detail?.type === 'VIDEO' && reviseForm.allowExternalGeneration" class="form-grid">
           <el-form-item label="预计费用"><el-input-number v-model="reviseForm.estimatedCost" :min="0" :precision="2" /></el-form-item>
           <el-form-item label="单任务预算上限"><el-input-number v-model="reviseForm.budgetLimit" :min="0" :precision="2" /></el-form-item>
         </div>
-        <el-checkbox v-model="reviseForm.autoExecute">预算及能力可用时自动执行</el-checkbox>
+        <el-alert title="保存即生成新的执行版本，旧成果和旧执行记录会保留。" type="info" :closable="false" />
       </el-form>
       <template #footer><el-button @click="reviseVisible = false">取消</el-button><el-button type="primary" :loading="revising" @click="submitRevision">保存并重新进入执行队列</el-button></template>
     </el-dialog>
@@ -601,13 +627,14 @@ onMounted(load);
           <el-descriptions-item label="任务编号">{{ detail.taskNo }}</el-descriptions-item>
           <el-descriptions-item label="状态">{{ statusLabel(detail.status) }}</el-descriptions-item>
           <el-descriptions-item label="类型">{{ typeLabel(detail.type) }}</el-descriptions-item>
-          <el-descriptions-item label="费用">预计 ¥{{ Number(detail.estimatedCost || 0).toFixed(2) }} / 实际 ¥{{ Number(detail.actualCost || 0).toFixed(2) }}</el-descriptions-item>
+          <el-descriptions-item v-if="detail.input?.executionClass === 'EXTERNAL_PAID'" label="外部模型费用">预计 ¥{{ Number(detail.estimatedCost || 0).toFixed(2) }} / 实际 ¥{{ Number(detail.actualCost || 0).toFixed(2) }}</el-descriptions-item>
+          <el-descriptions-item v-else label="执行方式">{{ detail.input?.executionClass === "ANALYSIS" ? "本地Codex分析" : "本地Codex Skill" }}</el-descriptions-item>
           <el-descriptions-item label="平台">{{ detail.platform || "未设置" }}</el-descriptions-item>
           <el-descriptions-item label="产品">{{ detail.productModel || "未选择" }}</el-descriptions-item>
           <el-descriptions-item label="负责人">{{ detail.owner?.name || "未指定" }}</el-descriptions-item>
           <el-descriptions-item label="审核人">{{ detail.reviewer?.name || "未指定" }}</el-descriptions-item>
-          <el-descriptions-item label="目标用户">{{ detail.input?.audience || "未设置" }}</el-descriptions-item>
-          <el-descriptions-item label="核心痛点">{{ detail.input?.painPoint || "未设置" }}</el-descriptions-item>
+          <el-descriptions-item label="目标用户">{{ detail.input?.targetAudience || detail.input?.audience || "未设置" }}</el-descriptions-item>
+          <el-descriptions-item label="核心痛点">{{ detail.input?.corePain || detail.input?.painPoint || "未设置" }}</el-descriptions-item>
           <el-descriptions-item label="关键词">{{ detail.input?.keyword || "未设置" }}</el-descriptions-item>
           <el-descriptions-item label="推荐场景">{{ detail.input?.recommendedScene || "未设置" }}</el-descriptions-item>
           <el-descriptions-item label="Hook" :span="2">{{ detail.input?.hook || "未设置" }}</el-descriptions-item>
@@ -654,13 +681,31 @@ onMounted(load);
             <strong>{{ output.title }}</strong>
             <span>{{ output.kind }} · {{ output.reviewStatus }}<template v-if="output.metadata?.sizeBytes"> · {{ output.metadata.sizeBytes }} bytes</template></span>
           </div>
-          <el-button v-if="output.assetId || output.url" link type="primary" @click="openOutput(output)">预览/下载</el-button>
+          <el-button v-if="output.assetId || output.url || output.contentPlan?.variants?.length" link type="primary" @click="openOutput(output)">预览</el-button>
         </div>
       </template>
     </el-drawer>
+    <el-dialog v-model="outputPreviewVisible" title="成果预览" width="min(860px, 94vw)" destroy-on-close>
+      <article v-if="outputPreview" class="output-preview">
+        <div class="output-preview-head">
+          <div><strong>{{ outputPreview.title }}</strong><span>{{ outputPreview.kind }} · {{ outputPreview.reviewStatus }}</span></div>
+          <a v-if="outputPreviewUrl" :href="outputPreviewUrl" target="_blank" rel="noopener noreferrer">下载原文件</a>
+        </div>
+        <video v-if="previewKind(outputPreview) === 'VIDEO' && outputPreviewUrl" :src="outputPreviewUrl" controls playsinline preload="metadata" />
+        <img v-else-if="previewKind(outputPreview) === 'IMAGE' && outputPreviewUrl" :src="outputPreviewUrl" :alt="outputPreview.title" />
+        <pre v-else-if="previewKind(outputPreview) === 'ARTICLE' && previewText(outputPreview)">{{ previewText(outputPreview) }}</pre>
+        <el-empty v-else description="当前成果没有可直接预览的文件" />
+        <dl v-if="outputPreview.asset" class="preview-meta">
+          <div><dt>尺寸</dt><dd>{{ outputPreview.asset.width || "—" }} × {{ outputPreview.asset.height || "—" }}</dd></div>
+          <div><dt>时长</dt><dd>{{ outputPreview.asset.durationSeconds == null ? "—" : `${Number(outputPreview.asset.durationSeconds).toFixed(1)}秒` }}</dd></div>
+          <div><dt>版本</dt><dd>第{{ Number(outputPreview.metadata?.version || 1) }}版</dd></div>
+        </dl>
+      </article>
+      <template #footer><el-button @click="outputPreviewVisible = false">关闭</el-button><el-button type="primary" @click="outputPreviewVisible = false; openRevise()">修改参数并重新创作</el-button></template>
+    </el-dialog>
   </div>
 </template>
 
 <style scoped>
-.ai-task-center{display:grid;gap:18px}.page-head,.section-head,.output-row{display:flex;align-items:center;justify-content:space-between;gap:16px}.page-head h2,.section-head h3,.config-card h3{margin:0}.page-head p,.config-card p{margin:6px 0 0;color:#64748b}.summary-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px}.summary-card{padding:16px;border:1px solid #e2e8f0;border-radius:12px;background:#fff;display:grid;gap:8px}.summary-card span{font-size:13px;color:#64748b}.summary-card strong{font-size:24px;color:#0f172a}.summary-card strong.compact{font-size:18px}.filters{display:grid;grid-template-columns:180px 180px minmax(220px,1fr) auto;gap:12px;margin-bottom:14px}.settings-grid{display:grid;gap:16px}.settings-actions{text-align:right}.token-box{font-family:Consolas,monospace;word-break:break-all;padding:8px 0;font-weight:700}.config-card{display:grid;grid-template-columns:1fr 1.5fr;gap:30px;border:1px solid #e2e8f0;border-radius:12px;padding:20px}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.field-tip{width:100%;margin-top:5px;color:#94a3b8;font-size:12px;line-height:1.4}.detail-actions{display:flex;justify-content:flex-end;margin-bottom:12px}.output-row{border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin:8px 0}.output-row div{display:grid;gap:4px}.output-row span{font-size:12px;color:#64748b}h3{margin:24px 0 12px}pre{max-height:320px;overflow:auto;white-space:pre-wrap;background:#f8fafc;padding:12px;border-radius:8px}.error-text{color:#dc2626;margin-top:6px}@media(max-width:1200px){.summary-grid{grid-template-columns:repeat(3,1fr)}}@media(max-width:760px){.summary-grid,.form-grid,.config-card{grid-template-columns:1fr}.filters{grid-template-columns:1fr}}
+.ai-task-center{display:grid;gap:18px}.page-head,.section-head,.output-row,.output-preview-head{display:flex;align-items:center;justify-content:space-between;gap:16px}.page-head h2,.section-head h3,.config-card h3{margin:0}.page-head p,.config-card p{margin:6px 0 0;color:#64748b}.summary-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px}.summary-card{padding:16px;border:1px solid #e2e8f0;border-radius:12px;background:#fff;display:grid;gap:8px}.summary-card span{font-size:13px;color:#64748b}.summary-card strong{font-size:24px;color:#0f172a}.summary-card strong.compact{font-size:18px}.filters{display:grid;grid-template-columns:180px 180px minmax(220px,1fr) auto;gap:12px;margin-bottom:14px}.settings-grid{display:grid;gap:16px}.settings-actions{text-align:right}.token-box{font-family:Consolas,monospace;word-break:break-all;padding:8px 0;font-weight:700}.config-card{display:grid;grid-template-columns:1fr 1.5fr;gap:30px;border:1px solid #e2e8f0;border-radius:12px;padding:20px}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.field-tip{width:100%;margin-top:5px;color:#94a3b8;font-size:12px;line-height:1.4}.detail-actions{display:flex;justify-content:flex-end;margin-bottom:12px}.output-row{border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin:8px 0}.output-row div,.output-preview-head div{display:grid;gap:4px}.output-row span,.output-preview-head span{font-size:12px;color:#64748b}.output-preview{display:grid;gap:16px}.output-preview video,.output-preview img{display:block;max-width:100%;max-height:64vh;margin:auto;border-radius:12px;background:#0f172a}.preview-meta{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.preview-meta div{padding:10px;border:1px solid #e2e8f0;border-radius:8px}.preview-meta dt{font-size:12px;color:#64748b}.preview-meta dd{margin:4px 0 0}h3{margin:24px 0 12px}pre{max-height:320px;overflow:auto;white-space:pre-wrap;background:#f8fafc;padding:12px;border-radius:8px}.error-text{color:#dc2626;margin-top:6px}@media(max-width:1200px){.summary-grid{grid-template-columns:repeat(3,1fr)}}@media(max-width:760px){.summary-grid,.form-grid,.config-card,.preview-meta{grid-template-columns:1fr}.filters{grid-template-columns:1fr}}
 </style>

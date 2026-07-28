@@ -2476,6 +2476,9 @@ model TaskNotification {
   aiTaskId            String?
   recipientEmployeeId String?
   channel             String    @default("IN_APP")
+  eventKey            String?
+  targetType          String?
+  targetId            String?
   type                String
   title               String
   content             String
@@ -2490,6 +2493,7 @@ model TaskNotification {
   @@index([recipientEmployeeId, readAt, createdAt])
   @@index([taskId])
   @@index([aiTaskId])
+  @@unique([recipientEmployeeId, channel, eventKey])
 }
 
 model OperationAnalysisRun {
