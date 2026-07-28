@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { detectSkill, routeTask, SkillRouteError } from "./skill-router";
 
-const codexHome = String(process.env.CODEX_HOME || "");
+const routeOnlyCodexHome = join(tmpdir(), "route-only-codex-home");
 
 describe("skill task router", () => {
   it.each([
@@ -16,14 +16,14 @@ describe("skill task router", () => {
     expect(routeTask({
       task: { type },
       execution: { mode, strategy: "CODEX_SKILL", requiredSkill: skill },
-    }, { ...process.env, CODEX_HOME: codexHome }).key).toBe(skill);
+    }, { ...process.env, CODEX_HOME: routeOnlyCodexHome }).key).toBe(skill);
   });
 
   it("keeps topic-card generation on the existing zero-output route", () => {
     expect(routeTask({
       task: { type: "VIDEO" },
       execution: { mode: "TOPIC_CARD_BATCH" },
-    }, { ...process.env, CODEX_HOME: codexHome })).toMatchObject({
+    }, { ...process.env, CODEX_HOME: routeOnlyCodexHome })).toMatchObject({
       key: "legacy-codex",
       strategy: "CODEX_TOPIC_CARD",
     });
@@ -33,7 +33,7 @@ describe("skill task router", () => {
     expect(() => routeTask({
       task: { type: "UNKNOWN" },
       execution: {},
-    }, { ...process.env, CODEX_HOME: codexHome })).toThrowError(
+    }, { ...process.env, CODEX_HOME: routeOnlyCodexHome })).toThrowError(
       expect.objectContaining<Partial<SkillRouteError>>({
         code: "UNSUPPORTED_TASK_TYPE",
         disposition: "WAITING_INPUT",
@@ -45,7 +45,7 @@ describe("skill task router", () => {
     expect(() => routeTask({
       task: { type: "IMAGE" },
       execution: { strategy: "CODEX_SKILL", requiredSkill: "some-other-skill" },
-    }, { ...process.env, CODEX_HOME: codexHome })).toThrowError(
+    }, { ...process.env, CODEX_HOME: routeOnlyCodexHome })).toThrowError(
       expect.objectContaining<Partial<SkillRouteError>>({ code: "REQUIRED_SKILL_MISMATCH" }),
     );
   });
