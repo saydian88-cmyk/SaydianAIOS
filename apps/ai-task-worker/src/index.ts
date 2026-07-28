@@ -1,11 +1,32 @@
 import "dotenv/config";
 import { execFile, spawn } from "node:child_process";
-import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { basename, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { safeName, sha256, verifySha256 } from "./worker-utils";
-
-type JsonRecord = Record<string, unknown>;
+import {
+  detectSkill,
+  routeTask,
+  type DetectedSkill,
+  type JsonRecord,
+} from "./skill-router";
+import {
+  ResultSchemaError,
+  runWithSchemaRetry,
+  validateResult,
+} from "./result-contract";
+import {
+  appendExecutionLog,
+  canResume,
+  ensureTaskWorkspace,
+  freshWorkspaceState,
+  loadWorkspaceState,
+  readJson,
+  saveWorkspaceState,
+  uploadLedgerKey,
+  writeJsonAtomic,
+  type WorkspaceState,
+} from "./workspace-state";
 
 function record(value: unknown): JsonRecord {
   return value && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : {};
@@ -14,9 +35,10 @@ function record(value: unknown): JsonRecord {
 const apiUrl = String(process.env.AI_TASK_API_URL || "https://stest.saydian.cn").replace(/\/+$/, "");
 const runnerToken = String(process.env.AI_TASK_RUNNER_TOKEN || "");
 const nodeCode = String(process.env.AI_TASK_RUNNER_NODE_CODE || "windows-codex-01");
-const runnerVersion = String(process.env.AI_TASK_RUNNER_VERSION || "2.1.0");
+const runnerVersion = String(process.env.AI_TASK_RUNNER_VERSION || "3.0.0");
 const workRoot = resolve(String(process.env.AI_TASK_WORKDIR || join(process.cwd(), ".ai-task-runner")));
 const pollMs = Math.max(2_000, Number(process.env.AI_TASK_POLL_MS || 10_000));
+const heartbeatMs = Math.max(10_000, Number(process.env.AI_TASK_HEARTBEAT_MS || 30_000));
 const codexExecutable = String(process.env.CODEX_EXECUTABLE || (process.platform === "win32" ? "codex.cmd" : "codex"));
 const ffmpegExecutable = String(process.env.FFMPEG_EXECUTABLE || "ffmpeg");
 const ffprobeExecutable = String(process.env.FFPROBE_EXECUTABLE || "ffprobe");
@@ -44,7 +66,7 @@ const baseProperties = {
         title: { type: "string" },
         metadata: {
           type: "object",
-          additionalProperties: false,
+          additionalProperties: true,
           properties: {
             description: { type: "string" },
             source: { type: "string" },
@@ -426,7 +448,7 @@ function outputSchema(type: string, executionMode = "", requestedCardCount = 10)
   };
 }
 
-function prompt(taskPackage: JsonRecord) {
+function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
   const task = record(taskPackage.task);
   const execution = record(taskPackage.execution);
   const type = String(task.type || "");
@@ -456,21 +478,32 @@ function prompt(taskPackage: JsonRecord) {
     COMPETITOR_ANALYSIS: "分析竞品商品、价格、内容和关键词变化，输出机会及待确认行动，禁止虚构竞品数据。",
     LIVE_ANALYSIS: "完成直播前方案或直播后复盘，输出切片建议、话术调整和下一场行动。",
   };
-  const requiredVideoSkill = type === "VIDEO" && executionMode === "FULL_VIDEO"
+  const skillInstruction = detectedSkill.key === "legacy-codex"
+    ? ""
+    : [
+      `本任务由统一 Skill Registry 选择 $${detectedSkill.name}。`,
+      `必须先完整读取并严格执行：${detectedSkill.skillPath}`,
+      `Skill版本：${detectedSkill.version}。不得改用其他 Skill 或第三方模型。`,
+    ].join("\n");
+  const requiredVideoSkill = type === "VIDEO" && ["FULL_VIDEO", "SCRIPT_ONLY"].includes(executionMode)
     ? [
       "本任务必须使用 $video-editing-from-media-library-share 完成正式剪辑，并完整遵循该Skill的初始化、素材只读、镜头连续性、内容禁止库、质检和交付规则。",
       `先验证本机active-config.json及全部根目录和索引均为ready和在线；health_content_allowed=${execution.healthContentAllowed !== false ? "true" : "false"}。`,
       "主时间线只能使用真实视频素材。图片、详情图和产品图只能作为绑定underlying_shot_id的短时辅助层，禁止图片轮播、静态图推拉或无关镜头补时长。",
       "每个功能镜头必须有直接对应画面；任何reshoot缺口都要停止受影响成片渲染，并输出明确补拍清单。",
-      "最终必须输出该Skill质检通过的1080×1920、30fps MP4，并在outputFiles中登记为VIDEO_MASTER。",
+      executionMode === "FULL_VIDEO"
+        ? "最终必须输出该Skill质检通过的1080×1920、30fps MP4，并在outputFiles中登记为VIDEO_MASTER。"
+        : "本次只执行脚本和分镜阶段，outputFiles不得包含VIDEO_MASTER，也不得调用付费成片能力。",
     ].join("\n")
     : "";
   return [
     "你是赛电总管理后台AI任务中心的Codex执行器。",
+    skillInstruction,
     instructions[type] || "按输入快照完成任务。",
     requiredVideoSkill,
     "必须以提供的JSON快照为事实边界；缺失数据明确写未配置或缺失，不编造数据、认证、费用和执行结果。",
     "优先使用manifest中已审核真实素材。VIDEO任务的每个镜头必须通过selectedAssetIds绑定具体素材ID；缺少素材时写清missingReason、alternativePlan和missingAssets，不得拿文件顺序代替镜头匹配。",
+    `固定回退顺序：${detectedSkill.fallbackOrder.join(" -> ")}。`,
     "输出必须符合output schema。outputFiles只能引用当前任务工作区内真实存在的文件。",
     `任务包JSON：\n${JSON.stringify(taskPackage, null, 2)}`,
   ].join("\n\n");
@@ -515,13 +548,12 @@ async function taskPackage(taskId: string) {
   return api<JsonRecord>(`/api/v1/ai-tasks/runner/tasks/${taskId}/package?nodeCode=${encodeURIComponent(nodeCode)}`);
 }
 
-async function verifyVideoSkillRuntime(taskPackageValue: JsonRecord) {
+async function verifyVideoSkillRuntime(taskPackageValue: JsonRecord, detectedSkill: DetectedSkill) {
   const task = record(taskPackageValue.task);
   const execution = record(taskPackageValue.execution);
-  if (String(task.type || "") !== "VIDEO" || String(execution.mode || "") !== "FULL_VIDEO") return;
-  if (String(execution.requiredSkill || "") !== "video-editing-from-media-library-share") {
-    throw new Error("完整视频任务未指定video-editing-from-media-library-share");
-  }
+  if (String(task.type || "") !== "VIDEO"
+    || !["FULL_VIDEO", "SCRIPT_ONLY"].includes(String(execution.mode || ""))
+    || detectedSkill.key !== "video-editing-from-media-library-share") return;
   const localAppData = String(process.env.LOCALAPPDATA || "");
   if (!localAppData) throw new Error("本机LOCALAPPDATA不可用，无法验证视频剪辑Skill");
   const activePath = join(localAppData, "Codex", "video-editing-from-media-library-share", "active-config.json");
@@ -541,7 +573,7 @@ async function verifyVideoSkillRuntime(taskPackageValue: JsonRecord) {
   }
 }
 
-async function downloadInputs(taskPackageValue: JsonRecord, workspace: string) {
+async function downloadInputs(taskPackageValue: JsonRecord, workspace: string): Promise<JsonRecord> {
   const inputsDir = join(workspace, "inputs");
   await mkdir(inputsDir, { recursive: true });
   const assets = Array.isArray(taskPackageValue.assets) ? taskPackageValue.assets.map(record) : [];
@@ -553,11 +585,18 @@ async function downloadInputs(taskPackageValue: JsonRecord, workspace: string) {
     let buffer: Buffer | undefined;
     const downloadUrl = String(asset.downloadUrl || "");
     const localPath = String(asset.localPath || "");
-    if (downloadUrl) {
+    const expectedHash = String(asset.sha256 || "").toLowerCase();
+    try {
+      const existing = await readFile(target);
+      if (expectedHash && verifySha256(existing, expectedHash)) buffer = existing;
+    } catch {
+      buffer = undefined;
+    }
+    if (!buffer && downloadUrl) {
       const response = await fetch(downloadUrl, { signal: AbortSignal.timeout(180_000) });
       if (!response.ok) continue;
       buffer = Buffer.from(await response.arrayBuffer());
-    } else if (localPath) {
+    } else if (!buffer && localPath) {
       try {
         buffer = await readFile(localPath);
       } catch {
@@ -565,10 +604,14 @@ async function downloadInputs(taskPackageValue: JsonRecord, workspace: string) {
       }
     }
     if (!buffer) continue;
-    const expectedHash = String(asset.sha256 || "").toLowerCase();
     const actualHash = sha256(buffer);
     if (!verifySha256(buffer, expectedHash)) throw new Error(`素材校验失败：${id}`);
-    await writeFile(target, buffer);
+    try {
+      const existing = await readFile(target);
+      if (sha256(existing) !== actualHash) await writeFile(target, buffer);
+    } catch {
+      await writeFile(target, buffer);
+    }
     downloaded.push({
       ...asset,
       downloadUrl: undefined,
@@ -577,12 +620,12 @@ async function downloadInputs(taskPackageValue: JsonRecord, workspace: string) {
       sha256: actualHash,
     });
   }
-  const packaged = {
+  const packaged: JsonRecord = {
     ...taskPackageValue,
     assets: downloaded,
   };
-  await writeFile(join(workspace, "snapshot.json"), JSON.stringify(taskPackageValue.snapshots || [], null, 2), "utf8");
-  await writeFile(join(workspace, "manifest.json"), JSON.stringify(downloaded, null, 2), "utf8");
+  await writeJsonAtomic(join(workspace, "snapshot.json"), taskPackageValue.snapshots || []);
+  await writeJsonAtomic(join(workspace, "manifest.json"), downloaded);
   return packaged;
 }
 
@@ -813,7 +856,13 @@ async function renderLocalVideo(result: JsonRecord, taskPackageValue: JsonRecord
   return result;
 }
 
-async function runCodex(taskPackage: JsonRecord, workspace: string, timeoutSeconds: number) {
+async function runCodex(
+  taskPackage: JsonRecord,
+  detectedSkill: DetectedSkill,
+  workspace: string,
+  timeoutSeconds: number,
+  schemaAttempt = 1,
+) {
   const task = record(taskPackage.task);
   const execution = record(taskPackage.execution);
   const snapshots = Array.isArray(taskPackage.snapshots) ? taskPackage.snapshots.map(record) : [];
@@ -832,7 +881,10 @@ async function runCodex(taskPackage: JsonRecord, workspace: string, timeoutSecon
     "--sandbox", "workspace-write", "-c", "approval_policy=\"never\"",
     "--cd", workspace, "--output-last-message", resultPath, "-",
   ];
-  await new Promise<void>((resolvePromise, reject) => {
+  let stdout = "";
+  let stderr = "";
+  try {
+    await new Promise<void>((resolvePromise, reject) => {
     const child = spawn(codexExecutable, args, {
       cwd: workspace,
       env: process.env,
@@ -840,19 +892,17 @@ async function runCodex(taskPackage: JsonRecord, workspace: string, timeoutSecon
       windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"],
     });
-    let stdout = "";
-    let stderr = "";
     const timer = setTimeout(() => {
       child.kill();
       reject(new Error(`Codex执行超时（${timeoutSeconds}秒）`));
     }, timeoutSeconds * 1_000);
     child.stderr.on("data", (chunk) => {
       stderr += chunk.toString();
-      if (stderr.length > 20_000) stderr = stderr.slice(-20_000);
+      if (stderr.length > 200_000) stderr = stderr.slice(-200_000);
     });
     child.stdout.on("data", (chunk) => {
       stdout += chunk.toString();
-      if (stdout.length > 20_000) stdout = stdout.slice(-20_000);
+      if (stdout.length > 200_000) stdout = stdout.slice(-200_000);
     });
     child.on("error", (error) => {
       clearTimeout(timer);
@@ -863,10 +913,53 @@ async function runCodex(taskPackage: JsonRecord, workspace: string, timeoutSecon
       if (code === 0) resolvePromise();
       else reject(new Error(stderr || stdout || `Codex退出码 ${code}`));
     });
-    child.stdin.end(prompt(taskPackage));
-  });
+    child.stdin.end(prompt(taskPackage, detectedSkill));
+    });
+  } finally {
+    await writeFile(join(workspace, "logs", `codex-${schemaAttempt}.stdout.log`), stdout, "utf8");
+    await writeFile(join(workspace, "logs", `codex-${schemaAttempt}.stderr.log`), stderr, "utf8");
+  }
   const content = await readFile(resultPath, "utf8");
-  return JSON.parse(content) as JsonRecord;
+  try {
+    return JSON.parse(content) as JsonRecord;
+  } catch {
+    throw new ResultSchemaError("result.json 不是合法JSON");
+  }
+}
+
+function packageFingerprint(taskPackageValue: JsonRecord) {
+  const stableAssets = (Array.isArray(taskPackageValue.assets) ? taskPackageValue.assets.map(record) : []).map((asset) => ({
+    id: asset.id,
+    sha256: asset.sha256,
+    kind: asset.kind,
+    workspacePath: asset.workspacePath,
+  }));
+  return sha256(Buffer.from(JSON.stringify({
+    task: taskPackageValue.task,
+    snapshots: taskPackageValue.snapshots,
+    execution: taskPackageValue.execution,
+    assets: stableAssets,
+  })));
+}
+
+async function validateOutputArtifacts(result: JsonRecord, workspace: string) {
+  const files = Array.isArray(result.outputFiles) ? result.outputFiles.map(record) : [];
+  for (const item of files) {
+    const requested = String(item.path || "");
+    const path = resolve(workspace, requested);
+    const rel = relative(workspace, path);
+    if (!requested || rel.startsWith("..") || isAbsolute(rel)) throw new Error(`输出文件越界：${requested}`);
+    const info = await stat(path);
+    if (!info.isFile() || info.size === 0) throw new Error(`输出文件为空：${requested}`);
+    const digest = sha256(await readFile(path));
+    item.metadata = {
+      ...record(item.metadata),
+      sha256: digest,
+      sizeBytes: info.size,
+    };
+  }
+  result.outputFiles = files;
+  return result;
 }
 
 async function uploadFile(taskId: string, workspace: string, item: JsonRecord) {
@@ -890,6 +983,7 @@ async function uploadFile(taskId: string, workspace: string, item: JsonRecord) {
     signal: AbortSignal.timeout(10 * 60_000),
   });
   if (!response.ok) throw new Error(`上传失败 ${response.status}: ${await response.text()}`);
+  return response.text();
 }
 
 async function execute(claimed: JsonRecord) {
@@ -898,27 +992,133 @@ async function execute(claimed: JsonRecord) {
   const taskNo = String(task.taskNo || taskId);
   const timeoutSeconds = Math.max(60, Number((claimed.policy as JsonRecord)?.timeoutSeconds || 1200));
   const workspace = join(workRoot, taskNo.replace(/[^a-zA-Z0-9_-]/g, "-"));
-  await rm(workspace, { recursive: true, force: true });
-  await mkdir(workspace, { recursive: true });
+  await ensureTaskWorkspace(workspace);
+  let currentSkill = "";
+  let state: WorkspaceState | undefined;
   const heartbeat = setInterval(() => {
     void api(`/api/v1/ai-tasks/runner/tasks/${taskId}/heartbeat`, {
       method: "POST",
-      body: JSON.stringify({ nodeCode }),
+      body: JSON.stringify({ nodeCode, currentSkill }),
     }).catch(() => undefined);
-  }, 30_000);
+  }, heartbeatMs);
+  const report = async (stage: string, progress: number, message: string, data: JsonRecord = {}) => {
+    if (state) {
+      state.stage = stage;
+      state.updatedAt = new Date().toISOString();
+      await saveWorkspaceState(workspace, state);
+    }
+    await appendExecutionLog(workspace, "CHECKPOINT", { stage, progress, message, currentSkill, ...data });
+    await checkpoint(taskId, stage, progress, message, { currentSkill, ...data });
+  };
   try {
-    await checkpoint(taskId, "PACKAGE", 10, "正在下载任务快照和已审核素材");
-    const packaged = await downloadInputs(await taskPackage(taskId), workspace);
-    await verifyVideoSkillRuntime(packaged);
-    await checkpoint(taskId, "CODEX", 25, "Codex正在生成结构化结果", {
-      assetCount: Array.isArray(packaged.assets) ? packaged.assets.length : 0,
+    await appendExecutionLog(workspace, "TASK_START", { taskId, taskNo, runnerVersion });
+    await report("PACKAGE", 10, "正在下载任务快照和已审核素材");
+    const packageValue = await taskPackage(taskId);
+    const route = routeTask(packageValue);
+    const detectedSkill = await detectSkill(route);
+    currentSkill = detectedSkill.name;
+    const packaged = await downloadInputs(packageValue, workspace);
+    await writeJsonAtomic(join(workspace, "task.json"), record(packaged.task));
+    const fingerprint = packageFingerprint(packaged);
+    const previousState = await loadWorkspaceState(workspace);
+    const resumeEligible = canResume(previousState, fingerprint, detectedSkill.digest);
+    const taskState: WorkspaceState = resumeEligible && previousState
+      ? previousState
+      : freshWorkspaceState(fingerprint, detectedSkill.digest);
+    state = taskState;
+    await saveWorkspaceState(workspace, taskState);
+    await appendExecutionLog(workspace, "SKILL_SELECTED", {
+      skill: detectedSkill.name,
+      version: detectedSkill.version,
+      digest: detectedSkill.digest,
+      strategy: detectedSkill.strategy,
+      executionMode: detectedSkill.executionMode,
+      resumed: resumeEligible,
     });
-    let result = await runCodex(packaged, workspace, timeoutSeconds);
-    await checkpoint(taskId, "LOCAL_RENDER", 65, "正在优先使用本地素材生成成片");
-    result = await renderLocalVideo(result, packaged, workspace);
-    await writeFile(join(workspace, "result.json"), JSON.stringify(result, null, 2), "utf8");
-    await checkpoint(taskId, "QUALITY_CHECK", 78, "正在校验和上传结果");
-    const execution = record(record(packaged).execution);
+    await report("SKILL_DETECTED", 15, `已选择 ${detectedSkill.name}`, {
+      skillVersion: detectedSkill.version,
+      strategy: detectedSkill.strategy,
+      executionMode: detectedSkill.executionMode,
+    });
+    await verifyVideoSkillRuntime(packaged, detectedSkill);
+
+    const execution = record(packaged.execution);
+    const snapshots = Array.isArray(packaged.snapshots) ? packaged.snapshots.map(record) : [];
+    const snapshotPayload = record(snapshots[0]?.payload);
+    const requirements = record(snapshotPayload.requirements);
+    const schema = outputSchema(
+      String(task.type || ""),
+      String(execution.mode || ""),
+      Number(requirements.exactCount || 10),
+    );
+    const startedAt = new Date();
+    let result: JsonRecord | undefined;
+    let schemaAttempts = 1;
+    if (resumeEligible && ["QUALITY_CHECK", "UPLOADING", "COMPLETE"].includes(String(taskState.stage || ""))) {
+      const savedResult = await readJson<JsonRecord>(join(workspace, "result.json"));
+      if (savedResult) {
+        try {
+          validateResult(savedResult, schema, true);
+          result = await validateOutputArtifacts(savedResult, workspace);
+          result.execution = {
+            ...record(result.execution),
+            resumed: true,
+          };
+          await appendExecutionLog(workspace, "RESUME_RESULT", { stage: taskState.stage });
+        } catch (error) {
+          await appendExecutionLog(workspace, "RESUME_REJECTED", {
+            reason: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    }
+
+    if (!result) {
+      await report("CODEX", 25, `正在使用 ${detectedSkill.name} 生成结构化结果`, {
+        skillVersion: detectedSkill.version,
+        assetCount: Array.isArray(packaged.assets) ? packaged.assets.length : 0,
+      });
+      const generated = await runWithSchemaRetry(
+        async (schemaAttempt) => {
+          await appendExecutionLog(workspace, "CODEX_ATTEMPT", { schemaAttempt });
+          return runCodex(packaged, detectedSkill, workspace, timeoutSeconds, schemaAttempt);
+        },
+        (candidate) => validateResult(candidate, schema),
+        2,
+      );
+      result = generated.result;
+      schemaAttempts = generated.attempts;
+      await report("LOCAL_RENDER", 65, "正在按固定回退顺序处理本地产物");
+      result = await renderLocalVideo(result, packaged, workspace);
+      const finishedAt = new Date();
+      result.execution = {
+        skill: detectedSkill.name,
+        skillVersion: detectedSkill.version,
+        skillDigest: detectedSkill.digest,
+        ...(detectedSkill.skillPath ? { skillPath: detectedSkill.skillPath } : {}),
+        strategy: detectedSkill.strategy,
+        executionMode: detectedSkill.executionMode,
+        routeReason: detectedSkill.reason,
+        fallbackOrder: detectedSkill.fallbackOrder,
+        startedAt: startedAt.toISOString(),
+        finishedAt: finishedAt.toISOString(),
+        durationMs: Math.max(0, finishedAt.getTime() - startedAt.getTime()),
+        resumed: false,
+        schemaAttempts,
+      };
+      result = await validateOutputArtifacts(result, workspace);
+      validateResult(result, schema, true);
+      await writeJsonAtomic(join(workspace, "result.json"), result);
+    } else {
+      schemaAttempts = Number(record(result.execution).schemaAttempts || 1);
+      validateResult(result, schema, true);
+      await writeJsonAtomic(join(workspace, "result.json"), result);
+    }
+
+    await report("QUALITY_CHECK", 78, "result.json与产物哈希校验通过", {
+      schemaAttempts,
+      outputCount: Array.isArray(result.outputFiles) ? result.outputFiles.length : 0,
+    });
     const structuredOnlyKinds = new Set(["SCRIPT_CANDIDATES", "VIDEO_SCRIPT", "STORYBOARD_JSON", "STRUCTURED_RESULT"]);
     const generatedFiles = Array.isArray(result.outputFiles) ? result.outputFiles : [];
     const files = String(task.type || "") === "VIDEO"
@@ -926,21 +1126,65 @@ async function execute(claimed: JsonRecord) {
       ? []
       : generatedFiles.filter((item) => !structuredOnlyKinds.has(String(record(item).kind || "").toUpperCase()));
     for (const raw of files) {
-      await checkpoint(taskId, "UPLOADING", 85, `正在上传${String((raw as JsonRecord).title || "任务输出")}`);
-      await uploadFile(taskId, workspace, raw as JsonRecord);
+      const item = record(raw);
+      const metadata = record(item.metadata);
+      const ledgerKey = uploadLedgerKey(
+        String(item.path || ""),
+        String(metadata.sha256 || ""),
+        String(item.kind || "FILE_OUTPUT"),
+      );
+      if (taskState.uploads[ledgerKey]) {
+        await appendExecutionLog(workspace, "UPLOAD_SKIPPED_IDEMPOTENT", {
+          path: item.path,
+          kind: item.kind,
+        });
+        continue;
+      }
+      await report("UPLOADING", 85, `正在上传${String(item.title || "任务输出")}`);
+      await uploadFile(taskId, workspace, item);
+      taskState.uploads[ledgerKey] = {
+        uploadedAt: new Date().toISOString(),
+        path: String(item.path || ""),
+        sha256: String(metadata.sha256 || ""),
+        kind: String(item.kind || "FILE_OUTPUT"),
+      };
+      await saveWorkspaceState(workspace, taskState);
     }
+    taskState.stage = "COMPLETE";
+    taskState.updatedAt = new Date().toISOString();
+    await saveWorkspaceState(workspace, taskState);
     await api(`/api/v1/ai-tasks/runner/tasks/${taskId}/complete`, {
       method: "POST",
-      body: JSON.stringify({ nodeCode, result }),
+      body: JSON.stringify({
+        nodeCode,
+        result,
+        logs: {
+          skill: currentSkill,
+          skillVersion: record(result.execution).skillVersion,
+          workspace,
+          executionLog: "logs/execution.ndjson",
+        },
+      }),
     });
+    await appendExecutionLog(workspace, "TASK_COMPLETE", { skill: currentSkill });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Codex执行失败";
     process.stderr.write(`${new Date().toISOString()} ${taskNo} ${message}\n`);
+    await appendExecutionLog(workspace, "TASK_FAILED", {
+      skill: currentSkill || "未探测",
+      error: message,
+      errorType: error instanceof Error ? error.name : "UnknownError",
+    }).catch(() => undefined);
     await api(`/api/v1/ai-tasks/runner/tasks/${taskId}/fail`, {
       method: "POST",
       body: JSON.stringify({
         nodeCode,
         message,
+        logs: {
+          skill: currentSkill || "未探测",
+          workspace,
+          executionLog: "logs/execution.ndjson",
+        },
       }),
     }).catch(() => undefined);
   } finally {

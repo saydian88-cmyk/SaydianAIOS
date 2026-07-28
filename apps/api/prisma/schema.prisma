@@ -2804,6 +2804,7 @@ model AiWorkerNode {
   capabilities    String[] @default([])
   version         String?
   currentTaskId   String?
+  currentSkill    String?
   lastHeartbeatAt DateTime?
   lastError       String?
   createdAt       DateTime @default(now())

@@ -471,6 +471,7 @@ onMounted(load);
         <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag :type="row.online ? 'success' : 'info'">{{ row.online ? "在线" : "离线" }}</el-tag></template></el-table-column>
         <el-table-column prop="version" label="版本" width="100" />
         <el-table-column label="当前任务" min-width="160"><template #default="{ row }">{{ row.currentTaskId || "空闲" }}</template></el-table-column>
+        <el-table-column label="当前 Skill" min-width="220"><template #default="{ row }">{{ row.currentSkill || "空闲" }}</template></el-table-column>
         <el-table-column label="最后心跳" width="160"><template #default="{ row }">{{ time(row.lastHeartbeatAt) }}</template></el-table-column>
         <el-table-column prop="lastError" label="最近错误" min-width="180" show-overflow-tooltip />
         <el-table-column label="操作" width="110"><template #default="{ row }"><el-button link type="warning" @click="rotateToken(row)">轮换Token</el-button></template></el-table-column>
@@ -613,6 +614,10 @@ onMounted(load);
           <el-descriptions-item v-if="detail.type === 'VIDEO'" label="执行模式">{{ detail.input?.executionMode === "SCRIPT_ONLY" ? "仅生成脚本" : "生成完整视频" }}</el-descriptions-item>
           <el-descriptions-item v-if="detail.type === 'VIDEO'" label="外部视觉模型">{{ detail.modelPolicy?.allowExternalGeneration ? "允许" : "不允许" }}</el-descriptions-item>
           <el-descriptions-item label="进度" :span="2">{{ detail.progress || 0 }}% · {{ detail.progressMessage || "未开始" }}</el-descriptions-item>
+          <el-descriptions-item label="实际 Skill">{{ detail.output?.execution?.skill || "尚未执行" }}</el-descriptions-item>
+          <el-descriptions-item label="Skill 版本">{{ detail.output?.execution?.skillVersion || "尚未执行" }}</el-descriptions-item>
+          <el-descriptions-item label="执行耗时">{{ detail.output?.execution?.durationMs == null ? "尚未执行" : `${(Number(detail.output.execution.durationMs) / 1000).toFixed(1)} 秒` }}</el-descriptions-item>
+          <el-descriptions-item label="路由策略">{{ detail.output?.execution?.strategy || "尚未执行" }}</el-descriptions-item>
           <el-descriptions-item label="任务要求" :span="2">{{ detail.instructions || "按输入数据自动执行" }}</el-descriptions-item>
           <el-descriptions-item label="缺失输入" :span="2">{{ (detail.missingInputs || []).join("、") || "无" }}</el-descriptions-item>
         </el-descriptions>
@@ -627,14 +632,19 @@ onMounted(load);
         <h3>Codex执行时间线</h3>
         <el-timeline>
           <el-timeline-item v-for="item in detail.attempts || []" :key="item.id" :timestamp="time(item.startedAt)" placement="top">
-            第 {{ item.attemptNo }} 次 · {{ item.status }} · {{ item.model || "Codex" }}<div v-if="item.errorMessage" class="error-text">{{ item.errorMessage }}</div>
+            第 {{ item.attemptNo }} 次 · {{ item.status }} · {{ item.logs?.skill || item.logs?.checkpoint?.data?.currentSkill || "Codex" }}
+            <div v-if="item.failureReason" class="error-text">{{ item.failureReason }}</div>
+            <div v-if="item.logs?.checkpoint?.message">{{ item.logs.checkpoint.message }}</div>
           </el-timeline-item>
         </el-timeline>
 
         <h3>结果与文件</h3>
         <el-empty v-if="!(detail.outputs || []).length" description="尚无输出" />
         <div v-for="output in detail.outputs || []" :key="output.id" class="output-row">
-          <div><strong>{{ output.title }}</strong><span>{{ output.kind }} · {{ output.reviewStatus }}</span></div>
+          <div>
+            <strong>{{ output.title }}</strong>
+            <span>{{ output.kind }} · {{ output.reviewStatus }}<template v-if="output.metadata?.sizeBytes"> · {{ output.metadata.sizeBytes }} bytes</template></span>
+          </div>
           <el-button v-if="output.assetId || output.url" link type="primary" @click="openOutput(output)">预览/下载</el-button>
         </div>
       </template>
