@@ -423,7 +423,9 @@ defineExpose({ reload });
         <el-table-column prop="version" label="版本" width="100" />
         <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag :type="row.online ? 'success' : 'danger'">{{ row.online ? "在线" : "离线" }}</el-tag></template></el-table-column>
         <el-table-column label="当前任务" min-width="180"><template #default="{ row }">{{ row.currentTaskId || "空闲" }}</template></el-table-column>
+        <el-table-column label="当前 Skill" min-width="220"><template #default="{ row }">{{ row.currentSkill || "空闲" }}</template></el-table-column>
         <el-table-column label="最后心跳" width="170"><template #default="{ row }">{{ time(row.lastHeartbeatAt) }}</template></el-table-column>
+        <el-table-column prop="lastError" label="最近错误" min-width="220" show-overflow-tooltip />
       </el-table>
     </template>
 
