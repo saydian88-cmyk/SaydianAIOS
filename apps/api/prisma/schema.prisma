@@ -161,6 +161,23 @@ enum AssetKind {
   DOCUMENT
 }
 
+enum AssetPurpose {
+  EDITING_FOOTAGE
+  PACKAGING_RESOURCE
+}
+
+enum PackagingResourceCategory {
+  BGM
+  BRAND_ELEMENT
+  FONT
+  LICENSE_DOCUMENT
+  TEXT_EFFECT
+  VIDEO_EFFECT
+  STICKER
+  SOUND_EFFECT
+  OTHER
+}
+
 enum AssetLevel {
   ORIGINAL
   MODULE
@@ -574,6 +591,9 @@ model Asset {
   assetNo             String?                 @unique
   displayName         String?
   kind                AssetKind?
+  purpose             AssetPurpose             @default(EDITING_FOOTAGE)
+  packagingCategory   PackagingResourceCategory?
+  packagingMetadata   Json                     @default("{}")
   level               AssetLevel              @default(ORIGINAL)
   productScope        ProductScope            @default(UNKNOWN)
   processingStatus    AssetProcessingStatus   @default(RECEIVED)
@@ -623,6 +643,7 @@ model Asset {
   @@index([model, status])
   @@index([storageProvider, storageSyncedAt])
   @@index([kind, level, processingStatus])
+  @@index([purpose, packagingCategory, reviewStatus, availabilityStatus])
   @@index([reviewStatus, availabilityStatus, rightsStatus])
   @@index([createdByEmployeeId, createdAt])
   @@index([perceptualHash])
@@ -799,6 +820,8 @@ model UploadBatch {
   productScope         ProductScope      @default(UNKNOWN)
   productIds           String[]          @default([])
   assetKind            AssetKind?
+  purpose              AssetPurpose             @default(EDITING_FOOTAGE)
+  packagingCategory    PackagingResourceCategory?
   contentDescription   String?
   originalStatus       Boolean           @default(false)
   rightsStatus         AssetRightsStatus @default(AUTH_REQUIRED)

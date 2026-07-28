@@ -551,6 +551,7 @@ export class VideoFactoryService {
     const assets = await this.prisma.asset.findMany({
       where: {
         kind: { in: ["VIDEO", "IMAGE"] },
+        purpose: "EDITING_FOOTAGE",
         reviewStatus: "APPROVED",
         availabilityStatus: "ACTIVE",
         rightsStatus: { in: ["COMMERCIAL", "EDIT_ONLY"] },
@@ -963,6 +964,7 @@ export class VideoFactoryService {
     const assets = assetIds.length ? await this.prisma.asset.findMany({
       where: {
         id: { in: assetIds },
+        purpose: "EDITING_FOOTAGE",
         reviewStatus: "APPROVED",
         availabilityStatus: "ACTIVE",
         rightsStatus: { in: ["COMMERCIAL", "EDIT_ONLY"] },

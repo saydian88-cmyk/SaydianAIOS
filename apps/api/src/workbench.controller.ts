@@ -399,6 +399,8 @@ export class WorkbenchController {
         query: query.query,
         model: query.model,
         kind: query.kind,
+        purpose: query.purpose,
+        packagingCategory: query.packagingCategory,
         moduleType: query.moduleType,
         minimumScore: query.minimumScore || "0",
         page: query.page || "1",

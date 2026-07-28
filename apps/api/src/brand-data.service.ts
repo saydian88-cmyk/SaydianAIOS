@@ -4,12 +4,14 @@ import {
   AssetAvailabilityStatus,
   AssetKind,
   AssetLevel,
+  AssetPurpose,
   AssetReviewAction,
   AssetReviewStatus,
   AssetRightsStatus,
   IntegrationKind,
   Prisma,
   ProductScope,
+  PackagingResourceCategory,
   RecordStatus,
   UploadBatchStatus,
   VideoModuleType,
@@ -33,6 +35,8 @@ type MemoryFile = { originalname: string; mimetype: string; size: number; buffer
 const knowledgeTypes = ["BRAND", "PRODUCT", "PARAMETER", "KNOWLEDGE", "WORDING", "FAQ", "FORBIDDEN", "AFTER_SALE", "TUTORIAL"];
 const recordStatuses: RecordStatus[] = ["DRAFT", "PENDING", "READY", "BLOCKED", "ARCHIVED"];
 const assetKinds: AssetKind[] = ["IMAGE", "VIDEO", "AUDIO", "DOCUMENT"];
+const assetPurposes: AssetPurpose[] = ["EDITING_FOOTAGE", "PACKAGING_RESOURCE"];
+const packagingCategories: PackagingResourceCategory[] = ["BGM", "BRAND_ELEMENT", "FONT", "LICENSE_DOCUMENT", "TEXT_EFFECT", "VIDEO_EFFECT", "STICKER", "SOUND_EFFECT", "OTHER"];
 const assetLevels: AssetLevel[] = ["ORIGINAL", "MODULE", "FINISHED", "REFERENCE", "AI_GENERATED"];
 const productScopes: ProductScope[] = ["MODEL", "SERIES", "BRAND", "COMMON", "UNKNOWN"];
 const rightsStatuses: AssetRightsStatus[] = ["COMMERCIAL", "INTERNAL", "EDIT_ONLY", "AUTH_REQUIRED", "EXPIRED", "PROHIBITED"];
@@ -643,6 +647,10 @@ export class BrandDataService {
         batchNo: batchNo(), sourceType: text(body.sourceType) || "WEB_UPLOAD",
         productScope: enumValue(body.productScope, productScopes, productIds.length ? "MODEL" : "UNKNOWN"), productIds,
         assetKind: text(body.assetKind) ? enumValue(body.assetKind, assetKinds, "DOCUMENT") : undefined,
+        purpose: enumValue(body.purpose, assetPurposes, "EDITING_FOOTAGE"),
+        packagingCategory: text(body.packagingCategory)
+          ? enumValue(body.packagingCategory, packagingCategories, "OTHER")
+          : undefined,
         contentDescription: text(body.contentDescription) || undefined, originalStatus: Boolean(body.originalStatus),
         rightsStatus: enumValue(body.rightsStatus, rightsStatuses, "AUTH_REQUIRED"), acquiredAt: parseDate(body.acquiredAt),
         contentPlanId: contentPlanId || undefined, shootRequirementId: shootRequirementId || undefined,
@@ -748,6 +756,8 @@ export class BrandDataService {
     const cursor = text(query.cursor);
     const keyword = text(query.query);
     const kind = text(query.kind || query.mediaType).toUpperCase();
+    const purpose = text(query.purpose).toUpperCase();
+    const packagingCategory = text(query.packagingCategory).toUpperCase();
     const level = text(query.level).toUpperCase();
     const model = text(query.model);
     const moduleType = text(query.moduleType).toUpperCase();
@@ -760,6 +770,10 @@ export class BrandDataService {
     const where: Prisma.AssetWhereInput = {
       ...(reviewScope === "TRASH" ? { deletedAt: { not: null } } : { deletedAt: null, status: { not: "ARCHIVED" } }),
       ...(assetKinds.includes(kind as AssetKind) ? { kind: kind as AssetKind } : {}),
+      ...(assetPurposes.includes(purpose as AssetPurpose) ? { purpose: purpose as AssetPurpose } : {}),
+      ...(packagingCategories.includes(packagingCategory as PackagingResourceCategory)
+        ? { packagingCategory: packagingCategory as PackagingResourceCategory }
+        : {}),
       ...(assetLevels.includes(level as AssetLevel) ? { level: level as AssetLevel } : {}),
       ...(reviewStatuses.includes(reviewStatus as AssetReviewStatus)
         ? { reviewStatus: reviewStatus as AssetReviewStatus }
@@ -801,18 +815,32 @@ export class BrandDataService {
     const keyword = text(query.query);
     const model = text(query.model);
     const kind = text(query.kind).toUpperCase();
+    const purpose = text(query.purpose).toUpperCase();
+    const packagingCategory = text(query.packagingCategory).toUpperCase();
     const moduleType = text(query.moduleType).toUpperCase();
     const minimumScore = Math.max(0, Math.min(100, Number(query.minimumScore || 0)));
     const paged = Boolean(query.page || query.pageSize);
     const page = Math.max(1, Number(query.page || 1));
     const limit = Math.min(Math.max(Number(query.pageSize || query.limit || 30), 1), 100);
+    const packagingMode = purpose === "PACKAGING_RESOURCE";
     const where: Prisma.AssetWhereInput = {
-      reviewStatus: "APPROVED",
-      availabilityStatus: "ACTIVE",
-      rightsStatus: { in: ["COMMERCIAL", "EDIT_ONLY"] },
+      ...(packagingMode
+        ? {
+            reviewStatus: { not: "REJECTED" as AssetReviewStatus },
+            rightsStatus: { notIn: ["EXPIRED", "PROHIBITED"] as AssetRightsStatus[] },
+          }
+        : {
+            reviewStatus: "APPROVED" as AssetReviewStatus,
+            availabilityStatus: "ACTIVE" as AssetAvailabilityStatus,
+            rightsStatus: { in: ["COMMERCIAL", "EDIT_ONLY"] as AssetRightsStatus[] },
+          }),
       deletedAt: null,
       qualityScore: { gte: minimumScore },
       ...(assetKinds.includes(kind as AssetKind) ? { kind: kind as AssetKind } : {}),
+      ...(assetPurposes.includes(purpose as AssetPurpose) ? { purpose: purpose as AssetPurpose } : {}),
+      ...(packagingCategories.includes(packagingCategory as PackagingResourceCategory)
+        ? { packagingCategory: packagingCategory as PackagingResourceCategory }
+        : {}),
       ...(model ? {
         OR: [
           { model: { contains: model, mode: "insensitive" } },
@@ -1505,7 +1533,7 @@ export class BrandDataService {
     return { url: this.oss.signedDownloadUrl(asset.objectKey), expiresIn: 1800 };
   }
 
-  private async ingestDiskFile(batch: { id: string; sourceType: string; assetKind: AssetKind | null; productScope: ProductScope; productIds: string[]; contentDescription: string | null; originalStatus: boolean; rightsStatus: AssetRightsStatus; acquiredAt: Date | null; uploadedByEmployeeId: string | null }, file: DiskFile, actor: string, technicalInfo?: JsonRecord, aiRename = true) {
+  private async ingestDiskFile(batch: { id: string; sourceType: string; assetKind: AssetKind | null; purpose: AssetPurpose; packagingCategory: PackagingResourceCategory | null; productScope: ProductScope; productIds: string[]; contentDescription: string | null; originalStatus: boolean; rightsStatus: AssetRightsStatus; acquiredAt: Date | null; uploadedByEmployeeId: string | null }, file: DiskFile, actor: string, technicalInfo?: JsonRecord, aiRename = true) {
     const hash = await hashFile(file.path);
     const duplicate = await this.prisma.asset.findFirst({ where: { sha256: hash }, orderBy: { createdAt: "asc" } });
     if (duplicate) {
@@ -1529,6 +1557,19 @@ export class BrandDataService {
       data: {
         sourceKey: `${batch.sourceType}:${hash}`, sourceType: batch.sourceType, sourcePath: `oss://${stored.objectKey}`,
         fileName: file.originalname, originalFileName: file.originalname, extension, mediaType: kind, kind,
+        purpose: batch.purpose, packagingCategory: batch.packagingCategory,
+        packagingMetadata: json(batch.purpose === "PACKAGING_RESOURCE" ? {
+          indexStatus: "PENDING",
+          originalRelativePath: text(technicalInfo?.relativePath),
+          style: [],
+          recommendedScenes: [],
+          forbiddenScenes: [],
+          intensity: null,
+          rhythm: null,
+          hasAlpha: Boolean(technicalInfo?.hasAlpha),
+          hasAudio: Boolean(technicalInfo?.hasAudio),
+          licenseStatus: batch.rightsStatus === "AUTH_REQUIRED" ? "license_unknown" : batch.rightsStatus.toLowerCase(),
+        } : {}),
         assetNo: assetNo(kind), displayName: basename(file.originalname, extension), level: "ORIGINAL", productScope: batch.productScope,
         processingStatus: "STORED", reviewStatus: "PENDING", availabilityStatus: "INACTIVE", rightsStatus: batch.rightsStatus,
         sha256: hash, sizeBytes: file.size, modifiedAt: now, width, height, durationSeconds, aspectRatio: width && height ? `${width}:${height}` : undefined,
