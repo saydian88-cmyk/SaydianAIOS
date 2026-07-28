@@ -105,7 +105,7 @@ async function repair(taskNo: string) {
 
 async function main() {
   if (!runnerToken) throw new Error("AI_TASK_RUNNER_TOKEN 未配置");
-  const taskNos = process.argv.slice(2).filter(Boolean);
+  const taskNos = process.argv.slice(2).filter((value) => Boolean(value) && value !== "--");
   if (!taskNos.length) throw new Error("请传入至少一个AI任务编号");
   for (const taskNo of taskNos) await repair(taskNo);
 }
