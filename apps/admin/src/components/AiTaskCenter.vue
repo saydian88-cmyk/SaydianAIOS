@@ -167,6 +167,7 @@ function outputKindLabel(value: string) {
     SCRIPT_CANDIDATES_JSON: "脚本方案", STORYBOARD_JSON: "分镜方案",
     IMAGE_MASTER: "图片成品", IMAGE: "图片成品", ARTICLE_OUTPUT: "软文成品",
     ARTICLE: "软文成品", QUALITY_REPORT: "质检报告", RESHOOT_BRIEF: "补拍清单",
+    OPS_TASK: "关联员工任务",
   };
   return labels[value] || value;
 }

@@ -39,6 +39,15 @@ const loginMessage = ref("");
 const adminLogin = reactive({ username: "", password: "" });
 const adminLoginLoading = ref(false);
 const dashboard = ref<Dashboard>();
+const dashboardLatestReports = computed(() => {
+  const seen = new Set<string>();
+  return (dashboard.value?.latestReports || []).filter((report) => {
+    const key = report.title;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+});
 const integrations = ref<Integration[]>([]);
 const content = ref<ContentPlan[]>([]);
 const contentFilter = ref<"ALL" | "PENDING_APPROVAL" | "APPROVED" | "PUBLISHED">("ALL");
@@ -805,8 +814,8 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
           </section>
           <section class="panel">
             <div class="panel-title"><div><span>最新运营报告</span><small>数据缺失时明确显示未获取</small></div></div>
-            <div v-if="dashboard?.latestReports.length" class="report-list">
-              <article v-for="report in dashboard.latestReports" :key="report.id"><div class="report-icon"><DataAnalysis /></div><div><strong>{{ report.title }}</strong><p>{{ report.summary }}</p><small>{{ time(report.createdAt) }}</small></div></article>
+            <div v-if="dashboardLatestReports.length" class="report-list">
+              <article v-for="report in dashboardLatestReports" :key="report.id"><div class="report-icon"><DataAnalysis /></div><div><strong>{{ report.title }}</strong><p>{{ report.summary }}</p><small>{{ time(report.createdAt) }}</small></div></article>
             </div>
             <el-empty v-else description="尚未生成运营报告" :image-size="70" />
           </section>
