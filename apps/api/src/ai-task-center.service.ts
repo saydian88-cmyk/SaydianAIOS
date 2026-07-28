@@ -311,9 +311,10 @@ export class AiTaskCenterService implements OnModuleInit {
     const snapshot = await this.buildSnapshot(type, body);
     const estimatedCost = number(body.estimatedCost);
     const budgetLimit = number(body.budgetLimit);
-    const localZeroCost = body.skipPaidBudget === true
-      && (estimatedCost || 0) === 0
-      && object(body.modelPolicy).allowExternalGeneration !== true;
+    const modelPolicy = object(body.modelPolicy);
+    const localZeroCost = (estimatedCost || 0) === 0
+      && (body.skipPaidBudget === true || text(modelPolicy.strategy).toUpperCase() === "CODEX_FIRST")
+      && modelPolicy.allowExternalGeneration !== true;
     const budgetState = localZeroCost
       ? { allowed: true, message: "本地Codex零付费模型任务" }
       : await this.budgetState(type, policy.dailyBudget, estimatedCost, budgetLimit);
@@ -353,7 +354,9 @@ export class AiTaskCenterService implements OnModuleInit {
         progressMessage: status === "WAITING_INPUT"
           ? `缺少数据：${snapshot.missingFields.join("、")}`
           : status === "WAITING_CONFIRMATION"
-            ? budgetState.message
+            ? executionPolicy === "MANUAL" || !policy.autoExecute
+              ? "等待管理员确认后由Codex执行"
+              : budgetState.message
             : "等待Codex执行器领取",
         createdBy: actor,
         inputSnapshots: {
