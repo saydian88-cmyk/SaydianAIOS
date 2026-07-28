@@ -1218,10 +1218,18 @@ export class WorkbenchService {
       orderBy: { createdAt: "desc" },
       take: 100,
     });
-    return notifications.map((item) => ({
+    const taskCreated = new Set(
+      notifications
+        .filter((item) => item.title === "AI任务已创建")
+        .map((item) => `${item.content.trim()}|${item.createdAt.toISOString().slice(0, 16)}`),
+    );
+    return notifications
+      .filter((item) => item.title !== "收到新任务"
+        || !taskCreated.has(`${item.content.trim()}|${item.createdAt.toISOString().slice(0, 16)}`))
+      .map((item) => ({
       ...item,
       content: this.employeeProgressMessage(item.content),
-    }));
+      }));
   }
 
   async readNotification(session: SessionPayload, id: string) {
