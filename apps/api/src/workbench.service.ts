@@ -1213,11 +1213,15 @@ export class WorkbenchService {
   }
 
   async notifications(session: SessionPayload) {
-    return this.prisma.taskNotification.findMany({
+    const notifications = await this.prisma.taskNotification.findMany({
       where: { recipientEmployeeId: session.employeeId, channel: "IN_APP" },
       orderBy: { createdAt: "desc" },
       take: 100,
     });
+    return notifications.map((item) => ({
+      ...item,
+      content: this.employeeProgressMessage(item.content),
+    }));
   }
 
   async readNotification(session: SessionPayload, id: string) {

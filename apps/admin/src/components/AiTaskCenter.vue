@@ -145,6 +145,43 @@ function statusType(value: string) {
   return "info";
 }
 
+function platformLabel(value?: string) {
+  const labels: Row = {
+    DOUYIN: "抖音", TIKTOK: "TikTok", ALL: "全平台/经营分析",
+    XIAOHONGSHU: "小红书", WECHAT: "视频号", AMAZON: "Amazon", SHOPIFY: "Shopify",
+  };
+  return value ? labels[value] || value : "未设置";
+}
+
+function attemptStatusLabel(value: string) {
+  const labels: Row = {
+    PENDING: "待执行", RUNNING: "执行中", SUCCEEDED: "执行成功",
+    FAILED: "执行失败", CANCELLED: "已取消",
+  };
+  return labels[value] || value;
+}
+
+function outputKindLabel(value: string) {
+  const labels: Row = {
+    VIDEO_MASTER: "视频成片", VIDEO_PROJECT: "视频项目", VIDEO_COVER: "视频封面",
+    SCRIPT_CANDIDATES_JSON: "脚本方案", STORYBOARD_JSON: "分镜方案",
+    IMAGE_MASTER: "图片成品", IMAGE: "图片成品", ARTICLE_OUTPUT: "软文成品",
+    ARTICLE: "软文成品", QUALITY_REPORT: "质检报告", RESHOOT_BRIEF: "补拍清单",
+  };
+  return labels[value] || value;
+}
+
+function reviewStatusLabel(value: string) {
+  const labels: Row = {
+    PENDING: "待审核", APPROVED: "已通过", RETURNED: "已退回", REJECTED: "已驳回",
+  };
+  return labels[value] || value;
+}
+
+function channelLabel(value: string) {
+  return value === "WECOM" ? "企业微信" : value === "IN_APP" ? "站内消息" : value;
+}
+
 function time(value?: string) {
   return value ? new Intl.DateTimeFormat("zh-CN", { dateStyle: "short", timeStyle: "short" }).format(new Date(value)) : "未记录";
 }
@@ -452,7 +489,7 @@ onMounted(load);
         <el-table-column prop="taskNo" label="任务编号" min-width="180" />
         <el-table-column label="类型" width="110"><template #default="{ row }">{{ typeLabel(row.type) }}</template></el-table-column>
         <el-table-column prop="title" label="任务" min-width="220" show-overflow-tooltip />
-        <el-table-column prop="platform" label="平台" width="100" />
+        <el-table-column label="平台" width="120"><template #default="{ row }">{{ platformLabel(row.platform) }}</template></el-table-column>
         <el-table-column label="状态" width="110"><template #default="{ row }"><el-tag :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag></template></el-table-column>
         <el-table-column label="进度" width="150">
           <template #default="{ row }"><el-progress :percentage="row.progress || 0" :stroke-width="8" /></template>
@@ -629,7 +666,7 @@ onMounted(load);
           <el-descriptions-item label="类型">{{ typeLabel(detail.type) }}</el-descriptions-item>
           <el-descriptions-item v-if="detail.input?.executionClass === 'EXTERNAL_PAID'" label="外部模型费用">预计 ¥{{ Number(detail.estimatedCost || 0).toFixed(2) }} / 实际 ¥{{ Number(detail.actualCost || 0).toFixed(2) }}</el-descriptions-item>
           <el-descriptions-item v-else label="执行方式">{{ detail.input?.executionClass === "ANALYSIS" ? "本地Codex分析" : "本地Codex Skill" }}</el-descriptions-item>
-          <el-descriptions-item label="平台">{{ detail.platform || "未设置" }}</el-descriptions-item>
+          <el-descriptions-item label="平台">{{ platformLabel(detail.platform) }}</el-descriptions-item>
           <el-descriptions-item label="产品">{{ detail.productModel || "未选择" }}</el-descriptions-item>
           <el-descriptions-item label="负责人">{{ detail.owner?.name || "未指定" }}</el-descriptions-item>
           <el-descriptions-item label="审核人">{{ detail.reviewer?.name || "未指定" }}</el-descriptions-item>
@@ -659,7 +696,7 @@ onMounted(load);
         <h3>Codex执行时间线</h3>
         <el-timeline>
           <el-timeline-item v-for="item in detail.attempts || []" :key="item.id" :timestamp="time(item.startedAt)" placement="top">
-            第 {{ item.attemptNo }} 次 · {{ item.status }} · {{ item.logs?.skill || item.logs?.checkpoint?.data?.currentSkill || "Codex" }}
+            第 {{ item.attemptNo }} 次 · {{ attemptStatusLabel(item.status) }} · {{ item.logs?.skill || item.logs?.checkpoint?.data?.currentSkill || "Codex" }}
             <div v-if="item.failureReason" class="error-text">{{ item.failureReason }}</div>
             <div v-if="item.logs?.checkpoint?.message">{{ item.logs.checkpoint.message }}</div>
           </el-timeline-item>
@@ -670,7 +707,7 @@ onMounted(load);
         <div v-for="item in detail.notifications || []" :key="item.id" class="output-row">
           <div>
             <strong>{{ item.title }}</strong>
-            <span>{{ item.channel }} · {{ item.channel === "WECOM" ? (item.sentAt ? "已发送" : "发送失败") : "已记录" }} · {{ time(item.sentAt || item.createdAt) }}</span>
+            <span>{{ channelLabel(item.channel) }} · {{ item.channel === "WECOM" ? (item.sentAt ? "已发送" : "发送失败") : "已记录" }} · {{ time(item.sentAt || item.createdAt) }}</span>
           </div>
         </div>
 
@@ -679,7 +716,7 @@ onMounted(load);
         <div v-for="output in detail.outputs || []" :key="output.id" class="output-row">
           <div>
             <strong>{{ output.title }}</strong>
-            <span>{{ output.kind }} · {{ output.reviewStatus }}<template v-if="output.metadata?.sizeBytes"> · {{ output.metadata.sizeBytes }} bytes</template></span>
+            <span>{{ outputKindLabel(output.kind) }} · {{ reviewStatusLabel(output.reviewStatus) }}<template v-if="output.metadata?.sizeBytes"> · {{ output.metadata.sizeBytes }} bytes</template></span>
           </div>
           <el-button v-if="output.assetId || output.url || output.contentPlan?.variants?.length" link type="primary" @click="openOutput(output)">预览</el-button>
         </div>
@@ -688,7 +725,7 @@ onMounted(load);
     <el-dialog v-model="outputPreviewVisible" title="成果预览" width="min(860px, 94vw)" destroy-on-close>
       <article v-if="outputPreview" class="output-preview">
         <div class="output-preview-head">
-          <div><strong>{{ outputPreview.title }}</strong><span>{{ outputPreview.kind }} · {{ outputPreview.reviewStatus }}</span></div>
+          <div><strong>{{ outputPreview.title }}</strong><span>{{ outputKindLabel(outputPreview.kind) }} · {{ reviewStatusLabel(outputPreview.reviewStatus) }}</span></div>
           <a v-if="outputPreviewUrl" :href="outputPreviewUrl" target="_blank" rel="noopener noreferrer">下载原文件</a>
         </div>
         <video v-if="previewKind(outputPreview) === 'VIDEO' && outputPreviewUrl" :src="outputPreviewUrl" controls playsinline preload="metadata" />

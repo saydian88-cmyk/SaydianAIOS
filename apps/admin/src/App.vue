@@ -117,7 +117,7 @@ function statusLabel(value: string) {
     UNCONFIGURED: "未配置", CONFIGURED: "待验证", HEALTHY: "正常", DEGRADED: "部分可用", ERROR: "异常",
     DRAFT: "候选", PENDING_APPROVAL: "待审核", APPROVED: "已审核", REJECTED: "已退回", SCHEDULED: "待发布",
     PUBLISHED: "已发布", FAILED: "失败", PENDING: "待处理", READY: "可用", BLOCKED: "禁用", ARCHIVED: "归档",
-    RUNNING: "执行中", RETRY: "重试中", SUCCEEDED: "已完成", LIVE: "直播中", OPEN: "待处理", RESOLVED: "已解决",
+    RUNNING: "执行中", RETRY: "重试中", SUCCEEDED: "已完成", COMPLETED: "已完成", LIVE: "直播中", OPEN: "待处理", RESOLVED: "已解决",
     PARTIAL: "部分成功", ACTIVE: "在职", SCRIPT_REVIEW: "脚本审核", AWAITING_ASSETS: "等待拍摄素材",
     READY_TO_EDIT: "素材已齐套", EDITING: "AI剪辑中", VIDEO_REVIEW: "成片审核", PLATFORM_PACKAGING: "生成平台包装",
     PACKAGING_REVIEW: "平台包装审核", READY_TO_PUBLISH: "可以发布", PUBLISHING: "发布中", TRACKING: "数据跟踪",
