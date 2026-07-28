@@ -803,34 +803,38 @@ export class BrandDataService {
     const kind = text(query.kind).toUpperCase();
     const moduleType = text(query.moduleType).toUpperCase();
     const minimumScore = Math.max(0, Math.min(100, Number(query.minimumScore || 0)));
-    const limit = Math.min(Math.max(Number(query.limit || 30), 1), 100);
-    const rows = await this.prisma.asset.findMany({
-      where: {
-        reviewStatus: "APPROVED",
-        availabilityStatus: "ACTIVE",
-        rightsStatus: { in: ["COMMERCIAL", "EDIT_ONLY"] },
-        qualityScore: { gte: minimumScore },
-        ...(assetKinds.includes(kind as AssetKind) ? { kind: kind as AssetKind } : {}),
-        ...(model ? {
+    const paged = Boolean(query.page || query.pageSize);
+    const page = Math.max(1, Number(query.page || 1));
+    const limit = Math.min(Math.max(Number(query.pageSize || query.limit || 30), 1), 100);
+    const where: Prisma.AssetWhereInput = {
+      reviewStatus: "APPROVED",
+      availabilityStatus: "ACTIVE",
+      rightsStatus: { in: ["COMMERCIAL", "EDIT_ONLY"] },
+      deletedAt: null,
+      qualityScore: { gte: minimumScore },
+      ...(assetKinds.includes(kind as AssetKind) ? { kind: kind as AssetKind } : {}),
+      ...(model ? {
+        OR: [
+          { model: { contains: model, mode: "insensitive" } },
+          { products: { some: { product: { modelCode: { contains: model, mode: "insensitive" } } } } },
+        ],
+      } : {}),
+      ...(moduleTypes.includes(moduleType as VideoModuleType) ? { segments: { some: { moduleType: moduleType as VideoModuleType } } } : {}),
+      ...(keyword ? {
+        AND: [{
           OR: [
-            { model: { contains: model, mode: "insensitive" } },
-            { products: { some: { product: { modelCode: { contains: model, mode: "insensitive" } } } } },
+            { assetNo: { contains: keyword, mode: "insensitive" } },
+            { displayName: { contains: keyword, mode: "insensitive" } },
+            { contentDescription: { contains: keyword, mode: "insensitive" } },
+            { searchText: { contains: keyword, mode: "insensitive" } },
+            { scene: { contains: keyword, mode: "insensitive" } },
+            { tags: { some: { tag: { label: { contains: keyword, mode: "insensitive" } } } } },
           ],
-        } : {}),
-        ...(moduleTypes.includes(moduleType as VideoModuleType) ? { segments: { some: { moduleType: moduleType as VideoModuleType } } } : {}),
-        ...(keyword ? {
-          AND: [{
-            OR: [
-              { assetNo: { contains: keyword, mode: "insensitive" } },
-              { displayName: { contains: keyword, mode: "insensitive" } },
-              { contentDescription: { contains: keyword, mode: "insensitive" } },
-              { searchText: { contains: keyword, mode: "insensitive" } },
-              { scene: { contains: keyword, mode: "insensitive" } },
-              { tags: { some: { tag: { label: { contains: keyword, mode: "insensitive" } } } } },
-            ],
-          }],
-        } : {}),
-      },
+        }],
+      } : {}),
+    };
+    const rows = await this.prisma.asset.findMany({
+      where,
       include: {
         versions: { orderBy: { version: "desc" }, take: 1 },
         products: { include: { product: true } },
@@ -840,9 +844,10 @@ export class BrandDataService {
         _count: { select: { usages: true } },
       },
       orderBy: [{ qualityScore: "desc" }, { useCount: "desc" }, { updatedAt: "desc" }],
+      skip: paged ? (page - 1) * limit : undefined,
       take: limit,
     });
-    return rows.map((row) => {
+    const items = rows.map((row) => {
       const latest = row.versions[0];
       const thumbnailObjectKey: string | undefined = ["IMAGE", "VIDEO"].includes(String(row.kind))
         ? (latest?.previewObjectKey || (row.kind === "IMAGE" ? latest?.objectKey || row.objectKey : undefined) || undefined)
@@ -859,6 +864,9 @@ export class BrandDataService {
         moduleTypes: Array.from(new Set(row.segments.map((segment) => segment.moduleType).filter(Boolean))),
       };
     });
+    if (!paged) return items;
+    const total = await this.prisma.asset.count({ where });
+    return { items, total, page, pageSize: limit };
   }
 
   async asset(id: string) {

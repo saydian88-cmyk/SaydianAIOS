@@ -276,7 +276,7 @@ export class WorkbenchController {
     @Param("id") id: string,
     @Body() body: Record<string, unknown>,
   ) {
-    const employee = this.requirePermission(authorization, "DATA_CENTER_VIEW");
+    const employee = this.requirePermission(authorization, "ASSET_CURATE");
     return this.brandData.updateAsset(id, {
       displayName: body.displayName,
       contentDescription: body.contentDescription,
@@ -337,7 +337,8 @@ export class WorkbenchController {
         kind: query.kind,
         moduleType: query.moduleType,
         minimumScore: query.minimumScore || "0",
-        limit: query.limit || "100",
+        page: query.page || "1",
+        pageSize: query.pageSize || "30",
       })
       : section === "knowledge"
         ? knowledgeType === "PRODUCT"
@@ -423,7 +424,12 @@ export class WorkbenchController {
               this.viralTrend.trends({ take: query.viralLimit || "60" }).catch(() => ({ items: [], summary: { total: 0 } })),
             ])
             : Promise.all([
-              this.videoFactory.projects({ platform: query.platform, productModel: query.model }).catch(() => []),
+              this.videoFactory.projects({
+                platform: query.platform,
+                productModel: query.model,
+                page: Number(query.page || 1),
+                pageSize: Number(query.pageSize || 12),
+              }).catch(() => ({ items: [], total: 0, page: 1, pageSize: 12 })),
               this.prisma.contentPlan.findMany({
                 where: {
                   kind: "VIDEO",
@@ -464,18 +470,24 @@ export class WorkbenchController {
       sectionPromise,
       optionsPromise,
     ]);
-    const assets = section === "assets" ? sectionData as Array<Record<string, unknown>> : [];
+    const assetPage = section === "assets"
+      ? sectionData as { items: Array<Record<string, unknown>>; total: number; page: number; pageSize: number }
+      : { items: [], total: 0, page: 1, pageSize: 30 };
+    const assets = assetPage.items || [];
     const knowledge = section === "knowledge" ? sectionData as Array<Record<string, unknown>> : [];
     const keywords = section === "keywords" ? sectionData : undefined;
     const viralData = section === "viral" ? sectionData as [Record<string, unknown>, Record<string, unknown>] : undefined;
-    const videoData = section === "videoFactory" ? sectionData as [Array<Record<string, unknown>>, Array<Record<string, unknown>>] : undefined;
-    const videoProjects = videoData?.[0] || [];
+    const videoData = section === "videoFactory"
+      ? sectionData as [{ items: Array<Record<string, unknown>>; total: number; page: number; pageSize: number }, Array<Record<string, unknown>>]
+      : undefined;
+    const videoProjectPage = videoData?.[0] || { items: [], total: 0, page: 1, pageSize: 12 };
+    const videoProjects = videoProjectPage.items || [];
     const videoScripts = videoData?.[1] || [];
     return {
       permissions: employee.permissions,
       summary: {
         assets: assetTotal,
-        assetResults: assets.length,
+        assetResults: assetPage.total,
         priorityAssets: assets.filter((item) => ["S", "A"].includes(String(item.grade))).length,
         knowledge: knowledgeTotal,
         pending: pendingTotal,
@@ -483,11 +495,11 @@ export class WorkbenchController {
         viralVideos: viralTotal,
         videoProjects: videoProjectTotal,
       },
-      ...(section === "assets" ? { assets } : {}),
+      ...(section === "assets" ? { assets, pagination: assetPage } : {}),
       ...(section === "knowledge" ? { knowledge } : {}),
       ...(section === "keywords" ? { keywords } : {}),
       ...(section === "viral" ? { viralKeywords: viralData?.[0], viralTrend: viralData?.[1] } : {}),
-      ...(section === "videoFactory" ? { videoProjects, videoScripts } : {}),
+      ...(section === "videoFactory" ? { videoProjects, pagination: videoProjectPage, videoScripts } : {}),
       ...(options ? { products: options[0], uploadOptions: { products: options[0], productionPlans: options[1] } } : {}),
     };
   }

@@ -984,15 +984,21 @@ export class VideoFactoryService {
     return job;
   }
 
-  async projects(query: { status?: string; platform?: string; productModel?: string }) {
+  async projects(query: { status?: string; platform?: string; productModel?: string; page: number; pageSize?: number }): Promise<{ items: unknown[]; total: number; page: number; pageSize: number }>;
+  async projects(query: { status?: string; platform?: string; productModel?: string }): Promise<any[]>;
+  async projects(query: { status?: string; platform?: string; productModel?: string; page?: number; pageSize?: number }): Promise<any> {
+    const paged = Boolean(query.page || query.pageSize);
+    const page = Math.max(1, Number(query.page || 1));
+    const pageSize = Math.min(50, Math.max(1, Number(query.pageSize || 20)));
+    const where: Prisma.ContentPlanWhereInput = {
+      kind: "VIDEO",
+      sourceSignals: { array_contains: [{ type: "VIDEO_FACTORY" }] },
+      ...(query.status ? { productionStage: query.status } : {}),
+      ...(query.productModel ? { productModel: query.productModel } : {}),
+      ...(query.platform ? { targetPlatforms: { has: integrationKind(query.platform) } } : {}),
+    };
     const rows = await this.prisma.contentPlan.findMany({
-      where: {
-        kind: "VIDEO",
-        sourceSignals: { array_contains: [{ type: "VIDEO_FACTORY" }] },
-        ...(query.status ? { productionStage: query.status } : {}),
-        ...(query.productModel ? { productModel: query.productModel } : {}),
-        ...(query.platform ? { targetPlatforms: { has: integrationKind(query.platform) } } : {}),
-      },
+      where,
       include: {
         videoShots: { orderBy: { sequence: "asc" }, include: { selectedAsset: true, generationJobs: { orderBy: { createdAt: "desc" }, take: 1 } } },
         videoGenerationJobs: { orderBy: { createdAt: "desc" }, take: 10, include: { resolvedModel: { include: { provider: true } } } },
@@ -1001,9 +1007,13 @@ export class VideoFactoryService {
         keywordRelations: { include: { keyword: true } },
       },
       orderBy: { updatedAt: "desc" },
-      take: 100,
+      skip: paged ? (page - 1) * pageSize : undefined,
+      take: paged ? pageSize : 100,
     });
-    return jsonSafe(rows);
+    const items = jsonSafe(rows);
+    if (!paged) return items;
+    const total = await this.prisma.contentPlan.count({ where });
+    return { items, total, page, pageSize };
   }
 
   async project(id: string) {

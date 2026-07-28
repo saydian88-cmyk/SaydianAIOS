@@ -114,7 +114,8 @@ main { grid-column: 2; width: min(1240px, calc(100% - 48px)); margin: 24px auto;
 .data-hero h2 { margin: 0 0 5px; font-size: 24px; }
 .data-hero p:not(.eyebrow) { max-width: 700px; margin: 0; color: #6f7774; font-size: 13px; line-height: 1.5; }
 .data-hero .eyebrow { margin-bottom: 5px; font-size: 11px; }
-.data-hero-actions { display: flex; gap: 10px; }
+.data-hero-actions { display: flex; align-items: center; gap: 10px; }
+.data-updated-at { color: #848b88; font-size: 12px; white-space: nowrap; }
 .team-hero { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 16px; }
 .team-hero h2 { margin: 5px 0 8px; }
 .team-hero p:not(.eyebrow) { margin: 0; color: #6f7774; }
@@ -156,6 +157,8 @@ main { grid-column: 2; width: min(1240px, calc(100% - 48px)); margin: 24px auto;
 .asset-copy { padding: 17px; }
 .asset-copy h4 { margin: 9px 0 6px; overflow: hidden; font-size: 17px; text-overflow: ellipsis; white-space: nowrap; }
 .asset-copy p { min-height: 42px; margin: 0 0 12px; overflow: hidden; color: #69726f; font-size: 13px; line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.asset-index-state { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin: 0 0 9px; color: #8a918e; font-size: 12px; }
+.data-pagination { display: flex; justify-content: center; margin-top: 18px; }
 .asset-copy small { color: #9a9f9d; }
 .knowledge-list { display: grid; gap: 10px; }
 .knowledge-list article { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 16px; padding: 18px; border: 1px solid #ebe7df; border-radius: 16px; background: #fcfbf8; }
@@ -313,6 +316,7 @@ main { grid-column: 2; width: min(1240px, calc(100% - 48px)); margin: 24px auto;
   .team-task-filters { grid-template-columns: 1fr; width: 100%; }
   .data-hero h2 { font-size: 21px; }
   .data-hero-actions { margin-top: 12px; }
+  .data-updated-at { width: 100%; }
   .data-hero-actions .el-button { flex: 1; margin-left: 0; }
   .data-module-nav { display: flex; margin: 14px -4px; padding: 4px; overflow-x: auto; }
   .data-module-nav button { flex: 0 0 150px; padding: 14px; }

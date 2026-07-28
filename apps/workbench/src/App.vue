@@ -144,11 +144,15 @@ const dataCenter = reactive<Row>({
   viralTrend: { summary: {}, items: [] },
   videoProjects: [],
   videoScripts: [],
+  pagination: { total: 0, page: 1, pageSize: 30 },
   products: [],
   uploadOptions: { products: [], productionPlans: [] },
 });
 const dataCenterTab = ref("knowledge");
 const dataCenterLoading = ref(false);
+const dataCenterUpdatedAt = ref("");
+const assetPage = ref(1);
+const videoProjectPage = ref(1);
 const dataCenterFilters = reactive({
   query: "",
   model: "",
@@ -182,7 +186,8 @@ const selectedAssetGapIds = ref<string[]>([]);
 const assetGapVisible = ref(false);
 const assetGapProductModel = ref("");
 let dataCenterRequestId = 0;
-const dataCenterCache = new Map<string, Row>();
+const dataCenterCacheTtl = 8 * 60 * 1000;
+const dataCenterCache = new Map<string, { data: Row; cachedAt: number }>();
 
 const classificationOptions = [
   { label: "钩子", value: "HOOK" },
@@ -435,8 +440,16 @@ async function loadNotices() {
 function dataCenterCacheKey() {
   return JSON.stringify({
     section: dataCenterTab.value,
+    page: dataCenterTab.value === "assets" ? assetPage.value : dataCenterTab.value === "videoFactory" ? videoProjectPage.value : 1,
     ...dataCenterFilters,
   });
+}
+
+function assetIndexStatus(asset: Row) {
+  if (asset.processingStatus === "FAILED") return { label: "AI分析失败", type: "danger" };
+  if (["RECEIVED", "HASHED", "STORED", "ANALYZING"].includes(asset.processingStatus)) return { label: "AI分析中", type: "primary" };
+  if (asset.indexNeedsReview || Number(asset.indexConfidence || 0) < 0.7) return { label: "低置信度待确认", type: "warning" };
+  return { label: "索引已完成", type: "success" };
 }
 
 function invalidateDataCenterSection(section = dataCenterTab.value) {
@@ -486,10 +499,13 @@ async function createSelfTask() {
 
 async function loadDataCenter(force = false) {
   const cacheKey = dataCenterCacheKey();
-  if (!force && dataCenterCache.has(cacheKey)) {
-    Object.assign(dataCenter, dataCenterCache.get(cacheKey));
+  const cached = dataCenterCache.get(cacheKey);
+  if (!force && cached && Date.now() - cached.cachedAt < dataCenterCacheTtl) {
+    Object.assign(dataCenter, cached.data);
+    dataCenterUpdatedAt.value = new Date(cached.cachedAt).toISOString();
     return;
   }
+  if (cached) dataCenterCache.delete(cacheKey);
   const requestId = ++dataCenterRequestId;
   dataCenterLoading.value = true;
   const parameters = new URLSearchParams();
@@ -497,13 +513,22 @@ async function loadDataCenter(force = false) {
     if (value) parameters.set(key, value);
   });
   parameters.set("section", dataCenterTab.value);
+  if (dataCenterTab.value === "assets") {
+    parameters.set("page", String(assetPage.value));
+    parameters.set("pageSize", "30");
+  } else if (dataCenterTab.value === "videoFactory") {
+    parameters.set("page", String(videoProjectPage.value));
+    parameters.set("pageSize", "12");
+  }
   if (!dataCenter.uploadOptions.products?.length) parameters.set("includeOptions", "1");
   parameters.set("_", String(Date.now()));
   try {
     const result = await api<Row>(`/api/v1/workbench/data-center?${parameters.toString()}`);
     if (requestId === dataCenterRequestId) {
-      dataCenterCache.set(cacheKey, result);
+      const cachedAt = Date.now();
+      dataCenterCache.set(cacheKey, { data: result, cachedAt });
       Object.assign(dataCenter, result);
+      dataCenterUpdatedAt.value = new Date(cachedAt).toISOString();
     }
   } finally {
     if (requestId === dataCenterRequestId) dataCenterLoading.value = false;
@@ -517,6 +542,7 @@ async function switchDataCenterTab(tab: string) {
 
 async function setAssetKind(kind: string) {
   dataCenterFilters.kind = kind;
+  assetPage.value = 1;
   await loadDataCenter(true);
 }
 
@@ -529,6 +555,18 @@ async function refreshDataCenter() {
   invalidateDataCenterSection();
   await loadDataCenter(true);
   ElMessage.success("当前栏目已重新拉取");
+}
+
+async function searchDataCenter() {
+  if (dataCenterTab.value === "assets") assetPage.value = 1;
+  if (dataCenterTab.value === "videoFactory") videoProjectPage.value = 1;
+  await loadDataCenter();
+}
+
+async function changeDataCenterPage(page: number) {
+  if (dataCenterTab.value === "assets") assetPage.value = page;
+  if (dataCenterTab.value === "videoFactory") videoProjectPage.value = page;
+  await loadDataCenter();
 }
 
 function useKeywordInFactory(keyword: Row) {
@@ -1354,6 +1392,7 @@ onMounted(() => void bootstrap());
             <p>每位员工都可检索全量可用素材与知识，使用智能关键词、爆款研究和视频工厂直接形成执行方案。</p>
           </div>
           <div class="data-hero-actions">
+            <span v-if="dataCenterUpdatedAt" class="data-updated-at">数据更新 {{ formatTime(dataCenterUpdatedAt) }}</span>
             <el-button :loading="dataCenterLoading" @click="refreshDataCenter">重新拉取当前栏目</el-button>
             <el-button v-if="can('ASSET_UPLOAD')" type="primary" @click="openUpload">上传素材</el-button>
             <el-button v-if="can('KNOWLEDGE_SUBMIT')" @click="knowledgeVisible = true">补充知识</el-button>
@@ -1378,7 +1417,7 @@ onMounted(() => void bootstrap());
 
         <section v-if="['assets','knowledge','keywords'].includes(dataCenterTab)" class="section-card data-toolbar">
           <div class="data-search" :class="{ compact: dataCenterTab !== 'assets' }">
-            <el-input v-model="dataCenterFilters.query" clearable placeholder="搜索名称、编号、内容或知识">
+            <el-input v-model="dataCenterFilters.query" clearable placeholder="搜索名称、编号、内容或知识" @keyup.enter="searchDataCenter">
               <template #prefix><el-icon><Search /></el-icon></template>
             </el-input>
             <el-select v-model="dataCenterFilters.model" clearable filterable placeholder="搜索或选择产品型号">
@@ -1393,7 +1432,7 @@ onMounted(() => void bootstrap());
             <el-select v-if="dataCenterTab === 'assets'" v-model="dataCenterFilters.moduleType" clearable placeholder="视频模块">
               <el-option v-for="item in classificationOptions" :key="item.value" :label="item.label" :value="item.value" />
             </el-select>
-            <el-button type="primary" @click="loadDataCenter(true)">查找</el-button>
+            <el-button type="primary" @click="searchDataCenter">查找</el-button>
           </div>
         </section>
 
@@ -1416,11 +1455,26 @@ onMounted(() => void bootstrap());
                 <div class="task-meta"><span>{{ asset.kind || "素材" }}</span><span>{{ asset.model || asset.productScope || "通用" }}</span><span>{{ asset.qualityScore || 0 }}分</span></div>
                 <h4>{{ asset.displayName || asset.fileName || asset.assetNo }}</h4>
                 <p>{{ asset.contentDescription || asset.searchText || "已审核可调用素材" }}</p>
+                <div class="asset-index-state">
+                  <el-tag size="small" :type="assetIndexStatus(asset).type">{{ assetIndexStatus(asset).label }}</el-tag>
+                  <span>置信度 {{ Math.round(Number(asset.indexConfidence || 0) * 100) }}%</span>
+                  <span v-if="['VIDEO','IMAGE'].includes(asset.kind) && !asset.thumbnailUrl">封面待生成</span>
+                </div>
                 <small>{{ asset.assetNo }}</small>
               </div>
             </article>
             <el-empty v-if="!dataCenter.assets?.length" description="没有找到符合条件的可用素材" />
           </div>
+          <el-pagination
+            v-if="Number(dataCenter.pagination?.total || 0) > 30"
+            class="data-pagination"
+            background
+            layout="prev, pager, next, total"
+            :current-page="assetPage"
+            :page-size="30"
+            :total="Number(dataCenter.pagination?.total || 0)"
+            @current-change="changeDataCenterPage"
+          />
         </section>
 
         <section v-else-if="dataCenterTab === 'knowledge'" v-loading="dataCenterLoading" class="section-card knowledge-list">
@@ -1604,6 +1658,16 @@ onMounted(() => void bootstrap());
             </article>
             <el-empty v-if="!dataCenter.videoProjects?.length" description="暂无视频项目，可从关键词、爆款研究或上方表单开始" />
           </div>
+          <el-pagination
+            v-if="Number(dataCenter.pagination?.total || 0) > 12"
+            class="data-pagination"
+            background
+            layout="prev, pager, next, total"
+            :current-page="videoProjectPage"
+            :page-size="12"
+            :total="Number(dataCenter.pagination?.total || 0)"
+            @current-change="changeDataCenterPage"
+          />
         </section>
       </template>
 
@@ -1930,11 +1994,11 @@ onMounted(() => void bootstrap());
           <div><dt>上传人</dt><dd>{{ assetDetail.createdByEmployee?.name || assetDetail.discoveredBy || "—" }}</dd></div>
         </dl>
         <div class="preview-actions">
-          <el-button @click="assetEditMode = !assetEditMode">{{ assetEditMode ? "取消编辑" : "编辑分类与标签" }}</el-button>
+          <el-button v-if="can('ASSET_CURATE')" @click="assetEditMode = !assetEditMode">{{ assetEditMode ? "取消编辑" : "编辑分类与标签" }}</el-button>
           <el-button @click="openAssetFile">新窗口打开</el-button>
           <el-button type="primary" @click="openAssetFile">下载原文件</el-button>
         </div>
-        <el-form v-if="assetEditMode" label-position="top" class="asset-edit-form">
+        <el-form v-if="assetEditMode && can('ASSET_CURATE')" label-position="top" class="asset-edit-form">
           <el-form-item label="素材名称" class="full"><el-input v-model="assetEditForm.displayName" /></el-form-item>
           <el-form-item label="产品范围">
             <el-select v-model="assetEditForm.productScope">
