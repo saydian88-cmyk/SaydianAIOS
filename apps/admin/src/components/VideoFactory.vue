@@ -141,7 +141,7 @@ const statusLabels: Record<string, string> = {
   FACTORY_SCRIPT_READY: "脚本已生成", FACTORY_GENERATING: "生成中", READY_TO_EDIT: "可合成",
   EDITING: "合成中", VIDEO_REVIEW: "成片待审", PLATFORM_PACKAGING: "已通过",
   OPEN: "待补素材", GENERATING: "生成中", PENDING_REVIEW: "素材待审", DONE: "已完成",
-  PASSED: "通过", APPROVED: "已通过", REVIEW_REQUIRED: "待人工审核", REJECTED: "已退回",
+  PASSED: "通过", APPROVED: "已通过", REVIEW_REQUIRED: "待人工审核", REJECTED: "已退回", RETURNED: "已退回",
 };
 
 function label(value?: string) {
@@ -150,7 +150,7 @@ function label(value?: string) {
 
 function tagType(value?: string) {
   if (["HEALTHY", "SUCCEEDED", "DONE", "PASSED", "APPROVED", "PLATFORM_PACKAGING", "TOPIC_CARD_APPROVED"].includes(String(value))) return "success";
-  if (["FAILED", "ERROR", "REJECTED"].includes(String(value))) return "danger";
+  if (["FAILED", "ERROR", "REJECTED", "RETURNED"].includes(String(value))) return "danger";
   if (["PENDING", "RUNNING", "RETRY", "CONFIGURED", "PENDING_REVIEW", "REVIEW_REQUIRED", "VIDEO_REVIEW", "TOPIC_CARD_RECOMMENDED"].includes(String(value))) return "warning";
   return "info";
 }
