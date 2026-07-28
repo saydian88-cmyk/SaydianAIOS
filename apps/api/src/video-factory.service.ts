@@ -8,6 +8,19 @@ import { decryptIntegrationValue, encryptIntegrationValue } from "./integration-
 import { OssStorageService } from "./oss-storage.service";
 import { PrismaService } from "./prisma.service";
 import { localDateKey } from "./utils";
+import {
+  DEFAULT_VIDEO_POLICY_CONFIG,
+  normalizeTopicText,
+  VIDEO_OPPORTUNITY_SCORE_MAX,
+  VIDEO_RECIPES,
+  type VideoExecutionMode,
+  type VideoMaterialCoverage,
+  type VideoOpportunityScore,
+  type VideoRecipeCode,
+  type VideoScriptCandidateV3,
+  type VideoShotPlanV3,
+  type VideoTopicCardPayload,
+} from "./video-topic-card";
 
 type JsonRow = Record<string, unknown>;
 
@@ -44,6 +57,21 @@ type SimilarVideoInput = {
   productModel?: string;
   replaceFeature?: boolean;
   feature?: string;
+};
+
+type TopicCardListInput = {
+  status?: string;
+  platform?: string;
+  productModel?: string;
+  sourceType?: string;
+  minScore?: number;
+  minCoverage?: number;
+};
+
+type TopicCardApprovalInput = {
+  executionMode: Exclude<VideoExecutionMode, "TOPIC_CARD_BATCH">;
+  ownerId: string;
+  reviewerId: string;
 };
 
 const PROVIDER_SEEDS = [
@@ -142,6 +170,52 @@ function conciseVideoTopic(value: string): string {
 
 function sourceSignals(plan: { sourceSignals: unknown }) {
   return Array.isArray(plan.sourceSignals) ? plan.sourceSignals.map(object) : [];
+}
+
+function number(value: unknown, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function clamp(value: unknown, min: number, max: number) {
+  return Math.min(max, Math.max(min, number(value)));
+}
+
+function topicCardSignal(plan: { sourceSignals: unknown }) {
+  return sourceSignals(plan).find((item) => item.type === "VIDEO_TOPIC_CARD");
+}
+
+function recipeCode(value: unknown, fallback: VideoRecipeCode = "PAIN_SOLVE"): VideoRecipeCode {
+  const normalized = String(value || "").trim().toUpperCase();
+  return VIDEO_RECIPES.some((item) => item.code === normalized)
+    ? normalized as VideoRecipeCode
+    : fallback;
+}
+
+function normalizeOpportunityScore(value: unknown, coveragePercent: number): VideoOpportunityScore {
+  const row = object(value);
+  const score = {
+    relevance: clamp(row.relevance, 0, VIDEO_OPPORTUNITY_SCORE_MAX.relevance),
+    demand: clamp(row.demand, 0, VIDEO_OPPORTUNITY_SCORE_MAX.demand),
+    trendGrowth: clamp(row.trendGrowth, 0, VIDEO_OPPORTUNITY_SCORE_MAX.trendGrowth),
+    contentGap: clamp(row.contentGap, 0, VIDEO_OPPORTUNITY_SCORE_MAX.contentGap),
+    commercialIntent: clamp(row.commercialIntent, 0, VIDEO_OPPORTUNITY_SCORE_MAX.commercialIntent),
+    brandFit: clamp(row.brandFit, 0, VIDEO_OPPORTUNITY_SCORE_MAX.brandFit),
+    assetCoverage: Math.round(clamp(coveragePercent, 0, 100) / 100 * VIDEO_OPPORTUNITY_SCORE_MAX.assetCoverage),
+    shootability: clamp(row.shootability, 0, VIDEO_OPPORTUNITY_SCORE_MAX.shootability),
+    novelty: clamp(row.novelty, 0, VIDEO_OPPORTUNITY_SCORE_MAX.novelty),
+    total: 0,
+  };
+  score.total = Math.round(Object.entries(score)
+    .filter(([key]) => key !== "total")
+    .reduce((total, [, points]) => total + points, 0));
+  return score;
+}
+
+function topicCardPayload(plan: { sourceSignals: unknown }): VideoTopicCardPayload | null {
+  const signal = topicCardSignal(plan);
+  if (!signal) return null;
+  return object(signal.card) as unknown as VideoTopicCardPayload;
 }
 
 @Injectable()
@@ -302,6 +376,803 @@ export class VideoFactoryService {
       );
     }
     return relations.length;
+  }
+
+  private referenceIsRelevant(reference: JsonRow, card: JsonRow) {
+    const moduleSummary = Array.isArray(reference.moduleSummary) ? reference.moduleSummary : [];
+    const analysis = object(reference.analysis);
+    if (!moduleSummary.length && !Object.keys(analysis).length) return false;
+    const referenceText = normalizeTopicText([
+      reference.title,
+      reference.transcript,
+      JSON.stringify(moduleSummary),
+      JSON.stringify(analysis),
+    ].join(" "));
+    const cardTerms = [
+      card.productModel,
+      card.mainKeyword,
+      ...strings(card.auxiliaryKeywords),
+      card.pain,
+      card.scene,
+    ].map(normalizeTopicText).filter((item) => item.length >= 2);
+    const wearableTerms = ["智能手表", "血压手表", "手表", "腕表", "智能戒指", "戒指", "smartwatch", "watch", "smartring", "ring"];
+    const hasWearableContext = wearableTerms.some((term) => referenceText.includes(normalizeTopicText(term)));
+    const isCarOnly = ["汽车", "车钥匙", "carkey"].some((term) => referenceText.includes(normalizeTopicText(term)))
+      && !["佩戴", "手腕", "表盘", "watch", "手表"].some((term) => referenceText.includes(normalizeTopicText(term)));
+    return Boolean(referenceText)
+      && !isCarOnly
+      && hasWearableContext
+      && cardTerms.some((term) => referenceText.includes(term) || term.includes(referenceText));
+  }
+
+  private materialCoverage(raw: JsonRow, allowedAssetIds: Set<string>): VideoMaterialCoverage {
+    const matchedAssetIds = Array.from(new Set(strings(raw.matchedAssetIds).filter((id) => allowedAssetIds.has(id))));
+    const totalShots = Math.max(1, Math.min(12, Math.round(number(raw.totalShots, 5))));
+    const coveredShots = Math.min(
+      totalShots,
+      Math.max(0, Math.min(matchedAssetIds.length, Math.round(number(raw.coveredShots, matchedAssetIds.length)))),
+    );
+    return {
+      totalShots,
+      coveredShots,
+      coveragePercent: Math.round(coveredShots / totalShots * 100),
+      matchedAssetIds,
+      missingShots: (Array.isArray(raw.missingShots) ? raw.missingShots.map(object) : []).map((item) => ({
+        moduleType: String(item.moduleType || "SCENE"),
+        description: String(item.description || "缺失镜头"),
+        reason: String(item.reason || "没有匹配到已审核真实素材"),
+        alternative: String(item.alternative || "优先使用产品图动画或本地程序化镜头"),
+      })),
+    };
+  }
+
+  private safeTopicTitle(card: JsonRow, references: Array<{ title: string | null }>) {
+    const requested = String(card.title || card.topic || card.mainKeyword || "视频选题").trim();
+    const copiedReference = references.some((reference) => {
+      const title = normalizeTopicText(reference.title);
+      return title.length >= 8 && normalizeTopicText(requested).includes(title);
+    });
+    const hasUnsafeClaim = /(第一|最准确|百分之百|100%|治愈|治疗|精准诊断|￥|¥|\$\s*\d|\d+\s*元)/iu.test(requested);
+    if (!copiedReference && !hasUnsafeClaim) return Array.from(requested).slice(0, 80).join("");
+    const recipe = VIDEO_RECIPES.find((item) => item.code === recipeCode(card.primaryRecipe));
+    return `${String(card.mainKeyword || card.productModel || "赛电产品").trim()}·${recipe?.name || "内容方案"}`;
+  }
+
+  async persistTopicCards(input: {
+    aiTaskId: string;
+    platform: string;
+    cards: unknown[];
+    policyVersion?: string;
+  }, actor: string) {
+    const platform = integrationKind(input.platform);
+    const cardPlatform: "DOUYIN" | "TIKTOK" = platform === IntegrationKind.TIKTOK ? "TIKTOK" : "DOUYIN";
+    const rawCards = Array.isArray(input.cards) ? input.cards.map(object).slice(0, 30) : [];
+    if (!rawCards.length) throw new BadRequestException("Codex没有返回可保存的视频选题卡");
+
+    const productModels = Array.from(new Set(rawCards.map((item) => String(item.productModel || "").trim()).filter(Boolean)));
+    const keywordIds = Array.from(new Set(rawCards.flatMap((item) => strings(item.keywordIds))));
+    const externalVideoIds = Array.from(new Set(rawCards.flatMap((item) => strings(item.externalVideoIds))));
+    const requestedAssetIds = Array.from(new Set(rawCards.flatMap((item) => strings(object(item.materialCoverage).matchedAssetIds))));
+    const [products, keywords, references, assets] = await Promise.all([
+      productModels.length
+        ? this.prisma.product.findMany({ where: { modelCode: { in: productModels }, status: "READY" } })
+        : Promise.resolve([]),
+      keywordIds.length
+        ? this.prisma.smartKeyword.findMany({
+          where: { id: { in: keywordIds }, status: "ACTIVE", contentEnabled: true },
+          include: { cluster: true },
+        })
+        : Promise.resolve([]),
+      externalVideoIds.length
+        ? this.prisma.externalVideo.findMany({
+          where: {
+            id: { in: externalVideoIds },
+            platform,
+            status: "READY",
+            level: "REFERENCE",
+            rightsStatus: "INTERNAL",
+            availabilityStatus: "INACTIVE",
+          },
+          select: { id: true, title: true, transcript: true, moduleSummary: true, analysis: true },
+        })
+        : Promise.resolve([]),
+      requestedAssetIds.length
+        ? this.prisma.asset.findMany({
+          where: {
+            id: { in: requestedAssetIds },
+            reviewStatus: "APPROVED",
+            availabilityStatus: "ACTIVE",
+            rightsStatus: { in: ["COMMERCIAL", "EDIT_ONLY"] },
+            deletedAt: null,
+          },
+          select: { id: true },
+        })
+        : Promise.resolve([]),
+    ]);
+    const productMap = new Map(products.map((item) => [item.modelCode, item]));
+    const keywordMap = new Map(keywords.map((item) => [item.id, item]));
+    const referenceMap = new Map(references.map((item) => [item.id, item]));
+    const allowedAssetIds = new Set(assets.map((item) => item.id));
+    const day = localDateKey(new Date());
+    const existingCards = await this.prisma.contentPlan.findMany({
+      where: {
+        kind: "VIDEO",
+        planDate: {
+          gte: new Date(`${day}T00:00:00+08:00`),
+          lte: new Date(`${day}T23:59:59.999+08:00`),
+        },
+        sourceSignals: { array_contains: [{ type: "VIDEO_TOPIC_CARD" }] },
+      },
+      select: { sourceSignals: true },
+    });
+    const existingKeys = new Set(existingCards.map((item) => String(topicCardPayload(item)?.dedupeKey || "")).filter(Boolean));
+    const created: Array<Record<string, unknown>> = [];
+    const skipped: Array<{ index: number; reason: string }> = [];
+
+    for (const [index, raw] of rawCards.entries()) {
+      const validKeywordIds = strings(raw.keywordIds).filter((id) => keywordMap.has(id));
+      const validReferences = strings(raw.externalVideoIds)
+        .map((id) => referenceMap.get(id))
+        .filter((reference): reference is NonNullable<typeof reference> => Boolean(reference))
+        .filter((reference) => this.referenceIsRelevant(reference as unknown as JsonRow, raw));
+      const productModel = String(raw.productModel || "").trim();
+      const product = productMap.get(productModel);
+      const missingFacts = Array.from(new Set([
+        ...strings(raw.missingFacts),
+        ...(!product ? ["缺少已审核产品事实"] : []),
+      ]));
+      const coverage = this.materialCoverage(object(raw.materialCoverage), allowedAssetIds);
+      const primaryKeyword = validKeywordIds.map((id) => keywordMap.get(id)).find(Boolean);
+      const mainKeyword = String(raw.mainKeyword || primaryKeyword?.keyword || "").trim();
+      const clusterKey = primaryKeyword?.cluster?.canonicalKey || normalizeTopicText(mainKeyword);
+      const primaryRecipe = recipeCode(raw.primaryRecipe);
+      const backupRecipe = recipeCode(raw.backupRecipe, primaryRecipe === "PAIN_SOLVE" ? "UGC" : "PAIN_SOLVE");
+      const dedupeKey = [
+        platform,
+        productModel || "UNVERIFIED",
+        clusterKey,
+        normalizeTopicText(raw.audience),
+        normalizeTopicText(raw.pain),
+        primaryRecipe,
+      ].join("|");
+      if (!mainKeyword || existingKeys.has(dedupeKey)) {
+        skipped.push({ index, reason: !mainKeyword ? "缺少主关键词" : "同一平台、产品、人群、痛点和配方的选题已存在" });
+        continue;
+      }
+      const scoreBreakdown = normalizeOpportunityScore(raw.scoreBreakdown, coverage.coveragePercent);
+      const cardNo = `VTC-${day.replaceAll("-", "")}-${randomUUID().slice(0, 6).toUpperCase()}`;
+      const title = this.safeTopicTitle(raw, validReferences);
+      const card: VideoTopicCardPayload = {
+        cardNo,
+        platform: cardPlatform,
+        market: String(raw.market || (cardPlatform === "TIKTOK" ? "US" : "CN")),
+        productModel: product?.modelCode,
+        title,
+        topic: String(raw.topic || title).trim(),
+        audience: String(raw.audience || "目标消费者").trim(),
+        pain: String(raw.pain || "待确认用户痛点").trim(),
+        scene: String(raw.scene || "真实日常场景").trim(),
+        objective: String(raw.objective || "内容种草与商品点击").trim(),
+        mainKeyword,
+        auxiliaryKeywords: strings(raw.auxiliaryKeywords).slice(0, 4),
+        keywordIds: validKeywordIds,
+        externalVideoIds: validReferences.map((item) => item.id),
+        knowledgeIds: strings(raw.knowledgeIds),
+        faqIds: strings(raw.faqIds),
+        evidenceIds: Array.from(new Set([...strings(raw.evidenceIds), ...(product?.evidenceIds || [])])),
+        sourceTypes: Array.from(new Set(strings(raw.sourceTypes).length ? strings(raw.sourceTypes) : ["SMART_KEYWORD"])),
+        rationale: String(raw.rationale || "结合关键词需求、产品事实和现有素材形成的内容机会").trim(),
+        reusableViralStructure: {
+          hookPattern: String(object(raw.reusableViralStructure).hookPattern || ""),
+          pace: String(object(raw.reusableViralStructure).pace || ""),
+          shotStructure: strings(object(raw.reusableViralStructure).shotStructure),
+          ctaPattern: String(object(raw.reusableViralStructure).ctaPattern || ""),
+        },
+        hookCandidates: strings(raw.hookCandidates).slice(0, 3),
+        primaryRecipe,
+        backupRecipe,
+        durationSeconds: Math.max(10, Math.min(60, Math.round(number(raw.durationSeconds, 20)))),
+        aspectRatio: "9:16",
+        voiceoverDirection: String(raw.voiceoverDirection || "自然、可信，优先使用真实用户语言"),
+        subtitleDirection: String(raw.subtitleDirection || "短句、大字、安全区内显示"),
+        materialCoverage: coverage,
+        scoreBreakdown,
+        estimatedCosts: {
+          local: Math.max(0, number(object(raw.estimatedCosts).local)),
+          external: Math.max(0, number(object(raw.estimatedCosts).external)),
+          currency: String(object(raw.estimatedCosts).currency || "CNY"),
+        },
+        missingFacts,
+        riskReasons: Array.from(new Set([
+          ...strings(raw.riskReasons),
+          ...(validReferences.length ? ["外部爆款仅允许复用结构、Hook模式、节奏和CTA模式"] : []),
+        ])),
+        dedupeKey,
+      };
+      const plan = await this.prisma.$transaction(async (tx) => {
+        const row = await tx.contentPlan.create({
+          data: {
+            productionNo: cardNo,
+            productionStage: "TOPIC_CARD_RECOMMENDED",
+            workflowVersion: 3,
+            targetPlatforms: [platform],
+            planDate: new Date(),
+            kind: "VIDEO",
+            topic: card.topic,
+            productModel: card.productModel,
+            audience: card.audience,
+            objective: card.objective,
+            score: card.scoreBreakdown.total,
+            scoreBreakdown: card.scoreBreakdown as unknown as Prisma.InputJsonValue,
+            hook: card.hookCandidates[0] || card.mainKeyword,
+            outline: card.reusableViralStructure.shotStructure as unknown as Prisma.InputJsonValue,
+            sourceSignals: [{
+              type: "VIDEO_TOPIC_CARD",
+              version: 3,
+              policyVersion: input.policyVersion || DEFAULT_VIDEO_POLICY_CONFIG.topicCardPolicyVersion,
+              aiTaskId: input.aiTaskId,
+              card,
+            }] as unknown as Prisma.InputJsonValue,
+            evidenceIds: card.evidenceIds,
+            status: ContentStatus.DRAFT,
+            riskReasons: card.riskReasons,
+            createdBy: actor,
+            actorType: "AI",
+          },
+        });
+        if (card.keywordIds.length) {
+          await tx.smartKeywordContentRelation.createMany({
+            data: card.keywordIds.map((keywordId, keywordIndex) => ({
+              keywordId,
+              contentPlanId: row.id,
+              usageType: "VIDEO_TOPIC_CARD",
+              position: keywordIndex === 0 ? "PRIMARY" : "AUXILIARY",
+            })),
+            skipDuplicates: true,
+          });
+        }
+        await tx.auditLog.create({
+          data: {
+            actor,
+            action: "VIDEO_TOPIC_CARD_CREATE",
+            entityType: "ContentPlan",
+            entityId: row.id,
+            after: { cardNo, platform, score: card.scoreBreakdown.total, coverage: card.materialCoverage.coveragePercent },
+          },
+        });
+        return row;
+      });
+      created.push({ ...jsonSafe(plan), topicCard: card });
+      existingKeys.add(dedupeKey);
+    }
+    return { created, skipped, requested: rawCards.length };
+  }
+
+  async topicCards(query: TopicCardListInput = {}) {
+    const rows = await this.prisma.contentPlan.findMany({
+      where: {
+        kind: "VIDEO",
+        sourceSignals: { array_contains: [{ type: "VIDEO_TOPIC_CARD" }] },
+        ...(query.status ? { productionStage: query.status } : { productionStage: { not: "TOPIC_CARD_ARCHIVED" } }),
+        ...(query.productModel ? { productModel: query.productModel } : {}),
+        ...(query.platform ? { targetPlatforms: { has: integrationKind(query.platform) } } : {}),
+      },
+      include: {
+        assignedEmployee: true,
+        keywordRelations: { include: { keyword: { include: { cluster: true } } } },
+        aiTaskOutputs: { orderBy: { createdAt: "desc" }, take: 5, include: { aiTask: { select: { taskNo: true, status: true } } } },
+      },
+      orderBy: [{ score: "desc" }, { createdAt: "desc" }],
+      take: 300,
+    });
+    return jsonSafe(rows.map((row) => ({ ...row, topicCard: topicCardPayload(row) })))
+      .filter((row) => {
+        const card = row.topicCard;
+        if (!card) return false;
+        if (query.sourceType && !card.sourceTypes.includes(query.sourceType)) return false;
+        if (query.minScore !== undefined && row.score < query.minScore) return false;
+        if (query.minCoverage !== undefined && card.materialCoverage.coveragePercent < query.minCoverage) return false;
+        return true;
+      });
+  }
+
+  async topicCard(id: string) {
+    const plan = await this.prisma.contentPlan.findUnique({
+      where: { id },
+      include: {
+        assignedEmployee: true,
+        keywordRelations: { include: { keyword: { include: { cluster: true } } } },
+        aiTaskOutputs: { orderBy: { createdAt: "desc" }, include: { aiTask: { select: { taskNo: true, status: true } } } },
+        contentAssets: { include: { asset: true } },
+      },
+    });
+    if (!plan || !topicCardSignal(plan)) throw new NotFoundException("视频选题卡不存在");
+    return jsonSafe({ ...plan, topicCard: topicCardPayload(plan) });
+  }
+
+  async updateTopicCard(id: string, input: JsonRow, actor: string) {
+    const existing = await this.prisma.contentPlan.findUnique({ where: { id } });
+    if (!existing || !topicCardSignal(existing)) throw new NotFoundException("视频选题卡不存在");
+    if (!["TOPIC_CARD_RECOMMENDED", "TOPIC_CARD_APPROVED"].includes(existing.productionStage)) {
+      throw new BadRequestException("选题卡已经进入生产，不能再修改关键内容");
+    }
+    const before = topicCardPayload(existing);
+    if (!before) throw new NotFoundException("视频选题卡内容不存在");
+    const productModel = input.productModel !== undefined ? String(input.productModel || "").trim() : before.productModel;
+    if (productModel) {
+      const product = await this.prisma.product.findFirst({ where: { modelCode: productModel, status: "READY" } });
+      if (!product) throw new BadRequestException("产品型号不存在或尚未审核");
+    }
+    const next: VideoTopicCardPayload = {
+      ...before,
+      ...(input.title !== undefined ? { title: String(input.title || "").trim() || before.title } : {}),
+      ...(input.topic !== undefined ? { topic: String(input.topic || "").trim() || before.topic } : {}),
+      ...(input.productModel !== undefined ? { productModel: productModel || undefined } : {}),
+      ...(input.audience !== undefined ? { audience: String(input.audience || "").trim() || before.audience } : {}),
+      ...(input.pain !== undefined ? { pain: String(input.pain || "").trim() || before.pain } : {}),
+      ...(input.scene !== undefined ? { scene: String(input.scene || "").trim() || before.scene } : {}),
+      ...(input.objective !== undefined ? { objective: String(input.objective || "").trim() || before.objective } : {}),
+      ...(input.mainKeyword !== undefined ? { mainKeyword: String(input.mainKeyword || "").trim() || before.mainKeyword } : {}),
+      ...(input.auxiliaryKeywords !== undefined ? { auxiliaryKeywords: strings(input.auxiliaryKeywords).slice(0, 4) } : {}),
+      ...(input.hookCandidates !== undefined ? { hookCandidates: strings(input.hookCandidates).slice(0, 3) } : {}),
+      ...(input.primaryRecipe !== undefined ? { primaryRecipe: recipeCode(input.primaryRecipe, before.primaryRecipe) } : {}),
+      ...(input.backupRecipe !== undefined ? { backupRecipe: recipeCode(input.backupRecipe, before.backupRecipe) } : {}),
+      ...(input.durationSeconds !== undefined ? { durationSeconds: Math.max(10, Math.min(60, Math.round(number(input.durationSeconds, before.durationSeconds)))) } : {}),
+      ...(input.ownerEmployeeId !== undefined ? { ownerEmployeeId: String(input.ownerEmployeeId || "") || undefined } : {}),
+      ...(input.reviewerEmployeeId !== undefined ? { reviewerEmployeeId: String(input.reviewerEmployeeId || "") || undefined } : {}),
+    };
+    next.dedupeKey = [
+      next.platform,
+      next.productModel || "UNVERIFIED",
+      normalizeTopicText(next.mainKeyword),
+      normalizeTopicText(next.audience),
+      normalizeTopicText(next.pain),
+      next.primaryRecipe,
+    ].join("|");
+    next.scoreBreakdown = normalizeOpportunityScore(next.scoreBreakdown, next.materialCoverage.coveragePercent);
+    const signals = sourceSignals(existing).map((signal) => signal.type === "VIDEO_TOPIC_CARD"
+      ? { ...signal, card: next, updatedBy: actor, updatedAt: new Date().toISOString() }
+      : signal);
+    await this.prisma.$transaction([
+      this.prisma.contentPlan.update({
+        where: { id },
+        data: {
+          topic: next.topic,
+          productModel: next.productModel,
+          audience: next.audience,
+          objective: next.objective,
+          score: next.scoreBreakdown.total,
+          scoreBreakdown: next.scoreBreakdown as unknown as Prisma.InputJsonValue,
+          hook: next.hookCandidates[0] || next.mainKeyword,
+          sourceSignals: signals as unknown as Prisma.InputJsonValue,
+          riskReasons: next.riskReasons,
+        },
+      }),
+      this.prisma.auditLog.create({
+        data: {
+          actor,
+          action: "VIDEO_TOPIC_CARD_UPDATE",
+          entityType: "ContentPlan",
+          entityId: id,
+          before: before as unknown as Prisma.InputJsonValue,
+          after: next as unknown as Prisma.InputJsonValue,
+        },
+      }),
+    ]);
+    return this.topicCard(id);
+  }
+
+  async archiveTopicCard(id: string, actor: string) {
+    const existing = await this.prisma.contentPlan.findUnique({ where: { id } });
+    if (!existing || !topicCardSignal(existing)) throw new NotFoundException("视频选题卡不存在");
+    if (existing.productionStage !== "TOPIC_CARD_RECOMMENDED") throw new BadRequestException("已进入生产的选题卡不能归档");
+    await this.prisma.$transaction([
+      this.prisma.contentPlan.update({ where: { id }, data: { productionStage: "TOPIC_CARD_ARCHIVED" } }),
+      this.prisma.auditLog.create({
+        data: { actor, action: "VIDEO_TOPIC_CARD_ARCHIVE", entityType: "ContentPlan", entityId: id, after: { productionStage: "TOPIC_CARD_ARCHIVED" } },
+      }),
+    ]);
+    return { id, archived: true };
+  }
+
+  async rematchTopicCardAssets(id: string, actor: string) {
+    const existing = await this.prisma.contentPlan.findUnique({ where: { id } });
+    const card = existing ? topicCardPayload(existing) : null;
+    if (!existing || !card) throw new NotFoundException("视频选题卡不存在");
+    const assets = await this.prisma.asset.findMany({
+      where: {
+        kind: { in: ["VIDEO", "IMAGE"] },
+        reviewStatus: "APPROVED",
+        availabilityStatus: "ACTIVE",
+        rightsStatus: { in: ["COMMERCIAL", "EDIT_ONLY"] },
+        deletedAt: null,
+        ...(card.productModel ? {
+          OR: [
+            { model: card.productModel },
+            { products: { some: { product: { modelCode: card.productModel } } } },
+          ],
+        } : {}),
+      },
+      include: { tags: { include: { tag: true } } },
+      orderBy: [{ qualityScore: "desc" }, { useCount: "desc" }, { updatedAt: "desc" }],
+      take: 40,
+    });
+    const searchTerms = [card.scene, card.audience, card.pain, card.mainKeyword].map(normalizeTopicText).filter(Boolean);
+    const ranked = assets.map((asset) => {
+      const haystack = normalizeTopicText([
+        asset.displayName,
+        asset.contentDescription,
+        asset.scene,
+        asset.model,
+        ...asset.tags.map((item) => item.tag.label),
+      ].join(" "));
+      return {
+        asset,
+        relevance: searchTerms.reduce((score, term) => score + (haystack.includes(term) ? 10 : 0), 0),
+      };
+    }).sort((a, b) => b.relevance - a.relevance || b.asset.qualityScore - a.asset.qualityScore);
+    const matchedAssetIds = ranked.slice(0, 6).map((item) => item.asset.id);
+    const totalShots = Math.max(1, card.materialCoverage.totalShots || 5);
+    const coverage: VideoMaterialCoverage = {
+      ...card.materialCoverage,
+      totalShots,
+      coveredShots: Math.min(totalShots, matchedAssetIds.length),
+      coveragePercent: Math.round(Math.min(totalShots, matchedAssetIds.length) / totalShots * 100),
+      matchedAssetIds,
+      missingShots: card.materialCoverage.missingShots.slice(Math.min(totalShots, matchedAssetIds.length)),
+    };
+    const allowedAssetIds = new Set(matchedAssetIds);
+    const normalizedCoverage = this.materialCoverage(coverage as unknown as JsonRow, allowedAssetIds);
+    const signals = sourceSignals(existing).map((signal) => signal.type === "VIDEO_TOPIC_CARD"
+      ? { ...signal, card: { ...card, materialCoverage: normalizedCoverage, scoreBreakdown: normalizeOpportunityScore(card.scoreBreakdown, normalizedCoverage.coveragePercent) } }
+      : signal);
+    await this.prisma.$transaction([
+      this.prisma.contentPlan.update({
+        where: { id },
+        data: {
+          score: normalizeOpportunityScore(card.scoreBreakdown, normalizedCoverage.coveragePercent).total,
+          scoreBreakdown: normalizeOpportunityScore(card.scoreBreakdown, normalizedCoverage.coveragePercent) as unknown as Prisma.InputJsonValue,
+          sourceSignals: signals as unknown as Prisma.InputJsonValue,
+        },
+      }),
+      this.prisma.auditLog.create({
+        data: { actor, action: "VIDEO_TOPIC_CARD_REMATCH_ASSETS", entityType: "ContentPlan", entityId: id, after: { matchedAssetIds, coveragePercent: normalizedCoverage.coveragePercent } },
+      }),
+    ]);
+    return this.topicCard(id);
+  }
+
+  async prepareTopicCardApproval(id: string, input: TopicCardApprovalInput) {
+    const plan = await this.prisma.contentPlan.findUnique({ where: { id } });
+    const card = plan ? topicCardPayload(plan) : null;
+    if (!plan || !card) throw new NotFoundException("视频选题卡不存在");
+    if (!["TOPIC_CARD_RECOMMENDED", "TOPIC_CARD_APPROVED"].includes(plan.productionStage)) {
+      throw new BadRequestException("选题卡当前不能确认执行");
+    }
+    if (!["SCRIPT_ONLY", "FULL_VIDEO"].includes(input.executionMode)) throw new BadRequestException("视频任务模式不正确");
+    if (!input.ownerId || !input.reviewerId) throw new BadRequestException("必须指定负责人和审核人");
+    const [product, employees] = await Promise.all([
+      card.productModel
+        ? this.prisma.product.findFirst({ where: { modelCode: card.productModel, status: "READY" } })
+        : Promise.resolve(null),
+      this.prisma.employee.findMany({ where: { id: { in: [input.ownerId, input.reviewerId] }, status: "ACTIVE" } }),
+    ]);
+    if (!product || card.missingFacts.some((item) => item.includes("产品"))) throw new BadRequestException("缺少已审核产品事实，暂不能执行");
+    if (employees.length !== new Set([input.ownerId, input.reviewerId]).size) throw new BadRequestException("负责人或审核人不存在");
+    return {
+      plan,
+      card,
+      owner: employees.find((item) => item.id === input.ownerId),
+      reviewer: employees.find((item) => item.id === input.reviewerId),
+    };
+  }
+
+  async markTopicCardApproved(id: string, input: TopicCardApprovalInput, aiTaskId: string, actor: string) {
+    const prepared = await this.prepareTopicCardApproval(id, input);
+    const card: VideoTopicCardPayload = {
+      ...prepared.card,
+      ownerEmployeeId: input.ownerId,
+      reviewerEmployeeId: input.reviewerId,
+      approvedAiTaskId: aiTaskId,
+      approvedExecutionMode: input.executionMode,
+    };
+    const signals = sourceSignals(prepared.plan);
+    const nextSignals = [
+      ...signals.map((signal) => signal.type === "VIDEO_TOPIC_CARD"
+        ? { ...signal, card, approvedBy: actor, approvedAt: new Date().toISOString() }
+        : signal),
+      ...(!signals.some((signal) => signal.type === "VIDEO_FACTORY") ? [{
+        type: "VIDEO_FACTORY",
+        workflowVersion: 3,
+        topicCardId: id,
+        topicCardNo: card.cardNo,
+        scriptCandidates: [],
+        selectedCandidateIndex: 0,
+        keywordIds: card.keywordIds,
+        externalVideoIds: card.externalVideoIds,
+        externalReferencePolicy: "STRUCTURE_ONLY",
+        routingMode: "AUTO",
+        allowFallback: false,
+      }] : []),
+    ];
+    await this.prisma.$transaction([
+      this.prisma.contentPlan.update({
+        where: { id },
+        data: {
+          productionStage: "TOPIC_CARD_APPROVED",
+          assignedEmployeeId: input.ownerId,
+          assignedTo: prepared.owner?.name,
+          owner: prepared.owner?.name,
+          approvedBy: actor,
+          approvedAt: new Date(),
+          sourceSignals: nextSignals as unknown as Prisma.InputJsonValue,
+        },
+      }),
+      this.prisma.auditLog.create({
+        data: {
+          actor,
+          action: "VIDEO_TOPIC_CARD_APPROVE",
+          entityType: "ContentPlan",
+          entityId: id,
+          after: { aiTaskId, executionMode: input.executionMode, ownerId: input.ownerId, reviewerId: input.reviewerId },
+        },
+      }),
+    ]);
+    return this.topicCard(id);
+  }
+
+  async createCodexProject(input: {
+    platform: string;
+    productModel?: string;
+    topic: string;
+    audience: string;
+    objective: string;
+    keywordIds?: string[];
+    externalVideoIds?: string[];
+    aiTaskId: string;
+  }, actor: string) {
+    const platform = integrationKind(input.platform);
+    const productionNo = `VF-${localDateKey(new Date()).replaceAll("-", "")}-${randomUUID().slice(0, 6).toUpperCase()}`;
+    const plan = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.contentPlan.create({
+        data: {
+          productionNo,
+          productionStage: "FACTORY_GENERATING",
+          workflowVersion: 3,
+          owner: actor,
+          targetPlatforms: [platform],
+          planDate: new Date(),
+          kind: "VIDEO",
+          topic: conciseVideoTopic(input.topic),
+          productModel: input.productModel,
+          audience: input.audience,
+          objective: input.objective,
+          score: 0,
+          scoreBreakdown: {},
+          hook: input.topic,
+          outline: [],
+          sourceSignals: [{
+            type: "VIDEO_FACTORY",
+            workflowVersion: 3,
+            aiTaskId: input.aiTaskId,
+            scriptCandidates: [],
+            selectedCandidateIndex: 0,
+            keywordIds: input.keywordIds || [],
+            externalVideoIds: input.externalVideoIds || [],
+            externalReferencePolicy: "STRUCTURE_ONLY",
+            routingMode: "AUTO",
+            allowFallback: false,
+          }] as unknown as Prisma.InputJsonValue,
+          evidenceIds: [],
+          status: ContentStatus.DRAFT,
+          riskReasons: [],
+          createdBy: actor,
+          assignedTo: actor,
+          actorType: "AI",
+        },
+      });
+      if (input.keywordIds?.length) {
+        await tx.smartKeywordContentRelation.createMany({
+          data: input.keywordIds.map((keywordId, index) => ({
+            keywordId,
+            contentPlanId: created.id,
+            usageType: "SMART_VIDEO_FACTORY",
+            position: index === 0 ? "PRIMARY" : "AUXILIARY",
+          })),
+          skipDuplicates: true,
+        });
+      }
+      return created;
+    });
+    return this.project(plan.id);
+  }
+
+  async applyCodexProjectResult(input: {
+    contentPlanId: string;
+    aiTaskId: string;
+    executionMode: "SCRIPT_ONLY" | "FULL_VIDEO";
+    scriptCandidates: VideoScriptCandidateV3[];
+    actor: string;
+  }) {
+    const plan = await this.prisma.contentPlan.findUnique({ where: { id: input.contentPlanId } });
+    if (!plan) throw new NotFoundException("智能视频项目不存在");
+    const candidates = input.scriptCandidates.slice(0, 3);
+    const selected = candidates.find((item) => item.selected) || candidates[0];
+    if (!selected) throw new BadRequestException("Codex未返回有效脚本候选");
+    const allAssetIds = Array.from(new Set(candidates.flatMap((candidate) => candidate.shots.flatMap((shot) => shot.selectedAssetIds))));
+    const validAssets = allAssetIds.length
+      ? await this.prisma.asset.findMany({
+        where: {
+          id: { in: allAssetIds },
+          reviewStatus: "APPROVED",
+          availabilityStatus: "ACTIVE",
+          rightsStatus: { in: ["COMMERCIAL", "EDIT_ONLY"] },
+          deletedAt: null,
+        },
+        select: { id: true },
+      })
+      : [];
+    const validAssetIds = new Set(validAssets.map((item) => item.id));
+    const shots = selected.shots.map((shot, index): VideoShotPlanV3 => ({
+      ...shot,
+      sequence: index,
+      durationSeconds: Math.max(2, Math.min(12, Math.round(number(shot.durationSeconds, 4)))),
+      selectedAssetIds: shot.selectedAssetIds.filter((id) => validAssetIds.has(id)),
+    }));
+    const signals = sourceSignals(plan);
+    const nextSignals = [
+      ...signals.map((signal) => signal.type === "VIDEO_FACTORY"
+        ? { ...signal, scriptCandidates: candidates, selectedCandidateIndex: candidates.indexOf(selected), workflowVersion: 3 }
+        : signal),
+      ...(!signals.some((signal) => signal.type === "AI_TASK" && signal.id === input.aiTaskId)
+        ? [{ type: "AI_TASK", id: input.aiTaskId, executionMode: input.executionMode, provider: "CODEX" }]
+        : []),
+    ];
+    const platform = plan.targetPlatforms[0] || IntegrationKind.DOUYIN;
+    await this.prisma.$transaction(async (tx) => {
+      await tx.contentPlan.update({
+        where: { id: plan.id },
+        data: {
+          hook: selected.hook || plan.hook,
+          score: Math.round(number(selected.score, plan.score)),
+          scoreBreakdown: selected.scoreBreakdown as Prisma.InputJsonValue,
+          outline: shots as unknown as Prisma.InputJsonValue,
+          shootRequirements: shots.map((shot) => ({
+            key: `codex-v3-${shot.sequence}`,
+            title: shot.title,
+            description: shot.description,
+            moduleType: shot.moduleType,
+            status: shot.selectedAssetIds.length ? "DONE" : "OPEN",
+            selectedAssetId: shot.selectedAssetIds[0] || null,
+            missingReason: shot.missingReason,
+            alternativePlan: shot.alternativePlan,
+          })) as unknown as Prisma.InputJsonValue,
+          sourceSignals: nextSignals as unknown as Prisma.InputJsonValue,
+          productionStage: "FACTORY_SCRIPT_READY",
+        },
+      });
+      await tx.contentVariant.upsert({
+        where: { contentPlanId_platform: { contentPlanId: plan.id, platform } },
+        create: {
+          contentPlanId: plan.id,
+          platform,
+          title: selected.title || plan.topic,
+          body: selected.script,
+          mediaType: "VIDEO",
+          coverSpec: { text: selected.hook, ratio: "9:16" },
+          metadata: { cta: selected.cta, templateCode: selected.templateCode },
+        },
+        update: {
+          title: selected.title || plan.topic,
+          body: selected.script,
+          coverSpec: { text: selected.hook, ratio: "9:16" },
+          metadata: { cta: selected.cta, templateCode: selected.templateCode },
+        },
+      });
+      for (const shot of shots) {
+        const selectedAssetId = shot.selectedAssetIds[0] || null;
+        await tx.videoShot.upsert({
+          where: { contentPlanId_requirementKey: { contentPlanId: plan.id, requirementKey: `codex-v3-${shot.sequence}` } },
+          create: {
+            contentPlanId: plan.id,
+            requirementKey: `codex-v3-${shot.sequence}`,
+            sequence: shot.sequence,
+            title: shot.title,
+            description: shot.description,
+            moduleType: shot.moduleType,
+            status: selectedAssetId ? "DONE" : "OPEN",
+            sourcePreference: shot.sourcePreference || "REAL_ASSET_FIRST",
+            durationSeconds: shot.durationSeconds,
+            prompt: shot.visual,
+            voiceover: shot.voiceover,
+            subtitle: shot.subtitle,
+            assetIds: shot.selectedAssetIds,
+            selectedAssetId,
+            metadata: {
+              requiredAssetTags: shot.requiredAssetTags,
+              missingReason: shot.missingReason,
+              alternativePlan: shot.alternativePlan,
+              aiTaskId: input.aiTaskId,
+            },
+          },
+          update: {
+            sequence: shot.sequence,
+            title: shot.title,
+            description: shot.description,
+            moduleType: shot.moduleType,
+            status: selectedAssetId ? "DONE" : "OPEN",
+            sourcePreference: shot.sourcePreference || "REAL_ASSET_FIRST",
+            durationSeconds: shot.durationSeconds,
+            prompt: shot.visual,
+            voiceover: shot.voiceover,
+            subtitle: shot.subtitle,
+            assetIds: shot.selectedAssetIds,
+            selectedAssetId,
+            metadata: {
+              requiredAssetTags: shot.requiredAssetTags,
+              missingReason: shot.missingReason,
+              alternativePlan: shot.alternativePlan,
+              aiTaskId: input.aiTaskId,
+            },
+          },
+        });
+      }
+      if (validAssetIds.size) {
+        await tx.contentAsset.createMany({
+          data: Array.from(validAssetIds).map((assetId) => ({ contentPlanId: plan.id, assetId, role: "VIDEO_FACTORY_SOURCE" })),
+          skipDuplicates: true,
+        });
+      }
+      await tx.auditLog.create({
+        data: {
+          actor: input.actor,
+          action: "VIDEO_FACTORY_CODEX_RESULT_APPLY",
+          entityType: "ContentPlan",
+          entityId: plan.id,
+          after: {
+            aiTaskId: input.aiTaskId,
+            executionMode: input.executionMode,
+            candidateCount: candidates.length,
+            shotCount: shots.length,
+            assetCount: validAssetIds.size,
+          },
+        },
+      });
+    });
+    for (const assetId of validAssetIds) {
+      const existingUsage = await this.prisma.assetUsage.findFirst({
+        where: { assetId, businessObjectType: "CONTENT_PLAN", businessObjectId: plan.id, usageType: "VIDEO_FACTORY_SOURCE" },
+      });
+      if (!existingUsage) {
+        await this.prisma.assetUsage.create({
+          data: {
+            assetId,
+            usageType: "VIDEO_FACTORY_SOURCE",
+            businessObjectType: "CONTENT_PLAN",
+            businessObjectId: plan.id,
+            usedBy: input.actor,
+            actorType: "AI",
+            purpose: selected.title,
+            platform,
+          },
+        });
+        await this.prisma.asset.update({ where: { id: assetId }, data: { useCount: { increment: 1 }, lastUsedAt: new Date() } });
+      }
+    }
+    return this.project(plan.id);
+  }
+
+  async syncProjectTaskState(contentPlanId: string, taskStatus: string) {
+    const plan = await this.prisma.contentPlan.findUnique({ where: { id: contentPlanId } });
+    if (!plan) return null;
+    let productionStage = plan.productionStage;
+    if (["CLAIMED", "RUNNING", "QUALITY_CHECK", "UPLOADING"].includes(taskStatus)) {
+      productionStage = "FACTORY_GENERATING";
+    } else if (["FAILED", "RETURNED", "CANCELLED"].includes(taskStatus)) {
+      productionStage = this.candidates(plan).length ? "FACTORY_SCRIPT_READY" : "TOPIC_CARD_APPROVED";
+    }
+    if (productionStage === plan.productionStage) return plan;
+    return this.prisma.contentPlan.update({ where: { id: contentPlanId }, data: { productionStage } });
   }
 
   private providerView<T extends { secretRef: string | null }>(provider: T) {
@@ -1371,12 +2242,14 @@ export class VideoFactoryService {
         videoRenderJobs: { orderBy: { createdAt: "desc" }, take: 3, include: { outputAsset: true } },
         videoQualityChecks: { orderBy: { createdAt: "desc" }, take: 10 },
         keywordRelations: { include: { keyword: true } },
+        aiTaskOutputs: { orderBy: { createdAt: "desc" }, take: 5, include: { aiTask: { select: { taskNo: true, status: true } } } },
+        assignedEmployee: true,
       },
       orderBy: { updatedAt: "desc" },
       skip: paged ? (page - 1) * pageSize : undefined,
       take: paged ? pageSize : 100,
     });
-    const items = jsonSafe(rows);
+    const items = jsonSafe(rows.map((row) => ({ ...row, topicCard: topicCardPayload(row) })));
     if (!paged) return items;
     const total = await this.prisma.contentPlan.count({ where });
     return { items, total, page, pageSize };
@@ -1400,10 +2273,12 @@ export class VideoFactoryService {
         videoRenderJobs: { orderBy: { createdAt: "desc" }, include: { outputAsset: true, qualityChecks: true } },
         videoQualityChecks: { orderBy: { createdAt: "desc" } },
         keywordRelations: { include: { keyword: { include: { cluster: true } } } },
+        aiTaskOutputs: { orderBy: { createdAt: "desc" }, include: { aiTask: { select: { taskNo: true, status: true } } } },
+        assignedEmployee: true,
       },
     });
     if (!plan) throw new NotFoundException("智能视频项目不存在");
-    return jsonSafe({ ...plan, scriptCandidates: this.candidates(plan) });
+    return jsonSafe({ ...plan, topicCard: topicCardPayload(plan), scriptCandidates: this.candidates(plan) });
   }
 
   async job(id: string) {

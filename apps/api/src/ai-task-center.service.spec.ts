@@ -87,6 +87,42 @@ describe("AiTaskCenterService", () => {
     expect(create.mock.calls[0][0].data.type).toBe("ARTICLE");
   });
 
+  it("creates only two zero-cost daily topic-card batches with ten cards per platform", async () => {
+    const prisma = {
+      aiTaskPolicy: {
+        upsert: vi.fn().mockResolvedValue({
+          type: "VIDEO",
+          config: {
+            topicCardPolicyVersion: "v2.0",
+            dailyTopicCards: { DOUYIN: 10, TIKTOK: 10 },
+          },
+        }),
+      },
+    };
+    const service = new AiTaskCenterService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+    const createTask = vi.spyOn(service, "createTask").mockImplementation(async (body) => body as never);
+
+    await service.createDailyTopicCardTasks(new Date("2026-07-28T00:00:00.000Z"), "系统自动化");
+
+    expect(createTask).toHaveBeenCalledTimes(2);
+    expect(createTask.mock.calls.map(([body]) => ({
+      platform: body.platform,
+      mode: (body.input as Record<string, unknown>).executionMode,
+      count: (body.input as Record<string, unknown>).cardCount,
+      estimatedCost: body.estimatedCost,
+    }))).toEqual([
+      { platform: "DOUYIN", mode: "TOPIC_CARD_BATCH", count: 10, estimatedCost: 0 },
+      { platform: "TIKTOK", mode: "TOPIC_CARD_BATCH", count: 10, estimatedCost: 0 },
+    ]);
+  });
+
   it("keeps store analysis in WAITING_INPUT when no operating snapshot exists", async () => {
     const { service, create } = serviceWith({
       aiTaskPolicy: {

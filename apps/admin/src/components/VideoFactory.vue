@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
-import { Plus, Refresh, VideoCamera } from "@element-plus/icons-vue";
+import { Plus, Refresh } from "@element-plus/icons-vue";
 import { api, patch, post } from "../api";
 
 type Row = Record<string, any>;
@@ -9,13 +9,21 @@ type Row = Record<string, any>;
 const props = defineProps<{ products: Row[] }>();
 const emit = defineEmits<{ (event: "open-system-config"): void }>();
 const loading = ref(false);
-const view = ref("opportunities");
+const view = ref("topicCards");
+const topicCards = ref<Row[]>([]);
 const projects = ref<Row[]>([]);
 const providers = ref<Row[]>([]);
 const models = ref<Row[]>([]);
 const routing = ref<Row[]>([]);
 const opportunityKeywords = ref<Row[]>([]);
 const opportunityReferences = ref<Row[]>([]);
+const employees = ref<Row[]>([]);
+const selectedTopicCards = ref<Row[]>([]);
+const topicTable = ref<Row>();
+const selectedTopicCard = ref<Row>();
+const topicCardDrawer = ref(false);
+const topicCardEdit = ref(false);
+const approvalDialog = ref(false);
 const selectedProject = ref<Row>();
 const detailDrawer = ref(false);
 const createDialog = ref(false);
@@ -24,6 +32,31 @@ const modelDialog = ref(false);
 const editingProviderId = ref("");
 const editingModelId = ref("");
 let pollTimer: number | undefined;
+
+const topicFilters = reactive({
+  platform: "",
+  productModel: "",
+  sourceType: "",
+  status: "",
+  minScore: 0,
+  minCoverage: 0,
+});
+const topicCardForm = reactive({
+  audience: "",
+  pain: "",
+  scene: "",
+  objective: "",
+  mainKeyword: "",
+  auxiliaryKeywords: [] as string[],
+  hookCandidates: [] as string[],
+  primaryRecipe: "PAIN_SOLVE",
+  backupRecipe: "UGC",
+});
+const approvalForm = reactive({
+  executionMode: "FULL_VIDEO",
+  ownerId: "",
+  reviewerId: "",
+});
 
 const createForm = reactive({
   platform: "DOUYIN",
@@ -80,6 +113,15 @@ const runningCount = computed(() => projects.value.reduce((total, project) =>
   + (project.videoGenerationJobs || []).filter((job: Row) => ["PENDING", "RUNNING", "RETRY"].includes(job.status)).length
   + (project.videoRenderJobs || []).filter((job: Row) => ["PENDING", "RUNNING"].includes(job.status)).length,
 0));
+const filteredTopicCards = computed(() => topicCards.value.filter((row) => {
+  const card = row.topicCard || {};
+  return (!topicFilters.platform || card.platform === topicFilters.platform)
+    && (!topicFilters.productModel || row.productModel === topicFilters.productModel)
+    && (!topicFilters.sourceType || card.sourceTypes?.includes(topicFilters.sourceType))
+    && (!topicFilters.status || row.productionStage === topicFilters.status)
+    && Number(row.score || 0) >= Number(topicFilters.minScore || 0)
+    && Number(card.materialCoverage?.coveragePercent || 0) >= Number(topicFilters.minCoverage || 0);
+}));
 const outputs = computed(() => projects.value.flatMap((project) => [
   ...(project.videoGenerationJobs || []).filter((job: Row) => job.outputAsset).map((job: Row) => ({ ...job, project, outputType: "AI镜头" })),
   ...(project.videoRenderJobs || []).filter((job: Row) => job.outputAsset).map((job: Row) => ({ ...job, project, outputType: "最终成片" })),
@@ -95,10 +137,11 @@ const opportunities = computed(() => [
 const statusLabels: Record<string, string> = {
   UNCONFIGURED: "未配置", CONFIGURED: "待验证", HEALTHY: "正常", DEGRADED: "部分可用", ERROR: "异常",
   PENDING: "排队中", RUNNING: "生成中", RETRY: "重试中", SUCCEEDED: "已完成", FAILED: "失败",
-  FACTORY_SCRIPT_READY: "脚本候选", FACTORY_GENERATING: "镜头生成", READY_TO_EDIT: "可合成",
+  TOPIC_CARD_RECOMMENDED: "待确认", TOPIC_CARD_APPROVED: "已确认", TOPIC_CARD_ARCHIVED: "已归档",
+  FACTORY_SCRIPT_READY: "脚本已生成", FACTORY_GENERATING: "生成中", READY_TO_EDIT: "可合成",
   EDITING: "合成中", VIDEO_REVIEW: "成片待审", PLATFORM_PACKAGING: "已通过",
   OPEN: "待补素材", GENERATING: "生成中", PENDING_REVIEW: "素材待审", DONE: "已完成",
-  PASSED: "通过", REVIEW_REQUIRED: "待人工审核", REJECTED: "已退回",
+  PASSED: "通过", APPROVED: "已通过", REVIEW_REQUIRED: "待人工审核", REJECTED: "已退回",
 };
 
 function label(value?: string) {
@@ -106,9 +149,9 @@ function label(value?: string) {
 }
 
 function tagType(value?: string) {
-  if (["HEALTHY", "SUCCEEDED", "DONE", "PASSED", "PLATFORM_PACKAGING"].includes(String(value))) return "success";
+  if (["HEALTHY", "SUCCEEDED", "DONE", "PASSED", "APPROVED", "PLATFORM_PACKAGING", "TOPIC_CARD_APPROVED"].includes(String(value))) return "success";
   if (["FAILED", "ERROR", "REJECTED"].includes(String(value))) return "danger";
-  if (["PENDING", "RUNNING", "RETRY", "CONFIGURED", "PENDING_REVIEW", "REVIEW_REQUIRED", "VIDEO_REVIEW"].includes(String(value))) return "warning";
+  if (["PENDING", "RUNNING", "RETRY", "CONFIGURED", "PENDING_REVIEW", "REVIEW_REQUIRED", "VIDEO_REVIEW", "TOPIC_CARD_RECOMMENDED"].includes(String(value))) return "warning";
   return "info";
 }
 
@@ -132,7 +175,8 @@ async function run(task: () => Promise<void>, success?: string) {
 
 async function reload() {
   await run(async () => {
-    const [projectRows, providerRows, modelRows, routeRows, douyinKeywords, tiktokKeywords, referenceRows] = await Promise.all([
+    const [cardRows, projectRows, providerRows, modelRows, routeRows, douyinKeywords, tiktokKeywords, referenceRows, workspace] = await Promise.all([
+      api<Row[]>("/api/v1/video-factory/topic-cards"),
       api<Row[]>("/api/v1/video-factory/projects"),
       api<Row[]>("/api/v1/video-factory/providers"),
       api<Row[]>("/api/v1/video-factory/models"),
@@ -140,17 +184,119 @@ async function reload() {
       api<Row[]>("/api/v1/brand-data/smart-keywords/active?platform=DOUYIN&consumer=SMART_VIDEO"),
       api<Row[]>("/api/v1/brand-data/smart-keywords/active?platform=TIKTOK&consumer=SMART_VIDEO"),
       api<Row[]>("/api/v1/brand-data/external-videos?take=20"),
+      api<Row>("/api/v1/admin/workspace"),
     ]);
+    topicCards.value = cardRows;
     projects.value = projectRows;
     providers.value = providerRows;
     models.value = modelRows;
     routing.value = routeRows;
     opportunityKeywords.value = [...douyinKeywords.slice(0, 5), ...tiktokKeywords.slice(0, 5)];
     opportunityReferences.value = referenceRows;
+    employees.value = workspace.employees || [];
     for (const platform of ["DOUYIN", "TIKTOK"] as const) {
       routeForm[platform] = routeRows.find((item) => item.platform === platform)?.primaryModelId || "";
     }
   });
+}
+
+const recipeOptions = [
+  { value: "PAIN_SOLVE", label: "痛点解决型" },
+  { value: "GIFT_EMOTION", label: "送礼情感型" },
+  { value: "CONTRARIAN", label: "反常识型" },
+  { value: "FAQ", label: "问答型" },
+  { value: "REVIEW", label: "测评型" },
+  { value: "COMPARISON", label: "对比型" },
+  { value: "UGC", label: "真人口播型" },
+  { value: "VISUAL_AD", label: "纯视觉广告型" },
+];
+
+function recipeLabel(value?: string) {
+  return recipeOptions.find((item) => item.value === value)?.label || value || "未选择";
+}
+
+function topicSelection(rows: Row[]) {
+  if (rows.length > 3) {
+    topicTable.value?.toggleRowSelection?.(rows[rows.length - 1], false);
+    selectedTopicCards.value = rows.slice(0, 3);
+    ElMessage.warning("最多对比3张选题卡");
+    return;
+  }
+  selectedTopicCards.value = rows;
+}
+
+async function openTopicCard(id: string) {
+  selectedTopicCard.value = await api<Row>(`/api/v1/video-factory/topic-cards/${id}`);
+  const card = selectedTopicCard.value.topicCard || {};
+  Object.assign(topicCardForm, {
+    audience: card.audience || "",
+    pain: card.pain || "",
+    scene: card.scene || "",
+    objective: card.objective || "",
+    mainKeyword: card.mainKeyword || "",
+    auxiliaryKeywords: card.auxiliaryKeywords || [],
+    hookCandidates: card.hookCandidates || [],
+    primaryRecipe: card.primaryRecipe || "PAIN_SOLVE",
+    backupRecipe: card.backupRecipe || "UGC",
+  });
+  topicCardEdit.value = false;
+  topicCardDrawer.value = true;
+}
+
+async function saveTopicCard() {
+  if (!selectedTopicCard.value) return;
+  await run(async () => {
+    selectedTopicCard.value = await patch<Row>(
+      `/api/v1/video-factory/topic-cards/${selectedTopicCard.value!.id}`,
+      topicCardForm,
+    );
+    topicCardEdit.value = false;
+    await reload();
+  }, "选题卡已保存");
+}
+
+function openApproval(row: Row, executionMode: "SCRIPT_ONLY" | "FULL_VIDEO") {
+  selectedTopicCard.value = row;
+  Object.assign(approvalForm, {
+    executionMode,
+    ownerId: row.topicCard?.ownerEmployeeId || row.assignedEmployeeId || "",
+    reviewerId: row.topicCard?.reviewerEmployeeId || "",
+  });
+  approvalDialog.value = true;
+}
+
+async function approveTopicCard() {
+  if (!selectedTopicCard.value) return;
+  if (!approvalForm.ownerId || !approvalForm.reviewerId) return ElMessage.warning("请选择负责人和审核人");
+  await run(async () => {
+    await post(`/api/v1/video-factory/topic-cards/${selectedTopicCard.value!.id}/approve`, approvalForm);
+    approvalDialog.value = false;
+    topicCardDrawer.value = false;
+    await reload();
+  }, approvalForm.executionMode === "SCRIPT_ONLY" ? "脚本任务已进入AI任务中心" : "完整视频任务已进入AI任务中心");
+}
+
+async function generateDailyTopicCards() {
+  await run(async () => {
+    await post("/api/v1/video-factory/topic-cards/generate-daily", {});
+    await reload();
+  }, "抖音和TikTok选题卡任务已创建");
+}
+
+async function rematchTopicCard(row: Row) {
+  await run(async () => {
+    await post(`/api/v1/video-factory/topic-cards/${row.id}/rematch-assets`, {});
+    await reload();
+    if (selectedTopicCard.value?.id === row.id) await openTopicCard(row.id);
+  }, "已按当前素材库重新匹配");
+}
+
+async function archiveTopicCard(row: Row) {
+  await run(async () => {
+    await post(`/api/v1/video-factory/topic-cards/${row.id}/archive`, {});
+    topicCardDrawer.value = false;
+    await reload();
+  }, "选题卡已归档");
 }
 
 function resetCreate() {
@@ -423,26 +569,27 @@ onBeforeUnmount(() => {
   <section class="video-factory" v-loading="loading">
     <div class="factory-hero">
       <div>
-        <span>SMART VIDEO FACTORY · V1.0</span>
+        <span>SMART VIDEO FACTORY · V2.0</span>
         <h3>视频工厂</h3>
-        <p>优先复用已审核真实素材，缺失镜头再调用AI；外部爆款只提取结构、Hook和节奏。</p>
+        <p>先把关键词、爆款结构、FAQ、产品知识和真实素材整理成选题卡；人工确认后再进入Codex生产。</p>
       </div>
       <div>
         <el-button :icon="Refresh" @click="reload">刷新</el-button>
-        <el-button @click="emit('open-system-config')">模型配置</el-button>
-        <el-button type="primary" :icon="Plus" @click="openCreate">一键生成视频</el-button>
+        <el-button @click="emit('open-system-config')">前往系统配置</el-button>
+        <el-button @click="openCreate">人工创建视频</el-button>
+        <el-button type="primary" :icon="Plus" @click="generateDailyTopicCards">生成今日选题卡</el-button>
       </div>
     </div>
 
     <div class="factory-summary">
+      <article><span>待确认选题</span><strong>{{ topicCards.filter((item: Row) => item.productionStage === 'TOPIC_CARD_RECOMMENDED').length }}</strong><small>确认前不会创建生产任务</small></article>
       <article><span>视频项目</span><strong>{{ projects.length }}</strong><small>脚本、分镜、成片统一追踪</small></article>
       <article><span>执行中</span><strong>{{ runningCount }}</strong><small>生成与渲染异步处理</small></article>
-      <article><span>成片与镜头</span><strong>{{ outputs.length }}</strong><small>均可追溯模型与成本</small></article>
-      <article><span>可用模型</span><strong>{{ enabledModels.length }}</strong><small>未配置模型不会被调用</small></article>
+      <article><span>待审核成片</span><strong>{{ outputs.filter((item: Row) => item.outputAsset?.reviewStatus === 'PENDING').length }}</strong><small>审核通过前不可发布</small></article>
     </div>
 
     <el-segmented v-model="view" :options="[
-      { label: '今日机会', value: 'opportunities' },
+      { label: `视频选题卡 ${topicCards.length}`, value: 'topicCards' },
       { label: `视频项目 ${projects.length}`, value: 'projects' },
       { label: '分镜与素材', value: 'shots' },
       { label: `生成任务 ${runningCount}`, value: 'jobs' },
@@ -450,40 +597,42 @@ onBeforeUnmount(() => {
       { label: '质检审核', value: 'quality' },
     ]" />
 
-    <div v-if="view === 'opportunities'" class="opportunity-grid">
-      <article>
-        <el-icon><VideoCamera /></el-icon>
-        <h4>从智能关键词生成</h4>
-        <p>在“智能关键词”中选择S/A级词，点击“一键生成视频”，主词和辅助词会自动关联。</p>
-      </article>
-      <article>
-        <el-icon><VideoCamera /></el-icon>
-        <h4>从爆款研究生成</h4>
-        <p>参考爆款的Hook、节奏和结构，系统只调用赛电自有或AI生成素材完成新成片。</p>
-      </article>
-      <article>
-        <el-icon><VideoCamera /></el-icon>
-        <h4>人工创意生成</h4>
-        <p>填写主题、产品、平台和人群，系统生成3套脚本并自动选择主执行方案。</p>
-        <el-button type="primary" @click="openCreate">立即创建</el-button>
-      </article>
-    </div>
-    <div v-if="view === 'opportunities' && opportunities.length" class="data-card">
-      <div class="card-title"><h4>今日可执行机会</h4><small>只推荐，不自动调用付费模型</small></div>
-      <el-table :data="opportunities" stripe height="390">
-        <el-table-column label="来源" width="105"><template #default="scope"><el-tag>{{ scope.row.opportunityType === 'KEYWORD' ? '智能关键词' : '爆款研究' }}</el-tag></template></el-table-column>
-        <el-table-column label="机会" min-width="280"><template #default="scope"><strong>{{ scope.row.opportunityTitle }}</strong><small>{{ scope.row.reason || scope.row.accountName || scope.row.platform }}</small></template></el-table-column>
-        <el-table-column label="平台" width="100"><template #default="scope">{{ scope.row.platform === 'TIKTOK' ? 'TikTok' : '抖音' }}</template></el-table-column>
-        <el-table-column label="评分" width="95"><template #default="scope">{{ scope.row.opportunityScore || scope.row.scoreSnapshots?.[0]?.score || '—' }}</template></el-table-column>
-        <el-table-column label="操作" width="125"><template #default="scope"><el-button link type="primary" @click="scope.row.opportunityType === 'KEYWORD' ? createFromKeyword(scope.row) : createFromReference(scope.row)">创建视频</el-button></template></el-table-column>
+    <div v-if="view === 'topicCards'" class="data-card topic-card-panel">
+      <div class="topic-filters">
+        <el-select v-model="topicFilters.platform" clearable placeholder="全部平台"><el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" /></el-select>
+        <el-select v-model="topicFilters.productModel" clearable filterable placeholder="全部产品"><el-option v-for="product in props.products" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" /></el-select>
+        <el-select v-model="topicFilters.sourceType" clearable placeholder="全部来源"><el-option label="智能关键词" value="SMART_KEYWORD" /><el-option label="爆款研究" value="VIRAL_RESEARCH" /><el-option label="FAQ" value="FAQ" /></el-select>
+        <el-select v-model="topicFilters.status" clearable placeholder="全部状态"><el-option label="待确认" value="TOPIC_CARD_RECOMMENDED" /><el-option label="已确认" value="TOPIC_CARD_APPROVED" /></el-select>
+        <label>最低分 <el-input-number v-model="topicFilters.minScore" :min="0" :max="100" :step="10" controls-position="right" /></label>
+        <label>素材覆盖 <el-input-number v-model="topicFilters.minCoverage" :min="0" :max="100" :step="10" controls-position="right" /></label>
+      </div>
+      <div v-if="selectedTopicCards.length > 1" class="topic-compare">
+        <article v-for="row in selectedTopicCards" :key="row.id">
+          <strong>{{ row.topic }}</strong>
+          <span>{{ row.score }}分 · 素材{{ row.topicCard?.materialCoverage?.coveragePercent || 0 }}%</span>
+          <small>{{ row.topicCard?.audience }}｜{{ row.topicCard?.pain }}</small>
+        </article>
+      </div>
+      <div class="card-title"><h4>可执行选题</h4><small>每天抖音10张、TikTok 10张；管理员确认前不创建脚本或成片任务</small></div>
+      <el-table ref="topicTable" :data="filteredTopicCards" stripe height="510" @selection-change="topicSelection">
+        <el-table-column type="selection" width="46" />
+        <el-table-column label="选题卡" min-width="270"><template #default="scope"><strong>{{ scope.row.topic }}</strong><small>{{ scope.row.productionNo }} · {{ scope.row.productModel || '缺产品事实' }}</small></template></el-table-column>
+        <el-table-column label="平台/来源" width="135"><template #default="scope">{{ scope.row.topicCard?.platform === 'TIKTOK' ? 'TikTok' : '抖音' }}<small>{{ scope.row.topicCard?.sourceTypes?.join('、') || '系统分析' }}</small></template></el-table-column>
+        <el-table-column label="人群与痛点" min-width="220"><template #default="scope">{{ scope.row.topicCard?.audience }}<small>{{ scope.row.topicCard?.pain }}</small></template></el-table-column>
+        <el-table-column label="配方" width="125"><template #default="scope">{{ recipeLabel(scope.row.topicCard?.primaryRecipe) }}<small>备选：{{ recipeLabel(scope.row.topicCard?.backupRecipe) }}</small></template></el-table-column>
+        <el-table-column label="机会分" width="90"><template #default="scope"><strong>{{ scope.row.score }}</strong></template></el-table-column>
+        <el-table-column label="素材覆盖" width="105"><template #default="scope">{{ scope.row.topicCard?.materialCoverage?.coveragePercent || 0 }}%<small>{{ scope.row.topicCard?.materialCoverage?.coveredShots || 0 }}/{{ scope.row.topicCard?.materialCoverage?.totalShots || 0 }}镜头</small></template></el-table-column>
+        <el-table-column label="状态" width="105"><template #default="scope"><el-tag :type="tagType(scope.row.productionStage)">{{ label(scope.row.productionStage) }}</el-tag></template></el-table-column>
+        <el-table-column label="操作" width="255" fixed="right"><template #default="scope"><el-button link type="primary" @click="openTopicCard(scope.row.id)">详情</el-button><template v-if="scope.row.productionStage === 'TOPIC_CARD_RECOMMENDED'"><el-button link @click="openApproval(scope.row, 'SCRIPT_ONLY')">仅生成脚本</el-button><el-button link type="success" @click="openApproval(scope.row, 'FULL_VIDEO')">生成完整视频</el-button></template></template></el-table-column>
       </el-table>
     </div>
 
     <div v-else-if="view === 'projects'" class="data-card">
       <el-table :data="projects" stripe height="570">
         <el-table-column label="项目" min-width="260"><template #default="scope"><strong>{{ scope.row.topic }}</strong><small>{{ scope.row.productionNo }} · {{ scope.row.productModel || '通用产品' }}</small></template></el-table-column>
+        <el-table-column label="选题卡/AI任务" min-width="165"><template #default="scope">{{ scope.row.topicCard?.cardNo || '人工创建' }}<small>{{ scope.row.aiTaskOutputs?.[0]?.aiTask?.taskNo || '未关联任务' }}</small></template></el-table-column>
         <el-table-column label="平台" width="105"><template #default="scope">{{ scope.row.targetPlatforms?.join('、') }}</template></el-table-column>
-        <el-table-column label="关键词" min-width="180"><template #default="scope">{{ scope.row.keywordRelations?.map((item: Row) => item.keyword?.keyword).join('、') || '人工创意' }}</template></el-table-column>
+        <el-table-column label="负责人/素材" min-width="155"><template #default="scope">{{ scope.row.assignedEmployee?.name || scope.row.owner || '未分配' }}<small>覆盖 {{ scope.row.topicCard?.materialCoverage?.coveragePercent || 0 }}%</small></template></el-table-column>
         <el-table-column label="阶段" width="130"><template #default="scope"><el-tag :type="tagType(scope.row.productionStage)">{{ label(scope.row.productionStage) }}</el-tag></template></el-table-column>
         <el-table-column label="镜头" width="100"><template #default="scope">{{ scope.row.videoShots?.filter((item: Row) => item.status === 'DONE').length || 0 }}/{{ scope.row.videoShots?.length || 0 }}</template></el-table-column>
         <el-table-column label="更新时间" width="165"><template #default="scope">{{ dateTime(scope.row.updatedAt) }}</template></el-table-column>
@@ -521,6 +670,8 @@ onBeforeUnmount(() => {
         <el-table-column label="审核" width="120"><template #default="scope"><el-tag :type="tagType(scope.row.outputAsset.reviewStatus)">{{ label(scope.row.outputAsset.reviewStatus) }}</el-tag></template></el-table-column>
         <el-table-column label="尺寸" width="130"><template #default="scope">{{ scope.row.outputAsset.width || '—' }}×{{ scope.row.outputAsset.height || '—' }}</template></el-table-column>
         <el-table-column label="时长" width="90"><template #default="scope">{{ Number(scope.row.outputAsset.durationSeconds || 0).toFixed(1) }}s</template></el-table-column>
+        <el-table-column label="编码/帧率" width="135"><template #default="scope">{{ scope.row.outputAsset.sourceSnapshot?.metadata?.codec || '—' }}<small>{{ scope.row.outputAsset.sourceSnapshot?.metadata?.frameRate || '—' }}</small></template></el-table-column>
+        <el-table-column label="素材来源" min-width="150"><template #default="scope">{{ scope.row.outputAsset.sourceSnapshot?.metadata?.source || scope.row.renderer || '—' }}<small>{{ scope.row.outputAsset.sourceSnapshot?.metadata?.usedAssetIds?.length || 0 }}项素材</small></template></el-table-column>
         <el-table-column label="操作" width="220"><template #default="scope"><el-button link type="primary" @click="openOutput(scope.row.outputAsset.id)">查看/下载</el-button><el-button v-if="scope.row.outputAsset.reviewStatus === 'PENDING'" link type="success" @click="reviewOutput(scope.row.outputAsset.id, true)">通过</el-button><el-button v-if="scope.row.outputAsset.reviewStatus === 'PENDING'" link type="danger" @click="reviewOutput(scope.row.outputAsset.id, false)">退回</el-button></template></el-table-column>
       </el-table>
     </div>
@@ -568,6 +719,72 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </template>
+
+    <el-drawer v-model="topicCardDrawer" title="视频选题卡" size="70%">
+      <template v-if="selectedTopicCard">
+        <div class="detail-head">
+          <div><strong>{{ selectedTopicCard.topic }}</strong><span>{{ selectedTopicCard.productionNo }} · {{ selectedTopicCard.productModel || '缺少产品事实' }}</span></div>
+          <el-tag :type="tagType(selectedTopicCard.productionStage)">{{ label(selectedTopicCard.productionStage) }}</el-tag>
+        </div>
+        <div class="topic-card-kpis">
+          <article><span>机会分</span><strong>{{ selectedTopicCard.score }}</strong></article>
+          <article><span>素材覆盖</span><strong>{{ selectedTopicCard.topicCard?.materialCoverage?.coveragePercent || 0 }}%</strong></article>
+          <article><span>本地预计</span><strong>{{ selectedTopicCard.topicCard?.estimatedCosts?.local || 0 }} {{ selectedTopicCard.topicCard?.estimatedCosts?.currency || 'CNY' }}</strong></article>
+          <article><span>外部预计</span><strong>{{ selectedTopicCard.topicCard?.estimatedCosts?.external || 0 }} {{ selectedTopicCard.topicCard?.estimatedCosts?.currency || 'CNY' }}</strong></article>
+        </div>
+        <el-form v-if="topicCardEdit" label-position="top" class="form-grid">
+          <el-form-item label="目标人群"><el-input v-model="topicCardForm.audience" /></el-form-item>
+          <el-form-item label="核心痛点"><el-input v-model="topicCardForm.pain" /></el-form-item>
+          <el-form-item label="场景"><el-input v-model="topicCardForm.scene" /></el-form-item>
+          <el-form-item label="内容目标"><el-input v-model="topicCardForm.objective" /></el-form-item>
+          <el-form-item label="主关键词"><el-input v-model="topicCardForm.mainKeyword" /></el-form-item>
+          <el-form-item label="辅助词"><el-select v-model="topicCardForm.auxiliaryKeywords" multiple allow-create filterable /></el-form-item>
+          <el-form-item label="主配方"><el-select v-model="topicCardForm.primaryRecipe"><el-option v-for="item in recipeOptions" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item>
+          <el-form-item label="备用配方"><el-select v-model="topicCardForm.backupRecipe"><el-option v-for="item in recipeOptions" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item>
+          <el-form-item label="Hook候选" class="full"><el-select v-model="topicCardForm.hookCandidates" multiple allow-create filterable /></el-form-item>
+        </el-form>
+        <template v-else>
+          <div class="topic-detail-grid">
+            <article><span>人群</span><strong>{{ selectedTopicCard.topicCard?.audience }}</strong></article>
+            <article><span>痛点</span><strong>{{ selectedTopicCard.topicCard?.pain }}</strong></article>
+            <article><span>场景</span><strong>{{ selectedTopicCard.topicCard?.scene }}</strong></article>
+            <article><span>目标</span><strong>{{ selectedTopicCard.topicCard?.objective }}</strong></article>
+          </div>
+          <h4>推荐依据</h4>
+          <p class="detail-copy">{{ selectedTopicCard.topicCard?.rationale }}</p>
+          <h4>3个Hook候选</h4>
+          <ol class="hook-list"><li v-for="hook in selectedTopicCard.topicCard?.hookCandidates || []" :key="hook">{{ hook }}</li></ol>
+          <h4>爆款可复用结构</h4>
+          <p class="detail-copy">{{ selectedTopicCard.topicCard?.reusableViralStructure?.hookPattern }} · {{ selectedTopicCard.topicCard?.reusableViralStructure?.pace }}</p>
+          <div class="structure-flow"><span v-for="item in selectedTopicCard.topicCard?.reusableViralStructure?.shotStructure || []" :key="item">{{ item }}</span></div>
+          <h4>素材匹配与缺口</h4>
+          <el-table :data="selectedTopicCard.topicCard?.materialCoverage?.missingShots || []" stripe>
+            <el-table-column prop="moduleType" label="模块" width="110" />
+            <el-table-column prop="description" label="缺失镜头" min-width="220" />
+            <el-table-column prop="reason" label="原因" min-width="220" />
+            <el-table-column prop="alternative" label="优先替代方案" min-width="260" />
+          </el-table>
+        </template>
+        <div class="detail-actions">
+          <el-button v-if="selectedTopicCard.productionStage === 'TOPIC_CARD_RECOMMENDED'" type="danger" plain @click="archiveTopicCard(selectedTopicCard)">归档</el-button>
+          <el-button @click="rematchTopicCard(selectedTopicCard)">重新匹配素材</el-button>
+          <el-button v-if="topicCardEdit" type="primary" @click="saveTopicCard">保存修改</el-button>
+          <el-button v-else-if="selectedTopicCard.productionStage === 'TOPIC_CARD_RECOMMENDED'" @click="topicCardEdit = true">编辑选题</el-button>
+          <el-button v-if="selectedTopicCard.productionStage === 'TOPIC_CARD_RECOMMENDED'" @click="openApproval(selectedTopicCard, 'SCRIPT_ONLY')">仅生成脚本</el-button>
+          <el-button v-if="selectedTopicCard.productionStage === 'TOPIC_CARD_RECOMMENDED'" type="primary" @click="openApproval(selectedTopicCard, 'FULL_VIDEO')">生成完整视频</el-button>
+        </div>
+      </template>
+    </el-drawer>
+
+    <el-dialog v-model="approvalDialog" title="确认选题并创建AI任务" width="620px" destroy-on-close>
+      <el-form label-position="top">
+        <el-form-item label="执行方式"><el-radio-group v-model="approvalForm.executionMode"><el-radio-button value="SCRIPT_ONLY">仅生成脚本</el-radio-button><el-radio-button value="FULL_VIDEO">生成完整视频</el-radio-button></el-radio-group></el-form-item>
+        <el-form-item label="负责人" required><el-select v-model="approvalForm.ownerId" filterable><el-option v-for="employee in employees" :key="employee.id" :label="`${employee.name} · ${employee.role}`" :value="employee.id" /></el-select></el-form-item>
+        <el-form-item label="审核人" required><el-select v-model="approvalForm.reviewerId" filterable><el-option v-for="employee in employees" :key="employee.id" :label="`${employee.name} · ${employee.role}`" :value="employee.id" /></el-select></el-form-item>
+        <el-alert type="info" :closable="false" title="确认后进入AI任务中心；完整视频优先复用已审核真实素材，再使用本地工具补齐。" />
+      </el-form>
+      <template #footer><el-button @click="approvalDialog = false">取消</el-button><el-button type="primary" @click="approveTopicCard">确认并创建任务</el-button></template>
+    </el-dialog>
 
     <el-dialog v-model="createDialog" title="一键生成智能视频" width="820px" destroy-on-close>
       <el-form label-position="top" class="form-grid">
@@ -624,10 +841,10 @@ onBeforeUnmount(() => {
         <h4>3套脚本候选</h4>
         <div class="candidate-grid">
           <article v-for="(candidate, index) in selectedProject.scriptCandidates || []" :key="index">
-            <el-tag v-if="index === 0" type="success">主执行包</el-tag>
-            <strong>{{ candidate.topic }}</strong>
+            <el-tag v-if="candidate.selected" type="success">主执行包</el-tag>
+            <strong>{{ candidate.title || candidate.topic }}</strong>
             <p>{{ candidate.hook }}</p>
-            <small>评分 {{ candidate.score }} · 缺口 {{ candidate.missingAssets?.length || 0 }}</small>
+            <small>{{ recipeLabel(candidate.templateCode) }} · 评分 {{ candidate.score }} · 缺口 {{ candidate.missingAssets?.length || 0 }}</small>
             <el-button v-if="selectedProject.productionStage === 'FACTORY_SCRIPT_READY'" size="small" @click="generateProject(selectedProject, index)">执行此方案</el-button>
           </article>
         </div>
@@ -653,9 +870,13 @@ onBeforeUnmount(() => {
 .factory-summary { grid-template-columns: repeat(4, minmax(0, 1fr)); }.factory-summary article, .opportunity-grid article, .model-route article { padding: 17px 19px; border: 1px solid #e4e9f1; border-radius: 14px; background: #fff; }.factory-summary span, .factory-summary small { display: block; color: #7d8797; }.factory-summary strong { display: block; margin: 5px 0; color: #18263e; font-size: 27px; }
 .opportunity-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }.opportunity-grid h4 { margin: 9px 0 5px; }.opportunity-grid p { min-height: 62px; color: #6f7a8c; line-height: 1.6; }.opportunity-grid .el-icon { color: #a2202b; font-size: 26px; }
 .data-card { overflow: hidden; border: 1px solid #e4e9f1; border-radius: 14px; background: #fff; }.data-card strong, .data-card small { display: block; }.data-card small { margin-top: 3px; color: #8a94a5; }
+.topic-card-panel { display: grid; gap: 0; }.topic-filters { display: grid; grid-template-columns: repeat(4, minmax(130px, 1fr)) auto auto; gap: 10px; align-items: center; padding: 14px 15px; border-bottom: 1px solid #edf0f5; }.topic-filters label { display: flex; align-items: center; gap: 7px; color: #667085; white-space: nowrap; }
+.topic-compare { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding: 12px 15px; background: #f5f8fc; }.topic-compare article { padding: 12px; border: 1px solid #dfe7f1; border-radius: 10px; background: #fff; }.topic-compare strong, .topic-compare span, .topic-compare small { display: block; }.topic-compare span { margin: 7px 0; color: #a2202b; }
+.topic-card-kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 16px 0; }.topic-card-kpis article { padding: 13px; border: 1px solid #e5eaf2; border-radius: 10px; }.topic-card-kpis span { display: block; color: #7c8797; }.topic-card-kpis strong { display: block; margin-top: 5px; font-size: 20px; }
+.topic-detail-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }.topic-detail-grid article { padding: 13px; border-radius: 10px; background: #f5f7fb; }.topic-detail-grid span, .topic-detail-grid strong { display: block; }.topic-detail-grid span { margin-bottom: 5px; color: #7c8797; }.detail-copy { color: #536176; line-height: 1.7; }.hook-list { display: grid; gap: 8px; padding-left: 22px; color: #344054; }.structure-flow { display: flex; flex-wrap: wrap; gap: 8px; }.structure-flow span { padding: 7px 10px; border-radius: 999px; color: #23436d; background: #eaf1fb; }
 .model-route { grid-template-columns: 1fr 1fr; }.model-route article { display: grid; grid-template-columns: 150px 1fr auto; align-items: center; gap: 10px; }.two-cards { grid-template-columns: .9fr 1.1fr; }.card-title { display: flex; align-items: center; justify-content: space-between; padding: 12px 15px; border-bottom: 1px solid #edf0f5; }.card-title h4 { margin: 0; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 18px; }.form-grid .full { grid-column: 1 / -1; }.form-tip { display: block; margin-top: 6px; color: #8a94a5; }
 .detail-head { display: flex; align-items: center; justify-content: space-between; padding-bottom: 14px; border-bottom: 1px solid #edf0f5; }.detail-head strong, .detail-head span { display: block; }.detail-head strong { font-size: 22px; }.detail-head span { margin-top: 4px; color: #7c8797; }
 .candidate-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 20px; }.candidate-grid article { padding: 14px; border: 1px solid #e3e8f0; border-radius: 12px; }.candidate-grid strong { display: block; margin: 8px 0; }.candidate-grid p { min-height: 48px; color: #657187; }.candidate-grid small { display: block; margin-bottom: 9px; color: #8a94a5; }.detail-actions { display: flex; justify-content: flex-end; padding-top: 16px; }
-@media (max-width: 1100px) { .factory-summary, .opportunity-grid, .candidate-grid { grid-template-columns: 1fr 1fr; }.two-cards, .model-route { grid-template-columns: 1fr; } }
+@media (max-width: 1100px) { .factory-summary, .opportunity-grid, .candidate-grid, .topic-card-kpis, .topic-detail-grid { grid-template-columns: 1fr 1fr; }.two-cards, .model-route, .topic-filters { grid-template-columns: 1fr 1fr; } }
 </style>

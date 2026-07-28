@@ -76,7 +76,7 @@ export class AutomationService {
     await this.enqueue("CREATE_AI_ANALYSIS_TASKS", new Date(), localDateKey());
   }
 
-  @Cron("0 0 7 * * *", { timeZone: "Asia/Shanghai" })
+  @Cron("0 45 6 * * *", { timeZone: "Asia/Shanghai" })
   async scheduleContent() {
     await this.enqueue("CREATE_AI_CONTENT_TASKS", new Date(), localDateKey());
   }

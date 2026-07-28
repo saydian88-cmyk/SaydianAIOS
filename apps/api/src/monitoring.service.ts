@@ -219,6 +219,14 @@ export class MonitoringService {
           remoteId: { not: null },
           publishedAt: { gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
         },
+        include: {
+          contentPlan: {
+            include: {
+              keywordRelations: true,
+              contentAssets: true,
+            },
+          },
+        },
         orderBy: { publishedAt: "desc" },
         take: 500,
       });
@@ -239,6 +247,119 @@ export class MonitoringService {
             unavailableFields: point.unavailableFields, raw: point as unknown as Prisma.InputJsonValue,
           },
         });
+        if (publishJob?.publishedAt && publishJob.contentPlan.kind === "VIDEO") {
+          const capturedAt = new Date(point.capturedAt);
+          const elapsedHours = Math.max(0, (capturedAt.getTime() - publishJob.publishedAt.getTime()) / 3_600_000);
+          const checkpointHours = [1, 24, 72, 168].filter((checkpoint) => elapsedHours >= checkpoint).at(-1);
+          if (checkpointHours) {
+            const checkpoint = {
+              capturedAt: capturedAt.toISOString(),
+              views: point.views ?? null,
+              completionRate: point.completionRate ?? null,
+              likes: point.likes ?? null,
+              comments: point.comments ?? null,
+              shares: point.shares ?? null,
+              saves: point.saves ?? null,
+              consultations: point.consultations ?? null,
+              orders: point.orders ?? null,
+            };
+            for (const relation of publishJob.contentPlan.keywordRelations) {
+              const metrics = relation.metrics && typeof relation.metrics === "object" && !Array.isArray(relation.metrics)
+                ? relation.metrics as Record<string, unknown>
+                : {};
+              await this.prisma.smartKeywordContentRelation.update({
+                where: { id: relation.id },
+                data: { metrics: { ...metrics, [`h${checkpointHours}`]: checkpoint } as unknown as Prisma.InputJsonValue },
+              });
+            }
+            for (const contentAsset of publishJob.contentPlan.contentAssets) {
+              const usage = await this.prisma.assetUsage.findFirst({
+                where: {
+                  assetId: contentAsset.assetId,
+                  businessObjectType: "CONTENT_PLAN",
+                  businessObjectId: publishJob.contentPlanId,
+                  usageType: "VIDEO_FACTORY_SOURCE",
+                },
+              });
+              const existingAssetMetric = await this.prisma.assetMetricSnapshot.findFirst({
+                where: {
+                  assetId: contentAsset.assetId,
+                  usageId: usage?.id || null,
+                  externalId: point.remoteId,
+                  capturedAt,
+                },
+              });
+              if (!existingAssetMetric) {
+                await this.prisma.assetMetricSnapshot.create({
+                  data: {
+                    assetId: contentAsset.assetId,
+                    usageId: usage?.id,
+                    platform: kind as IntegrationKind,
+                    accountId: publishJob.platformAccountId,
+                    externalId: point.remoteId,
+                    capturedAt,
+                    views: point.views,
+                    likes: point.likes,
+                    comments: point.comments,
+                    shares: point.shares,
+                    saves: point.saves,
+                    consultations: point.consultations,
+                    orders: point.orders,
+                    unavailableFields: point.unavailableFields,
+                    raw: point as unknown as Prisma.InputJsonValue,
+                  },
+                });
+              }
+            }
+            const sourceSignals = Array.isArray(publishJob.contentPlan.sourceSignals)
+              ? publishJob.contentPlan.sourceSignals
+              : [];
+            const feedback = {
+              type: "VIDEO_FEEDBACK",
+              checkpointHours,
+              platform: kind,
+              remoteId: point.remoteId,
+              predictedScore: publishJob.contentPlan.score,
+              actual: checkpoint,
+            };
+            await this.prisma.contentPlan.update({
+              where: { id: publishJob.contentPlanId },
+              data: {
+                sourceSignals: [
+                  ...sourceSignals.filter((value) => {
+                    if (!value || typeof value !== "object" || Array.isArray(value)) return true;
+                    const row = value as Record<string, unknown>;
+                    return row.type !== "VIDEO_FEEDBACK" || row.checkpointHours !== checkpointHours;
+                  }),
+                  feedback,
+                ] as unknown as Prisma.InputJsonValue,
+              },
+            });
+            const interactionCount = Number(point.likes || 0) + Number(point.comments || 0) + Number(point.shares || 0) + Number(point.saves || 0);
+            await this.prisma.contentOptimizationSuggestion.upsert({
+              where: { contentPlanId_checkpointHours: { contentPlanId: publishJob.contentPlanId, checkpointHours } },
+              create: {
+                contentPlanId: publishJob.contentPlanId,
+                checkpointHours,
+                summary: `${checkpointHours}小时表现已回流，等待人工确认优化方向`,
+                evidence: checkpoint,
+                recommendations: [{
+                  action: "REVIEW_TOPIC_PREDICTION",
+                  message: `对比选题预测${publishJob.contentPlan.score}分与实际播放${point.views || 0}、互动${interactionCount}、订单${point.orders || 0}`,
+                }],
+                rulePatch: {},
+              },
+              update: {
+                summary: `${checkpointHours}小时表现已更新，等待人工确认优化方向`,
+                evidence: checkpoint,
+                recommendations: [{
+                  action: "REVIEW_TOPIC_PREDICTION",
+                  message: `对比选题预测${publishJob.contentPlan.score}分与实际播放${point.views || 0}、互动${interactionCount}、订单${point.orders || 0}`,
+                }],
+              },
+            });
+          }
+        }
         snapshots += 1;
       }
     }

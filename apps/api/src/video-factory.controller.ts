@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Headers, Param, Patch, Post, Put, Query } from "@nestjs/common";
+import { AiTaskCenterService } from "./ai-task-center.service";
 import { AuthService } from "./auth.service";
 import { VideoFactoryWorkerService } from "./video-factory-worker.service";
 import { VideoFactoryService } from "./video-factory.service";
@@ -9,6 +10,7 @@ export class VideoFactoryController {
     private readonly auth: AuthService,
     private readonly factory: VideoFactoryService,
     private readonly worker: VideoFactoryWorkerService,
+    private readonly aiTasks: AiTaskCenterService,
   ) {}
 
   private actor(authorization?: string, requestedActor?: string) {
@@ -94,6 +96,118 @@ export class VideoFactoryController {
   replaceRouting(@Headers("authorization") authorization: string | undefined, @Body() body: Record<string, unknown>) {
     this.actor(authorization);
     return this.factory.saveRouting(body);
+  }
+
+  @Get("topic-cards")
+  topicCards(
+    @Headers("authorization") authorization: string | undefined,
+    @Query("status") status?: string,
+    @Query("platform") platform?: string,
+    @Query("productModel") productModel?: string,
+    @Query("sourceType") sourceType?: string,
+    @Query("minScore") minScore?: string,
+    @Query("minCoverage") minCoverage?: string,
+  ) {
+    this.actor(authorization);
+    return this.factory.topicCards({
+      status,
+      platform,
+      productModel,
+      sourceType,
+      minScore: minScore === undefined ? undefined : Number(minScore),
+      minCoverage: minCoverage === undefined ? undefined : Number(minCoverage),
+    });
+  }
+
+  @Get("topic-cards/:id")
+  topicCard(@Headers("authorization") authorization: string | undefined, @Param("id") id: string) {
+    this.actor(authorization);
+    return this.factory.topicCard(id);
+  }
+
+  @Post("topic-cards/generate-daily")
+  generateDailyTopicCards(
+    @Headers("authorization") authorization: string | undefined,
+    @Headers("x-ops-actor") requestedActor: string | undefined,
+  ) {
+    return this.aiTasks.createDailyTopicCardTasks(new Date(), this.actor(authorization, requestedActor));
+  }
+
+  @Patch("topic-cards/:id")
+  updateTopicCard(
+    @Headers("authorization") authorization: string | undefined,
+    @Headers("x-ops-actor") requestedActor: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.factory.updateTopicCard(id, body, this.actor(authorization, requestedActor));
+  }
+
+  @Post("topic-cards/:id/archive")
+  archiveTopicCard(
+    @Headers("authorization") authorization: string | undefined,
+    @Headers("x-ops-actor") requestedActor: string | undefined,
+    @Param("id") id: string,
+  ) {
+    return this.factory.archiveTopicCard(id, this.actor(authorization, requestedActor));
+  }
+
+  @Post("topic-cards/:id/rematch-assets")
+  rematchTopicCardAssets(
+    @Headers("authorization") authorization: string | undefined,
+    @Headers("x-ops-actor") requestedActor: string | undefined,
+    @Param("id") id: string,
+  ) {
+    return this.factory.rematchTopicCardAssets(id, this.actor(authorization, requestedActor));
+  }
+
+  @Post("topic-cards/:id/approve")
+  async approveTopicCard(
+    @Headers("authorization") authorization: string | undefined,
+    @Headers("x-ops-actor") requestedActor: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const actor = this.actor(authorization, requestedActor);
+    const executionMode = String(body.executionMode || "").toUpperCase();
+    const ownerId = String(body.ownerId || "");
+    const reviewerId = String(body.reviewerId || "");
+    const prepared = await this.factory.prepareTopicCardApproval(id, {
+      executionMode: executionMode as "SCRIPT_ONLY" | "FULL_VIDEO",
+      ownerId,
+      reviewerId,
+    });
+    const task = await this.aiTasks.createTask({
+      type: "VIDEO",
+      title: prepared.card.title,
+      platform: prepared.card.platform,
+      productModel: prepared.card.productModel,
+      ownerEmployeeId: ownerId,
+      reviewerEmployeeId: reviewerId,
+      sourceType: "VIDEO_TOPIC_CARD",
+      sourceId: id,
+      idempotencyKey: `ai-task:video-topic-card:${id}:${executionMode}:v${prepared.plan.workflowVersion}`,
+      estimatedCost: 0,
+      skipPaidBudget: true,
+      instructions: `${prepared.card.objective}；目标人群：${prepared.card.audience}；主配方：${prepared.card.primaryRecipe}`,
+      input: {
+        executionMode,
+        existingContentPlanId: id,
+        topicCardId: id,
+        candidateIndex: 0,
+      },
+      modelPolicy: {
+        strategy: "CODEX_FIRST",
+        allowExternalGeneration: false,
+        allowFallback: false,
+      },
+    }, actor);
+    const card = await this.factory.markTopicCardApproved(id, {
+      executionMode: executionMode as "SCRIPT_ONLY" | "FULL_VIDEO",
+      ownerId,
+      reviewerId,
+    }, task.id, actor);
+    return { card, task };
   }
 
   @Post("projects")
