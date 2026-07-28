@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { ResultSchemaError, runWithSchemaRetry, validateResult } from "./result-contract";
+import {
+  openAiStrictSchema,
+  ResultSchemaError,
+  runWithSchemaRetry,
+  validateResult,
+} from "./result-contract";
 
 const schema = {
   type: "object",
@@ -12,6 +17,31 @@ const schema = {
 };
 
 describe("unified result contract", () => {
+  it("converts every nested object to an OpenAI strict schema", () => {
+    const strict = openAiStrictSchema({
+      type: "object",
+      properties: {
+        outputFiles: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              metadata: {
+                type: "object",
+                additionalProperties: true,
+                properties: { description: { type: "string" } },
+              },
+            },
+          },
+        },
+      },
+    }) as Record<string, any>;
+
+    expect(strict.additionalProperties).toBe(false);
+    expect(strict.properties.outputFiles.items.additionalProperties).toBe(false);
+    expect(strict.properties.outputFiles.items.properties.metadata.additionalProperties).toBe(false);
+  });
+
   it("retries a schema-invalid result and accepts the corrected result", async () => {
     const execute = vi.fn()
       .mockResolvedValueOnce({ summary: 1, outputFiles: [] })

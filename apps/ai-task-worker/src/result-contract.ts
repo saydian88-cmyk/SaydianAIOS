@@ -45,6 +45,16 @@ const executionSchema = {
   ],
 } as const;
 
+export function openAiStrictSchema(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(openAiStrictSchema);
+  if (!value || typeof value !== "object") return value;
+  const schema = Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [key, openAiStrictSchema(item)]),
+  );
+  if (schema.type === "object") schema.additionalProperties = false;
+  return schema;
+}
+
 export function finalResultSchema(contentSchema: JsonRecord): JsonRecord {
   const properties = {
     ...(contentSchema.properties as JsonRecord || {}),

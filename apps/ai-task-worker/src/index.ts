@@ -11,6 +11,7 @@ import {
   type JsonRecord,
 } from "./skill-router";
 import {
+  openAiStrictSchema,
   ResultSchemaError,
   runWithSchemaRetry,
   validateResult,
@@ -870,11 +871,11 @@ async function runCodex(
   const requirements = record(snapshotPayload.requirements);
   const schemaPath = join(workspace, "output-schema.json");
   const resultPath = join(workspace, "result.json");
-  await writeFile(schemaPath, JSON.stringify(outputSchema(
+  await writeFile(schemaPath, JSON.stringify(openAiStrictSchema(outputSchema(
     String(task.type || ""),
     String(execution.mode || ""),
     Number(requirements.exactCount || 10),
-  ), null, 2), "utf8");
+  )), null, 2), "utf8");
   await writeFile(join(workspace, "task.json"), JSON.stringify(task, null, 2), "utf8");
   const args = [
     "exec", "--ephemeral", "--skip-git-repo-check", "--output-schema", schemaPath, "--json",
