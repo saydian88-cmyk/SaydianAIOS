@@ -450,8 +450,8 @@ function prompt(taskPackage: JsonRecord) {
   }
   const instructions: Record<string, string> = {
     VIDEO: "生成恰好3套脚本候选并选择1套主方案。每套包含标题、Hook、正文、CTA、评分、评分依据、结构化分镜和逐镜头素材建议。只提取外部爆款的Hook、节奏和结构，不复用外部商业镜头。",
-    IMAGE: "生成可执行的图片生成任务书。若本机已有可用图片生成能力，可生成文件并写入outputFiles；否则保持outputFiles为空。",
-    ARTICLE: "生成公众号、小红书和企业微信版本。每段简短，产品事实只能来自输入快照。",
+    IMAGE: "本任务必须调用 $imagegen Skill，使用Codex内置图片生成能力完成图片成品并写入outputFiles。不得调用或要求配置第三方图片模型；生成前读取产品图片和任务快照，成品保存到当前任务工作区。",
+    ARTICLE: "本任务必须调用 $build-health-brand-trust-content Skill，生成公众号、小红书和企业微信版本。每段简短，产品事实只能来自输入快照，不得调用或要求配置第三方文本模型。",
     STORE_ANALYSIS: "先依据确定性指标和异常数据，再解释原因、影响和可执行动作。证据不足的判断标记为推断。",
     COMPETITOR_ANALYSIS: "分析竞品商品、价格、内容和关键词变化，输出机会及待确认行动，禁止虚构竞品数据。",
     LIVE_ANALYSIS: "完成直播前方案或直播后复盘，输出切片建议、话术调整和下一场行动。",

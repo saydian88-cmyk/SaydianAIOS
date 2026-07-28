@@ -50,6 +50,11 @@ const tabs = [
   ["runners", "执行节点"],
   ["logs", "配置日志"],
 ];
+const codexSkills = [
+  { title: "图片生成", skill: "imagegen", description: "由Codex内置图片能力生成，不需要配置第三方模型。" },
+  { title: "软文生成", skill: "build-health-brand-trust-content", description: "按赛电健康品牌内容规范生成，不需要配置第三方模型。" },
+  { title: "完整视频", skill: "video-editing-from-media-library-share", description: "优先使用素材库真实素材，由本地Codex完成剪辑。" },
+];
 
 const storageIntegrations = computed(() =>
   (groups.value.integrations || []).filter((item: Row) =>
@@ -74,6 +79,18 @@ function stateType(value?: string) {
   if (["ERROR", "OFFLINE"].includes(String(value))) return "danger";
   if (["CONFIGURED", "DEGRADED", "BUSY"].includes(String(value))) return "warning";
   return "info";
+}
+
+function connectionMessage(item: Row) {
+  if (item.state === "HEALTHY") return "已连接，可以正常使用";
+  if (item.state === "CONFIGURED") return "资料已保存，请检查连接";
+  if (item.state === "DEGRADED") return "部分功能不可用，请重新检查";
+  if (item.state === "ERROR") return item.message || "连接异常，请检查配置";
+  return "尚未连接";
+}
+
+function connectionAction(item: Row) {
+  return item.state === "UNCONFIGURED" ? "去连接" : "修改连接";
 }
 
 function time(value?: string) {
@@ -328,21 +345,32 @@ defineExpose({ reload });
     </template>
 
     <template v-else-if="activeTab === 'integrations' || activeTab === 'storage'">
+      <div class="plain-guide">
+        <strong>{{ activeTab === "storage" ? "文件与素材连接" : "平台连接" }}</strong>
+        <span>选择需要使用的平台，点击“去连接”，保存后再点“检查连接”即可。</span>
+      </div>
       <div class="integration-grid">
         <article v-for="item in activeTab === 'storage' ? storageIntegrations : businessIntegrations" :key="item.id">
           <div class="integration-icon"><el-icon><Connection /></el-icon></div>
           <div class="integration-copy">
             <div><h3>{{ item.displayName }}</h3><el-tag :type="stateType(item.state)">{{ stateLabel(item.state) }}</el-tag></div>
-            <p>{{ item.message }}</p>
-            <small>公开配置 {{ Object.keys(item.publicConfig || {}).length }}项 · 密钥 {{ item.secretKeys?.length || 0 }}项</small>
-            <div class="row-actions"><el-button link type="primary" @click="openIntegration(item)">配置</el-button><el-button link @click="checkIntegration(item)">检查</el-button></div>
+            <p>{{ connectionMessage(item) }}</p>
+            <div class="row-actions"><el-button type="primary" plain @click="openIntegration(item)">{{ connectionAction(item) }}</el-button><el-button @click="checkIntegration(item)">检查连接</el-button></div>
           </div>
         </article>
       </div>
     </template>
 
     <template v-else-if="activeTab === 'ai'">
-      <div class="section-head"><div><h3>AI与媒体服务商</h3><p>Codex为默认执行器；视觉模型仅在任务明确允许时调用。</p></div><el-button type="primary" :icon="Plus" @click="openProvider()">新增服务商</el-button></div>
+      <div class="section-head"><div><h3>Codex默认生产能力</h3><p>图片、软文和完整视频已固定使用下列Skill，不需要配置第三方模型。</p></div></div>
+      <div class="skill-grid">
+        <article v-for="item in codexSkills" :key="item.skill">
+          <div><strong>{{ item.title }}</strong><el-tag type="success">已启用</el-tag></div>
+          <p>{{ item.description }}</p>
+          <small>{{ item.skill }}</small>
+        </article>
+      </div>
+      <div class="section-head provider-head"><div><h3>视频外部能力（可选）</h3><p>仅在本地素材无法完成、且任务明确允许时使用。</p></div><el-button :icon="Plus" @click="openProvider()">新增视频服务</el-button></div>
       <el-table :data="groups.providers || []" stripe>
         <el-table-column prop="displayName" label="服务商" min-width="180" />
         <el-table-column prop="region" label="地区" width="90" />
@@ -408,14 +436,15 @@ defineExpose({ reload });
       </el-table>
     </template>
 
-    <el-dialog v-model="integrationVisible" :title="`${integrationForm.displayName}配置`" width="760px">
+    <el-dialog v-model="integrationVisible" :title="`连接${integrationForm.displayName}`" width="760px">
+      <el-alert type="info" :closable="false" title="填写平台提供的账号和连接资料。已有密钥留空不会被清除。" />
       <el-form label-position="top">
-        <el-form-item label="名称"><el-input v-model="integrationForm.displayName" /></el-form-item>
-        <el-form-item label="区域"><el-input v-model="integrationForm.region" /></el-form-item>
-        <el-form-item label="公开配置(JSON)"><el-input v-model="integrationForm.publicConfigText" type="textarea" :rows="8" /></el-form-item>
-        <el-form-item label="密钥（每行 key=value；留空保留原值）"><el-input v-model="integrationForm.secretsText" type="textarea" :rows="5" placeholder="credentials.apiKey=..." /></el-form-item>
+        <el-form-item label="显示名称"><el-input v-model="integrationForm.displayName" /></el-form-item>
+        <el-form-item label="使用地区"><el-input v-model="integrationForm.region" placeholder="例如：中国、美国或全球" /></el-form-item>
+        <el-form-item label="平台提供的连接参数"><el-input v-model="integrationForm.publicConfigText" type="textarea" :rows="8" placeholder="按平台提供的资料填写，保持现有格式即可" /></el-form-item>
+        <el-form-item label="账号密钥（每行一项，留空保留原值）"><el-input v-model="integrationForm.secretsText" type="textarea" :rows="5" placeholder="例如：apiKey=平台提供的密钥" /></el-form-item>
       </el-form>
-      <template #footer><el-button @click="integrationVisible = false">取消</el-button><el-button type="primary" @click="saveIntegration">保存</el-button></template>
+      <template #footer><el-button @click="integrationVisible = false">取消</el-button><el-button type="primary" @click="saveIntegration">保存并返回</el-button></template>
     </el-dialog>
 
     <el-dialog v-model="providerVisible" title="AI与媒体服务商" width="720px">
@@ -458,5 +487,5 @@ defineExpose({ reload });
 </template>
 
 <style scoped>
-.system-config{display:grid;gap:18px}.page-head,.head-actions,.section-head,.row-actions{display:flex;align-items:center;justify-content:space-between;gap:12px}.page-head h2,.section-head h3,.integration-copy h3{margin:0}.page-head p,.section-head p,.integration-copy p,.config-card p{margin:6px 0 0;color:#64748b}.eyebrow{font-size:12px;letter-spacing:.14em;color:#ef4444}.summary-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}.summary-grid article{display:grid;gap:7px;padding:18px;border:1px solid #e2e8f0;border-radius:14px;background:#fff}.summary-grid span,.summary-grid small{color:#64748b}.summary-grid strong{font-size:25px}.summary-grid strong.compact{font-size:18px}.config-card{display:grid;grid-template-columns:1fr 2fr;gap:24px;padding:20px;border:1px solid #e2e8f0;border-radius:14px;background:#fff}.config-card>div:first-child{display:flex;gap:12px}.integration-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.integration-grid article{display:flex;gap:14px;padding:18px;border:1px solid #e2e8f0;border-radius:14px;background:#fff}.integration-icon{display:grid;place-items:center;width:40px;height:40px;border-radius:10px;background:#eff6ff;color:#2563eb}.integration-copy{min-width:0;flex:1}.integration-copy>div:first-child{display:flex;align-items:center;justify-content:space-between;gap:8px}.integration-copy small{display:block;margin:10px 0;color:#64748b}.save-row{text-align:right;margin-top:14px}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.token-box{padding:10px;font-family:Consolas,monospace;word-break:break-all}.head-actions{justify-content:flex-end}@media(max-width:1200px){.summary-grid{grid-template-columns:repeat(3,1fr)}.integration-grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:760px){.summary-grid,.integration-grid,.config-card,.form-grid{grid-template-columns:1fr}.page-head,.section-head{align-items:flex-start;flex-direction:column}}
+.system-config{display:grid;gap:18px}.page-head,.head-actions,.section-head,.row-actions{display:flex;align-items:center;justify-content:space-between;gap:12px}.page-head h2,.section-head h3,.integration-copy h3{margin:0}.page-head p,.section-head p,.integration-copy p,.config-card p,.skill-grid p{margin:6px 0 0;color:#64748b}.eyebrow{font-size:12px;letter-spacing:.14em;color:#ef4444}.summary-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}.summary-grid article{display:grid;gap:7px;padding:18px;border:1px solid #e2e8f0;border-radius:14px;background:#fff}.summary-grid span,.summary-grid small{color:#64748b}.summary-grid strong{font-size:25px}.summary-grid strong.compact{font-size:18px}.config-card{display:grid;grid-template-columns:1fr 2fr;gap:24px;padding:20px;border:1px solid #e2e8f0;border-radius:14px;background:#fff}.config-card>div:first-child{display:flex;gap:12px}.plain-guide{display:flex;align-items:center;gap:12px;padding:14px 16px;border-radius:12px;background:#eff6ff;color:#1e3a5f}.plain-guide span{color:#52677f}.integration-grid,.skill-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.integration-grid article,.skill-grid article{display:flex;gap:14px;padding:18px;border:1px solid #e2e8f0;border-radius:14px;background:#fff}.skill-grid article{display:grid}.skill-grid article>div{display:flex;align-items:center;justify-content:space-between;gap:8px}.skill-grid small{color:#94a3b8}.provider-head{margin-top:8px}.integration-icon{display:grid;place-items:center;width:40px;height:40px;border-radius:10px;background:#eff6ff;color:#2563eb}.integration-copy{min-width:0;flex:1}.integration-copy>div:first-child{display:flex;align-items:center;justify-content:space-between;gap:8px}.integration-copy p{min-height:42px}.row-actions{justify-content:flex-start;margin-top:14px}.save-row{text-align:right;margin-top:14px}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.token-box{padding:10px;font-family:Consolas,monospace;word-break:break-all}.head-actions{justify-content:flex-end}@media(max-width:1200px){.summary-grid{grid-template-columns:repeat(3,1fr)}.integration-grid,.skill-grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:760px){.summary-grid,.integration-grid,.skill-grid,.config-card,.form-grid{grid-template-columns:1fr}.page-head,.section-head,.plain-guide{align-items:flex-start;flex-direction:column}}
 </style>

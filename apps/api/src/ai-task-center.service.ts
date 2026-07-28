@@ -874,12 +874,20 @@ export class AiTaskCenterService implements OnModuleInit {
       }),
       execution: {
         mode: text(input.executionMode).toUpperCase() || (task.type === "VIDEO" ? "FULL_VIDEO" : "DEFAULT"),
-        strategy: text(modelPolicy.strategy).toUpperCase() || "CODEX_FIRST",
-        allowExternalGeneration: modelPolicy.allowExternalGeneration === true,
+        strategy: ["IMAGE", "ARTICLE"].includes(task.type)
+          ? "CODEX_SKILL"
+          : text(modelPolicy.strategy).toUpperCase() || "CODEX_FIRST",
+        allowExternalGeneration: ["IMAGE", "ARTICLE"].includes(task.type)
+          ? false
+          : modelPolicy.allowExternalGeneration === true,
         requiredSkill: task.type === "VIDEO"
           && (text(input.executionMode).toUpperCase() || "FULL_VIDEO") === "FULL_VIDEO"
           ? "video-editing-from-media-library-share"
-          : undefined,
+          : task.type === "IMAGE"
+            ? "imagegen"
+            : task.type === "ARTICLE"
+              ? "build-health-brand-trust-content"
+              : undefined,
         healthContentAllowed: input.healthContentAllowed !== false,
         output: task.type === "VIDEO"
           ? { aspectRatio: "9:16", width: 1080, height: 1920, format: "mp4" }

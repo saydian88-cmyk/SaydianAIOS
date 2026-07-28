@@ -187,7 +187,7 @@ describe("AiTaskCenterService", () => {
 
   it("returns a task package when an OSS signed URL cannot be created", async () => {
     const token = "runner-token";
-    const task = {
+    const task: Record<string, any> = {
       id: "task-1",
       taskNo: "AIT-1",
       type: "VIDEO",
@@ -266,6 +266,24 @@ describe("AiTaskCenterService", () => {
     });
     expect(result.assets[0]).not.toHaveProperty("sourcePath");
     expect(result.assets[0]).not.toHaveProperty("objectKey");
+
+    task.type = "IMAGE";
+    task.input = {};
+    task.modelPolicy = { strategy: "AUTO", allowExternalGeneration: true };
+    const imageResult = await service.runnerPackage(token, task.id, { nodeCode: "windows-codex-01" });
+    expect(imageResult.execution).toMatchObject({
+      strategy: "CODEX_SKILL",
+      allowExternalGeneration: false,
+      requiredSkill: "imagegen",
+    });
+
+    task.type = "ARTICLE";
+    const articleResult = await service.runnerPackage(token, task.id, { nodeCode: "windows-codex-01" });
+    expect(articleResult.execution).toMatchObject({
+      strategy: "CODEX_SKILL",
+      allowExternalGeneration: false,
+      requiredSkill: "build-health-brand-trust-content",
+    });
   });
 
   it("serializes uploaded output asset sizes for task APIs", async () => {
