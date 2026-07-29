@@ -99,6 +99,12 @@ export type VideoShotPlanV3 = {
   sourcePreference: string;
   missingReason: string;
   alternativePlan: string;
+  lineId?: string;
+  sourceIn?: number | null;
+  sourceOut?: number | null;
+  visibleFacts?: string[];
+  restrictions?: string[];
+  semanticScore?: number | null;
 };
 
 export type VideoScriptCandidateV3 = {

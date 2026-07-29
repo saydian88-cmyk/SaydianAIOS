@@ -21,6 +21,7 @@ describe("VideoFactoryService model routing", () => {
       contentPlan: {
         findMany: vi.fn(),
         findUnique: vi.fn(),
+        update: vi.fn(),
       },
       asset: {
         findUnique: vi.fn(),
@@ -110,6 +111,38 @@ describe("VideoFactoryService model routing", () => {
     const result = await service.projects({});
 
     expect(result[0].productionStage).toBe("READY_TO_EDIT");
+  });
+
+  it("keeps a single-project script task in the dedicated generating stage", async () => {
+    prisma.contentPlan.findUnique.mockResolvedValue({
+      id: "single-project",
+      workflowVersion: 4,
+      productionStage: "SCRIPT_GENERATING",
+      sourceSignals: [{ type: "VIDEO_FACTORY", lastTaskMode: "SCRIPT_ONLY", scriptCandidates: [] }],
+    });
+
+    const result = await service.syncProjectTaskState("single-project", "RUNNING");
+
+    expect(result?.productionStage).toBe("SCRIPT_GENERATING");
+    expect(prisma.contentPlan.update).not.toHaveBeenCalled();
+  });
+
+  it("returns a failed single-project script task to the project brief", async () => {
+    prisma.contentPlan.findUnique.mockResolvedValue({
+      id: "single-project",
+      workflowVersion: 4,
+      productionStage: "SCRIPT_GENERATING",
+      sourceSignals: [{ type: "VIDEO_FACTORY", lastTaskMode: "SCRIPT_ONLY", scriptCandidates: [] }],
+    });
+    prisma.contentPlan.update.mockResolvedValue({ id: "single-project", productionStage: "PROJECT_BRIEF" });
+
+    const result = await service.syncProjectTaskState("single-project", "FAILED");
+
+    expect(result?.productionStage).toBe("PROJECT_BRIEF");
+    expect(prisma.contentPlan.update).toHaveBeenCalledWith({
+      where: { id: "single-project" },
+      data: { productionStage: "PROJECT_BRIEF" },
+    });
   });
 
   it("returns the review master with a topic card so the admin can preview it", async () => {

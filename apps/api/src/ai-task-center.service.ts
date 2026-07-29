@@ -127,6 +127,12 @@ function normalizeVideoScriptCandidates(value: unknown): VideoScriptCandidateV3[
         sourcePreference: text(shot.sourcePreference).toUpperCase() || "REAL_ASSET_FIRST",
         missingReason: text(shot.missingReason),
         alternativePlan: text(shot.alternativePlan) || "优先使用产品图动画或程序化文字镜头",
+        lineId: text(shot.lineId || shot.line_id) || `line_${String(shotIndex + 1).padStart(2, "0")}`,
+        sourceIn: shot.sourceIn === undefined && shot.source_in === undefined ? null : number(shot.sourceIn ?? shot.source_in),
+        sourceOut: shot.sourceOut === undefined && shot.source_out === undefined ? null : number(shot.sourceOut ?? shot.source_out),
+        visibleFacts: strings(shot.visibleFacts || shot.visible_facts),
+        restrictions: strings(shot.restrictions),
+        semanticScore: shot.semanticScore === undefined && shot.semantic_score === undefined ? null : number(shot.semanticScore ?? shot.semantic_score),
       };
     });
     const scoreBreakdown = object(candidate.scoreBreakdown);
@@ -1612,7 +1618,7 @@ export class AiTaskCenterService implements OnModuleInit {
           message: `已生成${persisted.created.length}张选题卡，${persisted.skipped.length}张重复或无效卡片已跳过，等待管理员确认`,
         };
       }
-      const scriptCandidates = normalizeVideoScriptCandidates(
+      let scriptCandidates = normalizeVideoScriptCandidates(
         Array.isArray(projectInput.scriptCandidates) ? projectInput.scriptCandidates : result.scriptCandidates,
       );
       if (!scriptCandidates.length) {
@@ -1622,6 +1628,9 @@ export class AiTaskCenterService implements OnModuleInit {
       const existingProject = existingContentPlanId
         ? await this.prisma.contentPlan.findUnique({ where: { id: existingContentPlanId } })
         : null;
+      if (existingProject?.workflowVersion && existingProject.workflowVersion >= 4) {
+        scriptCandidates = scriptCandidates.slice(0, 1).map((candidate) => ({ ...candidate, selected: true }));
+      }
       const project = existingProject || await this.videoFactory.createCodexProject({
         platform: enumValue(projectInput.platform || task.platform, ["DOUYIN", "TIKTOK"] as const, "DOUYIN"),
         productModel: text(projectInput.productModel || task.productModel) || undefined,
@@ -1660,7 +1669,12 @@ export class AiTaskCenterService implements OnModuleInit {
         });
       }
       if (executionMode === "SCRIPT_ONLY") {
-        return { status: "PENDING_REVIEW" as AiTaskStatus, message: "三套脚本和分镜已进入视频工厂，等待审核" };
+        return {
+          status: "PENDING_REVIEW" as AiTaskStatus,
+          message: existingProject?.workflowVersion && existingProject.workflowVersion >= 4
+            ? "单套完整脚本、逐句素材绑定和缺口清单已进入视频工厂，等待审核"
+            : "三套脚本和分镜已进入视频工厂，等待审核",
+        };
       }
 
       const masterOutput = await this.prisma.aiTaskOutput.findFirst({
