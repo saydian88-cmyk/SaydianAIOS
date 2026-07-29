@@ -164,7 +164,16 @@ export class WorkbenchService {
           select: {
             id: true,
             topic: true,
-            variants: { select: { title: true, body: true, platform: true }, orderBy: { createdAt: "asc" } },
+            variants: {
+              select: {
+                title: true,
+                body: true,
+                platform: true,
+                manualPublishUrl: true,
+                manualPublishedAt: true,
+              },
+              orderBy: { createdAt: "asc" },
+            },
           },
         },
       },
@@ -230,6 +239,14 @@ export class WorkbenchService {
 
   async tasks(session: SessionPayload, query: Record<string, string | undefined>) {
     const status = value(query.status).toUpperCase();
+    const statusGroups: Record<string, string[]> = {
+      TODO: ["OPEN", "ACCEPTED", "IN_PROGRESS", "RETURNED"],
+      PENDING_REVIEW: ["SUBMITTED", "REVIEW"],
+      DONE: ["COMPLETED", "VERIFIED"],
+    };
+    const statusFilter = status
+      ? { status: statusGroups[status] ? { in: statusGroups[status] } : status }
+      : {};
     const scope = value(query.scope).toUpperCase();
     const employeeId = session.employeeId!;
     const access = this.taskAccess(session);
@@ -246,7 +263,7 @@ export class WorkbenchService {
             access,
             { category: { not: "AI_DELIVERY" } },
             scope === "MINE" ? { assigneeEmployeeId: employeeId } : {},
-            status ? { status } : {},
+            statusFilter,
           ],
         };
     const rows = await this.prisma.opsTask.findMany({
