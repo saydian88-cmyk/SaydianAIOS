@@ -51,6 +51,62 @@ const workbenchBatchUploadStorage = diskStorage({
   filename: (_request, file, callback) => callback(null, `${Date.now()}-${randomUUID()}${extname(file.originalname).toLowerCase()}`),
 });
 
+function compileVideoScriptTaskPrompt(project: Record<string, any>, brief: Record<string, unknown>) {
+  const value = (key: string, fallback = "未填写") => String(brief[key] ?? fallback).trim() || fallback;
+  const platform = String(project.targetPlatforms?.[0] || brief.platform || "DOUYIN");
+  const healthPolicy = brief.healthContentAllowed !== false
+    ? "允许健康相关内容；仍须读取系统风险词与风险画面库进行合规检查"
+    : "禁止健康相关内容；必须读取系统风险词与风险画面库，并过滤相关文案、字幕、配音和画面";
+
+  return [
+    "【任务类型】单视频项目完整脚本生成（只生成一套脚本，不生成三个方向，不生成成片）",
+    "",
+    "【项目基础信息】",
+    `项目编号：${project.productionNo || project.id}`,
+    `产品型号：${project.productModel || "未填写"}`,
+    `视频类型：${value("videoType")}`,
+    `发布平台：${platform}`,
+    `账号类型：${value("accountType", "BRAND")}`,
+    `预计时长：${value("estimatedDurationSeconds", "30")}秒`,
+    `口播模式：${value("voiceoverMode", "VOICEOVER")}`,
+    `健康内容规则：${healthPolicy}`,
+    `素材策略：${value("materialPolicy", "REAL_ASSET_FIRST")}`,
+    "",
+    "【内容需求】",
+    `核心关键词：${value("keywords", project.topic || "未填写")}`,
+    `模仿参考：${value("reference")}`,
+    `指定钩子：${value("hook")}`,
+    `使用场景：${value("scene")}`,
+    `目标用户：${value("audience", project.audience || "未填写")}`,
+    `用户痛点：${value("painPoint")}`,
+    `传播目标：${project.objective || "未填写"}`,
+    `声音要求：${value("soundPrompt")}`,
+    `必须展示的事实或动作：${value("mustShowFacts")}`,
+    `补充AI提示词：${value("additionalPrompt")}`,
+    "",
+    "【必须执行】",
+    "使用 video-editing-from-media-library-share Skill 的素材学习、索引与路径规则。",
+    "读取素材库索引、包装资源索引、系统风险词库和风险画面库；不得仅凭文件名推断素材内容。",
+    "具体功能口播必须绑定能够直接证明该功能的操作、过程或结果视频；外观、包装、佩戴空镜和静态图片不能替代。",
+    "已有素材需返回素材ID、远程可访问路径、有效入点/出点、画面事实和匹配分。",
+    "缺失素材逐项标明真人补拍或AI生成方案，并保留脚本行ID，供系统后续回传补充素材路径。",
+    "",
+    "【完整脚本输出结构】",
+    "1. 基础任务信息：产品型号、视频类型、发布平台、账号类型、目标受众、预计时长、健康内容规则。",
+    "2. 内容定位：核心主题、传播目标、用户痛点、唯一核心卖点。",
+    "3. 黄金三秒钩子：文案、类型、对应画面、留人理由、开头声音设计。",
+    "4. 完整口播：逐句文案、语气、语速、情绪、预计时长。",
+    "5. 脚本结构：钩子、承接、卖点展开、证据展示、转折或留人节点、结尾。",
+    "6. 逐句镜头需求与素材覆盖状态：已有素材覆盖、可以改写、需要补拍、禁止制作。",
+    "7. 每个镜头的画面事实、音画匹配要求和留人设计。",
+    "8. 无标点字幕稿、自然语义断句、重点文字。",
+    "9. 配音人群、音色、情绪、语速、音效、环境声。",
+    "10. 合规检查、结尾安全尾帧、素材缺口清单及明确补充方法。",
+    "",
+    "返回结构化结果时，每句必须具有稳定 lineId，素材绑定必须能被系统直接保存和再次提供给远程剪辑节点。",
+  ].join("\n");
+}
+
 @Controller("api/v1/workbench")
 export class WorkbenchController {
   constructor(
@@ -805,6 +861,7 @@ export class WorkbenchController {
     const scriptEngines = Array.isArray((brief as Record<string, unknown>).scriptEngines)
       ? ((brief as Record<string, unknown>).scriptEngines as unknown[]).map(String)
       : ["REMOTE_CODEX", "SYSTEM_AI"];
+    const compiledPrompt = compileVideoScriptTaskPrompt(project, brief as Record<string, unknown>);
     let task: Record<string, any> | null = null;
     if (scriptEngines.includes("REMOTE_CODEX")) task = await this.aiTasks.createTask({
       type: "VIDEO",
@@ -816,17 +873,13 @@ export class WorkbenchController {
       sourceType: "VIDEO_FACTORY_PROJECT",
       sourceId: project.id,
       idempotencyKey: `ai-task:video-project:${project.id}:script:v${project.workflowVersion}`,
-      instructions: [
-        "使用 video-editing-from-media-library-share Skill，只生成一套完整脚本和逐句素材覆盖，不生成三个方向。",
-        "读取系统风险词与风险画面库，并根据 healthContentAllowed 生成本项目过滤规则。",
-        "每句返回素材ID、远程可访问路径、有效入点出点、画面事实、匹配分和缺失处理建议。",
-        "具体功能必须使用90分以上直接视频素材；缺失时标记真人补拍或AI生成候选，不得用弱相关画面代替。",
-      ].join("\n"),
+      instructions: compiledPrompt,
       input: {
         executionMode: "SCRIPT_ONLY",
         existingContentPlanId: project.id,
         singleScript: true,
         skillName: "video-editing-from-media-library-share",
+        compiledPrompt,
         projectBrief: brief,
         healthContentAllowed: brief.healthContentAllowed !== false,
         requiredOutputs: [

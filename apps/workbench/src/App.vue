@@ -115,7 +115,7 @@ const videoProjectKeywordOptions = computed<Row[]>(() => {
   ];
   const seen = new Set<string>();
   return rows.filter((item: Row) => {
-    const id = String(item.id || item.smartKeywordId || "");
+    const id = String(item.smartKeywordId || item.smartKeyword?.id || item.id || "");
     if (!id || !String(item.keyword || "").trim() || seen.has(id)) return false;
     if (product?.id && item.productId && item.productId !== product.id) return false;
     if (item.platform && String(item.platform) !== videoFactoryForm.platform) return false;
@@ -4071,9 +4071,9 @@ onMounted(() => void bootstrap());
             >
               <el-option
                 v-for="keyword in videoProjectKeywordOptions"
-                :key="keyword.id || keyword.smartKeywordId"
+                :key="keyword.smartKeywordId || keyword.smartKeyword?.id || keyword.id"
                 :label="`${keyword.keyword} · ${keyword.sourceLabel}`"
-                :value="keyword.id || keyword.smartKeywordId"
+                :value="keyword.smartKeywordId || keyword.smartKeyword?.id || keyword.id"
               />
             </el-select>
           </el-form-item>
