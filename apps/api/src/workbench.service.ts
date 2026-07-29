@@ -1815,10 +1815,13 @@ export class WorkbenchService {
           contentPlan: item.contentPlan || null,
         };
       });
+    const projectProjection = videoProject ? this.videoProjectTaskProjection(videoProject) : null;
     return {
-      displayStatus: state[0],
-      currentPhase: state[1],
-      nextAction: state[2],
+      // 视频项目任务必须与视频工厂共用项目主阶段；AI 子任务只提供进度明细，
+      // 不能把已经进入脚本审核的项目继续显示成“脚本生成中”。
+      displayStatus: projectProjection?.displayStatus || state[0],
+      currentPhase: projectProjection?.displayStatus || state[1],
+      nextAction: projectProjection?.nextAction || state[2],
       isAiManaged: Boolean(aiRequest),
       opsTask: { id: task.id, taskNo: task.taskNo, status: task.status },
       aiTask: aiRequest ? {
@@ -1833,12 +1836,16 @@ export class WorkbenchService {
       deliverables,
       feedback: task.reviews || [],
       sourceLinks: { opsTaskId: task.id, aiTaskId: aiRequest?.id || null },
-      project: videoProject ? this.videoProjectTaskProjection(videoProject) : null,
+      project: projectProjection,
     };
   }
 
   private videoProjectTaskProjection(project: any) {
     const stage = value(project.productionStage).toUpperCase();
+    const factory = Array.isArray(project.sourceSignals)
+      ? project.sourceSignals.map(object).find((signal: Record<string, unknown>) => signal.type === "VIDEO_FACTORY") || {}
+      : {};
+    const brief = object(factory.brief);
     const state: Record<string, [number, string, string]> = {
       PROJECT_BRIEF: [2, "脚本任务提交中", "等待系统提交所选脚本引擎"],
       SCRIPT_GENERATING: [2, "脚本生成中", "等待脚本生成完成"],
@@ -1859,6 +1866,11 @@ export class WorkbenchService {
     return {
       id: project.id,
       productionNo: project.productionNo,
+      productModel: project.productModel || null,
+      platform: Array.isArray(project.targetPlatforms) ? project.targetPlatforms[0] || null : null,
+      videoType: value(brief.videoType) || null,
+      keywords: value(brief.keywords) || null,
+      createdAt: project.createdAt || null,
       stage,
       step: current[0],
       displayStatus: current[1],
@@ -1904,7 +1916,15 @@ export class WorkbenchService {
     const videoProjects = videoProjectIds.length
       ? await this.prisma.contentPlan.findMany({
           where: { id: { in: videoProjectIds } },
-          select: { id: true, productionNo: true, productionStage: true },
+          select: {
+            id: true,
+            productionNo: true,
+            productionStage: true,
+            productModel: true,
+            targetPlatforms: true,
+            sourceSignals: true,
+            createdAt: true,
+          },
         })
       : [];
     const videoProjectById = new Map(videoProjects.map((project) => [project.id, project]));

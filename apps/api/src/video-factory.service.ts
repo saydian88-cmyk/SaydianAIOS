@@ -1235,11 +1235,42 @@ export class VideoFactoryService {
           materialPolicy: brief.materialPolicy,
         },
       });
-    } catch {
-      generated = this.fallbackCandidates(context);
+    } catch (error) {
+      const failureReason = error instanceof Error ? error.message : "系统 AI 脚本生成失败";
+      const scriptEngineStatus: Record<string, unknown> = {
+        ...object(factory.scriptEngineStatus),
+        SYSTEM_AI: "FAILED",
+      };
+      const nextSignals = signals.map((signal) => signal.type === "VIDEO_FACTORY"
+        ? {
+          ...signal,
+          scriptEngineStatus,
+          scriptEngineErrors: { ...object(signal.scriptEngineErrors), SYSTEM_AI: failureReason },
+        }
+        : signal);
+      await this.prisma.$transaction([
+        this.prisma.contentPlan.update({
+          where: { id: contentPlanId },
+          data: {
+            productionStage: "SCRIPT_GENERATING",
+            sourceSignals: nextSignals as unknown as Prisma.InputJsonValue,
+          },
+        }),
+        this.prisma.auditLog.create({
+          data: {
+            actor,
+            action: "VIDEO_FACTORY_SYSTEM_AI_SCRIPT_FAILED",
+            entityType: "ContentPlan",
+            entityId: contentPlanId,
+            after: { failureReason, scriptEngineStatus } as Prisma.InputJsonValue,
+          },
+        }),
+      ]);
+      return this.project(contentPlanId);
     }
+    if (!generated[0]) throw new BadRequestException("系统 AI 未返回有效脚本");
     const candidate = {
-      ...(generated[0] || this.fallbackCandidates(context)[0]),
+      ...generated[0],
       generationSource: "SYSTEM_AI",
       generatedAt: new Date().toISOString(),
     };
@@ -1282,11 +1313,22 @@ export class VideoFactoryService {
   async reviewScript(contentPlanId: string, approved: boolean, note: string, actor: string, candidateIndex?: number) {
     const plan = await this.prisma.contentPlan.findUnique({ where: { id: contentPlanId } });
     if (!plan) throw new NotFoundException("智能视频项目不存在");
+    if (plan.productionStage !== "FACTORY_SCRIPT_READY") {
+      throw new BadRequestException("所选脚本引擎全部完成后才能审核脚本");
+    }
     if (!approved && !note.trim()) throw new BadRequestException("退回脚本时必须填写修改原因");
     if (!this.candidates(plan).length) throw new BadRequestException("当前项目还没有可审核的脚本");
     const candidates = this.candidates(plan);
     const signals = sourceSignals(plan);
     const factory = signals.find((signal) => signal.type === "VIDEO_FACTORY") || {};
+    const brief = object(factory.brief);
+    const requestedEngines = Array.isArray(brief.scriptEngines)
+      ? brief.scriptEngines.map(String)
+      : ["REMOTE_CODEX", "SYSTEM_AI"];
+    const scriptEngineStatus = object(factory.scriptEngineStatus);
+    if (requestedEngines.some((engine) => scriptEngineStatus[engine] !== "COMPLETED")) {
+      throw new BadRequestException("所选脚本引擎尚未全部完成，暂不能进入审核");
+    }
     const selectedCandidateIndex = candidateIndex === undefined
       ? Math.max(0, Math.min(candidates.length - 1, Number(factory.selectedCandidateIndex || 0)))
       : Math.max(0, Math.min(candidates.length - 1, Math.round(candidateIndex)));

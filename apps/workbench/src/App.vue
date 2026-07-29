@@ -676,8 +676,8 @@ function projectWaitingForScripts(project: Row) {
   const factory = Array.isArray(project.sourceSignals)
     ? project.sourceSignals.find((item: Row) => item.type === "VIDEO_FACTORY")
     : undefined;
-  const requestedEngines = Array.isArray(factory?.projectBrief?.scriptEngines)
-    ? factory.projectBrief.scriptEngines.map((engine: unknown) => String(engine))
+  const requestedEngines = Array.isArray(factory?.brief?.scriptEngines)
+    ? factory.brief.scriptEngines.map((engine: unknown) => String(engine))
     : [];
   if (requestedEngines.length === 0) return false;
   const status = projectScriptEngineStatus(project);
@@ -2757,6 +2757,14 @@ onMounted(() => void bootstrap());
                 <span>截止 {{ formatTime(task.dueAt) }}</span>
               </div>
               <h4>{{ task.title }}</h4>
+              <div v-if="isVideoProjectTask(task)" class="video-task-identifiers">
+                <span>{{ task.projection?.project?.productionNo || "项目编号待生成" }}</span>
+                <span>{{ task.projection?.project?.productModel || "通用产品" }}</span>
+                <span>{{ task.projection?.project?.videoType || "未标注视频类型" }}</span>
+                <span v-if="task.projection?.project?.keywords">关键词：{{ task.projection.project.keywords }}</span>
+                <span v-if="task.projection?.project?.platform">{{ platformLabel(task.projection.project.platform) }}</span>
+                <span v-if="task.projection?.project?.createdAt">创建于 {{ formatTime(task.projection.project.createdAt) }}</span>
+              </div>
               <p class="task-summary">{{ taskCardSummary(task) }}</p>
               <template v-if="isVideoProjectTask(task)">
                 <div class="video-task-steps" :aria-label="`当前进行到第 ${videoProjectTaskStep(task)} 步`">
@@ -3283,7 +3291,7 @@ onMounted(() => void bootstrap());
                       <el-button v-if="job.outputAsset" @click="openAssetPreview(job.outputAsset, '成片预览')">预览成片</el-button>
                       <el-button v-if="job.outputAsset" @click="downloadWorkbenchAsset(job.outputAsset)">下载成片</el-button>
                       <el-button
-                        v-if="job.status === 'SUCCEEDED' && job.outputAsset?.reviewStatus === 'APPROVED' && canGenerateVideoScript"
+                        v-if="job.status === 'SUCCEEDED' && job.outputAsset?.reviewStatus === 'APPROVED' && canGenerateVideoScript && ['READY_TO_PUBLISH','PUBLISHING','TRACKING'].includes(project.productionStage)"
                         @click="openPublishLink(project, job)"
                       >{{ project.variants?.some((variant: Row) => variant.manualPublishUrl) ? "更新发布链接" : "回传发布链接" }}</el-button>
                       <el-button

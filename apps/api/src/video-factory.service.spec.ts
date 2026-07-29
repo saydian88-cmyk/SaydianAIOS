@@ -261,6 +261,8 @@ describe("VideoFactoryService model routing", () => {
       sourceSignals: [{
         type: "VIDEO_FACTORY",
         selectedCandidateIndex: 0,
+        brief: { scriptEngines: ["REMOTE_CODEX", "SYSTEM_AI"] },
+        scriptEngineStatus: { REMOTE_CODEX: "COMPLETED", SYSTEM_AI: "COMPLETED" },
         scriptCandidates: [
           { title: "Remote Codex script" },
           { title: "System AI script" },
@@ -281,5 +283,28 @@ describe("VideoFactoryService model routing", () => {
         })],
       }),
     }));
+  });
+
+  it("does not allow script review while any requested engine is unfinished", async () => {
+    prisma.contentPlan.findUnique.mockResolvedValue({
+      id: "project-waiting-system-ai",
+      workflowVersion: 4,
+      productionStage: "SCRIPT_GENERATING",
+      sourceSignals: [{
+        type: "VIDEO_FACTORY",
+        brief: { scriptEngines: ["REMOTE_CODEX", "SYSTEM_AI"] },
+        scriptEngineStatus: { REMOTE_CODEX: "COMPLETED", SYSTEM_AI: "RUNNING" },
+        scriptCandidates: [{ title: "Remote Codex script" }],
+      }],
+    });
+
+    await expect(service.reviewScript(
+      "project-waiting-system-ai",
+      true,
+      "",
+      "employee",
+      0,
+    )).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.contentPlan.update).not.toHaveBeenCalled();
   });
 });
