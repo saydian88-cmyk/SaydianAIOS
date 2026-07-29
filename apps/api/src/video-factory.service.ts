@@ -2704,6 +2704,17 @@ export class VideoFactoryService {
           sourceSignals: nextSignals as Prisma.InputJsonValue,
         },
       }),
+      this.prisma.opsTask.updateMany({
+        where: {
+          sourceType: "VIDEO_PROJECT",
+          sourceId: id,
+          deletedAt: null,
+        },
+        data: {
+          deletedAt: archivedAt,
+          purgeAfter,
+        },
+      }),
       this.prisma.auditLog.create({
         data: {
           actor,
@@ -2788,6 +2799,18 @@ export class VideoFactoryService {
         data: {
           productionStage: previousProductionStage,
           sourceSignals: nextSignals as Prisma.InputJsonValue,
+        },
+      }),
+      this.prisma.opsTask.updateMany({
+        where: {
+          sourceType: "VIDEO_PROJECT",
+          sourceId: id,
+          deletedAt: { not: null },
+        },
+        data: {
+          deletedAt: null,
+          purgeAfter: null,
+          deletedByEmployeeId: null,
         },
       }),
       this.prisma.auditLog.create({
