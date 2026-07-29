@@ -676,8 +676,8 @@ function projectWaitingForScripts(project: Row) {
   const factory = Array.isArray(project.sourceSignals)
     ? project.sourceSignals.find((item: Row) => item.type === "VIDEO_FACTORY")
     : undefined;
-  const requestedEngines = Array.isArray(factory?.projectBrief?.scriptEngines)
-    ? factory.projectBrief.scriptEngines.map((engine: unknown) => String(engine))
+  const requestedEngines = Array.isArray(factory?.brief?.scriptEngines)
+    ? factory.brief.scriptEngines.map((engine: unknown) => String(engine))
     : [];
   if (requestedEngines.length === 0) return false;
   const status = projectScriptEngineStatus(project);
@@ -3283,7 +3283,7 @@ onMounted(() => void bootstrap());
                       <el-button v-if="job.outputAsset" @click="openAssetPreview(job.outputAsset, '成片预览')">预览成片</el-button>
                       <el-button v-if="job.outputAsset" @click="downloadWorkbenchAsset(job.outputAsset)">下载成片</el-button>
                       <el-button
-                        v-if="job.status === 'SUCCEEDED' && job.outputAsset?.reviewStatus === 'APPROVED' && canGenerateVideoScript"
+                        v-if="job.status === 'SUCCEEDED' && job.outputAsset?.reviewStatus === 'APPROVED' && canGenerateVideoScript && ['READY_TO_PUBLISH','PUBLISHING','TRACKING'].includes(project.productionStage)"
                         @click="openPublishLink(project, job)"
                       >{{ project.variants?.some((variant: Row) => variant.manualPublishUrl) ? "更新发布链接" : "回传发布链接" }}</el-button>
                       <el-button

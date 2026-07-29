@@ -1289,6 +1289,17 @@ export class WorkbenchController {
       throw new ForbiddenException("只有审核通过的成片可以回传发布链接");
     }
     if (!plan) throw new ForbiddenException("视频项目不存在");
+    if (!["READY_TO_PUBLISH", "PUBLISHING", "TRACKING"].includes(String(plan.productionStage))) {
+      throw new ForbiddenException("请先生成并审核通过封面和标题，再回传发布链接");
+    }
+    const approvedVariantByPlatform = new Map(
+      plan.variants
+        .filter((variant) => variant.packagingStatus === "APPROVED")
+        .map((variant) => [String(variant.platform), variant]),
+    );
+    if (normalized.some((record) => !approvedVariantByPlatform.has(record.platform))) {
+      throw new ForbiddenException("所选平台的封面和标题尚未审核通过");
+    }
     const platformNames: Record<string, string> = {
       DOUYIN: "抖音", TIKTOK: "TikTok", XIAOHONGSHU: "小红书",
       BILIBILI: "B站", WECHAT_CHANNELS: "视频号", KUAISHOU: "快手",
@@ -1305,25 +1316,7 @@ export class WorkbenchController {
         },
         update: {},
       });
-      const variant = await this.prisma.contentVariant.upsert({
-        where: { contentPlanId_platform: { contentPlanId: id, platform: record.platform as never } },
-        create: {
-          contentPlanId: id,
-          platform: record.platform as never,
-          title: plan.topic,
-          body: plan.hook,
-          mediaType: "VIDEO",
-          packagingStatus: "APPROVED",
-          packagingReviewedBy: employee.name,
-          packagingReviewedAt: new Date(),
-          status: "APPROVED",
-        },
-        update: {
-          packagingStatus: "APPROVED",
-          packagingReviewedBy: employee.name,
-          packagingReviewedAt: new Date(),
-        },
-      });
+      const variant = approvedVariantByPlatform.get(record.platform)!;
       void integration;
       results.push(await this.content.recordManualPublish(variant.id, employee.name, {
         remoteUrl: record.remoteUrl,
