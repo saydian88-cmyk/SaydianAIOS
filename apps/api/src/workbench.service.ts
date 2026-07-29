@@ -1815,10 +1815,13 @@ export class WorkbenchService {
           contentPlan: item.contentPlan || null,
         };
       });
+    const projectProjection = videoProject ? this.videoProjectTaskProjection(videoProject) : null;
     return {
-      displayStatus: state[0],
-      currentPhase: state[1],
-      nextAction: state[2],
+      // 视频项目任务必须与视频工厂共用项目主阶段；AI 子任务只提供进度明细，
+      // 不能把已经进入脚本审核的项目继续显示成“脚本生成中”。
+      displayStatus: projectProjection?.displayStatus || state[0],
+      currentPhase: projectProjection?.displayStatus || state[1],
+      nextAction: projectProjection?.nextAction || state[2],
       isAiManaged: Boolean(aiRequest),
       opsTask: { id: task.id, taskNo: task.taskNo, status: task.status },
       aiTask: aiRequest ? {
@@ -1833,7 +1836,7 @@ export class WorkbenchService {
       deliverables,
       feedback: task.reviews || [],
       sourceLinks: { opsTaskId: task.id, aiTaskId: aiRequest?.id || null },
-      project: videoProject ? this.videoProjectTaskProjection(videoProject) : null,
+      project: projectProjection,
     };
   }
 

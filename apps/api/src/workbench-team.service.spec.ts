@@ -17,6 +17,19 @@ function service(prisma: Record<string, unknown>) {
 }
 
 describe("WorkbenchService operation team", () => {
+  it("uses the video project stage instead of a stale AI subtask status", () => {
+    const target = service({});
+    const projection = (target as any).taskProjection(
+      { id: "task-1", taskNo: "TASK-1", status: "IN_PROGRESS", reviews: [] },
+      { id: "ai-1", taskNo: "AI-1", status: "RUNNING", outputs: [], progress: 80 },
+      { id: "project-1", productionNo: "VF-1", productionStage: "FACTORY_SCRIPT_READY" },
+    );
+
+    expect(projection.displayStatus).toBe("脚本待审核");
+    expect(projection.nextAction).toBe("审核、修改或退回当前脚本");
+    expect(projection.aiTask.status).toBe("RUNNING");
+  });
+
   it("rejects inviting self", async () => {
     const target = service({});
     await expect(target.inviteOperator(operator, { recipientEmployeeId: "operator-1" }))
