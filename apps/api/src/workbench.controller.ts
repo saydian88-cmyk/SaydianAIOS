@@ -59,7 +59,7 @@ function compileVideoScriptTaskPrompt(project: Record<string, any>, brief: Recor
     : "禁止健康相关内容；必须读取系统风险词与风险画面库，并过滤相关文案、字幕、配音和画面";
 
   return [
-    "【任务类型】单视频项目完整脚本生成（只生成一套脚本，不生成三个方向，不生成成片）",
+    "【任务类型】当前视频项目候选脚本生成（本引擎返回一份完整候选脚本，不生成成片）",
     "",
     "【项目基础信息】",
     `项目编号：${project.productionNo || project.id}`,
@@ -915,42 +915,6 @@ export class WorkbenchController {
     return { project: await this.videoFactory.project(id), task, scriptEngines };
   }
 
-  @Post("data-center/video-projects/:id/brief")
-  async updateVideoProjectBrief(
-    @Headers("authorization") authorization: string | undefined,
-    @Param("id") id: string,
-    @Body() body: Record<string, unknown>,
-  ) {
-    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
-    if (!employee.roles.some((role) => ["CONTENT_OPERATOR", "VIDEO_SPECIALIST"].includes(role))) {
-      throw new ForbiddenException("只有运营和视频专员可以修改视频项目要求");
-    }
-    const project = await this.videoFactory.project(id) as Record<string, any>;
-    if (project.createdBy !== employee.name) throw new ForbiddenException("只能修改自己创建的视频项目");
-    return this.videoFactory.updateDraftBrief(id, {
-      platform: body.platform ? String(body.platform) : undefined,
-      voiceoverMode: body.voiceoverMode ? String(body.voiceoverMode) : undefined,
-      accountType: body.accountType ? String(body.accountType) : undefined,
-      estimatedDurationSeconds: Number(body.estimatedDurationSeconds || 30),
-      healthContentAllowed: body.healthContentAllowed !== false,
-      generationMode: body.generationMode ? String(body.generationMode) : undefined,
-      productModel: body.productModel ? String(body.productModel) : undefined,
-      topic: body.topic ? String(body.topic) : undefined,
-      audience: body.audience ? String(body.audience) : undefined,
-      objective: body.objective ? String(body.objective) : undefined,
-      soundPrompt: body.soundPrompt ? String(body.soundPrompt) : undefined,
-      mustShowFacts: body.mustShowFacts ? String(body.mustShowFacts) : undefined,
-      additionalPrompt: body.additionalPrompt ? String(body.additionalPrompt) : undefined,
-      videoType: body.videoType ? String(body.videoType) : undefined,
-      keywords: body.keywords ? String(body.keywords) : undefined,
-      reference: body.reference ? String(body.reference) : undefined,
-      hook: body.hook ? String(body.hook) : undefined,
-      scene: body.scene ? String(body.scene) : undefined,
-      painPoint: body.painPoint ? String(body.painPoint) : undefined,
-      scriptEngines: Array.isArray(body.scriptEngines) ? body.scriptEngines.map(String) : undefined,
-    }, employee.name);
-  }
-
   @Post("data-center/video-projects/:id/script-review")
   async reviewVideoScript(
     @Headers("authorization") authorization: string | undefined,
@@ -1017,6 +981,7 @@ export class WorkbenchController {
       throw new ForbiddenException("只有待审核脚本可以直接修改");
     }
     return this.videoFactory.updateDraftScript(id, {
+      candidateIndex: body.candidateIndex === undefined ? undefined : Number(body.candidateIndex),
       title: String(body.title || ""),
       hook: String(body.hook || ""),
       script: String(body.script || ""),

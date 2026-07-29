@@ -1840,10 +1840,10 @@ export class WorkbenchService {
   private videoProjectTaskProjection(project: any) {
     const stage = value(project.productionStage).toUpperCase();
     const state: Record<string, [number, string, string]> = {
-      PROJECT_BRIEF: [1, "需求确认中", "确认项目需求并提交脚本生成"],
+      PROJECT_BRIEF: [2, "脚本任务提交中", "等待系统提交所选脚本引擎"],
       SCRIPT_GENERATING: [2, "脚本生成中", "等待脚本生成完成"],
       FACTORY_SCRIPT_READY: [3, "脚本待审核", "审核、修改或退回当前脚本"],
-      SCRIPT_RETURNED: [3, "脚本已退回", "修改需求后重新提交脚本生成"],
+      SCRIPT_RETURNED: [2, "脚本重写任务提交中", "等待系统按退回原因重新生成脚本"],
       SCRIPT_APPROVED: [4, "素材待补全", "补拍或调用AI生成缺失素材"],
       FACTORY_GENERATING: [4, "素材补全中", "完成缺失素材并确认对应镜头"],
       READY_TO_EDIT: [4, "素材已齐全", "提交视频生成任务"],
@@ -1855,7 +1855,7 @@ export class WorkbenchService {
       PUBLISHING: [7, "发布中", "等待平台发布结果"],
       TRACKING: [7, "数据跟踪中", "回传或查看发布链接和数据"],
     };
-    const current = state[stage] || [1, "需求确认中", "进入项目继续处理"];
+    const current = state[stage] || [2, "脚本处理中", "进入项目查看处理进度"];
     return {
       id: project.id,
       productionNo: project.productionNo,

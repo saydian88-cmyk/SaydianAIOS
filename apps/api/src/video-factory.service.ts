@@ -1105,6 +1105,7 @@ export class VideoFactoryService {
             brief,
             scriptCandidates: [],
             selectedCandidateIndex: 0,
+            scriptEngineStatus: Object.fromEntries(brief.scriptEngines.map((engine) => [engine, "PENDING"])),
             keywordIds,
             externalVideoIds: input.externalVideoIds || [],
             externalReferencePolicy: "STRUCTURE_ONLY",
@@ -1154,6 +1155,9 @@ export class VideoFactoryService {
         aiTaskId: mode === "SCRIPT_ONLY" ? aiTaskId : signal.aiTaskId,
         videoAiTaskId: mode === "FULL_VIDEO" ? aiTaskId : signal.videoAiTaskId,
         lastTaskMode: mode,
+        scriptEngineStatus: mode === "SCRIPT_ONLY"
+          ? { ...object(signal.scriptEngineStatus), REMOTE_CODEX: "RUNNING" }
+          : signal.scriptEngineStatus,
       }
       : signal);
     await this.prisma.$transaction([
@@ -1243,14 +1247,22 @@ export class VideoFactoryService {
       ? factory.scriptCandidates.filter((item) => object(item).generationSource !== "SYSTEM_AI")
       : [];
     const nextCandidates = [...current, candidate].slice(-2);
+    const requestedEngines = Array.isArray(brief.scriptEngines)
+      ? brief.scriptEngines.map(String)
+      : ["REMOTE_CODEX", "SYSTEM_AI"];
+    const scriptEngineStatus: Record<string, unknown> = {
+      ...object(factory.scriptEngineStatus),
+      SYSTEM_AI: "COMPLETED",
+    };
+    const allRequestedEnginesCompleted = requestedEngines.every((engine) => scriptEngineStatus[engine] === "COMPLETED");
     const nextSignals = signals.map((signal) => signal.type === "VIDEO_FACTORY"
-      ? { ...signal, scriptCandidates: nextCandidates }
+      ? { ...signal, scriptCandidates: nextCandidates, scriptEngineStatus }
       : signal);
     await this.prisma.$transaction([
       this.prisma.contentPlan.update({
         where: { id: contentPlanId },
         data: {
-          productionStage: "FACTORY_SCRIPT_READY",
+          productionStage: allRequestedEnginesCompleted ? "FACTORY_SCRIPT_READY" : "SCRIPT_GENERATING",
           sourceSignals: nextSignals as unknown as Prisma.InputJsonValue,
         },
       }),
@@ -1260,69 +1272,7 @@ export class VideoFactoryService {
           action: "VIDEO_FACTORY_SYSTEM_AI_SCRIPT_GENERATE",
           entityType: "ContentPlan",
           entityId: contentPlanId,
-          after: { candidateCount: nextCandidates.length },
-        },
-      }),
-    ]);
-    return this.project(contentPlanId);
-  }
-
-  async updateDraftBrief(contentPlanId: string, input: ProjectCreateInput, actor: string) {
-    const plan = await this.prisma.contentPlan.findUnique({ where: { id: contentPlanId } });
-    if (!plan) throw new NotFoundException("智能视频项目不存在");
-    if (!["PROJECT_BRIEF", "SCRIPT_RETURNED"].includes(plan.productionStage)) {
-      throw new BadRequestException("脚本任务提交后不能直接修改项目要求，请先退回脚本");
-    }
-    const signals = sourceSignals(plan);
-    const currentFactory = signals.find((signal) => signal.type === "VIDEO_FACTORY") || {};
-    const currentBrief = object(currentFactory.brief);
-    const platform = integrationKind(input.platform || plan.targetPlatforms[0]);
-    const brief = {
-      ...currentBrief,
-      platform,
-      voiceoverMode: String(input.voiceoverMode || currentBrief.voiceoverMode || "VOICEOVER").toUpperCase(),
-      accountType: String(input.accountType || currentBrief.accountType || "BRAND").toUpperCase(),
-      estimatedDurationSeconds: Math.max(15, Math.min(180, Math.round(number(input.estimatedDurationSeconds, number(currentBrief.estimatedDurationSeconds, 30))))),
-      healthContentAllowed: input.healthContentAllowed !== false,
-      materialPolicy: String(input.generationMode || currentBrief.materialPolicy || "REAL_ASSET_FIRST").toUpperCase() === "ASSET_ONLY"
-        ? "ASSET_ONLY"
-        : "REAL_ASSET_FIRST",
-      missingMaterialStrategies: ["RESHOOT", "AI_GENERATE"],
-      soundPrompt: String(input.soundPrompt ?? currentBrief.soundPrompt ?? "").trim(),
-      mustShowFacts: String(input.mustShowFacts ?? currentBrief.mustShowFacts ?? "").trim(),
-      additionalPrompt: String(input.additionalPrompt ?? currentBrief.additionalPrompt ?? "").trim(),
-      videoType: String(input.videoType ?? currentBrief.videoType ?? "").trim(),
-      keywords: String(input.keywords ?? currentBrief.keywords ?? "").trim(),
-      reference: String(input.reference ?? currentBrief.reference ?? "").trim(),
-      hook: String(input.hook ?? currentBrief.hook ?? "").trim(),
-      scene: String(input.scene ?? currentBrief.scene ?? "").trim(),
-      painPoint: String(input.painPoint ?? currentBrief.painPoint ?? "").trim(),
-      audience: String(input.audience ?? currentBrief.audience ?? plan.audience ?? "").trim(),
-      scriptEngines: Array.from(new Set((input.scriptEngines?.length
-        ? input.scriptEngines
-        : Array.isArray(currentBrief.scriptEngines) ? currentBrief.scriptEngines.map(String) : ["REMOTE_CODEX", "SYSTEM_AI"])
-        .map((item) => String(item).toUpperCase()))).filter((item) => ["REMOTE_CODEX", "SYSTEM_AI"].includes(item)),
-    };
-    const nextSignals = signals.map((signal) => signal.type === "VIDEO_FACTORY" ? { ...signal, brief } : signal);
-    await this.prisma.$transaction([
-      this.prisma.contentPlan.update({
-        where: { id: contentPlanId },
-        data: {
-          targetPlatforms: [platform],
-          productModel: String(input.productModel || plan.productModel || "").trim() || null,
-          topic: conciseVideoTopic(String(input.topic || plan.topic)),
-          audience: String(input.audience || plan.audience).trim(),
-          objective: String(input.objective || plan.objective).trim(),
-          sourceSignals: nextSignals as unknown as Prisma.InputJsonValue,
-        },
-      }),
-      this.prisma.auditLog.create({
-        data: {
-          actor,
-          action: "VIDEO_FACTORY_PROJECT_BRIEF_UPDATE",
-          entityType: "ContentPlan",
-          entityId: contentPlanId,
-          after: { brief },
+          after: { candidateCount: nextCandidates.length, scriptEngineStatus } as Prisma.InputJsonValue,
         },
       }),
     ]);
@@ -1378,6 +1328,7 @@ export class VideoFactoryService {
   }
 
   async updateDraftScript(contentPlanId: string, input: {
+    candidateIndex?: number;
     title: string;
     hook: string;
     script: string;
@@ -1400,7 +1351,9 @@ export class VideoFactoryService {
     if (!candidates.length) throw new BadRequestException("当前项目没有可修改的脚本");
     const signals = sourceSignals(plan);
     const factory = signals.find((signal) => signal.type === "VIDEO_FACTORY") || {};
-    const selectedIndex = Math.max(0, Math.min(candidates.length - 1, Number(factory.selectedCandidateIndex || 0)));
+    const selectedIndex = input.candidateIndex === undefined
+      ? Math.max(0, Math.min(candidates.length - 1, Number(factory.selectedCandidateIndex || 0)))
+      : Math.max(0, Math.min(candidates.length - 1, Math.round(input.candidateIndex)));
     const selected = candidates[selectedIndex] as unknown as Record<string, any>;
     const scriptPackage = object(selected.scriptPackage) as Record<string, any>;
     const positioning = object(scriptPackage.positioning) as Record<string, any>;
@@ -1595,9 +1548,24 @@ export class VideoFactoryService {
       durationSeconds: Math.max(2, Math.min(12, Math.round(number(shot.durationSeconds, 4)))),
       selectedAssetIds: shot.selectedAssetIds.filter((id) => validAssetIds.has(id)),
     }));
+    const brief = object(factory.brief);
+    const requestedEngines = Array.isArray(brief.scriptEngines)
+      ? brief.scriptEngines.map(String)
+      : ["REMOTE_CODEX", "SYSTEM_AI"];
+    const scriptEngineStatus: Record<string, unknown> = {
+      ...object(factory.scriptEngineStatus),
+      REMOTE_CODEX: "COMPLETED",
+    };
+    const allRequestedEnginesCompleted = requestedEngines.every((engine) => scriptEngineStatus[engine] === "COMPLETED");
     const nextSignals = [
       ...signals.map((signal) => signal.type === "VIDEO_FACTORY"
-        ? { ...signal, scriptCandidates: candidates, selectedCandidateIndex: candidates.indexOf(selected), workflowVersion: plan.workflowVersion }
+        ? {
+          ...signal,
+          scriptCandidates: candidates,
+          selectedCandidateIndex: candidates.indexOf(selected),
+          scriptEngineStatus,
+          workflowVersion: plan.workflowVersion,
+        }
         : signal),
       ...(!signals.some((signal) => signal.type === "AI_TASK" && signal.id === input.aiTaskId)
         ? [{ type: "AI_TASK", id: input.aiTaskId, executionMode: input.executionMode, provider: "CODEX" }]
@@ -1623,7 +1591,7 @@ export class VideoFactoryService {
             alternativePlan: shot.alternativePlan,
           })) as unknown as Prisma.InputJsonValue,
           sourceSignals: nextSignals as unknown as Prisma.InputJsonValue,
-          productionStage: "FACTORY_SCRIPT_READY",
+          productionStage: allRequestedEnginesCompleted ? "FACTORY_SCRIPT_READY" : "SCRIPT_GENERATING",
         },
       });
       await tx.contentVariant.upsert({

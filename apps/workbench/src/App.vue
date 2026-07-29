@@ -279,17 +279,11 @@ const videoProjectDefaultSummary = computed(() => {
   const voiceover = videoFactoryForm.voiceoverMode === "NO_VOICEOVER" ? "无口播" : "有口播";
   return `${platform} · ${duration} · ${account} · ${health} · ${material} · ${voiceover}`;
 });
-const videoScriptSource = ref("AI");
-const providedVideoScriptsVisible = ref(false);
-const providedVideoScripts = reactive([
-  { title: "", content: "" },
-  { title: "", content: "" },
-  { title: "", content: "" },
-]);
 const scriptPackageVisible = ref(false);
 const scriptPackageCandidate = ref<Row>();
 const scriptEditorVisible = ref(false);
 const editingScriptProject = ref<Row>();
+const editingScriptCandidateIndex = ref(0);
 const savingScript = ref(false);
 const scriptEditorForm = reactive({
   title: "",
@@ -309,25 +303,7 @@ const scriptEditorForm = reactive({
 });
 const newVideoProjectVisible = ref(false);
 const creatingVideoProject = ref(false);
-const submittingScriptProjectId = ref("");
 const reviewingScriptProjectId = ref("");
-const videoBriefVisible = ref(false);
-const editingVideoBriefProject = ref<Row>();
-const videoBriefForm = reactive({
-  platform: "DOUYIN",
-  voiceoverMode: "VOICEOVER",
-  accountType: "BRAND",
-  estimatedDurationSeconds: 30,
-  healthContentAllowed: true,
-  generationMode: "NORMAL",
-  productModel: "",
-  topic: "",
-  audience: "",
-  objective: "",
-  soundPrompt: "",
-  mustShowFacts: "",
-  additionalPrompt: "",
-});
 const generatingProjectId = ref("");
 const archivingVideoProjectId = ref("");
 const videoRecycleBinVisible = ref(false);
@@ -676,13 +652,40 @@ function isSingleScriptProject(project: Row) {
 }
 
 function displayedProjectCandidates(project: Row) {
-  const candidates = projectCandidates(project);
-  return isSingleScriptProject(project) ? candidates.slice(0, 1) : candidates;
+  return projectCandidates(project);
+}
+
+function scriptEngineLabel(candidate: Row) {
+  return candidate.generationSource === "SYSTEM_AI" ? "系统 AI 脚本工厂" : "远程 Codex + 剪辑 Skill";
+}
+
+function projectScriptEngineStatus(project: Row) {
+  const factory = Array.isArray(project.sourceSignals)
+    ? project.sourceSignals.find((item: Row) => item.type === "VIDEO_FACTORY")
+    : undefined;
+  const status = { ...(factory?.scriptEngineStatus || {}) };
+  for (const candidate of projectCandidates(project)) {
+    const source = String(candidate.generationSource || "");
+    if (source === "REMOTE_CODEX" || source === "SYSTEM_AI") status[source] = "COMPLETED";
+  }
+  return status;
+}
+
+function projectWaitingForScripts(project: Row) {
+  if (!isSingleScriptProject(project)) return false;
+  const factory = Array.isArray(project.sourceSignals)
+    ? project.sourceSignals.find((item: Row) => item.type === "VIDEO_FACTORY")
+    : undefined;
+  const requestedEngines = Array.isArray(factory?.projectBrief?.scriptEngines)
+    ? factory.projectBrief.scriptEngines.map((engine: unknown) => String(engine))
+    : [];
+  if (requestedEngines.length === 0) return false;
+  const status = projectScriptEngineStatus(project);
+  return requestedEngines.some((engine: string) => status[engine] !== "COMPLETED");
 }
 
 function openVideoProject(project: Row) {
   activeVideoProjectId.value = project.id;
-  populateVideoBriefForm(project);
   if (!expandedVideoProjectIds.value.includes(project.id)) expandedVideoProjectIds.value.push(project.id);
 }
 
@@ -701,10 +704,10 @@ const videoFlowSteps = [
 ];
 
 function videoFlowStep(project: Row) {
+  if (projectWaitingForScripts(project)) return 2;
   const stage = String(project.productionStage || "");
-  if (["PROJECT_BRIEF"].includes(stage)) return 1;
-  if (["SCRIPT_GENERATING"].includes(stage)) return 2;
-  if (["FACTORY_SCRIPT_READY", "SCRIPT_RETURNED"].includes(stage)) return 3;
+  if (["PROJECT_BRIEF", "SCRIPT_GENERATING", "SCRIPT_RETURNED"].includes(stage)) return 2;
+  if (["FACTORY_SCRIPT_READY"].includes(stage)) return 3;
   if (["SCRIPT_APPROVED", "FACTORY_GENERATING", "READY_TO_EDIT"].includes(stage)) return 4;
   if (["EDITING"].includes(stage)) return 5;
   if (["VIDEO_REVIEW"].includes(stage)) return 6;
@@ -916,11 +919,12 @@ async function quickCreateProject(command: string) {
   ElMessage.info(command === "IMAGE" ? "图文项目稍后完善" : "软文项目稍后完善");
 }
 
-function openScriptEditor(project: Row, candidate: Row) {
+function openScriptEditor(project: Row, candidate: Row, candidateIndex = 0) {
   const scriptPackage = candidate.scriptPackage || {};
   const positioning = scriptPackage.positioning || {};
   const ending = scriptPackage.ending || {};
   editingScriptProject.value = project;
+  editingScriptCandidateIndex.value = candidateIndex;
   Object.assign(scriptEditorForm, {
     title: candidate.titleZh || candidate.title || candidate.topic || project.topic || "",
     hook: candidate.hook || scriptPackage.goldenHook?.copy || "",
@@ -949,6 +953,7 @@ async function saveEditedScript() {
     const lines = (value: string) => value.split("\n").map((item) => item.trim()).filter(Boolean);
     await post(`/api/v1/workbench/data-center/video-projects/${project.id}/script`, {
       ...scriptEditorForm,
+      candidateIndex: editingScriptCandidateIndex.value,
       voiceoverLines: lines(scriptEditorForm.voiceoverText),
       retentionDesign: lines(scriptEditorForm.retentionText),
       subtitles: lines(scriptEditorForm.subtitlesText),
@@ -1589,85 +1594,6 @@ function checkNewVideoProjectBrief() {
   ElMessage.success("任务信息完整，可以创建项目");
 }
 
-function videoFactoryBrief(project: Row) {
-  const signal = Array.isArray(project.sourceSignals)
-    ? project.sourceSignals.find((item: Row) => item.type === "VIDEO_FACTORY")
-    : undefined;
-  return signal?.brief || {};
-}
-
-function populateVideoBriefForm(project: Row) {
-  const brief = videoFactoryBrief(project);
-  editingVideoBriefProject.value = project;
-  Object.assign(videoBriefForm, {
-    platform: project.targetPlatforms?.[0] || "DOUYIN",
-    voiceoverMode: brief.voiceoverMode || "VOICEOVER",
-    accountType: brief.accountType || "BRAND",
-    estimatedDurationSeconds: Number(brief.estimatedDurationSeconds || 30),
-    healthContentAllowed: brief.healthContentAllowed !== false,
-    generationMode: brief.materialPolicy === "ASSET_ONLY" ? "ASSET_ONLY" : "NORMAL",
-    productModel: project.productModel || "",
-    topic: project.topic || "",
-    audience: project.audience || "",
-    objective: project.objective || "",
-    soundPrompt: brief.soundPrompt || "",
-    mustShowFacts: brief.mustShowFacts || "",
-    additionalPrompt: brief.additionalPrompt || "",
-  });
-}
-
-function openVideoBriefEditor(project: Row) {
-  populateVideoBriefForm(project);
-  videoBriefVisible.value = true;
-}
-
-async function persistVideoBrief(project: Row) {
-  await post(`/api/v1/workbench/data-center/video-projects/${project.id}/brief`, videoBriefForm);
-  await invalidateDataCenterSection("videoFactory");
-  await loadDataCenter(true);
-}
-
-async function saveVideoBrief() {
-  const project = editingVideoBriefProject.value;
-  if (!project) return;
-  await persistVideoBrief(project);
-  videoBriefVisible.value = false;
-  ElMessage.success("项目要求已保存");
-}
-
-async function saveInlineVideoBrief(project: Row) {
-  await persistVideoBrief(project);
-  ElMessage.success("项目需求草稿已保存");
-}
-
-function checkInlineVideoBrief() {
-  if (!videoBriefForm.productModel) return ElMessage.warning("请先选择产品型号");
-  if (!videoBriefForm.audience.trim()) return ElMessage.warning("请填写目标受众");
-  if (!videoBriefForm.objective.trim()) return ElMessage.warning("请填写大致脚本方向");
-  if (!videoBriefForm.mustShowFacts.trim()) return ElMessage.warning("请填写必须展示的事实或动作");
-  ElMessage.success("需求信息完整，可以提交脚本生成任务");
-}
-
-async function confirmVideoBriefAndSubmit(project: Row) {
-  if (!videoBriefForm.productModel) return ElMessage.warning("请先选择产品型号");
-  if (!videoBriefForm.audience.trim()) return ElMessage.warning("请填写目标受众");
-  if (!videoBriefForm.objective.trim()) return ElMessage.warning("请填写大致脚本方向");
-  await persistVideoBrief(project);
-  await submitProjectScriptTask(project);
-}
-
-async function submitProjectScriptTask(project: Row) {
-  submittingScriptProjectId.value = project.id;
-  try {
-    await post(`/api/v1/workbench/data-center/video-projects/${project.id}/script-task`);
-    ElMessage.success("脚本任务已提交，等待远程Codex领取");
-    await invalidateDataCenterSection("videoFactory");
-    await loadDataCenter(true);
-  } finally {
-    submittingScriptProjectId.value = "";
-  }
-}
-
 async function reviewProjectScript(project: Row, approved: boolean, candidateIndex?: number) {
   let note = "";
   if (!approved) {
@@ -1805,9 +1731,9 @@ async function filterVideoProjects() {
 
 function videoProjectStageLabel(stage?: string) {
   return ({
-    PROJECT_BRIEF: "待确认项目要求",
-    SCRIPT_GENERATING: "远程脚本生成中",
-    SCRIPT_RETURNED: "脚本已退回",
+    PROJECT_BRIEF: "脚本任务提交中",
+    SCRIPT_GENERATING: "脚本生成中",
+    SCRIPT_RETURNED: "脚本重写任务提交中",
     SCRIPT_APPROVED: "脚本已通过",
     FACTORY_SCRIPT_READY: "项目脚本已生成",
     FACTORY_GENERATING: "素材准备中",
@@ -3157,10 +3083,8 @@ onMounted(() => void bootstrap());
             <div v-if="!activeVideoProject" class="factory-results-actions">
               <el-select v-model="videoProjectStatus" placeholder="全部项目状态" @change="filterVideoProjects">
                 <el-option label="全部项目" value="" />
-                <el-option label="待确认项目要求" value="PROJECT_BRIEF" />
-                <el-option label="远程脚本生成中" value="SCRIPT_GENERATING" />
+                <el-option label="脚本生成中" value="SCRIPT_GENERATING" />
                 <el-option label="项目脚本已生成" value="FACTORY_SCRIPT_READY" />
-                <el-option label="脚本已退回" value="SCRIPT_RETURNED" />
                 <el-option label="脚本已通过" value="SCRIPT_APPROVED" />
                 <el-option label="素材准备中" value="FACTORY_GENERATING" />
                 <el-option label="可进入AI剪辑" value="READY_TO_EDIT" />
@@ -3187,9 +3111,9 @@ onMounted(() => void bootstrap());
                 <div>
                   <div class="task-meta"><span>{{ platformLabel(project.targetPlatforms?.[0]) }}</span><span>{{ project.productModel || "品牌通用" }}</span><span>{{ project.productionNo }}</span></div>
                   <h3>{{ project.topic }}</h3>
-                  <p>{{ isSingleScriptProject(project) ? "单项目 · 单脚本 · 远程Codex流程" : `历史三方向流程 · ${projectCandidates(project).length}套脚本` }}</p>
+                  <p>单项目 · {{ projectCandidates(project).length }} 份候选脚本 · 选择一份进入后续制作</p>
                 </div>
-                <el-tag :type="isSingleScriptProject(project) ? 'success' : 'info'">{{ videoProjectStageLabel(project.productionStage) }}</el-tag>
+                <el-tag type="success">{{ videoProjectStageLabel(project.productionStage) }}</el-tag>
               </div>
               <div class="project-overview-progress">
                 <span>当前阶段</span>
@@ -3219,7 +3143,6 @@ onMounted(() => void bootstrap());
                 <div><div class="task-meta"><span>{{ platformLabel(project.targetPlatforms?.[0]) }}</span><span>{{ project.productModel || "品牌通用" }}</span><span>{{ videoVoiceoverLabel(project) }}</span><span>{{ project.productionNo }}</span><span>生成于 {{ formatTime(project.createdAt) }}</span><span v-if="project.updatedAt !== project.createdAt">更新于 {{ formatTime(project.updatedAt) }}</span></div><h3>{{ project.topic }}</h3></div>
                 <div class="factory-project-head-actions">
                   <el-tag>{{ videoProjectStageLabel(project.productionStage) }}</el-tag>
-                  <el-tag v-if="!isSingleScriptProject(project)" type="info">历史三方向项目</el-tag>
                   <el-button
                     v-if="canGenerateVideoScript"
                     type="danger"
@@ -3230,111 +3153,35 @@ onMounted(() => void bootstrap());
                   >删除</el-button>
                 </div>
               </div>
-              <section v-if="false && ['PROJECT_BRIEF', 'SCRIPT_RETURNED'].includes(project.productionStage)" class="project-brief-confirmation">
-                <div class="project-brief-confirmation-head">
-                  <div>
-                    <el-tag size="small">{{ project.productionStage === "SCRIPT_RETURNED" ? "脚本已退回 · 等待修改需求" : "刚刚创建 · 尚未生成脚本" }}</el-tag>
-                    <h3>确认项目需求</h3>
-                    <p>先确认大致脚本方向和交给 Skill 的全部约束。此阶段不会自动生成脚本。</p>
-                  </div>
-                  <el-button @click="saveInlineVideoBrief(project)">保存草稿</el-button>
+              <section
+                v-if="project.productionStage === 'SCRIPT_GENERATING' || projectWaitingForScripts(project)"
+                class="project-running-panel"
+              >
+                <el-tag type="warning">双引擎脚本生成中</el-tag>
+                <h3>等待所选脚本引擎全部返回，再进入对比审核</h3>
+                <p>已经完成的候选会暂存，但不会提前推进到脚本审核，也不会隐藏另一个引擎的结果。</p>
+                <div class="script-engine-progress">
+                  <span :class="{ done: projectScriptEngineStatus(project).REMOTE_CODEX === 'COMPLETED' }">
+                    远程 Codex + 剪辑 Skill · {{ projectScriptEngineStatus(project).REMOTE_CODEX === "COMPLETED" ? "已完成" : "生成中" }}
+                  </span>
+                  <span :class="{ done: projectScriptEngineStatus(project).SYSTEM_AI === 'COMPLETED' }">
+                    系统 AI 脚本工厂 · {{ projectScriptEngineStatus(project).SYSTEM_AI === "COMPLETED" ? "已完成" : "生成中" }}
+                  </span>
                 </div>
-                <el-alert
-                  v-if="project.rejectedReason"
-                  :title="`上次退回原因：${project.rejectedReason}`"
-                  type="warning"
-                  :closable="false"
-                />
-                <el-form label-position="top">
-                  <div class="project-brief-confirmation-form">
-                    <el-form-item label="发布平台">
-                      <el-select v-model="videoBriefForm.platform">
-                        <el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" />
-                        <el-option label="小红书" value="XIAOHONGSHU" /><el-option label="B站" value="BILIBILI" />
-                        <el-option label="视频号" value="WECHAT_CHANNELS" /><el-option label="快手" value="KUAISHOU" />
-                      </el-select>
-                    </el-form-item>
-                    <el-form-item label="产品型号" required>
-                      <el-select v-model="videoBriefForm.productModel" clearable filterable placeholder="搜索或选择产品型号">
-                        <el-option v-for="product in productOptions" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" />
-                      </el-select>
-                    </el-form-item>
-                    <el-form-item label="视频类型">
-                      <el-select v-model="videoBriefForm.voiceoverMode"><el-option label="有口播视频" value="VOICEOVER" /><el-option label="无口播视频" value="NO_VOICEOVER" /></el-select>
-                    </el-form-item>
-                    <el-form-item label="预计时长">
-                      <el-select v-model="videoBriefForm.estimatedDurationSeconds"><el-option label="15秒" :value="15" /><el-option label="30秒" :value="30" /><el-option label="60秒" :value="60" /></el-select>
-                    </el-form-item>
-                    <el-form-item label="账号类型">
-                      <el-select v-model="videoBriefForm.accountType"><el-option label="品牌账号" value="BRAND" /><el-option label="达人账号" value="CREATOR" /><el-option label="员工账号" value="EMPLOYEE" /></el-select>
-                    </el-form-item>
-                    <el-form-item label="目标受众" required><el-input v-model="videoBriefForm.audience" placeholder="例如：为父母选健康手表的子女" /></el-form-item>
-                    <el-form-item label="配音与声音"><el-input v-model="videoBriefForm.soundPrompt" placeholder="例如：温和女声、中速、保留提示音" /></el-form-item>
-                    <el-form-item label="健康相关内容">
-                      <el-select v-model="videoBriefForm.healthContentAllowed"><el-option label="允许健康相关内容" :value="true" /><el-option label="不允许健康相关内容" :value="false" /></el-select>
-                    </el-form-item>
-                    <el-form-item label="大致脚本方向"><el-input v-model="videoBriefForm.objective" placeholder="说明痛点切入、内容重点和自然收束方式" /></el-form-item>
-                    <el-form-item label="必须展示的事实或动作"><el-input v-model="videoBriefForm.mustShowFacts" type="textarea" :rows="3" placeholder="填写真实操作、过程或结果画面要求" /></el-form-item>
-                    <el-form-item label="核心要求 / 临时补充提示"><el-input v-model="videoBriefForm.additionalPrompt" type="textarea" :rows="3" placeholder="填写本次项目的其他特殊要求" /></el-form-item>
-                    <el-form-item label="视频主题或关键词（可选）"><el-input v-model="videoBriefForm.topic" placeholder="可留空，由远程 Codex 根据需求生成" /></el-form-item>
-                  </div>
-                </el-form>
-                <section class="project-risk-source">
-                  <strong>合规规则来源</strong>
-                  <p>系统自动读取素材库中的风险词与风险画面库，并根据健康内容开关生成本项目的禁止词、禁止画面和素材过滤条件，无需人工填写。</p>
-                </section>
-                <div class="project-skill-options">
-                  <el-select v-model="videoBriefForm.generationMode">
-                    <el-option label="优先使用素材库已有素材" value="NORMAL" />
-                    <el-option label="仅使用已有素材（缺少则改写）" value="ASSET_ONLY" />
-                  </el-select>
-                  <span>需要配音与字幕</span>
-                  <span>允许使用已审核包装资源</span>
-                  <span>成片通过后再生成封面标题</span>
-                </div>
-                <div class="project-brief-confirmation-actions">
-                  <el-button @click="checkInlineVideoBrief">AI检查任务信息</el-button>
-                  <el-button
-                    type="primary"
-                    :loading="submittingScriptProjectId === project.id"
-                    @click="confirmVideoBriefAndSubmit(project)"
-                  >{{ project.productionStage === "SCRIPT_RETURNED" ? "确认修改并重新提交脚本任务" : "确认方向并提交脚本生成任务" }}</el-button>
-                </div>
-              </section>
-              <section v-if="project.productionStage === 'PROJECT_BRIEF'" class="project-running-panel">
-                <el-tag type="warning">历史项目待提交</el-tag>
-                <h3>这个项目创建于自动提交脚本任务功能上线前</h3>
-                <p>新项目创建后会直接提交脚本生成任务，不再进入需求确认。这个历史项目可以在此补交一次。</p>
-                <el-button
-                  type="primary"
-                  :loading="submittingScriptProjectId === project.id"
-                  @click="submitProjectScriptTask(project)"
-                >立即提交脚本生成任务</el-button>
-              </section>
-              <section v-if="project.productionStage === 'SCRIPT_GENERATING'" class="project-running-panel">
-                <el-tag type="warning">远程脚本生成中</el-tag>
-                <h3>远程 Codex 正在生成本项目的一份完整脚本</h3>
-                <p>系统已提交项目需求、素材策略、风险规则、包装资源约束和 Skill 所需参数。脚本回传后会自动进入脚本审核。</p>
-                <el-steps :active="3" finish-status="success" simple>
-                  <el-step title="任务已提交" /><el-step title="远程节点已领取" /><el-step title="素材索引与规则检查" /><el-step title="生成完整脚本" />
-                </el-steps>
               </section>
               <div
                 v-if="projectCandidates(project).length && videoFlowStep(project) === 3"
                 class="candidate-grid"
-                :class="{ single: isSingleScriptProject(project), 'script-review-workspace': isSingleScriptProject(project) }"
+                :class="{ dual: projectCandidates(project).length > 1, 'script-review-workspace': true }"
               >
                 <article v-for="(candidate, index) in displayedProjectCandidates(project)" :key="`${project.id}-${index}`">
-                  <small>{{ isSingleScriptProject(project) ? "单项目脚本" : `历史方向 ${Number(index) + 1}` }} · {{ candidate.score || 0 }}分</small>
+                  <small>{{ scriptEngineLabel(candidate) }} · {{ candidate.score || 0 }}分</small>
                   <h4>{{ candidate.title || candidate.topic }}</h4>
                   <p><b>HOOK：</b>{{ candidate.hook }}</p>
                   <p class="candidate-full-script"><b>完整脚本：</b>{{ candidate.script || candidate.scripts?.zh30 || candidate.scripts?.zh15 || candidate.outline?.join("；") }}</p>
                   <el-button v-if="candidate.scriptPackage" @click="openScriptPackage(candidate)">查看完整脚本</el-button>
                   <template v-if="project.productionStage === 'FACTORY_SCRIPT_READY'">
-                    <el-button
-                      v-if="isSingleScriptProject(project)"
-                      @click="openScriptEditor(project, candidate)"
-                    >直接修改脚本</el-button>
+                    <el-button @click="openScriptEditor(project, candidate, index)">直接修改脚本</el-button>
                     <el-button
                       type="success"
                       :loading="reviewingScriptProjectId === project.id"
@@ -4039,7 +3886,7 @@ onMounted(() => void bootstrap());
 
   <el-dialog v-model="newVideoProjectVisible" title="新建智能视频项目" width="min(980px, 96vw)" destroy-on-close>
     <div class="prototype-project-form">
-      <el-alert title="先创建单项目并确认需求；项目创建时不生成脚本，确认后再选择脚本引擎生成候选脚本。" type="info" :closable="false" />
+      <el-alert title="填写项目要求并创建后，系统会立即提交所选脚本引擎；两种引擎的候选脚本都返回后再进入对比审核。" type="info" :closable="false" />
 
       <section class="prototype-form-section">
         <header><strong>必填信息</strong><span>视频类型、产品和关键词为必填项</span></header>
@@ -4126,133 +3973,10 @@ onMounted(() => void bootstrap());
         </el-checkbox-group>
       </section>
     </div>
-    <div v-if="false" class="new-video-project-dialog">
-      <el-alert
-        title="先确认大致脚本方向和交给 Skill 的约束。创建项目时不会自动生成脚本，项目创建后再提交远程脚本生成任务。"
-        type="info"
-        :closable="false"
-      />
-      <el-form label-position="top">
-        <div class="new-video-project-form">
-          <el-form-item label="发布平台">
-            <el-select v-model="videoFactoryForm.platform">
-              <el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" />
-              <el-option label="小红书" value="XIAOHONGSHU" /><el-option label="B站" value="BILIBILI" />
-              <el-option label="视频号" value="WECHAT_CHANNELS" /><el-option label="快手" value="KUAISHOU" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="产品型号" required>
-            <el-select v-model="videoFactoryForm.productModel" clearable filterable placeholder="搜索或选择产品型号">
-              <el-option v-for="product in productOptions" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="视频类型">
-            <el-select v-model="videoFactoryForm.voiceoverMode"><el-option label="有口播视频" value="VOICEOVER" /><el-option label="无口播视频" value="NO_VOICEOVER" /></el-select>
-          </el-form-item>
-          <el-form-item label="预计时长">
-            <el-select v-model="videoFactoryForm.estimatedDurationSeconds"><el-option label="15秒" :value="15" /><el-option label="30秒" :value="30" /><el-option label="60秒" :value="60" /></el-select>
-          </el-form-item>
-          <el-form-item label="账号类型">
-            <el-select v-model="videoFactoryForm.accountType"><el-option label="品牌账号" value="BRAND" /><el-option label="达人账号" value="CREATOR" /><el-option label="员工账号" value="EMPLOYEE" /></el-select>
-          </el-form-item>
-          <el-form-item label="目标受众" required>
-            <el-input v-model="videoFactoryForm.audience" placeholder="例如：为父母选健康手表的子女" />
-          </el-form-item>
-          <el-form-item label="配音与声音">
-            <el-input v-model="videoFactoryForm.soundPrompt" placeholder="例如：温和女声、中速、保留提示音" />
-          </el-form-item>
-          <el-form-item label="健康相关内容">
-            <el-select v-model="videoFactoryForm.healthContentAllowed"><el-option label="允许健康相关内容" :value="true" /><el-option label="不允许健康相关内容" :value="false" /></el-select>
-          </el-form-item>
-          <el-form-item label="大致脚本方向">
-            <el-input v-model="videoFactoryForm.objective" placeholder="说明本条视频准备从什么痛点或场景切入" />
-          </el-form-item>
-          <el-form-item label="必须展示的事实或动作">
-            <el-input v-model="videoFactoryForm.mustShowFacts" type="textarea" :rows="3" placeholder="填写真实操作、过程或结果画面要求" />
-          </el-form-item>
-          <el-form-item label="核心要求 / 临时补充提示">
-            <el-input v-model="videoFactoryForm.additionalPrompt" type="textarea" :rows="3" placeholder="填写本次项目的其他特殊要求" />
-          </el-form-item>
-          <el-form-item label="视频主题或关键词（可选）">
-            <el-input v-model="videoFactoryForm.topic" placeholder="留空时由远程 Codex 根据项目要求生成" />
-          </el-form-item>
-        </div>
-      </el-form>
-      <section class="project-risk-source">
-        <strong>合规规则来源</strong>
-        <p>系统会读取素材库中的风险词与风险画面库，并根据“是否允许健康相关内容”自动生成本项目的禁止词、禁止画面和素材过滤条件。</p>
-      </section>
-      <div class="project-skill-options">
-        <el-select v-model="videoScriptMode">
-          <el-option label="优先使用素材库已有素材" value="ASSET_FIRST" />
-          <el-option label="仅使用已有素材（缺少则改写）" value="ASSET_ONLY" />
-        </el-select>
-        <span>需要配音与字幕</span>
-        <span>允许使用已审核包装资源</span>
-        <span>成片通过后再生成封面标题</span>
-      </div>
-      <el-alert
-        v-if="videoFactoryForm.keywordIds.length || videoFactoryForm.externalVideoIds.length"
-        :title="`已带入 ${videoFactoryForm.keywordIds.length} 个关键词、${videoFactoryForm.externalVideoIds.length} 条爆款参考`"
-        type="success"
-        :closable="false"
-      />
-    </div>
     <template #footer>
       <el-button @click="newVideoProjectVisible = false">取消</el-button>
       <el-button @click="checkNewVideoProjectBrief">AI检查任务信息</el-button>
       <el-button type="primary" :loading="creatingVideoProject" @click="createVideoFactoryProject">创建项目</el-button>
-    </template>
-  </el-dialog>
-
-  <el-dialog v-model="videoBriefVisible" title="修改视频项目要求" width="min(820px, 94vw)" destroy-on-close>
-    <el-form label-position="top" class="factory-brief-editor">
-      <div class="factory-form">
-        <el-select v-model="videoBriefForm.platform" placeholder="目标平台">
-          <el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" />
-          <el-option label="小红书" value="XIAOHONGSHU" /><el-option label="B站" value="BILIBILI" />
-          <el-option label="视频号" value="WECHAT_CHANNELS" /><el-option label="快手" value="KUAISHOU" />
-        </el-select>
-        <el-select v-model="videoBriefForm.voiceoverMode"><el-option label="有口播视频" value="VOICEOVER" /><el-option label="无口播视频" value="NO_VOICEOVER" /></el-select>
-        <el-select v-model="videoBriefForm.accountType"><el-option label="品牌账号" value="BRAND" /><el-option label="达人账号" value="CREATOR" /><el-option label="员工账号" value="EMPLOYEE" /></el-select>
-        <el-select v-model="videoBriefForm.estimatedDurationSeconds"><el-option label="15秒" :value="15" /><el-option label="30秒" :value="30" /><el-option label="60秒" :value="60" /></el-select>
-        <el-select v-model="videoBriefForm.healthContentAllowed"><el-option label="允许健康相关内容" :value="true" /><el-option label="不允许健康相关内容" :value="false" /></el-select>
-        <el-select v-model="videoBriefForm.generationMode"><el-option label="优先使用素材库已有素材" value="NORMAL" /><el-option label="仅使用已有素材" value="ASSET_ONLY" /></el-select>
-        <el-select v-model="videoBriefForm.productModel" clearable filterable placeholder="搜索或选择产品型号">
-          <el-option v-for="product in productOptions" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" />
-        </el-select>
-        <el-input v-model="videoBriefForm.audience" placeholder="目标人群" />
-        <el-input v-model="videoBriefForm.topic" placeholder="视频主题" />
-        <el-input v-model="videoBriefForm.objective" placeholder="内容目标" />
-        <el-input v-model="videoBriefForm.soundPrompt" placeholder="声音要求" />
-        <el-input v-model="videoBriefForm.mustShowFacts" placeholder="必须展示的真实动作或画面事实" />
-        <el-input v-model="videoBriefForm.additionalPrompt" placeholder="其他补充要求" />
-      </div>
-    </el-form>
-    <template #footer><el-button @click="videoBriefVisible = false">取消</el-button><el-button type="primary" @click="saveVideoBrief">保存项目要求</el-button></template>
-  </el-dialog>
-
-  <el-dialog v-model="providedVideoScriptsVisible" title="提供三个方向的完整脚本" width="min(980px, 96vw)">
-    <el-alert
-      title="可直接粘贴已有脚本。系统会保留你的核心内容，并补齐基础信息、内容定位、黄金三秒、逐句口播、脚本结构、镜头需求、素材覆盖、画面事实、音画匹配、留人设计、字幕、重点文字、声音、合规、结尾和素材缺口。"
-      type="info"
-      :closable="false"
-    />
-    <div class="provided-script-grid">
-      <section v-for="(direction, index) in providedVideoScripts" :key="index" class="provided-script-card">
-        <strong>方向 {{ index + 1 }}</strong>
-        <el-input v-model="direction.title" placeholder="方向标题（可选）" />
-        <el-input
-          v-model="direction.content"
-          type="textarea"
-          :rows="12"
-          placeholder="填写或粘贴本方向完整脚本。可包含口播、镜头、字幕、声音、合规要求和补拍说明；未写完整的结构由AI补齐。"
-        />
-      </section>
-    </div>
-    <template #footer>
-      <el-button @click="providedVideoScriptsVisible = false">取消</el-button>
-      <el-button type="primary" @click="providedVideoScriptsVisible = false">保存三个方向</el-button>
     </template>
   </el-dialog>
 
