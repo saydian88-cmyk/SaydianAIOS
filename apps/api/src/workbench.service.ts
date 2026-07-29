@@ -70,10 +70,10 @@ export class WorkbenchService {
         take: 40,
       }),
       this.prisma.taskNotification.count({
-        where: { recipientEmployeeId: employeeId, channel: "IN_APP", readAt: null },
+        where: { recipientEmployeeId: employeeId, channel: "IN_APP", readAt: null, taskId: { not: null } },
       }),
       this.prisma.taskNotification.findMany({
-        where: { recipientEmployeeId: employeeId, channel: "IN_APP" },
+        where: { recipientEmployeeId: employeeId, channel: "IN_APP", taskId: { not: null } },
         orderBy: { createdAt: "desc" },
         take: 8,
       }),
