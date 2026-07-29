@@ -2113,7 +2113,15 @@ export class AiTaskCenterService implements OnModuleInit {
     }
     if (["VIDEO", "IMAGE", "ARTICLE"].includes(type)) {
       const existingContentPlanId = text(baseInput.existingContentPlanId || body.sourceId);
-      if (type === "VIDEO" && existingContentPlanId) {
+      const existingContentPlan = type === "VIDEO" && existingContentPlanId
+        ? await this.prisma.contentPlan.findUnique({
+            where: { id: existingContentPlanId },
+            select: { sourceSignals: true },
+          })
+        : null;
+      const isVideoTopicCard = Array.isArray(existingContentPlan?.sourceSignals)
+        && existingContentPlan.sourceSignals.some((signal) => object(signal).type === "VIDEO_TOPIC_CARD");
+      if (type === "VIDEO" && existingContentPlanId && isVideoTopicCard) {
         const topicCard = await this.videoFactory.topicCard(existingContentPlanId);
         const card = object(topicCard.topicCard);
         const keywordIds = strings(card.keywordIds);

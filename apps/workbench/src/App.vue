@@ -311,7 +311,6 @@ const newVideoProjectVisible = ref(false);
 const creatingVideoProject = ref(false);
 const submittingScriptProjectId = ref("");
 const reviewingScriptProjectId = ref("");
-const creatingReshootProjectId = ref("");
 const videoBriefVisible = ref(false);
 const editingVideoBriefProject = ref<Row>();
 const videoBriefForm = reactive({
@@ -1669,7 +1668,7 @@ async function submitProjectScriptTask(project: Row) {
   }
 }
 
-async function reviewProjectScript(project: Row, approved: boolean) {
+async function reviewProjectScript(project: Row, approved: boolean, candidateIndex?: number) {
   let note = "";
   if (!approved) {
     const result = await ElMessageBox.prompt(
@@ -1686,22 +1685,13 @@ async function reviewProjectScript(project: Row, approved: boolean) {
     await post(`/api/v1/workbench/data-center/video-projects/${project.id}/script-review`, {
       action: approved ? "APPROVE" : "RETURN",
       note,
+      candidateIndex,
     });
     ElMessage.success(approved ? "脚本审核通过，可以补齐缺失素材" : "脚本已退回，系统已根据退回原因提交重写任务");
     await invalidateDataCenterSection("videoFactory");
     await loadDataCenter(true);
   } finally {
     reviewingScriptProjectId.value = "";
-  }
-}
-
-async function createProjectReshootTask(project: Row) {
-  creatingReshootProjectId.value = project.id;
-  try {
-    await post(`/api/v1/workbench/data-center/video-projects/${project.id}/reshoot-task`);
-    ElMessage.success("已把本脚本的全部缺失镜头合并成一个员工补拍任务");
-  } finally {
-    creatingReshootProjectId.value = "";
   }
 }
 
@@ -3348,13 +3338,13 @@ onMounted(() => void bootstrap());
                     <el-button
                       type="success"
                       :loading="reviewingScriptProjectId === project.id"
-                      @click="reviewProjectScript(project, true)"
+                      @click="reviewProjectScript(project, true, index)"
                     >脚本审核通过</el-button>
                     <el-button
                       type="danger"
                       plain
                       :loading="reviewingScriptProjectId === project.id"
-                      @click="reviewProjectScript(project, false)"
+                      @click="reviewProjectScript(project, false, index)"
                     >退回并填写原因</el-button>
                   </template>
                   <el-tag v-else-if="project.productionStage === 'SCRIPT_APPROVED'" type="success">脚本已审核通过</el-tag>
@@ -3365,13 +3355,6 @@ onMounted(() => void bootstrap());
                   <span>已形成 {{ project.videoShots.length }} 个镜头任务 · {{ project.videoShots.filter((shot: Row) => !shot.selectedAssetId).length }} 个镜头待补拍或生成</span>
                   <b>{{ expandedVideoProjectIds.includes(project.id) ? "收起镜头任务" : "查看镜头任务" }}</b>
                 </button>
-                <el-button
-                  v-if="project.productionStage === 'SCRIPT_APPROVED' && project.videoShots.some((shot: Row) => !shot.selectedAssetId)"
-                  type="primary"
-                  plain
-                  :loading="creatingReshootProjectId === project.id"
-                  @click="createProjectReshootTask(project)"
-                >一键生成本脚本补拍任务</el-button>
                 <el-button
                   v-if="canGenerateVideoScript && projectReadyToRender(project) && !project.videoRenderJobs?.some((job: Row) => ['PENDING','RUNNING','RETRY'].includes(job.status))"
                   type="primary"

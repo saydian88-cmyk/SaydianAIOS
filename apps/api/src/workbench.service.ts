@@ -1926,14 +1926,21 @@ export class WorkbenchService {
         if (linked) byTaskId.set(task.id, linked);
       }
     }
-    return tasks.map((task) => ({
+    return tasks
+      .filter((task) => {
+        if ((task as any).sourceType !== "VIDEO_PROJECT") return true;
+        const project = videoProjectById.get((task as any).sourceId);
+        return project != null
+          && !["VIDEO_FACTORY_ARCHIVED", "VIDEO_FACTORY_PURGED"].includes(String(project.productionStage || ""));
+      })
+      .map((task) => ({
       ...task,
       projection: this.taskProjection(
         task,
         byTaskId.get(task.id) || null,
         videoProjectById.get((task as any).sourceId) || null,
       ),
-    }));
+      }));
   }
 
   private employeeProgressMessage(input: unknown) {

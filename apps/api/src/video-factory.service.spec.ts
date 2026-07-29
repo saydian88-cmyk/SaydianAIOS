@@ -35,6 +35,16 @@ describe("VideoFactoryService model routing", () => {
       videoQualityCheck: {
         updateMany: vi.fn(),
       },
+      approval: {
+        create: vi.fn(),
+      },
+      auditLog: {
+        create: vi.fn(),
+      },
+      opsTask: {
+        updateMany: vi.fn(),
+      },
+      $transaction: vi.fn().mockResolvedValue([]),
     };
     service = new VideoFactoryService(prisma as never, {} as never, {} as never, {} as never);
     vi.spyOn(service, "ensureCatalog").mockResolvedValue();
@@ -111,6 +121,23 @@ describe("VideoFactoryService model routing", () => {
     const result = await service.projects({});
 
     expect(result[0].productionStage).toBe("READY_TO_EDIT");
+  });
+
+  it("keeps downstream packaging and tracking stages after the master is approved", async () => {
+    prisma.contentPlan.findMany.mockResolvedValue([{
+      id: "project-tracking",
+      productionStage: "TRACKING",
+      videoRenderJobs: [{
+        status: "SUCCEEDED",
+        outputAsset: { id: "asset-1", reviewStatus: "APPROVED" },
+      }],
+      aiTaskOutputs: [],
+      videoShots: [],
+    }]);
+
+    const result = await service.projects({});
+
+    expect(result[0].productionStage).toBe("TRACKING");
   });
 
   it("keeps a single-project script task in the dedicated generating stage", async () => {
@@ -220,5 +247,39 @@ describe("VideoFactoryService model routing", () => {
       where: { contentPlanId: "plan-1", assetId: "asset-master", renderJobId: null },
       data: { renderJobId: "render-local" },
     });
+    expect(prisma.contentPlan.update).toHaveBeenCalledWith({
+      where: { id: "plan-1" },
+      data: { masterVideoPath: "https://oss.example/master.mp4" },
+    });
+  });
+
+  it("records the script candidate selected by the employee during approval", async () => {
+    prisma.contentPlan.findUnique.mockResolvedValue({
+      id: "project-dual-engine",
+      workflowVersion: 4,
+      productionStage: "FACTORY_SCRIPT_READY",
+      sourceSignals: [{
+        type: "VIDEO_FACTORY",
+        selectedCandidateIndex: 0,
+        scriptCandidates: [
+          { title: "Remote Codex script" },
+          { title: "System AI script" },
+        ],
+      }],
+    });
+    vi.spyOn(service, "project").mockResolvedValue({ id: "project-dual-engine" } as never);
+
+    await service.reviewScript("project-dual-engine", true, "", "employee", 1);
+
+    expect(prisma.contentPlan.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: "project-dual-engine" },
+      data: expect.objectContaining({
+        productionStage: "SCRIPT_APPROVED",
+        sourceSignals: [expect.objectContaining({
+          type: "VIDEO_FACTORY",
+          selectedCandidateIndex: 1,
+        })],
+      }),
+    }));
   });
 });

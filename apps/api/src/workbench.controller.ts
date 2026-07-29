@@ -973,12 +973,32 @@ export class WorkbenchController {
     if (factory.aiTaskId) {
       await this.aiTasks.review(String(factory.aiTaskId), { action, note }, employee.name);
     }
-    const reviewed = await this.videoFactory.reviewScript(id, action === "APPROVE", note, employee.name);
+    const candidateIndex = body.candidateIndex === undefined ? undefined : Number(body.candidateIndex);
+    const reviewed = await this.videoFactory.reviewScript(
+      id,
+      action === "APPROVE",
+      note,
+      employee.name,
+      Number.isFinite(candidateIndex) ? candidateIndex : undefined,
+    );
     if (action === "RETURN") {
       const scriptSubmission = await this.submitVideoScriptTask(authorization, id);
       return { ...scriptSubmission.project, scriptTask: scriptSubmission.task };
     }
-    return reviewed;
+    let approvedProject = reviewed as Record<string, any>;
+    if (!Array.isArray(approvedProject.videoShots) || !approvedProject.videoShots.length) {
+      approvedProject = await this.videoFactory.generateProject(id, {
+        candidateIndex: Number.isFinite(candidateIndex) ? candidateIndex : 0,
+        routingMode: "AUTO",
+        allowFallback: false,
+        prepareOnly: true,
+      }, employee.name) as Record<string, any>;
+    }
+    if (employee.employeeId && Array.isArray(approvedProject.videoShots)
+      && approvedProject.videoShots.some((shot: Record<string, unknown>) => !shot.selectedAssetId)) {
+      await this.videoFactory.createGroupedReshootTask(id, employee.employeeId, employee.name);
+    }
+    return approvedProject;
   }
 
   @Post("data-center/video-projects/:id/script")
@@ -1349,6 +1369,20 @@ export class WorkbenchController {
       where: { id },
       data: {
         targetPlatforms: Array.from(new Set([...plan.targetPlatforms, ...normalized.map((record) => record.platform)])) as never,
+      },
+    });
+    await this.prisma.opsTask.updateMany({
+      where: {
+        sourceType: "VIDEO_PROJECT",
+        sourceId: id,
+        deletedAt: null,
+        status: { notIn: ["CANCELLED", "COMPLETED"] },
+      },
+      data: {
+        status: "COMPLETED",
+        completedAt: new Date(),
+        completedBy: employee.name,
+        result: `已回传${results.length}个平台的发布链接，视频项目进入数据跟踪`,
       },
     });
     return { saved: results.length, platforms: normalized.map((record) => record.platform) };

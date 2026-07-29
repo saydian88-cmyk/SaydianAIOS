@@ -800,7 +800,13 @@ export class ContentService {
     if (!plan || plan.kind !== "VIDEO") throw new NotFoundException("视频生产单不存在");
     if (!["APPROVED", "SCHEDULED"].includes(plan.status)) throw new BadRequestException("请先通过脚本审核，再分析素材覆盖");
     const signals = Array.isArray(plan.sourceSignals) ? plan.sourceSignals as Array<Record<string, unknown>> : [];
-    const restricted = signals.some((item) => item.contentRestrictionMode === "HEALTH_RESTRICTED");
+    const restricted = signals.some((item) =>
+      item.contentRestrictionMode === "HEALTH_RESTRICTED"
+      || (item.type === "VIDEO_FACTORY"
+        && item.brief
+        && typeof item.brief === "object"
+        && (item.brief as Record<string, unknown>).healthContentAllowed === false),
+    );
     const context = await this.generationContext(plan.productModel || undefined, restricted);
     const assetRows = context.assets as Array<{ id: string; kind?: string }>;
     const allowedAssetIds = new Set(assetRows.map((item) => item.id));
