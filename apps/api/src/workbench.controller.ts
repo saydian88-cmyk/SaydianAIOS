@@ -985,12 +985,20 @@ export class WorkbenchController {
       const scriptSubmission = await this.submitVideoScriptTask(authorization, id);
       return { ...scriptSubmission.project, scriptTask: scriptSubmission.task };
     }
-    const approvedProject = reviewed as Record<string, any>;
+    let approvedProject = reviewed as Record<string, any>;
+    if (!Array.isArray(approvedProject.videoShots) || !approvedProject.videoShots.length) {
+      approvedProject = await this.videoFactory.generateProject(id, {
+        candidateIndex: Number.isFinite(candidateIndex) ? candidateIndex : 0,
+        routingMode: "AUTO",
+        allowFallback: false,
+        prepareOnly: true,
+      }, employee.name) as Record<string, any>;
+    }
     if (employee.employeeId && Array.isArray(approvedProject.videoShots)
       && approvedProject.videoShots.some((shot: Record<string, unknown>) => !shot.selectedAssetId)) {
       await this.videoFactory.createGroupedReshootTask(id, employee.employeeId, employee.name);
     }
-    return reviewed;
+    return approvedProject;
   }
 
   @Post("data-center/video-projects/:id/script")

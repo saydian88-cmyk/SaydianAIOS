@@ -62,6 +62,7 @@ type GenerateInput = {
   requestedModelId?: string;
   routingMode?: string;
   allowFallback?: boolean;
+  prepareOnly?: boolean;
 };
 
 type SimilarVideoInput = {
@@ -2483,7 +2484,7 @@ export class VideoFactoryService {
     const routingMode = String(input.routingMode || factorySignal.routingMode || "AUTO").toUpperCase();
     const requestedModelId = String(input.requestedModelId || factorySignal.requestedModelId || "").trim() || undefined;
     const allowFallback = input.allowFallback ?? factorySignal.allowFallback !== false;
-    if (coverage.some((shot) => shot.coverage === "MISSING")) {
+    if (!input.prepareOnly && coverage.some((shot) => shot.coverage === "MISSING")) {
       await this.resolveModel({ requestedModelId, platform: plan.targetPlatforms[0], scenario: "SCENE", capability: "IMAGE_TO_VIDEO" })
         .catch(async () => this.resolveModel({ requestedModelId, platform: plan.targetPlatforms[0], scenario: "SCENE", capability: "TEXT_TO_VIDEO" }));
     }
@@ -2505,7 +2506,7 @@ export class VideoFactoryService {
             description: item.description,
             moduleType: index === 0 ? "HOOK" : index === coverage.length - 1 ? "CTA" : "SCENE",
             status: selectedAssetId ? "DONE" : "OPEN",
-            sourcePreference: selectedAssetId ? "REAL_ASSET" : "AI_GENERATED",
+            sourcePreference: selectedAssetId ? "REAL_ASSET" : (input.prepareOnly ? "REAL_ASSET_FIRST" : "AI_GENERATED"),
             durationSeconds: 5,
             prompt: item.description,
             assetIds: item.matchedAssetIds,
@@ -2514,7 +2515,7 @@ export class VideoFactoryService {
             metadata: { reason: item.reason, imageAssetIds: item.auxiliaryImageAssetIds },
           },
         });
-        if (!selectedAssetId) {
+        if (!selectedAssetId && !input.prepareOnly) {
           await tx.videoGenerationJob.create({
             data: {
               idempotencyKey: `video-shot:${id}:${shot.id}:${candidateIndex}`,
@@ -2546,7 +2547,9 @@ export class VideoFactoryService {
           videoAssetIds: item.matchedVideoAssetIds,
           imageAssetIds: item.auxiliaryImageAssetIds,
           reason: item.reason,
-          note: selectedAssetId ? "使用已审核真实素材" : "AI生成任务已排队",
+          note: selectedAssetId
+            ? "使用已审核真实素材"
+            : (input.prepareOnly ? "等待真人补拍或由员工发起AI生成" : "AI生成任务已排队"),
         });
       }
       if (assets.length) {
@@ -2573,7 +2576,9 @@ export class VideoFactoryService {
           scoreBreakdown: selected.scoreBreakdown,
           sourceSignals: nextSignals as Prisma.InputJsonValue,
           shootRequirements: requirements as Prisma.InputJsonValue,
-          productionStage: requirements.every((item) => item.status === "DONE") ? "READY_TO_EDIT" : "FACTORY_GENERATING",
+          productionStage: requirements.every((item) => item.status === "DONE")
+            ? "READY_TO_EDIT"
+            : (input.prepareOnly ? "SCRIPT_APPROVED" : "FACTORY_GENERATING"),
           masterVideoStatus: "PENDING",
         },
       });
