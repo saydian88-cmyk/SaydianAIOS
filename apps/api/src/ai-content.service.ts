@@ -173,12 +173,16 @@ export class AiContentService {
     const voiceoverPolicy = noVoiceover
       ? "本次必须生成无口播视频：不得设计人物口播、旁白、配音或对话；用连续视频画面、动作、音乐节奏、音效和屏幕字幕完整表达内容。scripts字段填写分段屏幕字幕与画面节奏，不得写成朗读稿。"
       : "本次生成有口播视频：提供自然简洁的中文/英文口播，并让口播与镜头动作逐段对应。";
+    const userScriptPolicy = context.scriptSource === "USER"
+      ? "userProvidedDirections是用户提供的三个方向脚本。必须分别保留每个方向的核心主题、表达顺序和关键文案，不得擅自替换；在此基础上补齐完整scriptPackage的全部结构化字段。"
+      : "三个方向均由AI生成，但每个方向都必须输出完整scriptPackage，不能只返回Hook或一句概述。";
     const result = await this.callJson(
       `根据已审核的赛电产品知识、FAQ、高分自有素材和外部参考，生成3个短视频候选方向。第1个为今日主执行包。
 只使用输入中的assetId、referenceId、产品事实和证据；缺素材写入missingAssets，不得虚构。
 ${assetPolicy}
 ${restrictionPolicy}
 ${voiceoverPolicy}
+${userScriptPolicy}
 每个候选必须含15秒和30秒中英文完整脚本、Hook、节奏化镜头大纲、字幕/CTA思路、标题、封面文案和标签，并生成scriptPackage结构化执行脚本。
 严禁只返回一句Hook或把Hook重复当作正文。outline至少3段；zh15至少40个汉字并包含开场、核心内容和结尾引导；zh30至少70个汉字并包含开场、场景或痛点、产品或功能展示、结果或价值、结尾引导。无口播模式也必须给出逐段画面字幕和动作节奏。
 scriptPackage必须包含：

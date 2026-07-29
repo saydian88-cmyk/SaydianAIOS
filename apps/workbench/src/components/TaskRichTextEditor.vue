@@ -68,7 +68,7 @@ function setLink() {
 .task-editor-toolbar button { border: 0; border-radius: 5px; padding: 5px 8px; color: #606266; background: transparent; cursor: pointer; }
 .task-editor-toolbar button:hover, .task-editor-toolbar button.active { color: #b42318; background: #fef0ed; }
 .task-editor-toolbar button:disabled { opacity: .35; cursor: default; }
-.task-editor-content { min-height: 110px; padding: 10px 12px; outline: none; line-height: 1.7; }
+.task-editor-content { min-height: 110px; max-height: 280px; overflow-y: auto; padding: 10px 12px; outline: none; line-height: 1.7; scrollbar-gutter: stable; }
 .task-editor-content p { margin: 0 0 7px; }
 .task-editor-content h3, .task-editor-content h4 { margin: 8px 0 5px; font-size: 15px; }
 .task-editor-content ul, .task-editor-content ol { margin: 5px 0; padding-left: 22px; }

@@ -52,6 +52,8 @@ const outputPreviewUrl = ref("");
 const tasks = ref<Row[]>([]);
 const taskScope = ref("MINE");
 const taskStatus = ref("");
+const selectedTaskIds = ref<string[]>([]);
+const bulkDeletingTasks = ref(false);
 const taskDetailVisible = ref(false);
 const taskDetail = ref<Row>();
 const taskDetailLoading = ref(false);
@@ -236,8 +238,16 @@ const videoFactoryForm = reactive({
   keywordIds: [] as string[],
   externalVideoIds: [] as string[],
 });
+const videoScriptSource = ref("AI");
+const providedVideoScriptsVisible = ref(false);
+const providedVideoScripts = reactive([
+  { title: "", content: "" },
+  { title: "", content: "" },
+  { title: "", content: "" },
+]);
 const scriptPackageVisible = ref(false);
 const scriptPackageCandidate = ref<Row>();
+const creatingVideoProject = ref(false);
 const generatingProjectId = ref("");
 const archivingVideoProjectId = ref("");
 const videoRecycleBinVisible = ref(false);
@@ -641,6 +651,7 @@ async function loadTasks() {
     const parameters = new URLSearchParams({ scope: taskScope.value });
     if (taskStatus.value) parameters.set("status", taskStatus.value);
     tasks.value = await api<Row[]>(`/api/v1/workbench/tasks?${parameters.toString()}`);
+    selectedTaskIds.value = selectedTaskIds.value.filter((id) => tasks.value.some((task) => task.id === id && task.sourceType === "SELF_CREATED" && task.status === "CANCELLED"));
   } finally {
     loading.value = false;
   }
@@ -731,6 +742,48 @@ async function createTeamTask() {
 function openScriptPackage(candidate: Row) {
   scriptPackageCandidate.value = candidate;
   scriptPackageVisible.value = true;
+}
+
+const bulkDeletableTasks = computed(() => tasks.value.filter((task) => task.sourceType === "SELF_CREATED" && task.status === "CANCELLED"));
+
+function toggleTaskSelection(task: Row, checked: boolean) {
+  selectedTaskIds.value = checked
+    ? Array.from(new Set([...selectedTaskIds.value, task.id]))
+    : selectedTaskIds.value.filter((id) => id !== task.id);
+}
+
+function toggleAllDeletableTasks(checked: boolean) {
+  selectedTaskIds.value = checked ? bulkDeletableTasks.value.map((task) => task.id) : [];
+}
+
+async function bulkTrashCancelledTasks() {
+  if (!selectedTaskIds.value.length) return ElMessage.warning("请先勾选需要删除的已取消任务");
+  await ElMessageBox.confirm(
+    `确认批量删除选中的 ${selectedTaskIds.value.length} 个任务吗？删除后进入回收站，3天内可以恢复。`,
+    "批量删除任务",
+    { confirmButtonText: "批量删除", cancelButtonText: "取消", type: "warning" },
+  );
+  bulkDeletingTasks.value = true;
+  try {
+    await Promise.all(selectedTaskIds.value.map((id) => post(`/api/v1/workbench/tasks/${id}/trash`)));
+    selectedTaskIds.value = [];
+    ElMessage.success("选中任务已移入回收站，将保留3天");
+    await Promise.all([loadTasks(), loadDashboard()]);
+  } finally {
+    bulkDeletingTasks.value = false;
+  }
+}
+
+async function copyCompleteVideoScript() {
+  const candidate = scriptPackageCandidate.value;
+  if (!candidate?.scriptPackage) return ElMessage.warning("暂无可复制的完整脚本");
+  const payload = {
+    direction: candidate.topic,
+    hook: candidate.hook,
+    fullScript: candidate.scripts?.zh30 || candidate.scripts?.zh15 || "",
+    ...candidate.scriptPackage,
+  };
+  await copyTaskContent(JSON.stringify(payload, null, 2), "完整脚本");
 }
 
 function assetCoverageLabel(status?: string) {
@@ -872,6 +925,7 @@ function dataCenterCacheKey() {
   return JSON.stringify({
     employeeId: user.value?.id || "",
     section: dataCenterTab.value,
+    scopeVersion: dataCenterTab.value === "videoFactory" ? "employee-projects-v1" : "",
     page: dataCenterTab.value === "assets" ? assetPage.value : dataCenterTab.value === "videoFactory" ? videoProjectPage.value : 1,
     videoProjectStatus: dataCenterTab.value === "videoFactory" ? videoProjectStatus.value : "",
     ...dataCenterFilters,
@@ -1043,6 +1097,10 @@ function outputText(output: Row) {
   return "";
 }
 
+function outputPublishedVariants(output?: Row) {
+  return (output?.contentPlan?.variants || []).filter((variant: Row) => variant.manualPublishUrl);
+}
+
 async function generateTaskSuggestion() {
   if (!selfTaskForm.productId) return ElMessage.warning("请先从产品库选择产品");
   generatingTaskSuggestion.value = true;
@@ -1094,6 +1152,8 @@ function taskAttachments(task?: Row) {
 }
 
 async function createSelfTask() {
+  if (!selfTaskForm.productId) return ElMessage.warning("请选择产品");
+  if (!selfTaskForm.keywordId) return ElMessage.warning("请选择智能关键词");
   if (!selfTaskForm.title.trim()) return ElMessage.warning("请填写任务标题");
   creatingSelfTask.value = true;
   try {
@@ -1136,6 +1196,8 @@ async function createSelfTask() {
     editingSelfTaskId.value = "";
     copyingSelfTask.value = false;
     await Promise.all([loadTasks(), loadDashboard()]);
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "任务添加失败，请稍后重试");
   } finally {
     creatingSelfTask.value = false;
   }
@@ -1192,19 +1254,19 @@ async function switchDataCenterTab(tab: string) {
 async function setAssetKind(kind: string) {
   dataCenterFilters.kind = kind;
   assetPage.value = 1;
-  await loadDataCenter(true);
+  await loadDataCenter();
 }
 
 async function setAssetPurpose(purpose: string) {
   dataCenterFilters.purpose = purpose;
   if (purpose !== "PACKAGING_RESOURCE") dataCenterFilters.packagingCategory = "";
   assetPage.value = 1;
-  await loadDataCenter(true);
+  await loadDataCenter();
 }
 
 async function setKnowledgeType(type: string) {
   dataCenterFilters.type = type;
-  await loadDataCenter(true);
+  await loadDataCenter();
 }
 
 async function refreshDataCenter() {
@@ -1263,25 +1325,33 @@ async function useViralVideoInFactory(video: Row) {
   selfTaskForm.descriptionDocument = taskEditorDocument(null, selfTaskForm.description);
 }
 
-async function openVideoFactoryTask(executionMode: "SCRIPT_ONLY" | "FULL_VIDEO") {
-  await openSelfTask();
-  const product = (contentTaskOptions.products || []).find((item: Row) => item.modelCode === videoFactoryForm.productModel);
-  Object.assign(selfTaskForm, {
-    contentType: "SHORT_VIDEO",
-    productId: product?.id || "",
-    keywordId: videoFactoryForm.keywordIds[0] || "",
-    platform: videoFactoryForm.platform,
-    targetAudience: videoFactoryForm.audience,
-    executionMode,
-    materialStrategy: videoScriptMode.value === "ASSET_ONLY" ? "APPROVED_ASSET_ONLY" : "REAL_ASSET_FIRST",
-    sourceKeywordIds: [...videoFactoryForm.keywordIds],
-    sourceExternalVideoIds: [...videoFactoryForm.externalVideoIds],
-    title: `${videoFactoryForm.productModel || "产品"} ${videoFactoryForm.topic || "短视频内容"}`,
-    description: `主题：${videoFactoryForm.topic || "待完善"}；目标：${videoFactoryForm.objective || "内容传播与转化"}；视频类型：${videoFactoryForm.voiceoverMode === "NO_VOICEOVER" ? "无口播" : "有口播"}。`,
-    expectedResult: executionMode === "SCRIPT_ONLY" ? "输出3套脚本候选、主方案、分镜、素材建议和缺口清单。" : "输出可预览的9:16主成片、脚本、分镜和素材使用记录。",
-  });
-  selfTaskForm.descriptionDocument = taskEditorDocument(null, selfTaskForm.description);
-  selfTaskForm.expectedResultDocument = taskEditorDocument(null, selfTaskForm.expectedResult);
+async function createVideoFactoryProject() {
+  if (!videoFactoryForm.productModel) return ElMessage.warning("请选择产品型号");
+  if (videoScriptSource.value === "USER" && providedVideoScripts.some((item) => !item.content.trim())) {
+    providedVideoScriptsVisible.value = true;
+    return ElMessage.warning("请填写三个方向的脚本内容");
+  }
+  creatingVideoProject.value = true;
+  try {
+    await post("/api/v1/workbench/data-center/video-projects", {
+      ...videoFactoryForm,
+      generationMode: videoScriptMode.value === "ASSET_ONLY" ? "ASSET_ONLY" : "NORMAL",
+      contentRestrictionMode: videoScriptRestriction.value,
+      scriptSource: videoScriptSource.value,
+      userProvidedDirections: videoScriptSource.value === "USER"
+        ? providedVideoScripts.map((item, index) => ({ index, title: item.title.trim(), content: item.content.trim() }))
+        : [],
+    });
+    videoProjectPage.value = 1;
+    videoProjectStatus.value = "";
+    await invalidateDataCenterSection("videoFactory");
+    await loadDataCenter(true);
+    ElMessage.success("视频项目已创建，并显示在下方项目列表");
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "视频项目创建失败，请稍后重试");
+  } finally {
+    creatingVideoProject.value = false;
+  }
 }
 
 async function analyzeWorkbenchAssetGaps() {
@@ -1394,13 +1464,17 @@ async function filterVideoProjects() {
 
 function videoProjectStageLabel(stage?: string) {
   return ({
-    FACTORY_SCRIPT_READY: "方向与脚本已生成",
+    FACTORY_SCRIPT_READY: "项目脚本已生成",
     FACTORY_GENERATING: "素材准备中",
     READY_TO_EDIT: "可进入AI剪辑",
     EDITING: "AI剪辑中",
     VIDEO_REVIEW: "成片待审核",
+    PLATFORM_PACKAGING: "最终成品",
     PACKAGING_REVIEW: "包装待审核",
-  } as Record<string, string>)[String(stage || "")] || stage || "方向与脚本已生成";
+    READY_TO_PUBLISH: "待发布",
+    PUBLISHING: "发布中",
+    TRACKING: "已发布并跟踪",
+  } as Record<string, string>)[String(stage || "")] || stage || "项目脚本已生成";
 }
 
 function videoVoiceoverLabel(project: Row) {
@@ -2304,6 +2378,9 @@ onMounted(() => void bootstrap());
               <span class="output-library-copy">
                 <strong>{{ output.title }}</strong>
                 <small>{{ output.aiTask?.taskNo }} · {{ output.aiTask?.platform ? platformLabel(output.aiTask.platform) : '全平台' }}</small>
+                <span v-if="outputPublishedVariants(output).length" class="output-published-platforms">
+                  已发布：{{ outputPublishedVariants(output).map((variant: Row) => platformLabel(variant.platform)).join("、") }}
+                </span>
                 <span>{{ formatTime(output.createdAt) }}</span>
               </span>
             </button>
@@ -2317,16 +2394,32 @@ onMounted(() => void bootstrap());
           <div class="task-toolbar-filters">
             <el-segmented v-model="taskScope" :options="[{label:'我的任务',value:'MINE'},{label:'可领取',value:'AVAILABLE'},{label:'全部相关',value:'ALL'}]" @change="loadTasks" />
             <el-select v-model="taskStatus" clearable placeholder="全部状态" @change="loadTasks">
-              <el-option v-for="(label, key) in statusLabels" :key="key" :label="label" :value="key" />
+              <el-option label="待完成" value="TODO" />
+              <el-option label="待审核" value="PENDING_REVIEW" />
+              <el-option label="已完成" value="DONE" />
+              <el-option label="已取消" value="CANCELLED" />
             </el-select>
           </div>
           <div class="task-toolbar-actions">
+            <el-checkbox
+              v-if="bulkDeletableTasks.length"
+              :model-value="selectedTaskIds.length === bulkDeletableTasks.length"
+              :indeterminate="selectedTaskIds.length > 0 && selectedTaskIds.length < bulkDeletableTasks.length"
+              @change="(checked: boolean) => toggleAllDeletableTasks(checked)"
+            >全选可删除任务</el-checkbox>
+            <el-button v-if="selectedTaskIds.length" type="danger" :loading="bulkDeletingTasks" @click="bulkTrashCancelledTasks">批量删除（{{ selectedTaskIds.length }}）</el-button>
             <el-button @click="openTaskRecycleBin">任务回收站</el-button>
             <el-button type="primary" @click="openSelfTask">新建我的任务</el-button>
           </div>
         </section>
         <section class="section-card task-list">
           <article v-for="task in tasks" :key="task.id" class="task-card">
+            <el-checkbox
+              v-if="task.sourceType === 'SELF_CREATED' && task.status === 'CANCELLED'"
+              class="task-select-checkbox"
+              :model-value="selectedTaskIds.includes(task.id)"
+              @change="(checked: boolean) => toggleTaskSelection(task, checked)"
+            />
             <div class="task-main">
               <div class="task-meta">
                 <el-tag size="small" :type="statusType(taskStatusCode(task))">{{ taskDisplayStatus(task) }}</el-tag>
@@ -2342,8 +2435,8 @@ onMounted(() => void bootstrap());
             <div class="task-actions">
               <el-button @click="openTaskDetail(task)">查看详情</el-button>
               <el-button v-if="!task.assigneeEmployeeId && task.status === 'OPEN'" type="primary" @click="acceptTask(task)">领取</el-button>
-              <el-button v-if="!isAiContentTask(task) && task.assigneeEmployeeId === user.id && ['ACCEPTED','RETURNED'].includes(task.status)" type="primary" @click="startTask(task)">开始</el-button>
-              <el-button v-if="!isAiContentTask(task) && task.assigneeEmployeeId === user.id && ['ACCEPTED','IN_PROGRESS','RETURNED'].includes(task.status)" @click="openSubmit(task)">提交成果</el-button>
+              <el-button v-if="task.assigneeEmployeeId === user.id && ['ACCEPTED','RETURNED'].includes(task.status)" type="primary" @click="startTask(task)">开始</el-button>
+              <el-button v-if="task.assigneeEmployeeId === user.id && ['ACCEPTED','IN_PROGRESS','RETURNED'].includes(task.status)" @click="openSubmit(task)">提交成果</el-button>
               <el-button v-if="task.sourceType === 'SELF_CREATED' && (!isAiContentTask(task) || task.status === 'ACCEPTED') && !['COMPLETED','CANCELLED','VERIFIED'].includes(task.status)" @click="openSelfTaskEdit(task)">修改</el-button>
               <el-button v-if="task.sourceType === 'SELF_CREATED' && !['COMPLETED','CANCELLED','VERIFIED'].includes(task.status)" type="danger" plain @click="cancelOwnedTask(task)">取消任务</el-button>
               <el-button v-if="task.sourceType === 'SELF_CREATED' && task.status === 'CANCELLED'" @click="openSelfTaskCopy(task)">复制再次添加</el-button>
@@ -2649,7 +2742,7 @@ onMounted(() => void bootstrap());
                 <el-option v-for="product in productOptions" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" />
               </el-select>
               <el-input v-model="videoFactoryForm.audience" placeholder="目标人群，如 子女送父母" />
-              <el-input v-model="videoFactoryForm.topic" placeholder="视频主题或关键词" />
+              <el-input v-model="videoFactoryForm.topic" placeholder="视频主题或关键词（可选）" />
               <el-input v-model="videoFactoryForm.objective" placeholder="内容目标" />
             </div>
             <div v-if="canGenerateVideoScript" class="factory-generation-options">
@@ -2661,9 +2754,12 @@ onMounted(() => void bootstrap());
                 <el-option label="无健康限制" value="NORMAL" />
                 <el-option label="健康内容受限" value="HEALTH_RESTRICTED" />
               </el-select>
+              <el-select v-model="videoScriptSource" @change="(value: string) => value === 'USER' && (providedVideoScriptsVisible = true)">
+                <el-option label="AI一键生成完整脚本" value="AI" />
+                <el-option label="用户提供三个方向脚本" value="USER" />
+              </el-select>
               <div class="factory-generation-actions">
-                <el-button @click="openVideoFactoryTask('SCRIPT_ONLY')">创建脚本任务</el-button>
-                <el-button type="primary" @click="openVideoFactoryTask('FULL_VIDEO')">创建完整视频任务</el-button>
+                <el-button type="primary" :loading="creatingVideoProject" @click="createVideoFactoryProject">创建视频项目</el-button>
               </div>
             </div>
             <el-alert v-if="videoScriptMode === 'ASSET_ONLY'" title="项目只使用素材库已有视频素材；不能完整覆盖时会明确提示缺少素材，不会生成需要补拍的脚本。" type="info" :closable="false" />
@@ -2674,18 +2770,28 @@ onMounted(() => void bootstrap());
 
           <div class="section-card factory-results-toolbar">
             <div>
-              <h3>视频方向与脚本</h3>
+              <h3>视频项目</h3>
               <p>最新生成的项目优先显示，每页 {{ videoProjectPageSize }} 条。</p>
             </div>
             <div class="factory-results-actions">
-              <el-select v-model="videoProjectStatus" clearable placeholder="全部方向状态" @change="filterVideoProjects">
-                <el-option label="方向与脚本已生成" value="FACTORY_SCRIPT_READY" />
+              <el-select v-model="videoProjectStatus" placeholder="全部项目状态" @change="filterVideoProjects">
+                <el-option label="全部项目" value="" />
+                <el-option label="项目脚本已生成" value="FACTORY_SCRIPT_READY" />
                 <el-option label="素材准备中" value="FACTORY_GENERATING" />
                 <el-option label="可进入AI剪辑" value="READY_TO_EDIT" />
                 <el-option label="AI剪辑中" value="EDITING" />
                 <el-option label="成片待审核" value="VIDEO_REVIEW" />
+                <el-option label="最终成品" value="FINAL_PRODUCT" />
                 <el-option label="包装待审核" value="PACKAGING_REVIEW" />
               </el-select>
+              <div class="factory-page-controls">
+                <el-button :disabled="videoProjectPage <= 1" @click="changeDataCenterPage(videoProjectPage - 1)">上一页</el-button>
+                <span>第 {{ videoProjectPage }} / {{ Math.max(1, Math.ceil(Number(dataCenter.pagination?.total || 0) / videoProjectPageSize)) }} 页</span>
+                <el-button
+                  :disabled="videoProjectPage * videoProjectPageSize >= Number(dataCenter.pagination?.total || 0)"
+                  @click="changeDataCenterPage(videoProjectPage + 1)"
+                >下一页</el-button>
+              </div>
               <el-button v-if="canGenerateVideoScript" @click="openVideoRecycleBin">回收站</el-button>
             </div>
           </div>
@@ -2712,7 +2818,7 @@ onMounted(() => void bootstrap());
                   <h4>{{ candidate.topic }}</h4>
                   <p><b>HOOK：</b>{{ candidate.hook }}</p>
                   <p class="candidate-full-script"><b>完整脚本：</b>{{ candidate.scripts?.zh30 || candidate.scripts?.zh15 || candidate.outline?.join("；") }}</p>
-                  <el-button v-if="candidate.scriptPackage" @click="openScriptPackage(candidate)">查看完整脚本包</el-button>
+                  <el-button v-if="candidate.scriptPackage" @click="openScriptPackage(candidate)">查看完整脚本</el-button>
                   <el-button type="primary" plain :loading="generatingProjectId === project.id" @click="generateVideoProject(project, Number(index))">生成拍摄执行包</el-button>
                 </article>
               </div>
@@ -3017,6 +3123,16 @@ onMounted(() => void bootstrap());
         <div><strong>{{ outputPreview.title }}</strong><span>{{ outputCategoryLabel(outputPreview) }} · {{ formatTime(outputPreview.createdAt) }}</span></div>
         <el-tag>{{ outputPreview.reviewStatus === "APPROVED" ? "已审核" : outputPreview.reviewStatus }}</el-tag>
       </div>
+      <div v-if="outputPublishedVariants(outputPreview).length" class="output-published-links">
+        <span>已回传发布作品</span>
+        <el-button
+          v-for="variant in outputPublishedVariants(outputPreview)"
+          :key="`${variant.platform}-${variant.manualPublishUrl}`"
+          type="success"
+          plain
+          @click="openPublishedVideo(variant.manualPublishUrl)"
+        >查看{{ platformLabel(variant.platform) }}作品</el-button>
+      </div>
       <video v-if="isVideoOutput(outputPreview) && outputPreviewUrl" :src="outputPreviewUrl" controls playsinline preload="metadata" />
       <img v-else-if="isImageOutput(outputPreview) && outputPreviewUrl" :src="outputPreviewUrl" :alt="outputPreview.title" />
       <iframe v-else-if="isPdfOutput(outputPreview) && outputPreviewUrl" :src="outputPreviewUrl" :title="outputPreview.title" />
@@ -3024,6 +3140,13 @@ onMounted(() => void bootstrap());
       <el-empty v-else description="该成品暂无可直接预览的文件" :image-size="72" />
     </article>
     <template #footer>
+      <el-button
+        v-for="variant in outputPublishedVariants(outputPreview)"
+        :key="`footer-${variant.platform}-${variant.manualPublishUrl}`"
+        type="success"
+        plain
+        @click="openPublishedVideo(variant.manualPublishUrl)"
+      >查看{{ platformLabel(variant.platform) }}作品</el-button>
       <el-button v-if="outputPreviewUrl" tag="a" :href="outputPreviewUrl" target="_blank">下载</el-button>
       <el-button @click="recreateSystemOutput">调整参数重新创作</el-button>
       <el-button type="primary" @click="outputPreviewVisible = false">完成</el-button>
@@ -3343,6 +3466,30 @@ onMounted(() => void bootstrap());
     </div>
   </el-dialog>
 
+  <el-dialog v-model="providedVideoScriptsVisible" title="提供三个方向的完整脚本" width="min(980px, 96vw)">
+    <el-alert
+      title="可直接粘贴已有脚本。系统会保留你的核心内容，并补齐基础信息、内容定位、黄金三秒、逐句口播、脚本结构、镜头需求、素材覆盖、画面事实、音画匹配、留人设计、字幕、重点文字、声音、合规、结尾和素材缺口。"
+      type="info"
+      :closable="false"
+    />
+    <div class="provided-script-grid">
+      <section v-for="(direction, index) in providedVideoScripts" :key="index" class="provided-script-card">
+        <strong>方向 {{ index + 1 }}</strong>
+        <el-input v-model="direction.title" placeholder="方向标题（可选）" />
+        <el-input
+          v-model="direction.content"
+          type="textarea"
+          :rows="12"
+          placeholder="填写或粘贴本方向完整脚本。可包含口播、镜头、字幕、声音、合规要求和补拍说明；未写完整的结构由AI补齐。"
+        />
+      </section>
+    </div>
+    <template #footer>
+      <el-button @click="providedVideoScriptsVisible = false">取消</el-button>
+      <el-button type="primary" @click="providedVideoScriptsVisible = false">保存三个方向</el-button>
+    </template>
+  </el-dialog>
+
   <el-dialog v-model="scriptPackageVisible" title="完整视频脚本包" width="min(980px, 96vw)" class="script-package-dialog">
     <div v-if="scriptPackageCandidate?.scriptPackage" class="script-package">
       <section>
@@ -3408,7 +3555,10 @@ onMounted(() => void bootstrap());
         <el-empty v-if="!scriptPackageCandidate.scriptPackage.materialGaps.length" :image-size="48" description="暂无素材缺口" />
       </section>
     </div>
-    <template #footer><el-button type="primary" @click="scriptPackageVisible = false">关闭</el-button></template>
+    <template #footer>
+      <el-button @click="copyCompleteVideoScript">一键复制完整脚本</el-button>
+      <el-button type="primary" @click="scriptPackageVisible = false">关闭</el-button>
+    </template>
   </el-dialog>
 
   <el-dialog

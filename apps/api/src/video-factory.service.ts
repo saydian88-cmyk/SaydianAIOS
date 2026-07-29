@@ -30,6 +30,9 @@ type ProjectCreateInput = {
   accountType?: string;
   estimatedDurationSeconds?: number;
   contentRestrictionMode?: string;
+  generationMode?: string;
+  scriptSource?: string;
+  userProvidedDirections?: Array<{ index?: number; title?: string; content?: string }>;
   productModel?: string;
   topic?: string;
   audience?: string;
@@ -1466,6 +1469,15 @@ export class VideoFactoryService {
       accountType: String(input.accountType || "BRAND").trim(),
       estimatedDurationSeconds: Math.max(15, Math.min(60, Number(input.estimatedDurationSeconds) || 30)),
       contentRestrictionMode: input.contentRestrictionMode === "HEALTH_RESTRICTED" ? "HEALTH_RESTRICTED" : "NORMAL",
+      generationMode: input.generationMode === "ASSET_ONLY" ? "ASSET_ONLY" : "NORMAL",
+      scriptSource: input.scriptSource === "USER" ? "USER" : "AI",
+      userProvidedDirections: (input.userProvidedDirections || [])
+        .map((item, index) => ({
+          index: Number.isFinite(Number(item.index)) ? Number(item.index) : index,
+          title: String(item.title || "").trim(),
+          content: String(item.content || "").trim(),
+        }))
+        .filter((item) => item.content),
       product,
       keywords,
       knowledge,
@@ -1630,7 +1642,10 @@ export class VideoFactoryService {
         audience: context.audience,
         objective: context.objective,
         voiceoverMode: context.voiceoverMode,
-        generationMode: "NORMAL",
+        generationMode: context.generationMode,
+        contentRestrictionMode: context.contentRestrictionMode,
+        scriptSource: context.scriptSource,
+        userProvidedDirections: context.userProvidedDirections,
       });
     } catch {
       candidates = this.fallbackCandidates(context);
@@ -1674,6 +1689,9 @@ export class VideoFactoryService {
             accountType: context.accountType,
             estimatedDurationSeconds: context.estimatedDurationSeconds,
             contentRestrictionMode: context.contentRestrictionMode,
+            generationMode: context.generationMode,
+            scriptSource: context.scriptSource,
+            userProvidedDirections: context.userProvidedDirections,
           }],
           evidenceIds,
           status: ContentStatus.DRAFT,
@@ -2245,16 +2263,20 @@ export class VideoFactoryService {
     return row.productionStage || "FACTORY_SCRIPT_READY";
   }
 
-  async projects(query: { status?: string; platform?: string; productModel?: string; page: number; pageSize?: number }): Promise<{ items: unknown[]; total: number; page: number; pageSize: number }>;
-  async projects(query: { status?: string; platform?: string; productModel?: string }): Promise<any[]>;
-  async projects(query: { status?: string; platform?: string; productModel?: string; page?: number; pageSize?: number }): Promise<any> {
+  async projects(query: { status?: string; platform?: string; productModel?: string; createdBy?: string; page: number; pageSize?: number }): Promise<{ items: unknown[]; total: number; page: number; pageSize: number }>;
+  async projects(query: { status?: string; platform?: string; productModel?: string; createdBy?: string }): Promise<any[]>;
+  async projects(query: { status?: string; platform?: string; productModel?: string; createdBy?: string; page?: number; pageSize?: number }): Promise<any> {
     const paged = Boolean(query.page || query.pageSize);
     const page = Math.max(1, Number(query.page || 1));
     const pageSize = Math.min(50, Math.max(1, Number(query.pageSize || 20)));
+    const finalProductStages = ["VIDEO_REVIEW", "PLATFORM_PACKAGING", "PACKAGING_REVIEW", "READY_TO_PUBLISH", "PUBLISHING", "TRACKING"];
     const where: Prisma.ContentPlanWhereInput = {
       kind: "VIDEO",
       sourceSignals: { array_contains: [{ type: "VIDEO_FACTORY" }] },
-      productionStage: query.status ? query.status : { not: "VIDEO_FACTORY_ARCHIVED" },
+      ...(query.createdBy ? { createdBy: query.createdBy } : {}),
+      ...(query.status === "FINAL_PRODUCT"
+        ? { productionStage: { in: finalProductStages } }
+        : { productionStage: query.status ? query.status : { not: "VIDEO_FACTORY_ARCHIVED" } }),
       ...(query.productModel ? { productModel: query.productModel } : {}),
       ...(query.platform ? { targetPlatforms: { has: integrationKind(query.platform) } } : {}),
     };

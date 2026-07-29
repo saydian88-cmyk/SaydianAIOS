@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   ForbiddenException,
@@ -134,6 +135,12 @@ export class WorkbenchController {
   ) {
     const employee = this.employee(authorization);
     const contentType = String(body.contentType || "").toUpperCase();
+    if (!String(body.productId || "").trim()) {
+      throw new BadRequestException("请选择产品");
+    }
+    if (!String(body.keywordId || "").trim()) {
+      throw new BadRequestException("请选择智能关键词");
+    }
     const type = contentType === "IMAGE" ? "IMAGE" : contentType === "ARTICLE" ? "ARTICLE" : "VIDEO";
     const category = type === "IMAGE" ? "CONTENT_IMAGE" : type === "ARTICLE" ? "CONTENT_ARTICLE" : "CONTENT_VIDEO";
     const opsTask = await this.workbench.createSelfTask(employee, {
@@ -531,7 +538,14 @@ export class WorkbenchController {
       this.prisma.knowledgeEntry.count({ where: { status: "READY" } }),
       this.prisma.smartKeyword.count(),
       this.prisma.externalVideo.count(),
-      this.prisma.contentPlan.count({ where: { kind: "VIDEO" } }),
+      this.prisma.contentPlan.count({
+        where: {
+          kind: "VIDEO",
+          createdBy: employee.name,
+          sourceSignals: { array_contains: [{ type: "VIDEO_FACTORY" }] },
+          productionStage: { notIn: ["VIDEO_FACTORY_ARCHIVED", "VIDEO_FACTORY_PURGED"] },
+        },
+      }),
       canCurateAssets ? this.prisma.asset.count({ where: { reviewStatus: "PENDING", deletedAt: null } }) : Promise.resolve(0),
     ]);
     const sectionPromise = section === "assets"
@@ -634,12 +648,14 @@ export class WorkbenchController {
                 status: query.status,
                 platform: query.platform,
                 productModel: query.model,
+                createdBy: employee.name,
                 page: Number(query.page || 1),
                 pageSize: Number(query.pageSize || 12),
               }).catch(() => ({ items: [], total: 0, page: 1, pageSize: 12 })),
               this.prisma.contentPlan.findMany({
                 where: {
                   kind: "VIDEO",
+                  createdBy: employee.name,
                   ...(query.model ? { productModel: { contains: query.model, mode: "insensitive" } } : {}),
                 },
                 select: {
@@ -723,6 +739,14 @@ export class WorkbenchController {
       accountType: String(body.accountType || "BRAND"),
       estimatedDurationSeconds: Number(body.estimatedDurationSeconds || 30),
       contentRestrictionMode: String(body.contentRestrictionMode || "NORMAL"),
+      generationMode: String(body.generationMode || "NORMAL"),
+      scriptSource: String(body.scriptSource || "AI"),
+      userProvidedDirections: Array.isArray(body.userProvidedDirections)
+        ? body.userProvidedDirections.map((item, index) => {
+          const row = item && typeof item === "object" ? item as Record<string, unknown> : {};
+          return { index: Number(row.index ?? index), title: String(row.title || ""), content: String(row.content || "") };
+        })
+        : [],
       productModel: body.productModel ? String(body.productModel) : undefined,
       topic: body.topic ? String(body.topic) : undefined,
       audience: body.audience ? String(body.audience) : undefined,
