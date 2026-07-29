@@ -1279,68 +1279,6 @@ export class VideoFactoryService {
     return this.project(contentPlanId);
   }
 
-  async updateDraftBrief(contentPlanId: string, input: ProjectCreateInput, actor: string) {
-    const plan = await this.prisma.contentPlan.findUnique({ where: { id: contentPlanId } });
-    if (!plan) throw new NotFoundException("智能视频项目不存在");
-    if (!["PROJECT_BRIEF", "SCRIPT_RETURNED"].includes(plan.productionStage)) {
-      throw new BadRequestException("脚本任务提交后不能直接修改项目要求，请先退回脚本");
-    }
-    const signals = sourceSignals(plan);
-    const currentFactory = signals.find((signal) => signal.type === "VIDEO_FACTORY") || {};
-    const currentBrief = object(currentFactory.brief);
-    const platform = integrationKind(input.platform || plan.targetPlatforms[0]);
-    const brief = {
-      ...currentBrief,
-      platform,
-      voiceoverMode: String(input.voiceoverMode || currentBrief.voiceoverMode || "VOICEOVER").toUpperCase(),
-      accountType: String(input.accountType || currentBrief.accountType || "BRAND").toUpperCase(),
-      estimatedDurationSeconds: Math.max(15, Math.min(180, Math.round(number(input.estimatedDurationSeconds, number(currentBrief.estimatedDurationSeconds, 30))))),
-      healthContentAllowed: input.healthContentAllowed !== false,
-      materialPolicy: String(input.generationMode || currentBrief.materialPolicy || "REAL_ASSET_FIRST").toUpperCase() === "ASSET_ONLY"
-        ? "ASSET_ONLY"
-        : "REAL_ASSET_FIRST",
-      missingMaterialStrategies: ["RESHOOT", "AI_GENERATE"],
-      soundPrompt: String(input.soundPrompt ?? currentBrief.soundPrompt ?? "").trim(),
-      mustShowFacts: String(input.mustShowFacts ?? currentBrief.mustShowFacts ?? "").trim(),
-      additionalPrompt: String(input.additionalPrompt ?? currentBrief.additionalPrompt ?? "").trim(),
-      videoType: String(input.videoType ?? currentBrief.videoType ?? "").trim(),
-      keywords: String(input.keywords ?? currentBrief.keywords ?? "").trim(),
-      reference: String(input.reference ?? currentBrief.reference ?? "").trim(),
-      hook: String(input.hook ?? currentBrief.hook ?? "").trim(),
-      scene: String(input.scene ?? currentBrief.scene ?? "").trim(),
-      painPoint: String(input.painPoint ?? currentBrief.painPoint ?? "").trim(),
-      audience: String(input.audience ?? currentBrief.audience ?? plan.audience ?? "").trim(),
-      scriptEngines: Array.from(new Set((input.scriptEngines?.length
-        ? input.scriptEngines
-        : Array.isArray(currentBrief.scriptEngines) ? currentBrief.scriptEngines.map(String) : ["REMOTE_CODEX", "SYSTEM_AI"])
-        .map((item) => String(item).toUpperCase()))).filter((item) => ["REMOTE_CODEX", "SYSTEM_AI"].includes(item)),
-    };
-    const nextSignals = signals.map((signal) => signal.type === "VIDEO_FACTORY" ? { ...signal, brief } : signal);
-    await this.prisma.$transaction([
-      this.prisma.contentPlan.update({
-        where: { id: contentPlanId },
-        data: {
-          targetPlatforms: [platform],
-          productModel: String(input.productModel || plan.productModel || "").trim() || null,
-          topic: conciseVideoTopic(String(input.topic || plan.topic)),
-          audience: String(input.audience || plan.audience).trim(),
-          objective: String(input.objective || plan.objective).trim(),
-          sourceSignals: nextSignals as unknown as Prisma.InputJsonValue,
-        },
-      }),
-      this.prisma.auditLog.create({
-        data: {
-          actor,
-          action: "VIDEO_FACTORY_PROJECT_BRIEF_UPDATE",
-          entityType: "ContentPlan",
-          entityId: contentPlanId,
-          after: { brief },
-        },
-      }),
-    ]);
-    return this.project(contentPlanId);
-  }
-
   async reviewScript(contentPlanId: string, approved: boolean, note: string, actor: string, candidateIndex?: number) {
     const plan = await this.prisma.contentPlan.findUnique({ where: { id: contentPlanId } });
     if (!plan) throw new NotFoundException("智能视频项目不存在");
