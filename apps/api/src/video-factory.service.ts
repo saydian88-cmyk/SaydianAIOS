@@ -1019,7 +1019,28 @@ export class VideoFactoryService {
   async createDraftProject(input: ProjectCreateInput, actor: string) {
     const productModel = String(input.productModel || "").trim();
     const videoType = String(input.videoType || "").trim();
-    const keywords = String(input.keywords || input.topic || "").trim();
+    const requestedKeywordIds = Array.from(new Set((input.keywordIds || []).map(String).filter(Boolean)));
+    const [selectedSmartKeywords, selectedViralKeywords] = requestedKeywordIds.length
+      ? await Promise.all([
+          this.prisma.smartKeyword.findMany({
+            where: { id: { in: requestedKeywordIds }, status: "ACTIVE", contentEnabled: true },
+            select: { id: true, keyword: true },
+          }),
+          this.prisma.viralKeyword.findMany({
+            where: { id: { in: requestedKeywordIds }, active: true },
+            select: { keyword: true, smartKeywordId: true },
+          }),
+        ])
+      : [[], []];
+    const keywordIds = Array.from(new Set([
+      ...selectedSmartKeywords.map((item) => item.id),
+      ...selectedViralKeywords.map((item) => item.smartKeywordId).filter((id): id is string => Boolean(id)),
+    ]));
+    const selectedKeywordText = Array.from(new Set([
+      ...selectedSmartKeywords.map((item) => item.keyword),
+      ...selectedViralKeywords.map((item) => item.keyword),
+    ].filter(Boolean))).join("、");
+    const keywords = String(input.keywords || input.topic || selectedKeywordText).trim();
     if (!productModel) throw new BadRequestException("请选择产品型号");
     if (!videoType) throw new BadRequestException("请选择或填写视频类型");
     if (!keywords && !input.keywordIds?.length) throw new BadRequestException("请填写或选择关键词");
@@ -1079,7 +1100,7 @@ export class VideoFactoryService {
             brief,
             scriptCandidates: [],
             selectedCandidateIndex: 0,
-            keywordIds: input.keywordIds || [],
+            keywordIds,
             externalVideoIds: input.externalVideoIds || [],
             externalReferencePolicy: "STRUCTURE_ONLY",
             routingMode: "DUAL_ENGINE",
@@ -1093,9 +1114,9 @@ export class VideoFactoryService {
           actorType: "HUMAN",
         },
       });
-      if (input.keywordIds?.length) {
+      if (keywordIds.length) {
         await tx.smartKeywordContentRelation.createMany({
-          data: input.keywordIds.map((keywordId, index) => ({
+          data: keywordIds.map((keywordId, index) => ({
             keywordId,
             contentPlanId: created.id,
             usageType: "SMART_VIDEO_FACTORY",
