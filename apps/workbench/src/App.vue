@@ -315,6 +315,8 @@ const publishPlatformOptions = [
 ];
 const publishLinkRecords = ref<Array<{ platform: string; remoteUrl: string; publishedAt: string }>>([]);
 const expandedVideoProjectIds = ref<string[]>([]);
+const activeVideoProjectId = ref("");
+const activeVideoProject = computed(() => (dataCenter.videoProjects || []).find((project: Row) => project.id === activeVideoProjectId.value));
 const lockedShotUpload = ref<Row>();
 const videoScriptMode = ref("ASSET_FIRST");
 const videoScriptRestriction = ref("NORMAL");
@@ -584,6 +586,46 @@ function projectCandidates(project: Row) {
     ? project.sourceSignals.find((item: Row) => item.type === "VIDEO_FACTORY")
     : undefined;
   return Array.isArray(project.scriptCandidates) ? project.scriptCandidates : signal?.scriptCandidates || [];
+}
+
+function isSingleScriptProject(project: Row) {
+  return Number(project.workflowVersion || 0) >= 4;
+}
+
+function displayedProjectCandidates(project: Row) {
+  const candidates = projectCandidates(project);
+  return isSingleScriptProject(project) ? candidates.slice(0, 1) : candidates;
+}
+
+function openVideoProject(project: Row) {
+  activeVideoProjectId.value = project.id;
+  if (!expandedVideoProjectIds.value.includes(project.id)) expandedVideoProjectIds.value.push(project.id);
+}
+
+function closeVideoProject() {
+  activeVideoProjectId.value = "";
+}
+
+const videoFlowSteps = [
+  "需求确认",
+  "脚本生成",
+  "脚本审核",
+  "素材补全",
+  "视频生成",
+  "成片审核",
+  "封面标题与发布",
+];
+
+function videoFlowStep(project: Row) {
+  const stage = String(project.productionStage || "");
+  if (["PROJECT_BRIEF"].includes(stage)) return 1;
+  if (["SCRIPT_GENERATING"].includes(stage)) return 2;
+  if (["FACTORY_SCRIPT_READY", "SCRIPT_RETURNED"].includes(stage)) return 3;
+  if (["SCRIPT_APPROVED", "FACTORY_GENERATING", "READY_TO_EDIT"].includes(stage)) return 4;
+  if (["EDITING"].includes(stage)) return 5;
+  if (["VIDEO_REVIEW"].includes(stage)) return 6;
+  if (["PLATFORM_PACKAGING", "PACKAGING_REVIEW", "READY_TO_PUBLISH", "PUBLISHING", "TRACKING"].includes(stage)) return 7;
+  return 1;
 }
 
 function openExternal(url: string) {
@@ -2841,7 +2883,7 @@ onMounted(() => void bootstrap());
         </section>
 
         <section v-else v-loading="dataCenterLoading" class="video-factory-workspace">
-          <div class="section-card factory-create">
+          <div v-if="!activeVideoProject" class="section-card factory-create">
             <div class="section-heading"><div><h3>新建智能视频项目</h3><p>先创建单项目并确认大致方向；项目创建时不生成脚本，确认后再交给远程Codex生成一套完整脚本。</p></div><el-tag type="success">运营 / 视频专员</el-tag></div>
             <div class="factory-form">
               <el-select v-model="videoFactoryForm.platform" placeholder="目标平台">
@@ -2881,10 +2923,11 @@ onMounted(() => void bootstrap());
 
           <div class="section-card factory-results-toolbar">
             <div>
-              <h3>视频项目</h3>
-              <p>最新生成的项目优先显示，每页 {{ videoProjectPageSize }} 条。</p>
+              <el-button v-if="activeVideoProject" text @click="closeVideoProject">← 返回项目列表</el-button>
+              <h3>{{ activeVideoProject ? activeVideoProject.topic : "视频项目" }}</h3>
+              <p>{{ activeVideoProject ? `${activeVideoProject.productionNo} · ${videoProjectStageLabel(activeVideoProject.productionStage)}` : `最新生成的项目优先显示，每页 ${videoProjectPageSize} 条。` }}</p>
             </div>
-            <div class="factory-results-actions">
+            <div v-if="!activeVideoProject" class="factory-results-actions">
               <el-select v-model="videoProjectStatus" placeholder="全部项目状态" @change="filterVideoProjects">
                 <el-option label="全部项目" value="" />
                 <el-option label="待确认项目要求" value="PROJECT_BRIEF" />
@@ -2911,12 +2954,45 @@ onMounted(() => void bootstrap());
             </div>
           </div>
 
-          <div class="factory-projects">
-            <article v-for="project in dataCenter.videoProjects || []" :key="project.id" class="section-card factory-project">
+          <div v-if="!activeVideoProject" class="factory-project-overview-grid">
+            <article v-for="project in dataCenter.videoProjects || []" :key="`overview-${project.id}`" class="section-card factory-project-overview">
+              <div class="factory-project-head">
+                <div>
+                  <div class="task-meta"><span>{{ platformLabel(project.targetPlatforms?.[0]) }}</span><span>{{ project.productModel || "品牌通用" }}</span><span>{{ project.productionNo }}</span></div>
+                  <h3>{{ project.topic }}</h3>
+                  <p>{{ isSingleScriptProject(project) ? "单项目 · 单脚本 · 远程Codex流程" : `历史三方向流程 · ${projectCandidates(project).length}套脚本` }}</p>
+                </div>
+                <el-tag :type="isSingleScriptProject(project) ? 'success' : 'info'">{{ videoProjectStageLabel(project.productionStage) }}</el-tag>
+              </div>
+              <div class="project-overview-progress">
+                <span>当前阶段</span>
+                <strong>{{ videoFlowStep(project) }} / 7 · {{ videoFlowSteps[videoFlowStep(project) - 1] }}</strong>
+              </div>
+              <div class="project-overview-actions">
+                <small>更新于 {{ formatTime(project.updatedAt || project.createdAt) }}</small>
+                <el-button type="primary" @click="openVideoProject(project)">进入项目</el-button>
+              </div>
+            </article>
+            <el-empty v-if="!dataCenter.videoProjects?.length" description="暂无视频项目，可从上方创建" />
+          </div>
+
+          <div v-if="activeVideoProject" class="video-project-flow-tabs section-card">
+            <div
+              v-for="(step, index) in videoFlowSteps"
+              :key="step"
+              :class="{ active: videoFlowStep(activeVideoProject) === index + 1, done: videoFlowStep(activeVideoProject) > index + 1 }"
+            >
+              <b>{{ index + 1 }}</b><span>{{ step }}</span>
+            </div>
+          </div>
+
+          <div v-if="activeVideoProject" class="factory-projects">
+            <article v-for="project in [activeVideoProject]" :key="project.id" class="section-card factory-project">
               <div class="factory-project-head">
                 <div><div class="task-meta"><span>{{ platformLabel(project.targetPlatforms?.[0]) }}</span><span>{{ project.productModel || "品牌通用" }}</span><span>{{ videoVoiceoverLabel(project) }}</span><span>{{ project.productionNo }}</span><span>生成于 {{ formatTime(project.createdAt) }}</span><span v-if="project.updatedAt !== project.createdAt">更新于 {{ formatTime(project.updatedAt) }}</span></div><h3>{{ project.topic }}</h3></div>
                 <div class="factory-project-head-actions">
                   <el-tag>{{ videoProjectStageLabel(project.productionStage) }}</el-tag>
+                  <el-tag v-if="!isSingleScriptProject(project)" type="info">历史三方向项目</el-tag>
                   <el-button
                     v-if="canGenerateVideoScript"
                     type="danger"
@@ -2940,9 +3016,9 @@ onMounted(() => void bootstrap());
                   @click="submitProjectScriptTask(project)"
                 >{{ project.productionStage === "SCRIPT_RETURNED" ? "根据原因重新生成脚本" : "确认要求并生成脚本" }}</el-button>
               </div>
-              <div class="candidate-grid">
-                <article v-for="(candidate, index) in projectCandidates(project)" :key="`${project.id}-${index}`">
-                  <small>单项目脚本 · {{ candidate.score || 0 }}分</small>
+              <div class="candidate-grid" :class="{ single: isSingleScriptProject(project) }">
+                <article v-for="(candidate, index) in displayedProjectCandidates(project)" :key="`${project.id}-${index}`">
+                  <small>{{ isSingleScriptProject(project) ? "单项目脚本" : `历史方向 ${Number(index) + 1}` }} · {{ candidate.score || 0 }}分</small>
                   <h4>{{ candidate.title || candidate.topic }}</h4>
                   <p><b>HOOK：</b>{{ candidate.hook }}</p>
                   <p class="candidate-full-script"><b>完整脚本：</b>{{ candidate.script || candidate.scripts?.zh30 || candidate.scripts?.zh15 || candidate.outline?.join("；") }}</p>
@@ -3095,10 +3171,9 @@ onMounted(() => void bootstrap());
                 />
               </section>
             </article>
-            <el-empty v-if="!dataCenter.videoProjects?.length" description="暂无视频项目，可从关键词、爆款研究或上方表单开始" />
           </div>
           <el-pagination
-            v-if="Number(dataCenter.pagination?.total || 0) > videoProjectPageSize"
+            v-if="!activeVideoProject && Number(dataCenter.pagination?.total || 0) > videoProjectPageSize"
             class="data-pagination"
             background
             layout="prev, pager, next, total"
