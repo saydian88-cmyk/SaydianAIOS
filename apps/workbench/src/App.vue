@@ -290,6 +290,7 @@ const scriptPackageVisible = ref(false);
 const scriptPackageCandidate = ref<Row>();
 const scriptEditorVisible = ref(false);
 const editingScriptProject = ref<Row>();
+const editingScriptCandidateIndex = ref(0);
 const savingScript = ref(false);
 const scriptEditorForm = reactive({
   title: "",
@@ -676,8 +677,36 @@ function isSingleScriptProject(project: Row) {
 }
 
 function displayedProjectCandidates(project: Row) {
-  const candidates = projectCandidates(project);
-  return isSingleScriptProject(project) ? candidates.slice(0, 1) : candidates;
+  return projectCandidates(project);
+}
+
+function scriptEngineLabel(candidate: Row) {
+  return candidate.generationSource === "SYSTEM_AI" ? "系统 AI 脚本工厂" : "远程 Codex + 剪辑 Skill";
+}
+
+function projectScriptEngineStatus(project: Row) {
+  const factory = Array.isArray(project.sourceSignals)
+    ? project.sourceSignals.find((item: Row) => item.type === "VIDEO_FACTORY")
+    : undefined;
+  const status = { ...(factory?.scriptEngineStatus || {}) };
+  for (const candidate of projectCandidates(project)) {
+    const source = String(candidate.generationSource || "");
+    if (source === "REMOTE_CODEX" || source === "SYSTEM_AI") status[source] = "COMPLETED";
+  }
+  return status;
+}
+
+function projectWaitingForScripts(project: Row) {
+  if (!isSingleScriptProject(project)) return false;
+  const factory = Array.isArray(project.sourceSignals)
+    ? project.sourceSignals.find((item: Row) => item.type === "VIDEO_FACTORY")
+    : undefined;
+  const requestedEngines = Array.isArray(factory?.projectBrief?.scriptEngines)
+    ? factory.projectBrief.scriptEngines.map((engine: unknown) => String(engine))
+    : [];
+  if (requestedEngines.length === 0) return false;
+  const status = projectScriptEngineStatus(project);
+  return requestedEngines.some((engine: string) => status[engine] !== "COMPLETED");
 }
 
 function openVideoProject(project: Row) {
@@ -701,6 +730,7 @@ const videoFlowSteps = [
 ];
 
 function videoFlowStep(project: Row) {
+  if (projectWaitingForScripts(project)) return 2;
   const stage = String(project.productionStage || "");
   if (["PROJECT_BRIEF"].includes(stage)) return 1;
   if (["SCRIPT_GENERATING"].includes(stage)) return 2;
@@ -916,11 +946,12 @@ async function quickCreateProject(command: string) {
   ElMessage.info(command === "IMAGE" ? "图文项目稍后完善" : "软文项目稍后完善");
 }
 
-function openScriptEditor(project: Row, candidate: Row) {
+function openScriptEditor(project: Row, candidate: Row, candidateIndex = 0) {
   const scriptPackage = candidate.scriptPackage || {};
   const positioning = scriptPackage.positioning || {};
   const ending = scriptPackage.ending || {};
   editingScriptProject.value = project;
+  editingScriptCandidateIndex.value = candidateIndex;
   Object.assign(scriptEditorForm, {
     title: candidate.titleZh || candidate.title || candidate.topic || project.topic || "",
     hook: candidate.hook || scriptPackage.goldenHook?.copy || "",
@@ -949,6 +980,7 @@ async function saveEditedScript() {
     const lines = (value: string) => value.split("\n").map((item) => item.trim()).filter(Boolean);
     await post(`/api/v1/workbench/data-center/video-projects/${project.id}/script`, {
       ...scriptEditorForm,
+      candidateIndex: editingScriptCandidateIndex.value,
       voiceoverLines: lines(scriptEditorForm.voiceoverText),
       retentionDesign: lines(scriptEditorForm.retentionText),
       subtitles: lines(scriptEditorForm.subtitlesText),
@@ -3187,7 +3219,7 @@ onMounted(() => void bootstrap());
                 <div>
                   <div class="task-meta"><span>{{ platformLabel(project.targetPlatforms?.[0]) }}</span><span>{{ project.productModel || "品牌通用" }}</span><span>{{ project.productionNo }}</span></div>
                   <h3>{{ project.topic }}</h3>
-                  <p>{{ isSingleScriptProject(project) ? "单项目 · 单脚本 · 远程Codex流程" : `历史三方向流程 · ${projectCandidates(project).length}套脚本` }}</p>
+                  <p>{{ isSingleScriptProject(project) ? `单项目 · ${projectCandidates(project).length}/2 份候选脚本 · 双引擎对比` : `历史三方向流程 · ${projectCandidates(project).length}套脚本` }}</p>
                 </div>
                 <el-tag :type="isSingleScriptProject(project) ? 'success' : 'info'">{{ videoProjectStageLabel(project.productionStage) }}</el-tag>
               </div>
@@ -3311,21 +3343,29 @@ onMounted(() => void bootstrap());
                   @click="submitProjectScriptTask(project)"
                 >立即提交脚本生成任务</el-button>
               </section>
-              <section v-if="project.productionStage === 'SCRIPT_GENERATING'" class="project-running-panel">
-                <el-tag type="warning">远程脚本生成中</el-tag>
-                <h3>远程 Codex 正在生成本项目的一份完整脚本</h3>
-                <p>系统已提交项目需求、素材策略、风险规则、包装资源约束和 Skill 所需参数。脚本回传后会自动进入脚本审核。</p>
-                <el-steps :active="3" finish-status="success" simple>
-                  <el-step title="任务已提交" /><el-step title="远程节点已领取" /><el-step title="素材索引与规则检查" /><el-step title="生成完整脚本" />
-                </el-steps>
+              <section
+                v-if="project.productionStage === 'SCRIPT_GENERATING' || projectWaitingForScripts(project)"
+                class="project-running-panel"
+              >
+                <el-tag type="warning">双引擎脚本生成中</el-tag>
+                <h3>等待所选脚本引擎全部返回，再进入对比审核</h3>
+                <p>已经完成的候选会暂存，但不会提前推进到脚本审核，也不会隐藏另一个引擎的结果。</p>
+                <div class="script-engine-progress">
+                  <span :class="{ done: projectScriptEngineStatus(project).REMOTE_CODEX === 'COMPLETED' }">
+                    远程 Codex + 剪辑 Skill · {{ projectScriptEngineStatus(project).REMOTE_CODEX === "COMPLETED" ? "已完成" : "生成中" }}
+                  </span>
+                  <span :class="{ done: projectScriptEngineStatus(project).SYSTEM_AI === 'COMPLETED' }">
+                    系统 AI 脚本工厂 · {{ projectScriptEngineStatus(project).SYSTEM_AI === "COMPLETED" ? "已完成" : "生成中" }}
+                  </span>
+                </div>
               </section>
               <div
                 v-if="projectCandidates(project).length && videoFlowStep(project) === 3"
                 class="candidate-grid"
-                :class="{ single: isSingleScriptProject(project), 'script-review-workspace': isSingleScriptProject(project) }"
+                :class="{ dual: isSingleScriptProject(project), 'script-review-workspace': isSingleScriptProject(project) }"
               >
                 <article v-for="(candidate, index) in displayedProjectCandidates(project)" :key="`${project.id}-${index}`">
-                  <small>{{ isSingleScriptProject(project) ? "单项目脚本" : `历史方向 ${Number(index) + 1}` }} · {{ candidate.score || 0 }}分</small>
+                  <small>{{ isSingleScriptProject(project) ? scriptEngineLabel(candidate) : `历史方向 ${Number(index) + 1}` }} · {{ candidate.score || 0 }}分</small>
                   <h4>{{ candidate.title || candidate.topic }}</h4>
                   <p><b>HOOK：</b>{{ candidate.hook }}</p>
                   <p class="candidate-full-script"><b>完整脚本：</b>{{ candidate.script || candidate.scripts?.zh30 || candidate.scripts?.zh15 || candidate.outline?.join("；") }}</p>
@@ -3333,7 +3373,7 @@ onMounted(() => void bootstrap());
                   <template v-if="project.productionStage === 'FACTORY_SCRIPT_READY'">
                     <el-button
                       v-if="isSingleScriptProject(project)"
-                      @click="openScriptEditor(project, candidate)"
+                      @click="openScriptEditor(project, candidate, index)"
                     >直接修改脚本</el-button>
                     <el-button
                       type="success"

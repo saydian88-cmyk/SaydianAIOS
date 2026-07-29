@@ -1017,6 +1017,7 @@ export class WorkbenchController {
       throw new ForbiddenException("只有待审核脚本可以直接修改");
     }
     return this.videoFactory.updateDraftScript(id, {
+      candidateIndex: body.candidateIndex === undefined ? undefined : Number(body.candidateIndex),
       title: String(body.title || ""),
       hook: String(body.hook || ""),
       script: String(body.script || ""),
