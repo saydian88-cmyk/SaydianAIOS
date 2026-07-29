@@ -1256,35 +1256,36 @@ export class WorkbenchService {
       where: { id, recipientEmployeeId: session.employeeId, channel: "IN_APP" },
     });
     if (!notification) throw new NotFoundException("消息不存在");
-    const result = await this.prisma.taskNotification.updateMany({
-      where: { id, recipientEmployeeId: session.employeeId, channel: "IN_APP" },
-      data: { readAt: new Date() },
-    });
-    if (!result.count) throw new NotFoundException("消息不存在");
-    let taskId: string | undefined;
     const notifiedTask = notification.taskId
       ? await this.prisma.opsTask.findFirst({
           where: { AND: [{ id: notification.taskId }, this.taskAccess(session)] },
           select: { id: true, category: true, evidence: true },
         })
       : null;
-    const linkedAiTaskId = notification.aiTaskId || value(object(notifiedTask?.evidence).aiTaskId);
-    if (linkedAiTaskId) {
-      const aiTask = await this.prisma.aiTask.findUnique({
-        where: { id: linkedAiTaskId },
-        select: { sourceType: true, sourceId: true, input: true },
-      });
+    let taskId = notifiedTask?.category === "AI_DELIVERY" ? undefined : notifiedTask?.id;
+    if (!taskId && notifiedTask?.category === "AI_DELIVERY") {
+      const linkedAiTaskId = notification.aiTaskId || value(object(notifiedTask.evidence).aiTaskId);
+      const aiTask = linkedAiTaskId
+        ? await this.prisma.aiTask.findUnique({
+            where: { id: linkedAiTaskId },
+            select: { sourceType: true, sourceId: true, input: true },
+          })
+        : null;
       const requestedTaskId = value(object(aiTask?.input).opsTaskId)
         || (aiTask?.sourceType === "WORKBENCH_CONTENT_REQUEST" ? value(aiTask.sourceId) : "");
       if (requestedTaskId) {
-        const accessible = await this.prisma.opsTask.findFirst({
+        taskId = (await this.prisma.opsTask.findFirst({
           where: { AND: [{ id: requestedTaskId }, this.taskAccess(session)] },
           select: { id: true },
-        });
-        taskId = accessible?.id;
+        }))?.id;
       }
     }
-    if (!taskId && notifiedTask?.category !== "AI_DELIVERY") taskId = notifiedTask?.id;
+    if (!taskId) throw new NotFoundException("关联任务不存在或当前不可查看");
+    const result = await this.prisma.taskNotification.updateMany({
+      where: { id, recipientEmployeeId: session.employeeId, channel: "IN_APP" },
+      data: { readAt: new Date() },
+    });
+    if (!result.count) throw new NotFoundException("消息不存在");
     return { ok: true, taskId };
   }
 
