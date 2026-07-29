@@ -692,7 +692,7 @@ function closeVideoProject() {
 }
 
 const videoFlowSteps = [
-  "需求确认",
+  "项目创建",
   "脚本生成",
   "脚本审核",
   "素材补全",
@@ -911,9 +911,6 @@ async function openVideoProjectFromTask(task: Row) {
 
 async function quickCreateProject(command: string) {
   if (command === "VIDEO") {
-    active.value = "data";
-    dataCenterTab.value = "videoFactory";
-    await loadDataCenter();
     await openNewVideoProjectDialog();
     return;
   }
@@ -1572,9 +1569,13 @@ async function createVideoFactoryProject() {
     videoProjectPage.value = 1;
     videoProjectStatus.value = "";
     await invalidateDataCenterSection("videoFactory");
-    await loadDataCenter(true);
+    if (active.value === "data" && dataCenterTab.value === "videoFactory") {
+      await loadDataCenter(true);
+    } else {
+      await loadTasks();
+    }
     newVideoProjectVisible.value = false;
-    ElMessage.success("视频项目已创建；确认项目要求后再提交远程脚本任务");
+    ElMessage.success("视频项目已创建，脚本生成任务已提交");
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : "视频项目创建失败，请稍后重试");
   } finally {
@@ -1686,7 +1687,7 @@ async function reviewProjectScript(project: Row, approved: boolean) {
       action: approved ? "APPROVE" : "RETURN",
       note,
     });
-    ElMessage.success(approved ? "脚本审核通过，可以补齐缺失素材" : "脚本已退回，可重新提交远程生成");
+    ElMessage.success(approved ? "脚本审核通过，可以补齐缺失素材" : "脚本已退回，系统已根据退回原因提交重写任务");
     await invalidateDataCenterSection("videoFactory");
     await loadDataCenter(true);
   } finally {
@@ -3239,7 +3240,7 @@ onMounted(() => void bootstrap());
                   >删除</el-button>
                 </div>
               </div>
-              <section v-if="['PROJECT_BRIEF', 'SCRIPT_RETURNED'].includes(project.productionStage)" class="project-brief-confirmation">
+              <section v-if="false && ['PROJECT_BRIEF', 'SCRIPT_RETURNED'].includes(project.productionStage)" class="project-brief-confirmation">
                 <div class="project-brief-confirmation-head">
                   <div>
                     <el-tag size="small">{{ project.productionStage === "SCRIPT_RETURNED" ? "脚本已退回 · 等待修改需求" : "刚刚创建 · 尚未生成脚本" }}</el-tag>
@@ -3309,6 +3310,16 @@ onMounted(() => void bootstrap());
                     @click="confirmVideoBriefAndSubmit(project)"
                   >{{ project.productionStage === "SCRIPT_RETURNED" ? "确认修改并重新提交脚本任务" : "确认方向并提交脚本生成任务" }}</el-button>
                 </div>
+              </section>
+              <section v-if="project.productionStage === 'PROJECT_BRIEF'" class="project-running-panel">
+                <el-tag type="warning">历史项目待提交</el-tag>
+                <h3>这个项目创建于自动提交脚本任务功能上线前</h3>
+                <p>新项目创建后会直接提交脚本生成任务，不再进入需求确认。这个历史项目可以在此补交一次。</p>
+                <el-button
+                  type="primary"
+                  :loading="submittingScriptProjectId === project.id"
+                  @click="submitProjectScriptTask(project)"
+                >立即提交脚本生成任务</el-button>
               </section>
               <section v-if="project.productionStage === 'SCRIPT_GENERATING'" class="project-running-panel">
                 <el-tag type="warning">远程脚本生成中</el-tag>

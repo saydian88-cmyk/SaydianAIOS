@@ -329,8 +329,8 @@ export class WorkbenchService {
     if (existing) return existing;
     return this.createTask({
       title: project.topic || "视频项目",
-      description: `员工自建视频项目自动形成。项目编号：${project.productionNo || project.id}。请进入项目完成当前阶段。`,
-      expectedResult: "完成需求确认、脚本审核、素材补全、成片审核、封面标题与发布链接回传。",
+      description: `员工新建视频项目后自动形成。项目编号：${project.productionNo || project.id}。脚本生成任务已自动提交，请进入项目查看当前阶段并处理待办事项。`,
+      expectedResult: "完成脚本审核、素材补全、成片审核、封面标题与发布链接回传。",
       category: "VIDEO_PROJECT",
       priority: "MEDIUM",
       owner: employee.name,
