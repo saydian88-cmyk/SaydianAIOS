@@ -161,6 +161,7 @@ export class AiContentService {
   }
 
   async generateVideoCandidates(context: JsonRecord): Promise<AiVideoCandidate[]> {
+    const exactCount = Math.max(1, Math.min(3, Math.round(Number(context.exactCount) || 3)));
     const assetOnly = context.generationMode === "ASSET_ONLY";
     const restricted = context.contentRestrictionMode === "HEALTH_RESTRICTED";
     const noVoiceover = context.voiceoverMode === "NO_VOICEOVER";
@@ -174,10 +175,10 @@ export class AiContentService {
       ? "本次必须生成无口播视频：不得设计人物口播、旁白、配音或对话；用连续视频画面、动作、音乐节奏、音效和屏幕字幕完整表达内容。scripts字段填写分段屏幕字幕与画面节奏，不得写成朗读稿。"
       : "本次生成有口播视频：提供自然简洁的中文/英文口播，并让口播与镜头动作逐段对应。";
     const userScriptPolicy = context.scriptSource === "USER"
-      ? "userProvidedDirections是用户提供的三个方向脚本。必须分别保留每个方向的核心主题、表达顺序和关键文案，不得擅自替换；在此基础上补齐完整scriptPackage的全部结构化字段。"
-      : "三个方向均由AI生成，但每个方向都必须输出完整scriptPackage，不能只返回Hook或一句概述。";
+      ? `userProvidedDirections是用户提供的${exactCount}个脚本要求。必须保留核心主题、表达顺序和关键文案，并补齐完整scriptPackage。`
+      : `由AI生成${exactCount}个完整脚本候选，每个候选都必须输出完整scriptPackage，不能只返回Hook或一句概述。`;
     const result = await this.callJson(
-      `根据已审核的赛电产品知识、FAQ、高分自有素材和外部参考，生成3个短视频候选方向。第1个为今日主执行包。
+      `根据已审核的赛电产品知识、FAQ、高分自有素材和外部参考，生成${exactCount}个完整短视频脚本候选。
 只使用输入中的assetId、referenceId、产品事实和证据；缺素材写入missingAssets，不得虚构。
 ${assetPolicy}
 ${restrictionPolicy}
@@ -200,8 +201,8 @@ scriptPackage必须包含：
 返回JSON：{"candidates":[{"topic":"","audience":"","objective":"","hook":"","outline":[],"score":0,"scoreBreakdown":{},"assetIds":[],"referenceIds":[],"missingAssets":[],"titleZh":"","titleEn":"","coverTextZh":"","coverTextEn":"","hashtags":[],"scripts":{"zh15":"","en15":"","zh30":"","en30":""},"scriptPackage":{"basicInfo":{"productModel":"","videoType":"","platform":"","accountType":"","targetAudience":"","estimatedDurationSeconds":30,"healthContentAllowed":true},"positioning":{"coreTheme":"","communicationGoal":"","userPainPoint":"","uniqueSellingPoint":""},"goldenHook":{"copy":"","type":"","visual":"","retentionReason":"","openingSound":""},"voiceoverLines":[{"text":"","tone":"","speed":"","emotion":"","durationSeconds":0}],"structure":[{"stage":"HOOK|BRIDGE|SELLING_POINT|PROOF|RETENTION|ENDING","purpose":"","content":""}],"shotRequirements":[{"line":"","visual":"","assetStatus":"COVERED|REWRITABLE|NEED_SHOOT|PROHIBITED","factualProof":"","audioVisualRequirement":""}],"retentionDesign":[],"subtitles":[],"emphasisTexts":[],"soundDesign":{"voiceProfile":"","tone":"","emotion":"","speed":"","openingSfx":"","keySfx":[],"ambientSound":""},"complianceChecks":[{"category":"","status":"PASS|REVIEW|BLOCK","note":""}],"ending":{"summary":"","interaction":"","visual":"","safeTailSeconds":1},"materialGaps":[{"product":"","action":"","shotSize":"","processOrResult":"","shootingMethod":""}]}}]}。
 输入：${JSON.stringify(context)}`,
     );
-    const rows = Array.isArray(result.candidates) ? result.candidates.slice(0, 3).map(object) : [];
-    if (rows.length !== 3) throw new Error("百炼未返回3个视频候选");
+    const rows = Array.isArray(result.candidates) ? result.candidates.slice(0, exactCount).map(object) : [];
+    if (rows.length !== exactCount) throw new Error(`AI未返回${exactCount}个完整视频脚本候选`);
     const candidates = rows.map((row) => {
       const scripts = object(row.scripts);
       const scriptPackage = object(row.scriptPackage);

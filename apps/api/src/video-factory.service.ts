@@ -380,6 +380,10 @@ export class VideoFactoryService {
       where: { contentPlanId, assetId, renderJobId: null },
       data: { renderJobId: renderJob.id },
     });
+    await this.prisma.contentPlan.update({
+      where: { id: contentPlanId },
+      data: { masterVideoPath: asset.storageUrl || asset.sourcePath },
+    });
     return renderJob;
   }
 
@@ -1208,6 +1212,23 @@ export class VideoFactoryService {
         contentRestrictionMode: context.contentRestrictionMode,
         scriptSource: "AI",
         userProvidedDirections: [],
+        exactCount: 1,
+        projectBrief: {
+          videoType: brief.videoType,
+          keywords: brief.keywords,
+          reference: brief.reference,
+          requestedHook: brief.hook,
+          scene: brief.scene,
+          painPoint: brief.painPoint,
+          targetAudience: brief.audience,
+          soundPrompt: brief.soundPrompt,
+          mustShowFacts: brief.mustShowFacts,
+          additionalPrompt: brief.additionalPrompt,
+          accountType: brief.accountType,
+          estimatedDurationSeconds: brief.estimatedDurationSeconds,
+          healthContentAllowed: brief.healthContentAllowed !== false,
+          materialPolicy: brief.materialPolicy,
+        },
       });
     } catch {
       generated = this.fallbackCandidates(context);
@@ -1307,16 +1328,22 @@ export class VideoFactoryService {
     return this.project(contentPlanId);
   }
 
-  async reviewScript(contentPlanId: string, approved: boolean, note: string, actor: string) {
+  async reviewScript(contentPlanId: string, approved: boolean, note: string, actor: string, candidateIndex?: number) {
     const plan = await this.prisma.contentPlan.findUnique({ where: { id: contentPlanId } });
     if (!plan) throw new NotFoundException("智能视频项目不存在");
     if (!approved && !note.trim()) throw new BadRequestException("退回脚本时必须填写修改原因");
     if (!this.candidates(plan).length) throw new BadRequestException("当前项目还没有可审核的脚本");
+    const candidates = this.candidates(plan);
     const signals = sourceSignals(plan);
+    const factory = signals.find((signal) => signal.type === "VIDEO_FACTORY") || {};
+    const selectedCandidateIndex = candidateIndex === undefined
+      ? Math.max(0, Math.min(candidates.length - 1, Number(factory.selectedCandidateIndex || 0)))
+      : Math.max(0, Math.min(candidates.length - 1, Math.round(candidateIndex)));
     const reviewedAt = new Date();
     const nextSignals = signals.map((signal) => signal.type === "VIDEO_FACTORY"
       ? {
         ...signal,
+        selectedCandidateIndex,
         scriptReview: {
           status: approved ? "APPROVED" : "RETURNED",
           note: note.trim(),
@@ -2832,6 +2859,10 @@ export class VideoFactoryService {
     videoRenderJobs?: Array<{ status?: string | null; outputAsset?: { reviewStatus?: string | null } | null }>;
     aiTaskOutputs?: Array<{ kind?: string | null; reviewStatus?: string | null; aiTask?: { status?: string | null } | null }>;
   }) {
+    const persistedStage = String(row.productionStage || "");
+    if (["PACKAGING_REVIEW", "READY_TO_PUBLISH", "PUBLISHING", "TRACKING"].includes(persistedStage)) {
+      return persistedStage;
+    }
     const render = row.videoRenderJobs?.[0];
     const master = render?.outputAsset;
     if (master?.reviewStatus === "APPROVED") return "PLATFORM_PACKAGING";
