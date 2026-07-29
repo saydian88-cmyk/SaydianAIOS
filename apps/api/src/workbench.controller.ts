@@ -114,9 +114,13 @@ export class WorkbenchController {
   }
 
   @Get("task-creation/options")
-  contentTaskOptions(@Headers("authorization") authorization?: string) {
+  async contentTaskOptions(@Headers("authorization") authorization?: string) {
     this.employee(authorization);
-    return this.workbench.contentTaskOptions();
+    const [options, viralKeywords] = await Promise.all([
+      this.workbench.contentTaskOptions(),
+      this.viralTrend.todayKeywords("DOUYIN").catch(() => ({ keywords: [] })),
+    ]);
+    return { ...options, viralKeywords: viralKeywords.keywords || [] };
   }
 
   @Post("task-creation/suggest")

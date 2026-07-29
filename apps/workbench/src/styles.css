@@ -117,6 +117,15 @@ main { grid-column: 2; width: min(1240px, calc(100% - 48px)); margin: 24px auto;
 .toolbar .el-select { width: 180px; }
 .task-toolbar-filters { display: flex; align-items: center; gap: 12px; }
 .task-toolbar-actions { display: flex; align-items: center; gap: 10px; }
+.video-task-steps { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 13px; }
+.video-task-steps span { padding: 5px 9px; border-radius: 7px; color: #7c8581; background: #efefec; font-size: 12px; }
+.video-task-steps span.done { color: #31804a; background: #eaf7ed; }
+.video-task-steps span.active { color: #fff; background: #c52e26; font-weight: 700; }
+.task-card .video-task-next { margin-top: 10px; color: #33423e; }
+.video-task-next b { color: #b32620; }
+.prototype-collapse-title { display: grid; grid-template-columns: minmax(130px, .45fr) minmax(0, 1fr); align-items: center; width: 100%; gap: 18px; padding-right: 12px; }
+.prototype-collapse-title strong { color: #25302d; font-size: 14px; }
+.prototype-collapse-title small { overflow: hidden; color: #79837f; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .task-recycle-list { min-height: 120px; display: grid; gap: 12px; margin-top: 16px; }
 .task-recycle-item { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 16px; border: 1px solid #ece8e0; border-radius: 14px; background: #fcfbf8; }
 .task-recycle-item > div { min-width: 0; flex: 1; }
