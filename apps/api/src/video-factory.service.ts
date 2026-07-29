@@ -43,6 +43,11 @@ type ProjectCreateInput = {
   requestedModelId?: string;
   routingMode?: string;
   allowFallback?: boolean;
+  deferScriptGeneration?: boolean;
+  healthContentAllowed?: boolean;
+  soundPrompt?: string;
+  mustShowFacts?: string;
+  additionalPrompt?: string;
 };
 
 type GenerateInput = {
@@ -160,7 +165,16 @@ function jsonSafe<T>(value: T): T {
 }
 
 function integrationKind(value?: string): IntegrationKind {
-  return value === "TIKTOK" ? IntegrationKind.TIKTOK : IntegrationKind.DOUYIN;
+  const supported = new Set<IntegrationKind>([
+    IntegrationKind.DOUYIN,
+    IntegrationKind.TIKTOK,
+    IntegrationKind.XIAOHONGSHU,
+    IntegrationKind.BILIBILI,
+    IntegrationKind.WECHAT_CHANNELS,
+    IntegrationKind.KUAISHOU,
+  ]);
+  const candidate = String(value || "").toUpperCase() as IntegrationKind;
+  return supported.has(candidate) ? candidate : IntegrationKind.DOUYIN;
 }
 
 function conciseVideoTopic(value: string): string {
@@ -995,6 +1009,288 @@ export class VideoFactoryService {
     return this.project(plan.id);
   }
 
+  async createDraftProject(input: ProjectCreateInput, actor: string) {
+    const productModel = String(input.productModel || "").trim();
+    if (!productModel) throw new BadRequestException("请选择产品型号");
+    const platform = integrationKind(input.platform);
+    const productionNo = `VF-${localDateKey(new Date()).replaceAll("-", "")}-${randomUUID().slice(0, 6).toUpperCase()}`;
+    const topic = conciseVideoTopic(String(input.topic || `${productModel} 智能视频项目`));
+    const brief = {
+      platform,
+      voiceoverMode: String(input.voiceoverMode || "VOICEOVER").toUpperCase(),
+      accountType: String(input.accountType || "BRAND").toUpperCase(),
+      estimatedDurationSeconds: Math.max(15, Math.min(180, Math.round(number(input.estimatedDurationSeconds, 30)))),
+      healthContentAllowed: input.healthContentAllowed !== false,
+      materialPolicy: String(input.generationMode || "NORMAL").toUpperCase() === "ASSET_ONLY" ? "ASSET_ONLY" : "REAL_ASSET_FIRST",
+      missingMaterialStrategies: ["RESHOOT", "AI_GENERATE"],
+      soundPrompt: String(input.soundPrompt || "").trim(),
+      mustShowFacts: String(input.mustShowFacts || "").trim(),
+      additionalPrompt: String(input.additionalPrompt || "").trim(),
+      compliancePolicy: {
+        source: "SYSTEM_RISK_TERM_AND_VISUAL_LIBRARY",
+        generatedByRemoteCodex: true,
+      },
+      coverTitleTiming: "AFTER_VIDEO_APPROVAL",
+    };
+    const plan = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.contentPlan.create({
+        data: {
+          productionNo,
+          productionStage: "PROJECT_BRIEF",
+          workflowVersion: 4,
+          owner: actor,
+          targetPlatforms: [platform],
+          planDate: new Date(),
+          kind: "VIDEO",
+          topic,
+          productModel,
+          audience: String(input.audience || "目标用户").trim() || "目标用户",
+          objective: String(input.objective || "内容测试").trim() || "内容测试",
+          score: 0,
+          scoreBreakdown: {},
+          hook: String(input.topic || topic),
+          outline: [],
+          sourceSignals: [{
+            type: "VIDEO_FACTORY",
+            workflowVersion: 4,
+            projectMode: "SINGLE_SCRIPT_REMOTE_CODEX",
+            brief,
+            scriptCandidates: [],
+            selectedCandidateIndex: 0,
+            keywordIds: input.keywordIds || [],
+            externalVideoIds: input.externalVideoIds || [],
+            externalReferencePolicy: "STRUCTURE_ONLY",
+            routingMode: "CODEX_SKILL",
+            allowFallback: false,
+          }] as unknown as Prisma.InputJsonValue,
+          evidenceIds: [],
+          status: ContentStatus.DRAFT,
+          riskReasons: [],
+          createdBy: actor,
+          assignedTo: actor,
+          actorType: "HUMAN",
+        },
+      });
+      if (input.keywordIds?.length) {
+        await tx.smartKeywordContentRelation.createMany({
+          data: input.keywordIds.map((keywordId, index) => ({
+            keywordId,
+            contentPlanId: created.id,
+            usageType: "SMART_VIDEO_FACTORY",
+            position: index === 0 ? "PRIMARY" : "AUXILIARY",
+          })),
+          skipDuplicates: true,
+        });
+      }
+      await tx.auditLog.create({
+        data: {
+          actor,
+          action: "VIDEO_FACTORY_PROJECT_DRAFT_CREATE",
+          entityType: "ContentPlan",
+          entityId: created.id,
+          after: { productionNo, projectMode: "SINGLE_SCRIPT_REMOTE_CODEX" },
+        },
+      });
+      return created;
+    });
+    return this.project(plan.id);
+  }
+
+  async attachRemoteTask(contentPlanId: string, aiTaskId: string, mode: "SCRIPT_ONLY" | "FULL_VIDEO", actor: string) {
+    const plan = await this.prisma.contentPlan.findUnique({ where: { id: contentPlanId } });
+    if (!plan) throw new NotFoundException("智能视频项目不存在");
+    const signals = sourceSignals(plan);
+    const nextSignals = signals.map((signal) => signal.type === "VIDEO_FACTORY"
+      ? {
+        ...signal,
+        aiTaskId: mode === "SCRIPT_ONLY" ? aiTaskId : signal.aiTaskId,
+        videoAiTaskId: mode === "FULL_VIDEO" ? aiTaskId : signal.videoAiTaskId,
+        lastTaskMode: mode,
+      }
+      : signal);
+    await this.prisma.$transaction([
+      this.prisma.contentPlan.update({
+        where: { id: contentPlanId },
+        data: {
+          productionStage: mode === "SCRIPT_ONLY" ? "SCRIPT_GENERATING" : "EDITING",
+          sourceSignals: nextSignals as unknown as Prisma.InputJsonValue,
+        },
+      }),
+      this.prisma.auditLog.create({
+        data: {
+          actor,
+          action: mode === "SCRIPT_ONLY" ? "VIDEO_FACTORY_SCRIPT_TASK_SUBMIT" : "VIDEO_FACTORY_VIDEO_TASK_SUBMIT",
+          entityType: "ContentPlan",
+          entityId: contentPlanId,
+          after: { aiTaskId, mode },
+        },
+      }),
+    ]);
+    return this.project(contentPlanId);
+  }
+
+  async updateDraftBrief(contentPlanId: string, input: ProjectCreateInput, actor: string) {
+    const plan = await this.prisma.contentPlan.findUnique({ where: { id: contentPlanId } });
+    if (!plan) throw new NotFoundException("智能视频项目不存在");
+    if (!["PROJECT_BRIEF", "SCRIPT_RETURNED"].includes(plan.productionStage)) {
+      throw new BadRequestException("脚本任务提交后不能直接修改项目要求，请先退回脚本");
+    }
+    const signals = sourceSignals(plan);
+    const currentFactory = signals.find((signal) => signal.type === "VIDEO_FACTORY") || {};
+    const currentBrief = object(currentFactory.brief);
+    const platform = integrationKind(input.platform || plan.targetPlatforms[0]);
+    const brief = {
+      ...currentBrief,
+      platform,
+      voiceoverMode: String(input.voiceoverMode || currentBrief.voiceoverMode || "VOICEOVER").toUpperCase(),
+      accountType: String(input.accountType || currentBrief.accountType || "BRAND").toUpperCase(),
+      estimatedDurationSeconds: Math.max(15, Math.min(180, Math.round(number(input.estimatedDurationSeconds, number(currentBrief.estimatedDurationSeconds, 30))))),
+      healthContentAllowed: input.healthContentAllowed !== false,
+      materialPolicy: String(input.generationMode || currentBrief.materialPolicy || "REAL_ASSET_FIRST").toUpperCase() === "ASSET_ONLY"
+        ? "ASSET_ONLY"
+        : "REAL_ASSET_FIRST",
+      missingMaterialStrategies: ["RESHOOT", "AI_GENERATE"],
+      soundPrompt: String(input.soundPrompt ?? currentBrief.soundPrompt ?? "").trim(),
+      mustShowFacts: String(input.mustShowFacts ?? currentBrief.mustShowFacts ?? "").trim(),
+      additionalPrompt: String(input.additionalPrompt ?? currentBrief.additionalPrompt ?? "").trim(),
+    };
+    const nextSignals = signals.map((signal) => signal.type === "VIDEO_FACTORY" ? { ...signal, brief } : signal);
+    await this.prisma.$transaction([
+      this.prisma.contentPlan.update({
+        where: { id: contentPlanId },
+        data: {
+          targetPlatforms: [platform],
+          productModel: String(input.productModel || plan.productModel || "").trim() || null,
+          topic: conciseVideoTopic(String(input.topic || plan.topic)),
+          audience: String(input.audience || plan.audience).trim(),
+          objective: String(input.objective || plan.objective).trim(),
+          sourceSignals: nextSignals as unknown as Prisma.InputJsonValue,
+        },
+      }),
+      this.prisma.auditLog.create({
+        data: {
+          actor,
+          action: "VIDEO_FACTORY_PROJECT_BRIEF_UPDATE",
+          entityType: "ContentPlan",
+          entityId: contentPlanId,
+          after: { brief },
+        },
+      }),
+    ]);
+    return this.project(contentPlanId);
+  }
+
+  async reviewScript(contentPlanId: string, approved: boolean, note: string, actor: string) {
+    const plan = await this.prisma.contentPlan.findUnique({ where: { id: contentPlanId } });
+    if (!plan) throw new NotFoundException("智能视频项目不存在");
+    if (!approved && !note.trim()) throw new BadRequestException("退回脚本时必须填写修改原因");
+    if (!this.candidates(plan).length) throw new BadRequestException("当前项目还没有可审核的脚本");
+    const signals = sourceSignals(plan);
+    const reviewedAt = new Date();
+    const nextSignals = signals.map((signal) => signal.type === "VIDEO_FACTORY"
+      ? {
+        ...signal,
+        scriptReview: {
+          status: approved ? "APPROVED" : "RETURNED",
+          note: note.trim(),
+          actor,
+          reviewedAt: reviewedAt.toISOString(),
+        },
+      }
+      : signal);
+    await this.prisma.$transaction([
+      this.prisma.contentPlan.update({
+        where: { id: contentPlanId },
+        data: {
+          productionStage: approved ? "SCRIPT_APPROVED" : "SCRIPT_RETURNED",
+          approvedBy: approved ? actor : null,
+          approvedAt: approved ? reviewedAt : null,
+          rejectedReason: approved ? null : note.trim(),
+          workflowVersion: approved ? plan.workflowVersion : { increment: 1 },
+          sourceSignals: nextSignals as unknown as Prisma.InputJsonValue,
+        },
+      }),
+      this.prisma.approval.create({
+        data: {
+          contentPlanId,
+          action: approved ? "SCRIPT_APPROVE" : "SCRIPT_RETURN",
+          actor,
+          note: note.trim() || null,
+        },
+      }),
+    ]);
+    return this.project(contentPlanId);
+  }
+
+  async createGroupedReshootTask(contentPlanId: string, assigneeEmployeeId: string, actor: string) {
+    const plan = await this.prisma.contentPlan.findUnique({
+      where: { id: contentPlanId },
+      include: { videoShots: { orderBy: { sequence: "asc" } } },
+    });
+    if (!plan) throw new NotFoundException("智能视频项目不存在");
+    if (!["SCRIPT_APPROVED", "READY_TO_EDIT"].includes(plan.productionStage)) {
+      throw new BadRequestException("脚本审核通过后才能生成补拍任务");
+    }
+    const missingShots = plan.videoShots.filter((shot) => !shot.selectedAssetId);
+    if (!missingShots.length) throw new BadRequestException("当前脚本没有需要补齐的素材");
+    const existing = await this.prisma.opsTask.findFirst({
+      where: {
+        sourceType: "VIDEO_FACTORY_PROJECT",
+        sourceId: contentPlanId,
+        category: "CONTENT_PRODUCTION",
+        status: { notIn: ["CANCELLED", "COMPLETED"] },
+      },
+    });
+    if (existing) return existing;
+    const items = missingShots.map((shot) => {
+      const metadata = object(shot.metadata);
+      return {
+        shotId: shot.id,
+        lineId: String(metadata.lineId || shot.requirementKey),
+        sequence: shot.sequence,
+        scriptLine: shot.voiceover || shot.subtitle || shot.description,
+        title: shot.title,
+        requirement: shot.description,
+        missingReason: String(metadata.missingReason || ""),
+        requiredAssetTags: strings(metadata.requiredAssetTags),
+        allowedStrategies: ["RESHOOT", "AI_GENERATE"],
+      };
+    });
+    const task = await this.prisma.opsTask.create({
+      data: {
+        taskNo: `TASK-VF-${localDateKey(new Date()).replaceAll("-", "")}-${randomUUID().slice(0, 6).toUpperCase()}`,
+        title: `补齐脚本素材：${plan.topic}`,
+        description: `本任务包含同一脚本的${items.length}个缺失镜头，请逐项补拍或发起AI生成，并上传到对应镜头项。`,
+        category: "CONTENT_PRODUCTION",
+        priority: "HIGH",
+        status: "OPEN",
+        assigneeEmployeeId,
+        assignedBy: actor,
+        sourceType: "VIDEO_FACTORY_PROJECT",
+        sourceId: contentPlanId,
+        platform: plan.targetPlatforms[0],
+        evidence: {
+          contentPlanId,
+          productionNo: plan.productionNo,
+          groupingPolicy: "ONE_TASK_PER_SCRIPT",
+          items,
+        } as unknown as Prisma.InputJsonValue,
+        expectedResult: "所有缺失镜头均已上传或AI生成、通过审核，并绑定到对应脚本行后再提交远程剪辑。",
+        dueAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      },
+    });
+    await this.prisma.auditLog.create({
+      data: {
+        actor,
+        action: "VIDEO_FACTORY_GROUPED_RESHOOT_TASK_CREATE",
+        entityType: "OpsTask",
+        entityId: task.id,
+        after: { contentPlanId, missingShotCount: items.length },
+      },
+    });
+    return task;
+  }
+
   async applyCodexProjectResult(input: {
     contentPlanId: string;
     aiTaskId: string;
@@ -1004,7 +1300,7 @@ export class VideoFactoryService {
   }) {
     const plan = await this.prisma.contentPlan.findUnique({ where: { id: input.contentPlanId } });
     if (!plan) throw new NotFoundException("智能视频项目不存在");
-    const candidates = input.scriptCandidates.slice(0, 3);
+    const candidates = input.scriptCandidates.slice(0, plan.workflowVersion >= 4 ? 1 : 3);
     const selected = candidates.find((item) => item.selected) || candidates[0];
     if (!selected) throw new BadRequestException("Codex未返回有效脚本候选");
     const allAssetIds = Array.from(new Set(candidates.flatMap((candidate) => candidate.shots.flatMap((shot) => shot.selectedAssetIds))));
@@ -1030,7 +1326,7 @@ export class VideoFactoryService {
     const signals = sourceSignals(plan);
     const nextSignals = [
       ...signals.map((signal) => signal.type === "VIDEO_FACTORY"
-        ? { ...signal, scriptCandidates: candidates, selectedCandidateIndex: candidates.indexOf(selected), workflowVersion: 3 }
+        ? { ...signal, scriptCandidates: candidates, selectedCandidateIndex: candidates.indexOf(selected), workflowVersion: plan.workflowVersion }
         : signal),
       ...(!signals.some((signal) => signal.type === "AI_TASK" && signal.id === input.aiTaskId)
         ? [{ type: "AI_TASK", id: input.aiTaskId, executionMode: input.executionMode, provider: "CODEX" }]
@@ -1101,6 +1397,12 @@ export class VideoFactoryService {
               missingReason: shot.missingReason,
               alternativePlan: shot.alternativePlan,
               aiTaskId: input.aiTaskId,
+              lineId: shot.lineId || `line_${String(shot.sequence + 1).padStart(2, "0")}`,
+              sourceIn: shot.sourceIn ?? null,
+              sourceOut: shot.sourceOut ?? null,
+              visibleFacts: shot.visibleFacts || [],
+              restrictions: shot.restrictions || [],
+              semanticScore: shot.semanticScore ?? null,
             },
           },
           update: {
@@ -1121,6 +1423,12 @@ export class VideoFactoryService {
               missingReason: shot.missingReason,
               alternativePlan: shot.alternativePlan,
               aiTaskId: input.aiTaskId,
+              lineId: shot.lineId || `line_${String(shot.sequence + 1).padStart(2, "0")}`,
+              sourceIn: shot.sourceIn ?? null,
+              sourceOut: shot.sourceOut ?? null,
+              visibleFacts: shot.visibleFacts || [],
+              restrictions: shot.restrictions || [],
+              semanticScore: shot.semanticScore ?? null,
             },
           },
         });
@@ -1173,11 +1481,18 @@ export class VideoFactoryService {
   async syncProjectTaskState(contentPlanId: string, taskStatus: string) {
     const plan = await this.prisma.contentPlan.findUnique({ where: { id: contentPlanId } });
     if (!plan) return null;
+    const factory = sourceSignals(plan).find((signal) => signal.type === "VIDEO_FACTORY") || {};
+    const lastTaskMode = String(factory.lastTaskMode || "");
+    const singleProjectFlow = plan.workflowVersion >= 4;
     let productionStage = plan.productionStage;
     if (["CLAIMED", "RUNNING", "QUALITY_CHECK", "UPLOADING"].includes(taskStatus)) {
-      productionStage = "FACTORY_GENERATING";
+      productionStage = singleProjectFlow && lastTaskMode === "SCRIPT_ONLY"
+        ? "SCRIPT_GENERATING"
+        : "FACTORY_GENERATING";
     } else if (["FAILED", "RETURNED", "CANCELLED"].includes(taskStatus)) {
-      productionStage = this.candidates(plan).length ? "FACTORY_SCRIPT_READY" : "TOPIC_CARD_APPROVED";
+      productionStage = singleProjectFlow
+        ? (this.candidates(plan).length ? "SCRIPT_RETURNED" : "PROJECT_BRIEF")
+        : (this.candidates(plan).length ? "FACTORY_SCRIPT_READY" : "TOPIC_CARD_APPROVED");
     }
     if (productionStage === plan.productionStage) return plan;
     return this.prisma.contentPlan.update({ where: { id: contentPlanId }, data: { productionStage } });
@@ -1628,6 +1943,7 @@ export class VideoFactoryService {
   }
 
   async createProject(input: ProjectCreateInput, actor: string) {
+    if (input.deferScriptGeneration) return this.createDraftProject(input, actor);
     const context = await this.buildContext(input);
     let candidates: AiVideoCandidate[];
     try {

@@ -755,7 +755,202 @@ export class WorkbenchController {
       externalVideoIds: Array.isArray(body.externalVideoIds) ? body.externalVideoIds.map(String) : [],
       routingMode: "AUTO",
       allowFallback: true,
+      deferScriptGeneration: true,
+      healthContentAllowed: body.healthContentAllowed !== false,
+      soundPrompt: body.soundPrompt ? String(body.soundPrompt) : undefined,
+      mustShowFacts: body.mustShowFacts ? String(body.mustShowFacts) : undefined,
+      additionalPrompt: body.additionalPrompt ? String(body.additionalPrompt) : undefined,
     }, employee.name);
+  }
+
+  @Post("data-center/video-projects/:id/script-task")
+  async submitVideoScriptTask(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+  ) {
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    if (!employee.roles.some((role) => ["CONTENT_OPERATOR", "VIDEO_SPECIALIST"].includes(role))) {
+      throw new ForbiddenException("只有运营和视频专员可以提交脚本生成任务");
+    }
+    const project = await this.videoFactory.project(id) as Record<string, any>;
+    if (project.createdBy !== employee.name) throw new ForbiddenException("只能提交自己创建的视频项目");
+    if (!["PROJECT_BRIEF", "SCRIPT_RETURNED"].includes(String(project.productionStage))) {
+      throw new ForbiddenException("当前项目状态不能提交脚本生成任务");
+    }
+    const factory = Array.isArray(project.sourceSignals)
+      ? project.sourceSignals.find((item: Record<string, unknown>) => item?.type === "VIDEO_FACTORY") || {}
+      : {};
+    const brief = factory.brief && typeof factory.brief === "object" ? factory.brief : {};
+    const task = await this.aiTasks.createTask({
+      type: "VIDEO",
+      title: `${project.topic} · 单脚本生成`,
+      platform: project.targetPlatforms?.[0] || "DOUYIN",
+      productModel: project.productModel,
+      ownerEmployeeId: employee.employeeId,
+      reviewerEmployeeId: employee.employeeId,
+      sourceType: "VIDEO_FACTORY_PROJECT",
+      sourceId: project.id,
+      idempotencyKey: `ai-task:video-project:${project.id}:script:v${project.workflowVersion}`,
+      instructions: [
+        "使用 video-editing-from-media-library-share Skill，只生成一套完整脚本和逐句素材覆盖，不生成三个方向。",
+        "读取系统风险词与风险画面库，并根据 healthContentAllowed 生成本项目过滤规则。",
+        "每句返回素材ID、远程可访问路径、有效入点出点、画面事实、匹配分和缺失处理建议。",
+        "具体功能必须使用90分以上直接视频素材；缺失时标记真人补拍或AI生成候选，不得用弱相关画面代替。",
+      ].join("\n"),
+      input: {
+        executionMode: "SCRIPT_ONLY",
+        existingContentPlanId: project.id,
+        singleScript: true,
+        skillName: "video-editing-from-media-library-share",
+        projectBrief: brief,
+        healthContentAllowed: brief.healthContentAllowed !== false,
+        requiredOutputs: [
+          "complete_script",
+          "line_material_coverage",
+          "material_paths",
+          "source_time_ranges",
+          "visible_facts",
+          "semantic_scores",
+          "shot_plan",
+          "material_gap_list",
+          "compliance_report",
+        ],
+      },
+      modelPolicy: { strategy: "CODEX_FIRST", allowExternalGeneration: false, allowFallback: false },
+      estimatedCost: 0,
+      skipPaidBudget: true,
+    }, employee.name) as Record<string, any>;
+    await this.videoFactory.attachRemoteTask(id, task.id, "SCRIPT_ONLY", employee.name);
+    return { project: await this.videoFactory.project(id), task };
+  }
+
+  @Post("data-center/video-projects/:id/brief")
+  async updateVideoProjectBrief(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    if (!employee.roles.some((role) => ["CONTENT_OPERATOR", "VIDEO_SPECIALIST"].includes(role))) {
+      throw new ForbiddenException("只有运营和视频专员可以修改视频项目要求");
+    }
+    const project = await this.videoFactory.project(id) as Record<string, any>;
+    if (project.createdBy !== employee.name) throw new ForbiddenException("只能修改自己创建的视频项目");
+    return this.videoFactory.updateDraftBrief(id, {
+      platform: body.platform ? String(body.platform) : undefined,
+      voiceoverMode: body.voiceoverMode ? String(body.voiceoverMode) : undefined,
+      accountType: body.accountType ? String(body.accountType) : undefined,
+      estimatedDurationSeconds: Number(body.estimatedDurationSeconds || 30),
+      healthContentAllowed: body.healthContentAllowed !== false,
+      generationMode: body.generationMode ? String(body.generationMode) : undefined,
+      productModel: body.productModel ? String(body.productModel) : undefined,
+      topic: body.topic ? String(body.topic) : undefined,
+      audience: body.audience ? String(body.audience) : undefined,
+      objective: body.objective ? String(body.objective) : undefined,
+      soundPrompt: body.soundPrompt ? String(body.soundPrompt) : undefined,
+      mustShowFacts: body.mustShowFacts ? String(body.mustShowFacts) : undefined,
+      additionalPrompt: body.additionalPrompt ? String(body.additionalPrompt) : undefined,
+    }, employee.name);
+  }
+
+  @Post("data-center/video-projects/:id/script-review")
+  async reviewVideoScript(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    if (!employee.roles.some((role) => ["CONTENT_OPERATOR", "VIDEO_SPECIALIST"].includes(role))) {
+      throw new ForbiddenException("只有运营和视频专员可以审核视频脚本");
+    }
+    const project = await this.videoFactory.project(id) as Record<string, any>;
+    if (project.createdBy !== employee.name) throw new ForbiddenException("只能审核自己创建的视频项目");
+    const action = String(body.action || "").trim().toUpperCase();
+    const note = String(body.note || "").trim();
+    if (!["APPROVE", "RETURN"].includes(action)) throw new ForbiddenException("审核动作不正确");
+    if (action === "RETURN" && !note) throw new ForbiddenException("退回脚本时必须填写修改原因");
+    const factory = Array.isArray(project.sourceSignals)
+      ? project.sourceSignals.find((item: Record<string, unknown>) => item?.type === "VIDEO_FACTORY") || {}
+      : {};
+    if (factory.aiTaskId) {
+      await this.aiTasks.review(String(factory.aiTaskId), { action, note }, employee.name);
+    }
+    return this.videoFactory.reviewScript(id, action === "APPROVE", note, employee.name);
+  }
+
+  @Post("data-center/video-projects/:id/video-task")
+  async submitRemoteVideoTask(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+  ) {
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    if (!employee.roles.some((role) => ["CONTENT_OPERATOR", "VIDEO_SPECIALIST"].includes(role))) {
+      throw new ForbiddenException("只有运营和视频专员可以提交视频生成任务");
+    }
+    const project = await this.videoFactory.project(id) as Record<string, any>;
+    if (project.createdBy !== employee.name) throw new ForbiddenException("只能提交自己创建的视频项目");
+    if (!["SCRIPT_APPROVED", "READY_TO_EDIT", "EDITING"].includes(String(project.productionStage))) {
+      throw new ForbiddenException("脚本尚未审核通过");
+    }
+    const missingShots = (project.videoShots || []).filter((shot: Record<string, unknown>) => !shot.selectedAssetId);
+    if (missingShots.length) throw new ForbiddenException(`仍有${missingShots.length}个镜头缺少已确认素材`);
+    const materialBindings = (project.videoShots || []).map((shot: Record<string, any>) => ({
+      lineId: shot.requirementKey,
+      sequence: shot.sequence,
+      scriptLine: shot.voiceover || shot.subtitle || shot.description,
+      assetId: shot.selectedAssetId,
+      path: shot.selectedAsset?.sourcePath || shot.selectedAsset?.storageUrl,
+      sourceIn: shot.metadata?.sourceIn,
+      sourceOut: shot.metadata?.sourceOut,
+      usage: "PRIMARY_SHOT",
+      visibleFacts: shot.metadata?.visibleFacts || [],
+      restrictions: shot.metadata?.restrictions || [],
+      userApproved: true,
+    }));
+    const factory = Array.isArray(project.sourceSignals)
+      ? project.sourceSignals.find((item: Record<string, unknown>) => item?.type === "VIDEO_FACTORY") || {}
+      : {};
+    const task = await this.aiTasks.createTask({
+      type: "VIDEO",
+      title: `${project.topic} · 远程剪辑成片`,
+      platform: project.targetPlatforms?.[0] || "DOUYIN",
+      productModel: project.productModel,
+      ownerEmployeeId: employee.employeeId,
+      reviewerEmployeeId: employee.employeeId,
+      sourceType: "VIDEO_FACTORY_PROJECT",
+      sourceId: project.id,
+      idempotencyKey: `ai-task:video-project:${project.id}:full-video:v${project.workflowVersion}`,
+      instructions: "使用已审核单脚本和系统提供的素材—脚本绑定执行剪辑。补拍或AI生成素材必须按指定lineId和路径使用，不得重新错配。",
+      input: {
+        executionMode: "FULL_VIDEO",
+        existingContentPlanId: project.id,
+        skillName: "video-editing-from-media-library-share",
+        approvedScriptOnly: true,
+        projectBrief: factory.brief || {},
+        materialBindings,
+        coverTitleTiming: "AFTER_VIDEO_APPROVAL",
+      },
+      modelPolicy: { strategy: "CODEX_FIRST", allowExternalGeneration: false, allowFallback: false },
+      estimatedCost: 0,
+      skipPaidBudget: true,
+    }, employee.name) as Record<string, any>;
+    await this.videoFactory.attachRemoteTask(id, task.id, "FULL_VIDEO", employee.name);
+    return { project: await this.videoFactory.project(id), task };
+  }
+
+  @Post("data-center/video-projects/:id/reshoot-task")
+  async createVideoProjectReshootTask(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+  ) {
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    if (!employee.roles.some((role) => ["CONTENT_OPERATOR", "VIDEO_SPECIALIST"].includes(role))) {
+      throw new ForbiddenException("只有运营和视频专员可以生成补拍任务");
+    }
+    const project = await this.videoFactory.project(id) as Record<string, any>;
+    if (project.createdBy !== employee.name) throw new ForbiddenException("只能处理自己创建的视频项目");
+    if (!employee.employeeId) throw new ForbiddenException("当前账号未关联员工档案");
+    return this.videoFactory.createGroupedReshootTask(id, employee.employeeId, employee.name);
   }
 
   @Post("data-center/video-projects/:id/generate")
