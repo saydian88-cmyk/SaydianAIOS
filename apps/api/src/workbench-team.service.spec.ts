@@ -22,12 +22,27 @@ describe("WorkbenchService operation team", () => {
     const projection = (target as any).taskProjection(
       { id: "task-1", taskNo: "TASK-1", status: "IN_PROGRESS", reviews: [] },
       { id: "ai-1", taskNo: "AI-1", status: "RUNNING", outputs: [], progress: 80 },
-      { id: "project-1", productionNo: "VF-1", productionStage: "FACTORY_SCRIPT_READY" },
+      {
+        id: "project-1",
+        productionNo: "VF-1",
+        productionStage: "FACTORY_SCRIPT_READY",
+        productModel: "W9S",
+        targetPlatforms: ["DOUYIN"],
+        createdAt: new Date("2026-07-29T08:00:00.000Z"),
+        sourceSignals: [{ type: "VIDEO_FACTORY", brief: { videoType: "场景种草型", keywords: "父母关爱" } }],
+      },
     );
 
     expect(projection.displayStatus).toBe("脚本待审核");
     expect(projection.nextAction).toBe("审核、修改或退回当前脚本");
     expect(projection.aiTask.status).toBe("RUNNING");
+    expect(projection.project).toMatchObject({
+      productionNo: "VF-1",
+      productModel: "W9S",
+      platform: "DOUYIN",
+      videoType: "场景种草型",
+      keywords: "父母关爱",
+    });
   });
 
   it("rejects inviting self", async () => {

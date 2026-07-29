@@ -1842,6 +1842,10 @@ export class WorkbenchService {
 
   private videoProjectTaskProjection(project: any) {
     const stage = value(project.productionStage).toUpperCase();
+    const factory = Array.isArray(project.sourceSignals)
+      ? project.sourceSignals.map(object).find((signal: Record<string, unknown>) => signal.type === "VIDEO_FACTORY") || {}
+      : {};
+    const brief = object(factory.brief);
     const state: Record<string, [number, string, string]> = {
       PROJECT_BRIEF: [2, "脚本任务提交中", "等待系统提交所选脚本引擎"],
       SCRIPT_GENERATING: [2, "脚本生成中", "等待脚本生成完成"],
@@ -1862,6 +1866,11 @@ export class WorkbenchService {
     return {
       id: project.id,
       productionNo: project.productionNo,
+      productModel: project.productModel || null,
+      platform: Array.isArray(project.targetPlatforms) ? project.targetPlatforms[0] || null : null,
+      videoType: value(brief.videoType) || null,
+      keywords: value(brief.keywords) || null,
+      createdAt: project.createdAt || null,
       stage,
       step: current[0],
       displayStatus: current[1],
@@ -1907,7 +1916,15 @@ export class WorkbenchService {
     const videoProjects = videoProjectIds.length
       ? await this.prisma.contentPlan.findMany({
           where: { id: { in: videoProjectIds } },
-          select: { id: true, productionNo: true, productionStage: true },
+          select: {
+            id: true,
+            productionNo: true,
+            productionStage: true,
+            productModel: true,
+            targetPlatforms: true,
+            sourceSignals: true,
+            createdAt: true,
+          },
         })
       : [];
     const videoProjectById = new Map(videoProjects.map((project) => [project.id, project]));

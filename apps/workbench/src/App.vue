@@ -2757,6 +2757,14 @@ onMounted(() => void bootstrap());
                 <span>截止 {{ formatTime(task.dueAt) }}</span>
               </div>
               <h4>{{ task.title }}</h4>
+              <div v-if="isVideoProjectTask(task)" class="video-task-identifiers">
+                <span>{{ task.projection?.project?.productionNo || "项目编号待生成" }}</span>
+                <span>{{ task.projection?.project?.productModel || "通用产品" }}</span>
+                <span>{{ task.projection?.project?.videoType || "未标注视频类型" }}</span>
+                <span v-if="task.projection?.project?.keywords">关键词：{{ task.projection.project.keywords }}</span>
+                <span v-if="task.projection?.project?.platform">{{ platformLabel(task.projection.project.platform) }}</span>
+                <span v-if="task.projection?.project?.createdAt">创建于 {{ formatTime(task.projection.project.createdAt) }}</span>
+              </div>
               <p class="task-summary">{{ taskCardSummary(task) }}</p>
               <template v-if="isVideoProjectTask(task)">
                 <div class="video-task-steps" :aria-label="`当前进行到第 ${videoProjectTaskStep(task)} 步`">
