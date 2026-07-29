@@ -126,6 +126,7 @@ function statusLabel(value: string) {
     UNCONFIGURED: "未配置", CONFIGURED: "待验证", HEALTHY: "正常", DEGRADED: "部分可用", ERROR: "异常",
     DRAFT: "候选", PENDING_APPROVAL: "待审核", APPROVED: "已审核", REJECTED: "已退回", SCHEDULED: "待发布",
     PUBLISHED: "已发布", FAILED: "失败", PENDING: "待处理", READY: "可用", BLOCKED: "禁用", ARCHIVED: "归档",
+    ASSIGNED: "待领取", ACCEPTED: "已领取", IN_PROGRESS: "执行中", REVIEW: "待审核", CANCELLED: "已取消", VERIFIED: "已验收",
     RUNNING: "执行中", RETRY: "重试中", SUCCEEDED: "已完成", COMPLETED: "已完成", LIVE: "直播中", OPEN: "待处理", RESOLVED: "已解决",
     PARTIAL: "部分成功", ACTIVE: "在职", SCRIPT_REVIEW: "脚本审核", AWAITING_ASSETS: "等待拍摄素材",
     READY_TO_EDIT: "素材已齐套", EDITING: "AI剪辑中", VIDEO_REVIEW: "成片审核", PLATFORM_PACKAGING: "生成平台包装",
@@ -136,6 +137,20 @@ function statusLabel(value: string) {
     FACTORY_SCRIPT_READY: "脚本已完成", FACTORY_GENERATING: "视频生成中",
   };
   return labels[value] || value || "未获取";
+}
+
+function todoDescription(value?: string) {
+  const labels: Record<string, string> = {
+    CONTENT_PRODUCTION: "内容制作",
+    VIDEO: "视频任务",
+    CONTENT_VIDEO: "短视频制作",
+    CONTENT_IMAGE: "图片制作",
+    CONTENT_ARTICLE: "软文制作",
+    STORE_ANALYSIS: "店铺分析",
+    COMPETITOR_ANALYSIS: "竞品分析",
+    LIVE_ANALYSIS: "直播分析",
+  };
+  return value ? labels[value] || value : "待补充执行说明";
 }
 
 function outlineText(input: unknown) {
@@ -825,7 +840,7 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
           <div v-if="dashboard?.todayTodos.length" class="today-todo-grid">
             <button v-for="item in dashboard.todayTodos" :key="item.id" type="button" @click="switchPage(item.targetPage)">
               <span :class="['todo-type', item.type.toLowerCase()]">{{ ({ SHOOT: '拍摄', VIRAL: '爆款', GAP: '补拍', TASK: '任务' } as Record<string, string>)[item.type] }}</span>
-              <div><strong>{{ item.title }}</strong><p>{{ item.description || '待补充执行说明' }}</p><small>{{ item.score ? `建议分 ${item.score}` : statusLabel(item.status) }}<template v-if="item.dueAt"> · {{ time(item.dueAt) }}</template></small></div>
+              <div><strong>{{ item.title }}</strong><p>{{ todoDescription(item.description) }}</p><small>{{ item.score ? `建议分 ${item.score}` : statusLabel(item.status) }}<template v-if="item.dueAt"> · {{ time(item.dueAt) }}</template></small></div>
             </button>
           </div>
           <el-empty v-else description="今日暂时没有待办；生成今日内容后会自动出现拍摄任务" :image-size="58" />

@@ -191,6 +191,11 @@ function missingInputText(task?: Row) {
   return "无";
 }
 
+function displayProgress(task?: Row) {
+  const progress = Math.max(0, Math.min(100, Number(task?.progress || 0)));
+  return task?.status === "WAITING_INPUT" ? Math.min(progress, 90) : progress;
+}
+
 function outputKindLabel(value: string) {
   const labels: Row = {
     VIDEO_MASTER: "视频成片", VIDEO_PROJECT: "视频项目", VIDEO_COVER: "视频封面",
@@ -523,7 +528,7 @@ onMounted(load);
         <el-table-column label="平台" width="120"><template #default="{ row }">{{ platformLabel(row.platform) }}</template></el-table-column>
         <el-table-column label="状态" width="110"><template #default="{ row }"><el-tag :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag></template></el-table-column>
         <el-table-column label="进度" width="150">
-          <template #default="{ row }"><el-progress :percentage="row.progress || 0" :stroke-width="8" /></template>
+          <template #default="{ row }"><el-progress :percentage="displayProgress(row)" :stroke-width="8" /></template>
         </el-table-column>
         <el-table-column label="负责人" width="120"><template #default="{ row }">{{ row.owner?.name || "未指定" }}</template></el-table-column>
         <el-table-column label="创建时间" width="150"><template #default="{ row }">{{ time(row.createdAt) }}</template></el-table-column>
@@ -708,7 +713,7 @@ onMounted(load);
           <el-descriptions-item label="Hook" :span="2">{{ detail.input?.hook || "未设置" }}</el-descriptions-item>
           <el-descriptions-item v-if="detail.type === 'VIDEO'" label="执行模式">{{ detail.input?.executionMode === "SCRIPT_ONLY" ? "仅生成脚本" : "生成完整视频" }}</el-descriptions-item>
           <el-descriptions-item v-if="detail.type === 'VIDEO'" label="外部视觉模型">{{ detail.modelPolicy?.allowExternalGeneration ? "允许" : "不允许" }}</el-descriptions-item>
-          <el-descriptions-item label="进度" :span="2">{{ detail.progress || 0 }}% · {{ detail.progressMessage || "未开始" }}</el-descriptions-item>
+          <el-descriptions-item label="进度" :span="2">{{ displayProgress(detail) }}% · {{ detail.progressMessage || "未开始" }}</el-descriptions-item>
           <el-descriptions-item label="实际 Skill">{{ routedSkill(detail) }}</el-descriptions-item>
           <el-descriptions-item label="Skill 版本">{{ skillVersion(detail) }}</el-descriptions-item>
           <el-descriptions-item label="执行耗时">{{ detail.output?.execution?.durationMs == null ? (hasSuccessfulAttempt(detail) ? "历史记录未保存" : "等待执行") : `${(Number(detail.output.execution.durationMs) / 1000).toFixed(1)} 秒` }}</el-descriptions-item>
