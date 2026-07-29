@@ -1233,7 +1233,7 @@ export class WorkbenchService {
 
   async notifications(session: SessionPayload) {
     const notifications = await this.prisma.taskNotification.findMany({
-      where: { recipientEmployeeId: session.employeeId, channel: "IN_APP" },
+      where: { recipientEmployeeId: session.employeeId, channel: "IN_APP", taskId: { not: null } },
       orderBy: { createdAt: "desc" },
       take: 100,
     });

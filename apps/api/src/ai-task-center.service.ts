@@ -1531,6 +1531,7 @@ export class AiTaskCenterService implements OnModuleInit {
         },
       });
       if (!project) continue;
+      const linkedOpsTaskId = await this.sourceOpsTaskId(task);
       const failed = [...project.videoGenerationJobs, ...project.videoRenderJobs].find((item) => item.status === "FAILED");
       if (failed) {
         await this.prisma.aiTask.update({ where: { id: task.id }, data: { status: "FAILED", failureReason: failed.failureReason || "视频子任务失败", finishedAt: new Date() } });
@@ -1549,7 +1550,7 @@ export class AiTaskCenterService implements OnModuleInit {
         const pending = await this.prisma.asset.count({ where: { id: { in: generatedAssetIds }, reviewStatus: { not: "APPROVED" } } });
         if (pending) {
           await this.prisma.aiTask.update({ where: { id: task.id }, data: { status: "PENDING_REVIEW", progress: 70, progressMessage: `${pending}个AI镜头等待审核` } });
-          if (task.reviewerEmployeeId) await this.notify(task.id, task.reviewerEmployeeId, "AI_VIDEO_SHOT_REVIEW", "AI补拍镜头等待审核", task.title);
+          if (task.reviewerEmployeeId) await this.notify(task.id, task.reviewerEmployeeId, "AI_VIDEO_SHOT_REVIEW", "AI补拍镜头等待审核", task.title, linkedOpsTaskId);
           continue;
         }
       }
@@ -1560,7 +1561,7 @@ export class AiTaskCenterService implements OnModuleInit {
           data: { aiTaskId: task.id, kind: "VIDEO_MASTER", title: asset?.displayName || "智能视频主成片", mimeType: "video/mp4", assetId: render.outputAssetId, url: asset?.storageUrl, reviewStatus: "PENDING", contentPlanId: projectId },
         });
         await this.prisma.aiTask.update({ where: { id: task.id }, data: { status: "PENDING_REVIEW", progress: 95, progressMessage: "主成片已上传，等待审核" } });
-        if (task.reviewerEmployeeId) await this.notify(task.id, task.reviewerEmployeeId, "AI_VIDEO_REVIEW", "智能视频主成片等待审核", task.title);
+        if (task.reviewerEmployeeId) await this.notify(task.id, task.reviewerEmployeeId, "AI_VIDEO_REVIEW", "智能视频主成片等待审核", task.title, linkedOpsTaskId);
       }
     }
   }
@@ -2421,8 +2422,9 @@ export class AiTaskCenterService implements OnModuleInit {
   }
 
   private async notify(aiTaskId: string, employeeId: string, type: string, title: string, content: string, taskId?: string) {
+    if (!taskId) return;
     const safeContent = this.employeeMessage(content);
-    const eventKey = `${aiTaskId}:${type}:${taskId || "NO_TASK"}`;
+    const eventKey = `${aiTaskId}:${type}:${taskId}`;
     await this.prisma.taskNotification.upsert({
       where: { recipientEmployeeId_channel_eventKey: { recipientEmployeeId: employeeId, channel: "IN_APP", eventKey } },
       create: {
@@ -2431,13 +2433,13 @@ export class AiTaskCenterService implements OnModuleInit {
         recipientEmployeeId: employeeId,
         channel: "IN_APP",
         eventKey,
-        targetType: taskId ? "OPS_TASK" : "AI_TASK",
-        targetId: taskId || aiTaskId,
+        targetType: "OPS_TASK",
+        targetId: taskId,
         type,
         title,
         content: safeContent,
       },
-      update: { title, content: safeContent, taskId, targetType: taskId ? "OPS_TASK" : "AI_TASK", targetId: taskId || aiTaskId },
+      update: { title, content: safeContent, taskId, targetType: "OPS_TASK", targetId: taskId },
     });
     const configuredWorkbenchUrl = new URL(opsConfig.webBaseUrl);
     const publicUrl = new URL(opsConfig.publicBaseUrl);
@@ -2447,8 +2449,7 @@ export class AiTaskCenterService implements OnModuleInit {
       : configuredWorkbenchUrl;
     workbenchUrl.search = "";
     workbenchUrl.hash = "";
-    if (taskId) workbenchUrl.searchParams.set("taskId", taskId);
-    else workbenchUrl.searchParams.set("page", "messages");
+    workbenchUrl.searchParams.set("taskId", taskId);
     const result = await this.wecom.send(employeeId, title, safeContent, workbenchUrl.toString());
     if (result.configured) {
       await this.prisma.taskNotification.upsert({
@@ -2459,8 +2460,8 @@ export class AiTaskCenterService implements OnModuleInit {
           recipientEmployeeId: employeeId,
           channel: "WECOM",
           eventKey,
-          targetType: taskId ? "OPS_TASK" : "AI_TASK",
-          targetId: taskId || aiTaskId,
+          targetType: "OPS_TASK",
+          targetId: taskId,
           type,
           title,
           content: result.sent ? safeContent : `${safeContent}｜${result.message || "发送失败"}`,
@@ -2471,8 +2472,8 @@ export class AiTaskCenterService implements OnModuleInit {
           content: result.sent ? safeContent : `${safeContent}｜${result.message || "发送失败"}`,
           sentAt: result.sent ? new Date() : null,
           taskId,
-          targetType: taskId ? "OPS_TASK" : "AI_TASK",
-          targetId: taskId || aiTaskId,
+          targetType: "OPS_TASK",
+          targetId: taskId,
         },
       });
     }
