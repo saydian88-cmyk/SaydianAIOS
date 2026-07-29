@@ -792,7 +792,10 @@ export class WorkbenchController {
     @Headers("authorization") authorization: string | undefined,
     @Body() body: Record<string, unknown>,
   ) {
-    const employee = this.requirePermission(authorization, "DATA_CENTER_VIEW");
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    if (!employee.roles.some((role) => ["CONTENT_OPERATOR", "VIDEO_SPECIALIST"].includes(role))) {
+      throw new ForbiddenException("只有运营和视频专员可以创建视频项目");
+    }
     const project = await this.videoFactory.createProject({
       platform: String(body.platform || "DOUYIN"),
       voiceoverMode: String(body.voiceoverMode || "VOICEOVER"),
@@ -828,16 +831,23 @@ export class WorkbenchController {
       painPoint: body.painPoint ? String(body.painPoint) : undefined,
       scriptEngines: Array.isArray(body.scriptEngines) ? body.scriptEngines.map(String) : undefined,
     }, employee.name) as Record<string, any>;
+    const scriptSubmission = await this.submitVideoScriptTask(authorization, String(project.id));
+    const submittedProject = scriptSubmission.project as Record<string, any>;
     const task = await this.workbench.ensureVideoProjectTask({
       employeeId: employee.employeeId!,
       name: employee.name,
     }, {
-      id: String(project.id),
-      productionNo: project.productionNo ? String(project.productionNo) : null,
-      topic: project.topic ? String(project.topic) : null,
-      productionStage: project.productionStage ? String(project.productionStage) : null,
+      id: String(submittedProject.id),
+      productionNo: submittedProject.productionNo ? String(submittedProject.productionNo) : null,
+      topic: submittedProject.topic ? String(submittedProject.topic) : null,
+      productionStage: submittedProject.productionStage ? String(submittedProject.productionStage) : null,
     });
-    return { ...project, linkedTask: task };
+    return {
+      ...submittedProject,
+      linkedTask: task,
+      scriptTask: scriptSubmission.task,
+      scriptEngines: scriptSubmission.scriptEngines,
+    };
   }
 
   @Post("data-center/video-projects/:id/script-task")
@@ -963,7 +973,12 @@ export class WorkbenchController {
     if (factory.aiTaskId) {
       await this.aiTasks.review(String(factory.aiTaskId), { action, note }, employee.name);
     }
-    return this.videoFactory.reviewScript(id, action === "APPROVE", note, employee.name);
+    const reviewed = await this.videoFactory.reviewScript(id, action === "APPROVE", note, employee.name);
+    if (action === "RETURN") {
+      const scriptSubmission = await this.submitVideoScriptTask(authorization, id);
+      return { ...scriptSubmission.project, scriptTask: scriptSubmission.task };
+    }
+    return reviewed;
   }
 
   @Post("data-center/video-projects/:id/script")
