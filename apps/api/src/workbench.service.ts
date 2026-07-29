@@ -1776,7 +1776,9 @@ export class WorkbenchService {
         id: aiRequest.id,
         taskNo: aiRequest.taskNo,
         status: aiStatus,
-        progress: aiRequest.progress,
+        progress: aiStatus === "WAITING_INPUT"
+          ? Math.min(Number(aiRequest.progress) || 0, 90)
+          : aiRequest.progress,
         progressMessage: this.employeeProgressMessage(aiRequest.progressMessage),
       } : null,
       deliverables,
