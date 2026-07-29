@@ -132,7 +132,7 @@ function typeLabel(value: string) {
 function statusLabel(value: string) {
   const labels: Row = {
     PENDING: "待处理", WAITING_CONFIRMATION: "待确认", CLAIMED: "已领取", RUNNING: "处理中",
-    WAITING_INPUT: "等待输入", QUALITY_CHECK: "自动质检", UPLOADING: "上传中", PENDING_REVIEW: "待审核",
+    WAITING_INPUT: "需补充资料", QUALITY_CHECK: "自动质检", UPLOADING: "上传中", PENDING_REVIEW: "待审核",
     RETURNED: "已退回", RETRY: "重试中", COMPLETED: "已完成", FAILED: "失败", CANCELLED: "已取消",
   };
   return labels[value] || value;
@@ -159,6 +159,36 @@ function attemptStatusLabel(value: string) {
     FAILED: "执行失败", CANCELLED: "已取消",
   };
   return labels[value] || value;
+}
+
+function hasSuccessfulAttempt(task?: Row) {
+  return Boolean(task?.attempts?.some((attempt: Row) => attempt.status === "SUCCEEDED"));
+}
+
+function routedSkill(task?: Row) {
+  if (task?.output?.execution?.skill) return task.output.execution.skill;
+  if (!hasSuccessfulAttempt(task)) return "等待执行";
+  return ({
+    VIDEO: "video-editing-from-media-library-share",
+    IMAGE: "imagegen",
+    ARTICLE: "build-health-brand-trust-content",
+  } as Row)[task?.type] || "Codex本地分析";
+}
+
+function skillVersion(task?: Row) {
+  if (task?.output?.execution?.skillVersion) return task.output.execution.skillVersion;
+  return hasSuccessfulAttempt(task) ? "历史执行记录" : "等待执行";
+}
+
+function executionStrategy(task?: Row) {
+  if (task?.output?.execution?.strategy) return task.output.execution.strategy;
+  return hasSuccessfulAttempt(task) ? "CODEX_SKILL" : "等待执行";
+}
+
+function missingInputText(task?: Row) {
+  if (Array.isArray(task?.missingInputs) && task.missingInputs.length) return task.missingInputs.join("、");
+  if (task?.status === "WAITING_INPUT") return task.progressMessage || "请查看补拍或资料任务";
+  return "无";
 }
 
 function outputKindLabel(value: string) {
@@ -500,7 +530,7 @@ onMounted(load);
         <el-table-column label="操作" width="290" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="showDetail(row)">详情</el-button>
-            <el-button v-if="['PENDING','WAITING_CONFIRMATION','WAITING_INPUT','RETURNED'].includes(row.status)" link type="primary" @click="action(row, 'start')">运行</el-button>
+            <el-button v-if="['PENDING','WAITING_CONFIRMATION','RETURNED'].includes(row.status)" link type="primary" @click="action(row, 'start')">运行</el-button>
             <el-button v-if="runningStatuses.includes(row.status)" link type="danger" @click="action(row, 'cancel')">取消</el-button>
             <el-button v-if="['FAILED','CANCELLED'].includes(row.status)" link type="warning" @click="action(row, 'retry')">重试</el-button>
             <el-button v-if="row.status === 'PENDING_REVIEW'" link type="success" @click="openReview(row, 'APPROVE')">通过</el-button>
@@ -679,12 +709,12 @@ onMounted(load);
           <el-descriptions-item v-if="detail.type === 'VIDEO'" label="执行模式">{{ detail.input?.executionMode === "SCRIPT_ONLY" ? "仅生成脚本" : "生成完整视频" }}</el-descriptions-item>
           <el-descriptions-item v-if="detail.type === 'VIDEO'" label="外部视觉模型">{{ detail.modelPolicy?.allowExternalGeneration ? "允许" : "不允许" }}</el-descriptions-item>
           <el-descriptions-item label="进度" :span="2">{{ detail.progress || 0 }}% · {{ detail.progressMessage || "未开始" }}</el-descriptions-item>
-          <el-descriptions-item label="实际 Skill">{{ detail.output?.execution?.skill || "尚未执行" }}</el-descriptions-item>
-          <el-descriptions-item label="Skill 版本">{{ detail.output?.execution?.skillVersion || "尚未执行" }}</el-descriptions-item>
-          <el-descriptions-item label="执行耗时">{{ detail.output?.execution?.durationMs == null ? "尚未执行" : `${(Number(detail.output.execution.durationMs) / 1000).toFixed(1)} 秒` }}</el-descriptions-item>
-          <el-descriptions-item label="路由策略">{{ detail.output?.execution?.strategy || "尚未执行" }}</el-descriptions-item>
+          <el-descriptions-item label="实际 Skill">{{ routedSkill(detail) }}</el-descriptions-item>
+          <el-descriptions-item label="Skill 版本">{{ skillVersion(detail) }}</el-descriptions-item>
+          <el-descriptions-item label="执行耗时">{{ detail.output?.execution?.durationMs == null ? (hasSuccessfulAttempt(detail) ? "历史记录未保存" : "等待执行") : `${(Number(detail.output.execution.durationMs) / 1000).toFixed(1)} 秒` }}</el-descriptions-item>
+          <el-descriptions-item label="路由策略">{{ executionStrategy(detail) }}</el-descriptions-item>
           <el-descriptions-item label="任务要求" :span="2">{{ detail.instructions || "按输入数据自动执行" }}</el-descriptions-item>
-          <el-descriptions-item label="缺失输入" :span="2">{{ (detail.missingInputs || []).join("、") || "无" }}</el-descriptions-item>
+          <el-descriptions-item label="缺失输入" :span="2">{{ missingInputText(detail) }}</el-descriptions-item>
         </el-descriptions>
 
         <h3>输入数据快照</h3>

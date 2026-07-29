@@ -54,14 +54,22 @@ function priority(value: unknown) {
   return priorities.has(result) ? result : "C";
 }
 
-export function normalizeKeyword(value: string) {
+export function cleanKeywordDisplay(value: string) {
   return value
     .normalize("NFKC")
-    .replace(/[#"“”‘’]/gu, "")
+    .replaceAll("园型", "圆形")
+    .replaceAll("气嚷", "气囊")
+    .replaceAll("跌掉", "跌倒")
     .replace(/\s+/gu, " ")
     .trim()
-    .toLowerCase()
     .slice(0, 120);
+}
+
+export function normalizeKeyword(value: string) {
+  return cleanKeywordDisplay(value)
+    .replace(/[#"“”‘’]/gu, "")
+    .toLowerCase()
+    .trim();
 }
 
 function clusterKey(value: string) {
@@ -209,7 +217,7 @@ export class SmartKeywordService {
 
   async create(input: JsonRecord, actor: string) {
     const target = platform(input.platform);
-    const keyword = text(input.keyword);
+    const keyword = cleanKeywordDisplay(text(input.keyword));
     if (!keyword) throw new BadRequestException("关键词不能为空");
     const products = await this.prisma.product.findMany({
       where: { status: "READY" },
@@ -226,7 +234,7 @@ export class SmartKeywordService {
     const scores = scoreFor({ type, source: "MANUAL", productId: product?.id });
     const cluster = await this.upsertCluster({
       clusterKey: text(input.clusterKey) || clusterKey(keyword),
-      clusterName: text(input.clusterName) || keyword,
+      clusterName: cleanKeywordDisplay(text(input.clusterName)) || keyword,
       audience: text(input.audience),
       pain: text(input.pain),
       scene: text(input.scene),
@@ -306,7 +314,7 @@ export class SmartKeywordService {
       ? current.pinned
       : Boolean(input.pinned || input.addToDailyPlan);
     if (nextPinned && (!current.pinned || target !== current.platform)) await this.assertPinnedCapacity(target, id);
-    const nextKeyword = input.keyword === undefined ? current.keyword : text(input.keyword);
+    const nextKeyword = input.keyword === undefined ? current.keyword : cleanKeywordDisplay(text(input.keyword));
     if (!nextKeyword) throw new BadRequestException("关键词不能为空");
     const products = await this.prisma.product.findMany({ where: { status: "READY" }, select: { id: true, name: true } });
     if (!allowedViralKeyword(nextKeyword, products.map((item) => item.name))) {
@@ -743,7 +751,7 @@ export class SmartKeywordService {
       });
       const cluster = await this.upsertCluster({
         clusterKey: candidate.clusterKey || clusterKey(candidate.clusterName || candidate.keyword),
-        clusterName: candidate.clusterName || candidate.keyword,
+        clusterName: cleanKeywordDisplay(candidate.clusterName || candidate.keyword),
         audience: candidate.audience,
         pain: candidate.pain,
         scene: candidate.scene,
@@ -751,7 +759,7 @@ export class SmartKeywordService {
       const data = {
         productId: product?.id,
         clusterId: cluster.id,
-        keyword: candidate.keyword.trim(),
+        keyword: cleanKeywordDisplay(candidate.keyword),
         normalizedKeyword: normalized,
         language: target === "TIKTOK" ? "en" : "zh-CN",
         market: target === "TIKTOK" ? "US" : "CN",

@@ -158,5 +158,7 @@ export function normalizeTopicText(value: unknown) {
     .trim()
     .toLowerCase()
     .replaceAll("园型", "圆形")
+    .replaceAll("气嚷", "气囊")
+    .replaceAll("跌掉", "跌倒")
     .replace(/[\s\-_—–·•，。！？、；：,.!?;:()[\]{}'"“”‘’]+/gu, "");
 }

@@ -507,7 +507,7 @@ export class AiTaskCenterService implements OnModuleInit {
 
   async start(id: string, actor: string) {
     const task = await this.ensureTask(id);
-    if (!["WAITING_CONFIRMATION", "WAITING_INPUT", "RETURNED", "FAILED", "PENDING"].includes(task.status)) {
+    if (!["WAITING_CONFIRMATION", "RETURNED", "PENDING"].includes(task.status)) {
       throw new BadRequestException("任务当前不能启动");
     }
     const snapshots = await this.prisma.aiTaskInputSnapshot.findMany({ where: { aiTaskId: id } });
@@ -1272,16 +1272,21 @@ export class AiTaskCenterService implements OnModuleInit {
     const result = object(body.result);
     const domain = await this.finalizeDomain(task, result, `Codex:${node.nodeCode}`);
     const status = domain.status;
+    const progress = status === "RUNNING"
+      ? 65
+      : status === "WAITING_INPUT"
+        ? Math.min(Math.max(task.progress || 60, 60), 90)
+        : 100;
     await this.prisma.$transaction([
       this.prisma.aiTask.update({
         where: { id },
         data: {
           status,
           output: json(result),
-          progress: status === "RUNNING" ? 65 : 100,
+          progress,
           progressMessage: domain.message,
           actualCost: number(body.actualCost) || task.actualCost,
-          finishedAt: ["PENDING_REVIEW", "COMPLETED", "WAITING_INPUT"].includes(status) ? new Date() : null,
+          finishedAt: ["PENDING_REVIEW", "COMPLETED"].includes(status) ? new Date() : null,
           heartbeatAt: new Date(),
           lockedAt: null,
           lockedBy: null,

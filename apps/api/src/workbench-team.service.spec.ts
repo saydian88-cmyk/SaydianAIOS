@@ -120,9 +120,7 @@ describe("WorkbenchService operation team", () => {
   });
 
   it("resolves an AI approval notification to its employee task", async () => {
-    const updateMany = vi.fn()
-      .mockResolvedValueOnce({ count: 1 })
-      .mockResolvedValueOnce({ count: 1 });
+    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
     const target = service({
       taskNotification: {
         findFirst: vi.fn().mockResolvedValue({
@@ -134,10 +132,48 @@ describe("WorkbenchService operation team", () => {
         }),
         updateMany,
       },
+      opsTask: {
+        findFirst: vi.fn().mockResolvedValue({ id: "task-ai-1", category: "CONTENT_VIDEO", evidence: {} }),
+      },
+      aiTask: {
+        findUnique: vi.fn().mockResolvedValue({
+          sourceType: "WORKBENCH_CONTENT_REQUEST",
+          sourceId: "task-ai-1",
+          input: { opsTaskId: "task-ai-1" },
+        }),
+      },
     });
     const result = await target.readNotification(operator, "notice-1");
     expect(result).toEqual({ ok: true, taskId: "task-ai-1" });
     expect(updateMany).toHaveBeenCalledOnce();
+  });
+
+  it("redirects a historical AI delivery notification to the original employee task", async () => {
+    const findFirst = vi.fn()
+      .mockResolvedValueOnce({ id: "delivery-1", category: "AI_DELIVERY", evidence: { aiTaskId: "ai-1" } })
+      .mockResolvedValueOnce({ id: "source-task-1" });
+    const target = service({
+      taskNotification: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: "notice-1",
+          taskId: "delivery-1",
+          aiTaskId: "ai-1",
+          recipientEmployeeId: "operator-1",
+          channel: "IN_APP",
+        }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      opsTask: { findFirst },
+      aiTask: {
+        findUnique: vi.fn().mockResolvedValue({
+          sourceType: "WORKBENCH_CONTENT_REQUEST",
+          sourceId: "source-task-1",
+          input: { opsTaskId: "source-task-1" },
+        }),
+      },
+    });
+    await expect(target.readNotification(operator, "notice-1"))
+      .resolves.toEqual({ ok: true, taskId: "source-task-1" });
   });
 
   it("completes a personal task without waiting for a reviewer", async () => {

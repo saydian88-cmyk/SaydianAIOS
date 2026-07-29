@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { grade, normalizeKeyword, scoreFor, SmartKeywordService } from "./smart-keyword.service";
+import { cleanKeywordDisplay, grade, normalizeKeyword, scoreFor, SmartKeywordService } from "./smart-keyword.service";
 
 describe("smart keyword logic", () => {
   it("normalizes Chinese and English independently", () => {
     expect(normalizeKeyword("  老人  智能手表  ")).toBe("老人 智能手表");
     expect(normalizeKeyword("SmartWatch For Seniors")).toBe("smartwatch for seniors");
     expect(normalizeKeyword("老人智能手表")).not.toBe(normalizeKeyword("smartwatch for seniors"));
+  });
+
+  it("corrects known collection typos before storing and deduplicating", () => {
+    expect(cleanKeywordDisplay("园型手表 气嚷表带 跌掉提醒")).toBe("圆形手表 气囊表带 跌倒提醒");
+    expect(normalizeKeyword("园型手表")).toBe(normalizeKeyword("圆形手表"));
   });
 
   it("uses the V1.1 grade boundaries", () => {

@@ -132,8 +132,36 @@ function statusLabel(value: string) {
     PACKAGING_REVIEW: "平台包装审核", READY_TO_PUBLISH: "可以发布", PUBLISHING: "发布中", TRACKING: "数据跟踪",
     WAITING_ASSETS: "等待素材", WAITING_RENDER_PROVIDER: "剪辑能力未配置", READY_FOR_REVIEW: "待成片审核",
     RETURNED: "已退回", WAITING_COVER_PROVIDER: "等待封面成品", PENDING_CONFIRMATION: "待确认", CONFIRMED: "已确认",
+    TOPIC_CARD_RECOMMENDED: "选题待确认", TOPIC_CARD_APPROVED: "选题已确认",
+    FACTORY_SCRIPT_READY: "脚本已完成", FACTORY_GENERATING: "视频生成中",
   };
   return labels[value] || value || "未获取";
+}
+
+function outlineText(input: unknown) {
+  let data = input;
+  if (typeof input === "string" && input.trim().startsWith("{")) {
+    try {
+      data = JSON.parse(input);
+    } catch {
+      return input;
+    }
+  }
+  if (!data || typeof data !== "object" || Array.isArray(data)) return String(data || "");
+  const row = data as Record<string, unknown>;
+  const moduleNames: Record<string, string> = {
+    HOOK: "Hook", PAIN: "痛点", SOLUTION: "解决方案", DEMO: "产品演示",
+    PROOF: "信任证明", CTA: "行动引导", FEATURE: "功能", SCENE: "场景",
+  };
+  const parts = [
+    moduleNames[String(row.moduleType || "")] || String(row.title || ""),
+    String(row.visual || row.description || ""),
+    row.voiceover ? `口播：${row.voiceover}` : "",
+    row.subtitle ? `字幕：${row.subtitle}` : "",
+    row.missingReason ? `缺少：${row.missingReason}` : "",
+    row.alternativePlan ? `替代：${row.alternativePlan}` : "",
+  ].filter(Boolean);
+  return parts.join(" · ") || "镜头方案";
 }
 
 function statusType(value: string) {
@@ -851,7 +879,7 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
             <div v-if="item.kind === 'VIDEO'" class="production-meta"><span>{{ item.productionNo || '历史内容' }}</span><el-tag type="primary">{{ statusLabel(item.productionStage) }}</el-tag><span>负责人：{{ item.owner || '待脚本审核时确定' }}</span></div>
             <p class="hook">“{{ item.hook }}”</p>
             <dl><div><dt>目标人群</dt><dd>{{ item.audience }}</dd></div><div><dt>传播目标</dt><dd>{{ item.objective }}</dd></div></dl>
-            <ol><li v-for="line in item.outline" :key="line">{{ line }}</li></ol>
+            <ol><li v-for="(line, index) in item.outline" :key="index">{{ outlineText(line) }}</li></ol>
             <el-alert v-if="item.riskReasons.length" :title="item.riskReasons.join('；')" type="warning" :closable="false" show-icon />
             <div v-if="item.kind === 'VIDEO' && item.status === 'PENDING_APPROVAL'" class="workflow-block"><strong>脚本审核通过后生产的平台</strong><el-checkbox-group v-model="item.targetPlatforms"><el-checkbox v-for="variant in item.variants" :key="variant.id" :value="variant.platform">{{ platformName(variant.platform) }}</el-checkbox></el-checkbox-group></div>
             <div v-if="item.kind === 'VIDEO' && item.status === 'APPROVED'" class="workflow-block shot-library-block">

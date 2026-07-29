@@ -54,6 +54,8 @@ docker compose --env-file "$production_env" --env-file "$images" -f "$compose" r
   node_modules/.bin/tsx prisma/seed.ts
 docker compose --env-file "$production_env" --env-file "$images" -f "$compose" run --rm ops-api \
   node_modules/.bin/tsx prisma/backfill-video-factory.ts
+docker compose --env-file "$production_env" --env-file "$images" -f "$compose" run --rm ops-api \
+  node_modules/.bin/tsx prisma/backfill-task-projection-v2.ts --apply
 docker compose --env-file "$production_env" --env-file "$images" -f "$compose" up -d --remove-orphans
 docker compose --env-file "$production_env" --env-file "$images" -f "$compose" restart gateway
 

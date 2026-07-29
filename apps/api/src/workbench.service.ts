@@ -12,8 +12,8 @@ const doneStatuses = ["COMPLETED", "CANCELLED", "VERIFIED"];
 const collaborationRoleCodes = ["CONTENT_OPERATOR", "VIDEO_SPECIALIST", "DESIGNER"];
 const deliverableOutputKinds = [
   "VIDEO_MASTER",
-  "IMAGE", "IMAGE_ASSET", "IMAGE_OUTPUT", "IMAGE_GENERATED",
-  "ARTICLE", "ARTICLE_OUTPUT",
+  "IMAGE", "IMAGE_ASSET", "IMAGE_OUTPUT", "IMAGE_GENERATED", "IMAGE_MASTER",
+  "ARTICLE", "ARTICLE_OUTPUT", "ARTICLE_PLAN",
 ];
 
 function value(input: unknown) {
@@ -64,7 +64,7 @@ export class WorkbenchService {
         include: { department: true, roles: { include: { role: true } } },
       }),
       this.prisma.opsTask.findMany({
-        where: { AND: [access, { status: { in: openStatuses } }] },
+        where: { AND: [access, { status: { in: openStatuses } }, { category: { not: "AI_DELIVERY" } }] },
         include: this.taskInclude(),
         orderBy: [{ priority: "asc" }, { dueAt: "asc" }, { createdAt: "desc" }],
         take: 40,
@@ -79,7 +79,7 @@ export class WorkbenchService {
       }),
     ]);
     const now = Date.now();
-    const sortedTasks = this.sortTasks(tasks);
+    const sortedTasks = await this.attachTaskProjections(this.sortTasks(tasks));
     const mine = sortedTasks.filter((task) => task.assigneeEmployeeId === employeeId);
     const available = sortedTasks.filter((task) => !task.assigneeEmployeeId && task.status === "OPEN");
     return {
@@ -114,12 +114,12 @@ export class WorkbenchService {
         ? {
             OR: [
               { mimeType: { startsWith: "image/" } },
-              { kind: { in: ["IMAGE", "IMAGE_ASSET", "IMAGE_OUTPUT"] } },
+              { kind: { in: ["IMAGE", "IMAGE_ASSET", "IMAGE_OUTPUT", "IMAGE_GENERATED", "IMAGE_MASTER"] } },
             ],
           }
         : type === "ARTICLE"
           ? {
-              kind: { in: ["ARTICLE", "ARTICLE_OUTPUT"] },
+              kind: { in: ["ARTICLE", "ARTICLE_OUTPUT", "ARTICLE_PLAN"] },
             }
           : {};
     const items = await this.prisma.aiTaskOutput.findMany({
@@ -180,7 +180,7 @@ export class WorkbenchService {
             && item.asset.availabilityStatus === "ACTIVE"
             && Boolean(item.asset.objectKey || item.url);
         }
-        if (["IMAGE", "IMAGE_ASSET", "IMAGE_OUTPUT", "IMAGE_GENERATED"].includes(item.kind)) {
+        if (["IMAGE", "IMAGE_ASSET", "IMAGE_OUTPUT", "IMAGE_GENERATED", "IMAGE_MASTER"].includes(item.kind)) {
           return item.asset?.reviewStatus === "APPROVED"
             && item.asset.availabilityStatus === "ACTIVE"
             && Boolean(item.asset.objectKey || item.url);
@@ -191,7 +191,7 @@ export class WorkbenchService {
       .map((item) => {
         const metadata = object(item.metadata);
         const previewKind = item.kind === "VIDEO_MASTER" ? "VIDEO"
-          : ["IMAGE", "IMAGE_ASSET", "IMAGE_OUTPUT", "IMAGE_GENERATED"].includes(item.kind) ? "IMAGE" : "ARTICLE";
+          : ["IMAGE", "IMAGE_ASSET", "IMAGE_OUTPUT", "IMAGE_GENERATED", "IMAGE_MASTER"].includes(item.kind) ? "IMAGE" : "ARTICLE";
         return {
           ...item,
           isFinal: true,
@@ -237,12 +237,14 @@ export class WorkbenchService {
       ? {
           AND: [
             access,
+            { category: { not: "AI_DELIVERY" } },
             { assigneeEmployeeId: null, status: "OPEN" },
           ],
         }
       : {
           AND: [
             access,
+            { category: { not: "AI_DELIVERY" } },
             scope === "MINE" ? { assigneeEmployeeId: employeeId } : {},
             status ? { status } : {},
           ],
@@ -253,7 +255,7 @@ export class WorkbenchService {
       orderBy: [{ dueAt: "asc" }, { createdAt: "desc" }],
       take: 200,
     });
-    return this.sortTasks(rows);
+    return this.attachTaskProjections(this.sortTasks(rows));
   }
 
   async createSelfTask(session: SessionPayload, body: Record<string, unknown>) {
@@ -1242,10 +1244,17 @@ export class WorkbenchService {
       data: { readAt: new Date() },
     });
     if (!result.count) throw new NotFoundException("消息不存在");
-    let taskId: string | undefined = notification.taskId || undefined;
-    if (!taskId && notification.aiTaskId) {
+    let taskId: string | undefined;
+    const notifiedTask = notification.taskId
+      ? await this.prisma.opsTask.findFirst({
+          where: { AND: [{ id: notification.taskId }, this.taskAccess(session)] },
+          select: { id: true, category: true, evidence: true },
+        })
+      : null;
+    const linkedAiTaskId = notification.aiTaskId || value(object(notifiedTask?.evidence).aiTaskId);
+    if (linkedAiTaskId) {
       const aiTask = await this.prisma.aiTask.findUnique({
-        where: { id: notification.aiTaskId },
+        where: { id: linkedAiTaskId },
         select: { sourceType: true, sourceId: true, input: true },
       });
       const requestedTaskId = value(object(aiTask?.input).opsTaskId)
@@ -1258,6 +1267,7 @@ export class WorkbenchService {
         taskId = accessible?.id;
       }
     }
+    if (!taskId && notifiedTask?.category !== "AI_DELIVERY") taskId = notifiedTask?.id;
     return { ok: true, taskId };
   }
 
@@ -1690,8 +1700,8 @@ export class WorkbenchService {
       .map((item: any) => {
         const metadata = object(item.metadata);
         const previewKind = item.kind === "VIDEO_MASTER" || value(item.mimeType).startsWith("video/") ? "VIDEO"
-          : value(item.mimeType).startsWith("image/") || ["IMAGE", "IMAGE_ASSET", "IMAGE_OUTPUT", "IMAGE_GENERATED"].includes(item.kind) ? "IMAGE"
-            : ["ARTICLE", "ARTICLE_OUTPUT"].includes(item.kind) ? "ARTICLE" : "DOCUMENT";
+          : value(item.mimeType).startsWith("image/") || ["IMAGE", "IMAGE_ASSET", "IMAGE_OUTPUT", "IMAGE_GENERATED", "IMAGE_MASTER"].includes(item.kind) ? "IMAGE"
+            : ["ARTICLE", "ARTICLE_OUTPUT", "ARTICLE_PLAN"].includes(item.kind) ? "ARTICLE" : "DOCUMENT";
         return {
           id: item.id,
           type: item.kind,
@@ -1731,6 +1741,61 @@ export class WorkbenchService {
       feedback: task.reviews || [],
       sourceLinks: { opsTaskId: task.id, aiTaskId: aiRequest?.id || null },
     };
+  }
+
+  private async attachTaskProjections<T extends { id: string; evidence?: Prisma.JsonValue }>(tasks: T[]) {
+    if (!tasks.length) return tasks;
+    const taskIds = tasks.map((task) => task.id);
+    const evidenceAiTaskIds = tasks
+      .map((task) => value(object(task.evidence).aiTaskId))
+      .filter(Boolean);
+    const aiTasks = await this.prisma.aiTask.findMany({
+      where: {
+        OR: [
+          { sourceType: "WORKBENCH_CONTENT_REQUEST", sourceId: { in: taskIds } },
+          ...(evidenceAiTaskIds.length ? [{ id: { in: evidenceAiTaskIds } }] : []),
+          { outputs: { some: { opsTaskId: { in: taskIds } } } },
+        ],
+      },
+      select: {
+        id: true,
+        taskNo: true,
+        status: true,
+        progress: true,
+        progressMessage: true,
+        sourceType: true,
+        sourceId: true,
+        input: true,
+        createdAt: true,
+        outputs: {
+          where: { opsTaskId: { in: taskIds }, kind: { not: "OPS_TASK" } },
+          select: { opsTaskId: true },
+        },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    const byTaskId = new Map<string, (typeof aiTasks)[number]>();
+    for (const aiTask of aiTasks) {
+      const linkedIds = new Set<string>([
+        ...(aiTask.sourceType === "WORKBENCH_CONTENT_REQUEST" && aiTask.sourceId ? [aiTask.sourceId] : []),
+        value(object(aiTask.input).opsTaskId),
+        ...aiTask.outputs.map((output) => output.opsTaskId || ""),
+      ].filter(Boolean));
+      for (const taskId of linkedIds) {
+        if (!byTaskId.has(taskId)) byTaskId.set(taskId, aiTask);
+      }
+    }
+    for (const task of tasks) {
+      const evidenceAiTaskId = value(object(task.evidence).aiTaskId);
+      if (evidenceAiTaskId) {
+        const linked = aiTasks.find((item) => item.id === evidenceAiTaskId);
+        if (linked) byTaskId.set(task.id, linked);
+      }
+    }
+    return tasks.map((task) => ({
+      ...task,
+      projection: this.taskProjection(task, byTaskId.get(task.id) || null),
+    }));
   }
 
   private employeeProgressMessage(input: unknown) {

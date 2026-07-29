@@ -10,6 +10,7 @@ describe("video topic card contract", () => {
   it("normalizes spacing, punctuation, casing and known obvious typos for deduplication", () => {
     expect(normalizeTopicText(" Smart-Watch  For Seniors ")).toBe("smartwatchforseniors");
     expect(normalizeTopicText("园型 智能手表！")).toBe(normalizeTopicText("圆形-智能手表"));
+    expect(normalizeTopicText("气嚷表带 跌掉提醒")).toBe(normalizeTopicText("气囊表带 跌倒提醒"));
   });
 
   it("keeps the opportunity score at exactly 100 points", () => {

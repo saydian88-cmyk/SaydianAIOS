@@ -273,6 +273,18 @@ export class ViralTrendService {
       where: { platform: "DOUYIN" },
       orderBy: { lastHeartbeatAt: "desc" },
     });
+    const now = Date.now();
+    const online = devices.some((device) => device.lastHeartbeatAt && now - device.lastHeartbeatAt.getTime() < 10 * 60 * 1000);
+    const latestSyncAt = devices
+      .map((device) => device.lastSyncAt)
+      .filter((item): item is Date => Boolean(item))
+      .sort((left, right) => right.getTime() - left.getTime())[0] || null;
+    const syncAgeMinutes = latestSyncAt ? Math.max(0, Math.round((now - latestSyncAt.getTime()) / 60_000)) : null;
+    const freshness = latestSyncAt && online && Number(syncAgeMinutes) <= 240
+      ? "FRESH"
+      : latestSyncAt
+        ? "STALE"
+        : "UNAVAILABLE";
     const candidateCount = items.filter((item) => Number(item.latestMetric?.playVelocity || 0) > 10_000).length;
     return {
       summary: {
@@ -280,11 +292,14 @@ export class ViralTrendService {
         candidates: candidateCount,
         sGrade: items.filter((item) => item.latestMetric?.viralGrade === "S").length,
         aGrade: items.filter((item) => item.latestMetric?.viralGrade === "A").length,
-        lastSyncAt: devices[0]?.lastSyncAt || null,
+        lastSyncAt: latestSyncAt,
+        syncAgeMinutes,
+        freshness,
+        collectorOnline: online,
       },
       devices: devices.map((device) => ({
         ...device,
-        state: device.lastHeartbeatAt && Date.now() - device.lastHeartbeatAt.getTime() < 10 * 60 * 1000
+        state: device.lastHeartbeatAt && now - device.lastHeartbeatAt.getTime() < 10 * 60 * 1000
           ? device.state
           : "OFFLINE",
       })),

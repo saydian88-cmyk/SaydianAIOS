@@ -381,6 +381,13 @@ const roleLabels: Record<string, string> = {
   CUSTOMER_SERVICE: "客服",
   LIVE_HOST: "主播",
 };
+const categoryLabels: Record<string, string> = {
+  CONTENT_VIDEO: "短视频",
+  CONTENT_IMAGE: "图片",
+  CONTENT_ARTICLE: "软文",
+  AI_DELIVERY: "AI历史交付",
+  GENERAL: "通用任务",
+};
 const statusLabels: Record<string, string> = {
   OPEN: "待领取",
   ACCEPTED: "待开始",
@@ -497,10 +504,18 @@ function durationLabel(value?: number | string) {
 
 function statusType(status: string) {
   if (status === "COMPLETED") return "success";
-  if (status === "RETURNED") return "danger";
-  if (status === "REVIEW") return "warning";
-  if (status === "IN_PROGRESS") return "primary";
+  if (["RETURNED", "FAILED", "CANCELLED"].includes(status)) return "danger";
+  if (["REVIEW", "PENDING_REVIEW", "WAITING_INPUT", "RETRY"].includes(status)) return "warning";
+  if (["IN_PROGRESS", "CLAIMED", "RUNNING", "QUALITY_CHECK", "UPLOADING"].includes(status)) return "primary";
   return "info";
+}
+
+function taskDisplayStatus(task: Row) {
+  return task.projection?.displayStatus || statusLabels[task.status] || task.status;
+}
+
+function taskStatusCode(task: Row) {
+  return task.projection?.aiTask?.status || task.status;
 }
 
 function compactNumber(value?: number | string) {
@@ -982,7 +997,15 @@ function outputMime(output: Row) {
 }
 
 function isAiContentTask(task?: Row) {
-  return Boolean(task && task.sourceType === "SELF_CREATED" && ["CONTENT_VIDEO", "CONTENT_IMAGE", "CONTENT_ARTICLE"].includes(task.category));
+  if (!task) return false;
+  return Boolean(
+    task.projection?.isAiManaged
+    || task.aiRequest
+    || task.evidence?.aiTaskId
+    || task.sourceType === "WORKBENCH_CONTENT_REQUEST"
+    || task.category === "AI_DELIVERY"
+    || (task.sourceType === "SELF_CREATED" && ["CONTENT_VIDEO", "CONTENT_IMAGE", "CONTENT_ARTICLE"].includes(task.category)),
+  );
 }
 
 function isVideoOutput(output: Row) {
@@ -990,7 +1013,7 @@ function isVideoOutput(output: Row) {
 }
 
 function isImageOutput(output: Row) {
-  return output.previewKind === "IMAGE" || outputMime(output).startsWith("image/") || ["IMAGE", "IMAGE_ASSET", "IMAGE_OUTPUT", "IMAGE_GENERATED"].includes(output.kind);
+  return output.previewKind === "IMAGE" || outputMime(output).startsWith("image/") || ["IMAGE", "IMAGE_ASSET", "IMAGE_OUTPUT", "IMAGE_GENERATED", "IMAGE_MASTER"].includes(output.kind);
 }
 
 function isPdfOutput(output: Row) {
@@ -1006,7 +1029,7 @@ function outputText(output: Row) {
 }
 
 async function generateTaskSuggestion() {
-  if (!selfTaskForm.productId || !selfTaskForm.keywordId) return ElMessage.warning("请先选择产品和关键词");
+  if (!selfTaskForm.productId) return ElMessage.warning("请先从产品库选择产品");
   generatingTaskSuggestion.value = true;
   try {
     const suggestion = await post<Row>("/api/v1/workbench/task-creation/suggest", {
@@ -1428,6 +1451,10 @@ function renderStatusType(job: Row) {
 
 function projectReadyToRender(project: Row) {
   return Boolean(project.videoShots?.length && project.videoShots.every((shot: Row) => shot.status === "DONE" && shot.selectedAssetId));
+}
+
+function projectHasApprovedMaster(project: Row) {
+  return Boolean(project.videoRenderJobs?.some((job: Row) => job.status === "SUCCEEDED" && job.outputAsset?.reviewStatus === "APPROVED"));
 }
 
 async function renderWorkbenchProject(project: Row) {
@@ -1953,17 +1980,18 @@ async function submitKnowledge() {
 }
 
 async function readNotice(item: Row) {
-  const result = !item.readAt || (!item.taskId && item.aiTaskId)
-    ? await post<Row>(`/api/v1/workbench/notifications/${item.id}/read`)
-    : { taskId: item.taskId };
-  item.readAt = new Date().toISOString();
-  const taskId = item.taskId || result.taskId;
-  if (taskId) {
-    const task = await api<Row>(`/api/v1/workbench/tasks/${taskId}`);
-    await switchPage(task.sourceType === "OPERATOR_COLLAB" ? "team" : "tasks");
-    await openTaskDetail(task);
-  } else if (item.aiTaskId) {
-    ElMessage.info("该AI任务尚未形成可查看的员工成果");
+  try {
+    const result = await post<Row>(`/api/v1/workbench/notifications/${item.id}/read`);
+    item.readAt = new Date().toISOString();
+    if (result.taskId) {
+      const task = await api<Row>(`/api/v1/workbench/tasks/${result.taskId}`);
+      await switchPage(task.sourceType === "OPERATOR_COLLAB" ? "team" : "tasks");
+      await openTaskDetail(task);
+    } else {
+      ElMessage.info("该消息暂未关联可查看的员工任务");
+    }
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "任务详情暂时无法打开");
   }
 }
 
@@ -2193,7 +2221,8 @@ onMounted(() => void bootstrap());
               <article v-for="task in dashboard.todayTasks" :key="task.id" class="task-card">
                 <div class="task-main">
                   <div class="task-meta">
-                    <el-tag size="small" :type="statusType(task.status)">{{ statusLabels[task.status] || task.status }}</el-tag>
+                    <el-tag size="small" :type="statusType(taskStatusCode(task))">{{ taskDisplayStatus(task) }}</el-tag>
+                    <span v-if="task.projection?.currentPhase">{{ task.projection.currentPhase }}</span>
                     <span>{{ priorityLabels[task.priority] || task.priority }}</span>
                     <span>截止 {{ formatTime(task.dueAt) }}</span>
                   </div>
@@ -2285,9 +2314,10 @@ onMounted(() => void bootstrap());
           <article v-for="task in tasks" :key="task.id" class="task-card">
             <div class="task-main">
               <div class="task-meta">
-                <el-tag size="small" :type="statusType(task.status)">{{ statusLabels[task.status] || task.status }}</el-tag>
+                <el-tag size="small" :type="statusType(taskStatusCode(task))">{{ taskDisplayStatus(task) }}</el-tag>
                 <span>{{ task.taskNo || "系统任务" }}</span>
-                <span>{{ roleLabels[task.requiredRoleCode] || task.category }}</span>
+                <span>{{ roleLabels[task.requiredRoleCode] || categoryLabels[task.category] || "业务任务" }}</span>
+                <span v-if="task.projection?.currentPhase">{{ task.projection.currentPhase }}</span>
                 <span>截止 {{ formatTime(task.dueAt) }}</span>
               </div>
               <h4>{{ task.title }}</h4>
@@ -2552,6 +2582,14 @@ onMounted(() => void bootstrap());
         </section>
 
         <section v-else-if="dataCenterTab === 'viral'" v-loading="dataCenterLoading" class="viral-workspace">
+          <el-alert
+            v-if="dataCenter.viralTrend?.summary?.freshness && dataCenter.viralTrend.summary.freshness !== 'FRESH'"
+            title="爆款采集数据已过期，仅供参考"
+            description="采集器恢复并完成新一轮同步前，不会把这些旧数据直接带入新的内容任务。"
+            type="warning"
+            :closable="false"
+            show-icon
+          />
           <div class="metric-grid viral-metrics">
             <article><span>12小时视频</span><strong>{{ dataCenter.viralTrend?.summary?.total || 0 }}</strong></article>
             <article><span>速度达标</span><strong>{{ dataCenter.viralTrend?.summary?.candidates || 0 }}</strong></article>
@@ -2573,7 +2611,11 @@ onMounted(() => void bootstrap());
               </div>
               <div class="viral-actions">
                 <el-button v-if="video.sourceUrl" @click="openExternal(video.sourceUrl)">查看原视频</el-button>
-                <el-button type="primary" @click="useViralVideoInFactory(video)">创建赛电版本任务</el-button>
+                <el-button
+                  type="primary"
+                  :disabled="dataCenter.viralTrend?.summary?.freshness !== 'FRESH'"
+                  @click="useViralVideoInFactory(video)"
+                >创建赛电版本任务</el-button>
               </div>
             </article>
             <el-empty v-if="!dataCenter.viralTrend?.items?.length" description="暂无12小时爆款数据，等待采集任务同步" />
@@ -2777,7 +2819,7 @@ onMounted(() => void bootstrap());
                   </article>
                 </div>
                 <el-alert
-                  v-if="project.videoShots?.length && !projectReadyToRender(project)"
+                  v-if="project.videoShots?.length && !projectReadyToRender(project) && !projectHasApprovedMaster(project)"
                   title="镜头素材尚未齐套，完成补拍或AI生成后才能开始剪辑"
                   type="warning"
                   :closable="false"
@@ -2844,7 +2886,16 @@ onMounted(() => void bootstrap());
             <div><h3>消息通知</h3><p>点击任务消息会直接打开对应任务。</p></div>
             <el-button :disabled="!notices.some((item: Row) => !item.readAt)" @click="readAllNotices">全部标为已读</el-button>
           </div>
-          <article v-for="notice in notices" :key="notice.id" :class="{ unread: !notice.readAt }" @click="readNotice(notice)">
+          <article
+            v-for="notice in notices"
+            :key="notice.id"
+            :class="{ unread: !notice.readAt }"
+            role="button"
+            tabindex="0"
+            @click="readNotice(notice)"
+            @keydown.enter.prevent="readNotice(notice)"
+            @keydown.space.prevent="readNotice(notice)"
+          >
             <el-icon><Bell /></el-icon>
             <div><strong>{{ notice.title }}</strong><p>{{ notice.content }}</p><span>{{ formatTime(notice.createdAt) }}</span></div>
           </article>
@@ -2869,7 +2920,7 @@ onMounted(() => void bootstrap());
     <template v-if="taskDetail">
       <div class="task-detail-header">
         <div class="task-meta">
-          <el-tag :type="statusType(taskDetail.status)">{{ statusLabels[taskDetail.status] || taskDetail.status }}</el-tag>
+          <el-tag :type="statusType(taskStatusCode(taskDetail))">{{ taskDisplayStatus(taskDetail) }}</el-tag>
           <el-tag v-if="taskDetail.priority === 'URGENT'" type="danger">紧急</el-tag>
           <span>{{ taskDetail.taskNo || "自建任务" }}</span>
         </div>
@@ -2996,8 +3047,8 @@ onMounted(() => void bootstrap());
           <el-select v-model="selfTaskForm.platform"><el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" /><el-option label="全平台" value="ALL" /></el-select>
         </el-form-item>
       </div>
-      <el-form-item label="智能关键词" required>
-        <el-select v-model="selfTaskForm.keywordId" filterable placeholder="选择关键词后生成选题">
+      <el-form-item label="智能关键词（可选）">
+        <el-select v-model="selfTaskForm.keywordId" clearable filterable placeholder="可选择关键词辅助生成选题">
           <el-option v-for="item in filteredTaskKeywords" :key="item.id" :label="`${item.keyword} · ${item.grade || 'C'}级 · ${Math.round(Number(item.opportunityScore || 0))}分`" :value="item.id" />
         </el-select>
       </el-form-item>
