@@ -1256,6 +1256,17 @@ export class WorkbenchService {
       where: { id, recipientEmployeeId: session.employeeId, channel: "IN_APP" },
     });
     if (!notification) throw new NotFoundException("消息不存在");
+    const markRead = async () => {
+      const result = await this.prisma.taskNotification.updateMany({
+        where: { id, recipientEmployeeId: session.employeeId, channel: "IN_APP" },
+        data: { readAt: new Date() },
+      });
+      if (!result.count) throw new NotFoundException("消息不存在");
+    };
+    if (notification.taskId && notification.targetType === "OPS_TASK") {
+      await markRead();
+      return { ok: true, taskId: notification.taskId };
+    }
     const notifiedTask = notification.taskId
       ? await this.prisma.opsTask.findFirst({
           where: { AND: [{ id: notification.taskId }, this.taskAccess(session)] },
@@ -1281,11 +1292,7 @@ export class WorkbenchService {
       }
     }
     if (!taskId) throw new NotFoundException("关联任务不存在或当前不可查看");
-    const result = await this.prisma.taskNotification.updateMany({
-      where: { id, recipientEmployeeId: session.employeeId, channel: "IN_APP" },
-      data: { readAt: new Date() },
-    });
-    if (!result.count) throw new NotFoundException("消息不存在");
+    await markRead();
     return { ok: true, taskId };
   }
 
