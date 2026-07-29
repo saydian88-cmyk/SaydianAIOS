@@ -52,6 +52,7 @@ const outputPreviewUrl = ref("");
 const tasks = ref<Row[]>([]);
 const taskScope = ref("MINE");
 const taskStatus = ref("");
+const taskType = ref("");
 const selectedTaskIds = ref<string[]>([]);
 const bulkDeletingTasks = ref(false);
 const taskDetailVisible = ref(false);
@@ -106,6 +107,22 @@ const filteredTaskKeywords = computed(() => (contentTaskOptions.keywords || []).
   if (selfTaskForm.platform && String(item.platform) !== selfTaskForm.platform) return false;
   return true;
 }));
+const videoProjectKeywordOptions = computed<Row[]>(() => {
+  const product = (contentTaskOptions.products || []).find((item: Row) => item.modelCode === videoFactoryForm.productModel);
+  const rows = [
+    ...(contentTaskOptions.viralKeywords || []).map((item: Row) => ({ ...item, sourceLabel: "爆款研究" })),
+    ...(contentTaskOptions.keywords || []).map((item: Row) => ({ ...item, sourceLabel: item.sourceLabel || "智能关键词" })),
+  ];
+  const seen = new Set<string>();
+  return rows.filter((item: Row) => {
+    const id = String(item.id || item.smartKeywordId || "");
+    if (!id || !String(item.keyword || "").trim() || seen.has(id)) return false;
+    if (product?.id && item.productId && item.productId !== product.id) return false;
+    if (item.platform && String(item.platform) !== videoFactoryForm.platform) return false;
+    seen.add(id);
+    return true;
+  });
+});
 const operationTeam = reactive<Row>({ supervisor: null, directReports: [], invitations: { incoming: [], outgoing: [] }, operators: [] });
 const teamTasks = ref<Row[]>([]);
 const receivedTeamTasks = ref<Row[]>([]);
@@ -251,7 +268,17 @@ const videoFactoryForm = reactive({
 });
 const videoOptionalOpen = ref(false);
 const videoDefaultsOpen = ref(false);
+const videoProjectCollapseNames = ref<string[]>([]);
 const videoTypeOptions = ["痛点解决型", "场景种草型", "功能演示型", "用户开箱型", "FAQ异议型", "优惠成交型"];
+const videoProjectDefaultSummary = computed(() => {
+  const platform = platformLabel(videoFactoryForm.platform);
+  const duration = `${videoFactoryForm.estimatedDurationSeconds || 30}秒`;
+  const account = ({ BRAND: "品牌账号", CREATOR: "达人账号", EMPLOYEE: "员工账号" } as Record<string, string>)[videoFactoryForm.accountType] || "品牌账号";
+  const health = videoFactoryForm.healthContentAllowed ? "允许健康内容" : "不允许健康内容";
+  const material = videoScriptMode.value === "ASSET_ONLY" ? "仅用已有素材" : "优先已有素材";
+  const voiceover = videoFactoryForm.voiceoverMode === "NO_VOICEOVER" ? "无口播" : "有口播";
+  return `${platform} · ${duration} · ${account} · ${health} · ${material} · ${voiceover}`;
+});
 const videoScriptSource = ref("AI");
 const providedVideoScriptsVisible = ref(false);
 const providedVideoScripts = reactive([
@@ -490,7 +517,20 @@ const isLiveHost = computed(() => currentRoles.value.includes("LIVE_HOST"));
 const isOperator = computed(() => currentRoles.value.includes("CONTENT_OPERATOR"));
 const isCollaborator = computed(() => currentRoles.value.some((role) => ["CONTENT_OPERATOR", "VIDEO_SPECIALIST", "DESIGNER"].includes(role)));
 const canGenerateVideoScript = computed(() => currentRoles.value.some((role) => ["CONTENT_OPERATOR", "VIDEO_SPECIALIST"].includes(role)) && can("CONTENT_SUBMIT"));
-const productOptions = computed<Row[]>(() => dataCenter.products?.length ? dataCenter.products : dataCenter.uploadOptions?.products || []);
+const productOptions = computed<Row[]>(() => {
+  const rows = [
+    ...(dataCenter.products || []),
+    ...(dataCenter.uploadOptions?.products || []),
+    ...(contentTaskOptions.products || []),
+  ];
+  const seen = new Set<string>();
+  return rows.filter((item: Row) => {
+    const key = String(item.id || item.modelCode || "");
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return item.status !== "INACTIVE";
+  });
+});
 const can = (permission: string) => Boolean(user.value?.permissions.includes("*") || user.value?.permissions.includes(permission));
 const canUseDataCenter = computed(() => can("DATA_CENTER_VIEW"));
 const navigation = computed(() => [
@@ -588,6 +628,18 @@ function taskDisplayStatus(task: Row) {
 
 function taskStatusCode(task: Row) {
   return task.projection?.aiTask?.status || task.status;
+}
+
+function isVideoProjectTask(task: Row) {
+  return task.sourceType === "VIDEO_PROJECT" || task.category === "VIDEO_PROJECT";
+}
+
+function videoProjectTaskStep(task: Row) {
+  return Number(task.projection?.project?.step || 1);
+}
+
+function videoProjectTaskHint(task: Row) {
+  return task.projection?.project?.nextAction || task.projection?.nextAction || "进入项目继续处理";
 }
 
 function compactNumber(value?: number | string) {
@@ -749,6 +801,7 @@ async function loadTasks() {
   try {
     const parameters = new URLSearchParams({ scope: taskScope.value });
     if (taskStatus.value) parameters.set("status", taskStatus.value);
+    if (taskType.value) parameters.set("taskType", taskType.value);
     tasks.value = await api<Row[]>(`/api/v1/workbench/tasks?${parameters.toString()}`);
     selectedTaskIds.value = selectedTaskIds.value.filter((id) => tasks.value.some((task) => task.id === id && task.sourceType === "SELF_CREATED" && task.status === "CANCELLED"));
   } finally {
@@ -841,6 +894,30 @@ async function createTeamTask() {
 function openScriptPackage(candidate: Row) {
   scriptPackageCandidate.value = candidate;
   scriptPackageVisible.value = true;
+}
+
+async function openVideoProjectFromTask(task: Row) {
+  active.value = "data";
+  dataCenterTab.value = "videoFactory";
+  await loadDataCenter();
+  const projectId = task.sourceId || task.evidence?.contentPlanId;
+  const project = (dataCenter.videoProjects || []).find((item: Row) => item.id === projectId);
+  if (project) {
+    openVideoProject(project);
+    return;
+  }
+  ElMessage.warning("项目不在当前缓存中，请在视频工厂手动重新拉取后查看");
+}
+
+async function quickCreateProject(command: string) {
+  if (command === "VIDEO") {
+    active.value = "data";
+    dataCenterTab.value = "videoFactory";
+    await loadDataCenter();
+    await openNewVideoProjectDialog();
+    return;
+  }
+  ElMessage.info(command === "IMAGE" ? "图文项目稍后完善" : "软文项目稍后完善");
 }
 
 function openScriptEditor(project: Row, candidate: Row) {
@@ -1096,6 +1173,15 @@ async function ensureContentTaskOptions() {
   if (contentTaskOptionsLoaded.value) return;
   Object.assign(contentTaskOptions, await api<Row>("/api/v1/workbench/task-creation/options"));
   contentTaskOptionsLoaded.value = true;
+}
+
+async function openNewVideoProjectDialog() {
+  try {
+    await ensureContentTaskOptions();
+    newVideoProjectVisible.value = true;
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "产品和关键词加载失败，请稍后重试");
+  }
 }
 
 async function openSelfTask() {
@@ -2707,6 +2793,12 @@ onMounted(() => void bootstrap());
               <el-option label="已完成" value="DONE" />
               <el-option label="已取消" value="CANCELLED" />
             </el-select>
+            <el-select v-model="taskType" clearable placeholder="全部任务类型" @change="loadTasks">
+              <el-option label="视频项目任务" value="VIDEO_PROJECT" />
+              <el-option label="图文项目任务" value="IMAGE_PROJECT" />
+              <el-option label="软文项目任务" value="ARTICLE_PROJECT" />
+              <el-option label="其他" value="OTHER" />
+            </el-select>
           </div>
           <div class="task-toolbar-actions">
             <el-checkbox
@@ -2717,7 +2809,17 @@ onMounted(() => void bootstrap());
             >全选可删除任务</el-checkbox>
             <el-button v-if="selectedTaskIds.length" type="danger" :loading="bulkDeletingTasks" @click="bulkTrashCancelledTasks">批量删除（{{ selectedTaskIds.length }}）</el-button>
             <el-button @click="openTaskRecycleBin">任务回收站</el-button>
-            <el-button type="primary" @click="openSelfTask">新建我的任务</el-button>
+            <el-button @click="openSelfTask">新建普通任务</el-button>
+            <el-dropdown split-button type="primary" @click="quickCreateProject('VIDEO')" @command="quickCreateProject">
+              快速新建视频项目
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="VIDEO">新建视频项目</el-dropdown-item>
+                  <el-dropdown-item command="IMAGE">新建图文项目（待完善）</el-dropdown-item>
+                  <el-dropdown-item command="ARTICLE">新建软文项目（待完善）</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
           </div>
         </section>
         <section class="section-card task-list">
@@ -2730,6 +2832,7 @@ onMounted(() => void bootstrap());
             />
             <div class="task-main">
               <div class="task-meta">
+                <el-tag v-if="isVideoProjectTask(task)" size="small" type="primary">视频项目任务</el-tag>
                 <el-tag size="small" :type="statusType(taskStatusCode(task))">{{ taskDisplayStatus(task) }}</el-tag>
                 <span>{{ task.taskNo || "系统任务" }}</span>
                 <span>{{ roleLabels[task.requiredRoleCode] || categoryLabels[task.category] || "业务任务" }}</span>
@@ -2738,10 +2841,21 @@ onMounted(() => void bootstrap());
               </div>
               <h4>{{ task.title }}</h4>
               <p class="task-summary">{{ taskCardSummary(task) }}</p>
+              <template v-if="isVideoProjectTask(task)">
+                <div class="video-task-steps" :aria-label="`当前进行到第 ${videoProjectTaskStep(task)} 步`">
+                  <span
+                    v-for="(step, index) in videoFlowSteps"
+                    :key="step"
+                    :class="{ active: videoProjectTaskStep(task) === index + 1, done: videoProjectTaskStep(task) > index + 1 }"
+                  >{{ index + 1 }} {{ step }}</span>
+                </div>
+                <p class="video-task-next"><b>现在需要：</b>{{ videoProjectTaskHint(task) }}</p>
+              </template>
               <p v-if="task.returnReason" class="return-note">修改要求：{{ task.returnReason }}</p>
             </div>
             <div class="task-actions">
               <el-button @click="openTaskDetail(task)">查看详情</el-button>
+              <el-button v-if="isVideoProjectTask(task)" type="primary" @click="openVideoProjectFromTask(task)">进入视频项目</el-button>
               <el-button v-if="!task.assigneeEmployeeId && task.status === 'OPEN'" type="primary" @click="acceptTask(task)">领取</el-button>
               <el-button v-if="!isAiContentTask(task) && task.assigneeEmployeeId === user.id && ['ACCEPTED','RETURNED'].includes(task.status)" type="primary" @click="startTask(task)">开始</el-button>
               <el-button v-if="!isAiContentTask(task) && task.assigneeEmployeeId === user.id && ['ACCEPTED','IN_PROGRESS','RETURNED'].includes(task.status)" @click="openSubmit(task)">提交成果</el-button>
@@ -3040,7 +3154,7 @@ onMounted(() => void bootstrap());
 
         <section v-else v-loading="dataCenterLoading" class="video-factory-workspace">
           <div v-if="!activeVideoProject && canGenerateVideoScript" class="factory-create-entry">
-            <el-button type="primary" size="large" @click="newVideoProjectVisible = true">新建智能视频项目</el-button>
+            <el-button type="primary" size="large" @click="openNewVideoProjectDialog">新建智能视频项目</el-button>
           </div>
 
           <div class="section-card factory-results-toolbar">
@@ -3947,13 +4061,36 @@ onMounted(() => void bootstrap());
             </el-select>
           </el-form-item>
           <el-form-item label="关键词" required>
-            <el-input v-model="videoFactoryForm.keywords" placeholder="填写核心关键词，也可从智能关键词带入" />
+            <el-select
+              v-model="videoFactoryForm.keywordIds"
+              multiple
+              filterable
+              collapse-tags
+              collapse-tags-tooltip
+              placeholder="搜索并选择爆款研究关键词"
+            >
+              <el-option
+                v-for="keyword in videoProjectKeywordOptions"
+                :key="keyword.id || keyword.smartKeywordId"
+                :label="`${keyword.keyword} · ${keyword.sourceLabel}`"
+                :value="keyword.id || keyword.smartKeywordId"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="补充关键词">
+            <el-input v-model="videoFactoryForm.keywords" placeholder="没有合适选项时可手动补充，多个词用逗号分隔" />
           </el-form-item>
         </div>
       </section>
 
-      <el-collapse class="prototype-collapses">
-        <el-collapse-item title="可选创作信息" name="optional">
+      <el-collapse v-model="videoProjectCollapseNames" class="prototype-collapses">
+        <el-collapse-item name="optional">
+          <template #title>
+            <span class="prototype-collapse-title">
+              <strong>可选创作信息</strong>
+              <small>模仿参考、钩子、场景、目标用户、痛点、AI提示词</small>
+            </span>
+          </template>
           <div class="prototype-optional-grid">
             <el-form-item label="模仿参考"><el-input v-model="videoFactoryForm.reference" placeholder="爆款研究、参考视频链接或已审核成片" /></el-form-item>
             <el-form-item label="钩子"><el-input v-model="videoFactoryForm.hook" placeholder="例如：不在父母身边，怎么知道他们今天的状态？" /></el-form-item>
@@ -3963,7 +4100,13 @@ onMounted(() => void bootstrap());
             <el-form-item class="wide" label="补充 AI 提示词"><el-input v-model="videoFactoryForm.additionalPrompt" type="textarea" :rows="3" placeholder="填写本次生成的临时要求" /></el-form-item>
           </div>
         </el-collapse-item>
-        <el-collapse-item title="默认设置（点击可修改）" name="defaults">
+        <el-collapse-item name="defaults">
+          <template #title>
+            <span class="prototype-collapse-title">
+              <strong>默认设置</strong>
+              <small>{{ videoProjectDefaultSummary }}</small>
+            </span>
+          </template>
           <div class="prototype-default-grid">
             <el-form-item label="发布平台"><el-select v-model="videoFactoryForm.platform"><el-option label="抖音" value="DOUYIN" /><el-option label="小红书" value="XIAOHONGSHU" /><el-option label="B站" value="BILIBILI" /><el-option label="视频号" value="WECHAT_CHANNELS" /><el-option label="快手" value="KUAISHOU" /><el-option label="TikTok" value="TIKTOK" /></el-select></el-form-item>
             <el-form-item label="视频时长"><el-select v-model="videoFactoryForm.estimatedDurationSeconds"><el-option label="15秒" :value="15" /><el-option label="30秒" :value="30" /><el-option label="60秒" :value="60" /></el-select></el-form-item>

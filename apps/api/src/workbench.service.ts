@@ -248,6 +248,19 @@ export class WorkbenchService {
       ? { status: statusGroups[status] ? { in: statusGroups[status] } : status }
       : {};
     const scope = value(query.scope).toUpperCase();
+    const taskType = value(query.taskType).toUpperCase();
+    const typeFilter = taskType === "VIDEO_PROJECT"
+      ? { OR: [{ sourceType: "VIDEO_PROJECT" }, { category: "VIDEO_PROJECT" }] }
+      : taskType === "IMAGE_PROJECT"
+        ? { category: "IMAGE_PROJECT" }
+        : taskType === "ARTICLE_PROJECT"
+          ? { category: "ARTICLE_PROJECT" }
+          : taskType === "OTHER"
+            ? {
+                sourceType: { not: "VIDEO_PROJECT" },
+                category: { notIn: ["VIDEO_PROJECT", "IMAGE_PROJECT", "ARTICLE_PROJECT"] },
+              }
+            : {};
     const employeeId = session.employeeId!;
     const access = this.taskAccess(session);
     const where = scope === "AVAILABLE"
@@ -264,6 +277,7 @@ export class WorkbenchService {
             { category: { not: "AI_DELIVERY" } },
             scope === "MINE" ? { assigneeEmployeeId: employeeId } : {},
             statusFilter,
+            typeFilter,
           ],
         };
     const rows = await this.prisma.opsTask.findMany({
@@ -1750,7 +1764,7 @@ export class WorkbenchService {
     };
   }
 
-  private taskProjection(task: any, aiRequest: any) {
+  private taskProjection(task: any, aiRequest: any, videoProject?: any) {
     const aiStatus = value(aiRequest?.status).toUpperCase();
     const state = {
       WAITING_CONFIRMATION: ["待后台确认", "等待管理员审核", "管理员确认后由Codex执行"],
@@ -1819,6 +1833,36 @@ export class WorkbenchService {
       deliverables,
       feedback: task.reviews || [],
       sourceLinks: { opsTaskId: task.id, aiTaskId: aiRequest?.id || null },
+      project: videoProject ? this.videoProjectTaskProjection(videoProject) : null,
+    };
+  }
+
+  private videoProjectTaskProjection(project: any) {
+    const stage = value(project.productionStage).toUpperCase();
+    const state: Record<string, [number, string, string]> = {
+      PROJECT_BRIEF: [1, "需求确认中", "确认项目需求并提交脚本生成"],
+      SCRIPT_GENERATING: [2, "脚本生成中", "等待脚本生成完成"],
+      FACTORY_SCRIPT_READY: [3, "脚本待审核", "审核、修改或退回当前脚本"],
+      SCRIPT_RETURNED: [3, "脚本已退回", "修改需求后重新提交脚本生成"],
+      SCRIPT_APPROVED: [4, "素材待补全", "补拍或调用AI生成缺失素材"],
+      FACTORY_GENERATING: [4, "素材补全中", "完成缺失素材并确认对应镜头"],
+      READY_TO_EDIT: [4, "素材已齐全", "提交视频生成任务"],
+      EDITING: [5, "视频生成中", "等待成片生成"],
+      VIDEO_REVIEW: [6, "成片待审核", "预览成片并审核或填写原因退回"],
+      PLATFORM_PACKAGING: [7, "封面标题生成中", "等待平台包装生成"],
+      PACKAGING_REVIEW: [7, "封面标题待审核", "审核封面与标题"],
+      READY_TO_PUBLISH: [7, "待发布", "下载发布或选择自动发布"],
+      PUBLISHING: [7, "发布中", "等待平台发布结果"],
+      TRACKING: [7, "数据跟踪中", "回传或查看发布链接和数据"],
+    };
+    const current = state[stage] || [1, "需求确认中", "进入项目继续处理"];
+    return {
+      id: project.id,
+      productionNo: project.productionNo,
+      stage,
+      step: current[0],
+      displayStatus: current[1],
+      nextAction: current[2],
     };
   }
 
@@ -1853,6 +1897,17 @@ export class WorkbenchService {
       },
       orderBy: { createdAt: "desc" },
     });
+    const videoProjectIds = tasks
+      .filter((task: any) => task.sourceType === "VIDEO_PROJECT")
+      .map((task: any) => task.sourceId)
+      .filter(Boolean);
+    const videoProjects = videoProjectIds.length
+      ? await this.prisma.contentPlan.findMany({
+          where: { id: { in: videoProjectIds } },
+          select: { id: true, productionNo: true, productionStage: true },
+        })
+      : [];
+    const videoProjectById = new Map(videoProjects.map((project) => [project.id, project]));
     const byTaskId = new Map<string, (typeof aiTasks)[number]>();
     for (const aiTask of aiTasks) {
       const linkedIds = new Set<string>([
@@ -1873,7 +1928,11 @@ export class WorkbenchService {
     }
     return tasks.map((task) => ({
       ...task,
-      projection: this.taskProjection(task, byTaskId.get(task.id) || null),
+      projection: this.taskProjection(
+        task,
+        byTaskId.get(task.id) || null,
+        videoProjectById.get((task as any).sourceId) || null,
+      ),
     }));
   }
 
