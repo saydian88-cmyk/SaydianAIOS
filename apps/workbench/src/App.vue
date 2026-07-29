@@ -375,6 +375,10 @@ const classificationOptions = [
 
 const roleLabels: Record<string, string> = {
   CONTENT_OPERATOR: "运营",
+  CONTENT_PRODUCTION: "内容制作",
+  CONTENT_VIDEO: "视频制作",
+  CONTENT_IMAGE: "图片制作",
+  CONTENT_ARTICLE: "软文制作",
   VIDEO_SPECIALIST: "视频专员",
   ASSET_CURATOR: "知识素材整理员",
   DESIGNER: "设计",
@@ -1006,6 +1010,17 @@ function isAiContentTask(task?: Row) {
     || task.category === "AI_DELIVERY"
     || (task.sourceType === "SELF_CREATED" && ["CONTENT_VIDEO", "CONTENT_IMAGE", "CONTENT_ARTICLE"].includes(task.category)),
   );
+}
+
+function taskCardSummary(task: Row) {
+  if (task.projection?.nextAction) return task.projection.nextAction;
+  if (String(task.title || "").startsWith("补拍素材：")) {
+    return "请按任务详情中的镜头清单补拍并上传真实素材，完成后交管理员审核。";
+  }
+  const source = String(task.description || task.expectedResult || "按任务要求完成并提交成果。")
+    .replace(/\s+/g, " ")
+    .trim();
+  return source.length > 96 ? `${source.slice(0, 96)}…` : source;
 }
 
 function isVideoOutput(output: Row) {
@@ -2227,7 +2242,7 @@ onMounted(() => void bootstrap());
                     <span>截止 {{ formatTime(task.dueAt) }}</span>
                   </div>
                   <h4>{{ task.title }}</h4>
-                  <p class="task-summary">{{ task.description || task.expectedResult || "按任务要求完成并提交成果。" }}</p>
+                  <p class="task-summary">{{ taskCardSummary(task) }}</p>
                   <p v-if="task.returnReason" class="return-note">修改要求：{{ task.returnReason }}</p>
                 </div>
                 <div class="task-actions">
@@ -2321,7 +2336,7 @@ onMounted(() => void bootstrap());
                 <span>截止 {{ formatTime(task.dueAt) }}</span>
               </div>
               <h4>{{ task.title }}</h4>
-              <p class="task-summary">{{ task.description || task.expectedResult || "按任务要求完成并提交成果。" }}</p>
+              <p class="task-summary">{{ taskCardSummary(task) }}</p>
               <p v-if="task.returnReason" class="return-note">修改要求：{{ task.returnReason }}</p>
             </div>
             <div class="task-actions">
@@ -2392,7 +2407,7 @@ onMounted(() => void bootstrap());
                 <span>截止 {{ formatTime(task.dueAt) }}</span>
               </div>
               <h4>{{ task.title }}</h4>
-              <p class="task-summary">{{ task.description || task.expectedResult || "按要求完成并提交成果。" }}</p>
+              <p class="task-summary">{{ taskCardSummary(task) }}</p>
               <p v-if="task.returnReason" class="return-note">修改要求：{{ task.returnReason }}</p>
             </div>
             <div class="task-actions">
@@ -2420,7 +2435,7 @@ onMounted(() => void bootstrap());
             <div class="task-main">
               <div class="task-meta"><el-tag v-if="task.priority === 'URGENT'" size="small" type="danger">紧急</el-tag><el-tag size="small" :type="statusType(task.status)">{{ statusLabels[task.status] || task.status }}</el-tag><span>{{ task.assignee?.name }}</span><span>截止 {{ formatTime(task.dueAt) }}</span></div>
               <h4>{{ task.title }}</h4>
-              <p class="task-summary">{{ task.description || task.expectedResult || "按要求完成并提交成果。" }}</p>
+              <p class="task-summary">{{ taskCardSummary(task) }}</p>
               <p v-if="task.submissions?.[0]" class="task-summary"><strong>最新提交：</strong>{{ task.submissions[0].summary }}</p>
             </div>
             <div class="task-actions">
