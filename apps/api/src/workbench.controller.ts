@@ -728,12 +728,12 @@ export class WorkbenchController {
   }
 
   @Post("data-center/video-projects")
-  createVideoProject(
+  async createVideoProject(
     @Headers("authorization") authorization: string | undefined,
     @Body() body: Record<string, unknown>,
   ) {
     const employee = this.requirePermission(authorization, "DATA_CENTER_VIEW");
-    return this.videoFactory.createProject({
+    const project = await this.videoFactory.createProject({
       platform: String(body.platform || "DOUYIN"),
       voiceoverMode: String(body.voiceoverMode || "VOICEOVER"),
       accountType: String(body.accountType || "BRAND"),
@@ -760,7 +760,24 @@ export class WorkbenchController {
       soundPrompt: body.soundPrompt ? String(body.soundPrompt) : undefined,
       mustShowFacts: body.mustShowFacts ? String(body.mustShowFacts) : undefined,
       additionalPrompt: body.additionalPrompt ? String(body.additionalPrompt) : undefined,
-    }, employee.name);
+      videoType: body.videoType ? String(body.videoType) : undefined,
+      keywords: body.keywords ? String(body.keywords) : undefined,
+      reference: body.reference ? String(body.reference) : undefined,
+      hook: body.hook ? String(body.hook) : undefined,
+      scene: body.scene ? String(body.scene) : undefined,
+      painPoint: body.painPoint ? String(body.painPoint) : undefined,
+      scriptEngines: Array.isArray(body.scriptEngines) ? body.scriptEngines.map(String) : undefined,
+    }, employee.name) as Record<string, any>;
+    const task = await this.workbench.ensureVideoProjectTask({
+      employeeId: employee.employeeId!,
+      name: employee.name,
+    }, {
+      id: String(project.id),
+      productionNo: project.productionNo ? String(project.productionNo) : null,
+      topic: project.topic ? String(project.topic) : null,
+      productionStage: project.productionStage ? String(project.productionStage) : null,
+    });
+    return { ...project, linkedTask: task };
   }
 
   @Post("data-center/video-projects/:id/script-task")
@@ -781,7 +798,11 @@ export class WorkbenchController {
       ? project.sourceSignals.find((item: Record<string, unknown>) => item?.type === "VIDEO_FACTORY") || {}
       : {};
     const brief = factory.brief && typeof factory.brief === "object" ? factory.brief : {};
-    const task = await this.aiTasks.createTask({
+    const scriptEngines = Array.isArray((brief as Record<string, unknown>).scriptEngines)
+      ? ((brief as Record<string, unknown>).scriptEngines as unknown[]).map(String)
+      : ["REMOTE_CODEX", "SYSTEM_AI"];
+    let task: Record<string, any> | null = null;
+    if (scriptEngines.includes("REMOTE_CODEX")) task = await this.aiTasks.createTask({
       type: "VIDEO",
       title: `${project.topic} · 单脚本生成`,
       platform: project.targetPlatforms?.[0] || "DOUYIN",
@@ -820,8 +841,11 @@ export class WorkbenchController {
       estimatedCost: 0,
       skipPaidBudget: true,
     }, employee.name) as Record<string, any>;
-    await this.videoFactory.attachRemoteTask(id, task.id, "SCRIPT_ONLY", employee.name);
-    return { project: await this.videoFactory.project(id), task };
+    if (task) await this.videoFactory.attachRemoteTask(id, task.id, "SCRIPT_ONLY", employee.name);
+    if (scriptEngines.includes("SYSTEM_AI")) {
+      await this.videoFactory.generateSystemScriptCandidate(id, employee.name);
+    }
+    return { project: await this.videoFactory.project(id), task, scriptEngines };
   }
 
   @Post("data-center/video-projects/:id/brief")
@@ -850,6 +874,13 @@ export class WorkbenchController {
       soundPrompt: body.soundPrompt ? String(body.soundPrompt) : undefined,
       mustShowFacts: body.mustShowFacts ? String(body.mustShowFacts) : undefined,
       additionalPrompt: body.additionalPrompt ? String(body.additionalPrompt) : undefined,
+      videoType: body.videoType ? String(body.videoType) : undefined,
+      keywords: body.keywords ? String(body.keywords) : undefined,
+      reference: body.reference ? String(body.reference) : undefined,
+      hook: body.hook ? String(body.hook) : undefined,
+      scene: body.scene ? String(body.scene) : undefined,
+      painPoint: body.painPoint ? String(body.painPoint) : undefined,
+      scriptEngines: Array.isArray(body.scriptEngines) ? body.scriptEngines.map(String) : undefined,
     }, employee.name);
   }
 
@@ -876,6 +907,39 @@ export class WorkbenchController {
       await this.aiTasks.review(String(factory.aiTaskId), { action, note }, employee.name);
     }
     return this.videoFactory.reviewScript(id, action === "APPROVE", note, employee.name);
+  }
+
+  @Post("data-center/video-projects/:id/script")
+  async updateVideoProjectScript(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    if (!employee.roles.some((role) => ["CONTENT_OPERATOR", "VIDEO_SPECIALIST"].includes(role))) {
+      throw new ForbiddenException("只有运营和视频专员可以修改视频脚本");
+    }
+    const project = await this.videoFactory.project(id) as Record<string, any>;
+    if (project.createdBy !== employee.name) throw new ForbiddenException("只能修改自己创建的视频项目");
+    if (String(project.productionStage) !== "FACTORY_SCRIPT_READY") {
+      throw new ForbiddenException("只有待审核脚本可以直接修改");
+    }
+    return this.videoFactory.updateDraftScript(id, {
+      title: String(body.title || ""),
+      hook: String(body.hook || ""),
+      script: String(body.script || ""),
+      coreTheme: String(body.coreTheme || ""),
+      communicationGoal: String(body.communicationGoal || ""),
+      userPainPoint: String(body.userPainPoint || ""),
+      uniqueSellingPoint: String(body.uniqueSellingPoint || ""),
+      voiceoverLines: Array.isArray(body.voiceoverLines) ? body.voiceoverLines.map(String) : [],
+      retentionDesign: Array.isArray(body.retentionDesign) ? body.retentionDesign.map(String) : [],
+      subtitles: Array.isArray(body.subtitles) ? body.subtitles.map(String) : [],
+      emphasisTexts: Array.isArray(body.emphasisTexts) ? body.emphasisTexts.map(String) : [],
+      endingSummary: String(body.endingSummary || ""),
+      endingInteraction: String(body.endingInteraction || ""),
+      endingVisual: String(body.endingVisual || ""),
+    }, employee.name);
   }
 
   @Post("data-center/video-projects/:id/video-task")
@@ -1102,6 +1166,31 @@ export class WorkbenchController {
       await this.videoFactory.reviewOutput(outputAssetId, true, employee.name, "成片预览确认满意并生成平台包装");
     }
     return this.content.generatePackaging(id, employee.name);
+  }
+
+  @Post("data-center/video-projects/:id/packaging/:variantId/review")
+  async reviewVideoPackaging(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Param("variantId") variantId: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    if (!employee.roles.some((role) => ["CONTENT_OPERATOR", "VIDEO_SPECIALIST"].includes(role))) {
+      throw new ForbiddenException("只有运营和视频专员可以审核封面和标题");
+    }
+    const approved = Boolean(body.approved);
+    const note = String(body.note || "").trim();
+    if (!approved && !note) throw new ForbiddenException("退回封面和标题时必须填写具体修改说明");
+    const variant = await this.prisma.contentVariant.findFirst({
+      where: { id: variantId, contentPlanId: id },
+      select: { id: true, packagingStatus: true },
+    });
+    if (!variant) throw new ForbiddenException("平台包装与当前视频项目不匹配");
+    if (!["PENDING_REVIEW", "RETURNED"].includes(variant.packagingStatus)) {
+      throw new ForbiddenException("该平台包装当前不能重复审核");
+    }
+    return this.content.reviewPackaging(variantId, approved, employee.name, { note });
   }
 
   @Post("data-center/video-projects/:id/manual-publish")

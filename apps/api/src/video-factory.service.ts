@@ -48,6 +48,13 @@ type ProjectCreateInput = {
   soundPrompt?: string;
   mustShowFacts?: string;
   additionalPrompt?: string;
+  videoType?: string;
+  keywords?: string;
+  reference?: string;
+  hook?: string;
+  scene?: string;
+  painPoint?: string;
+  scriptEngines?: string[];
 };
 
 type GenerateInput = {
@@ -1011,7 +1018,11 @@ export class VideoFactoryService {
 
   async createDraftProject(input: ProjectCreateInput, actor: string) {
     const productModel = String(input.productModel || "").trim();
+    const videoType = String(input.videoType || "").trim();
+    const keywords = String(input.keywords || input.topic || "").trim();
     if (!productModel) throw new BadRequestException("请选择产品型号");
+    if (!videoType) throw new BadRequestException("请选择或填写视频类型");
+    if (!keywords && !input.keywordIds?.length) throw new BadRequestException("请填写或选择关键词");
     const platform = integrationKind(input.platform);
     const productionNo = `VF-${localDateKey(new Date()).replaceAll("-", "")}-${randomUUID().slice(0, 6).toUpperCase()}`;
     const topic = conciseVideoTopic(String(input.topic || `${productModel} 智能视频项目`));
@@ -1026,6 +1037,17 @@ export class VideoFactoryService {
       soundPrompt: String(input.soundPrompt || "").trim(),
       mustShowFacts: String(input.mustShowFacts || "").trim(),
       additionalPrompt: String(input.additionalPrompt || "").trim(),
+      videoType,
+      keywords,
+      reference: String(input.reference || "").trim(),
+      hook: String(input.hook || "").trim(),
+      scene: String(input.scene || "").trim(),
+      painPoint: String(input.painPoint || "").trim(),
+      audience: String(input.audience || "").trim(),
+      scriptEngines: Array.from(new Set((input.scriptEngines?.length
+        ? input.scriptEngines
+        : ["REMOTE_CODEX", "SYSTEM_AI"]).map((item) => String(item).toUpperCase())))
+        .filter((item) => ["REMOTE_CODEX", "SYSTEM_AI"].includes(item)),
       compliancePolicy: {
         source: "SYSTEM_RISK_TERM_AND_VISUAL_LIBRARY",
         generatedByRemoteCodex: true,
@@ -1053,14 +1075,14 @@ export class VideoFactoryService {
           sourceSignals: [{
             type: "VIDEO_FACTORY",
             workflowVersion: 4,
-            projectMode: "SINGLE_SCRIPT_REMOTE_CODEX",
+            projectMode: "SINGLE_SCRIPT_DUAL_ENGINE",
             brief,
             scriptCandidates: [],
             selectedCandidateIndex: 0,
             keywordIds: input.keywordIds || [],
             externalVideoIds: input.externalVideoIds || [],
             externalReferencePolicy: "STRUCTURE_ONLY",
-            routingMode: "CODEX_SKILL",
+            routingMode: "DUAL_ENGINE",
             allowFallback: false,
           }] as unknown as Prisma.InputJsonValue,
           evidenceIds: [],
@@ -1088,7 +1110,7 @@ export class VideoFactoryService {
           action: "VIDEO_FACTORY_PROJECT_DRAFT_CREATE",
           entityType: "ContentPlan",
           entityId: created.id,
-          after: { productionNo, projectMode: "SINGLE_SCRIPT_REMOTE_CODEX" },
+          after: { productionNo, projectMode: "SINGLE_SCRIPT_DUAL_ENGINE", scriptEngines: brief.scriptEngines },
         },
       });
       return created;
@@ -1129,6 +1151,79 @@ export class VideoFactoryService {
     return this.project(contentPlanId);
   }
 
+  async generateSystemScriptCandidate(contentPlanId: string, actor: string) {
+    const plan = await this.prisma.contentPlan.findUnique({ where: { id: contentPlanId } });
+    if (!plan) throw new NotFoundException("智能视频项目不存在");
+    const signals = sourceSignals(plan);
+    const factory = signals.find((signal) => signal.type === "VIDEO_FACTORY") || {};
+    const brief = object(factory.brief);
+    const context = await this.buildContext({
+      platform: plan.targetPlatforms[0],
+      productModel: plan.productModel || undefined,
+      topic: String(brief.keywords || plan.topic),
+      audience: String(brief.audience || plan.audience),
+      objective: String(brief.videoType || plan.objective),
+      voiceoverMode: String(brief.voiceoverMode || "VOICEOVER"),
+      generationMode: String(brief.materialPolicy || "REAL_ASSET_FIRST") === "ASSET_ONLY" ? "ASSET_ONLY" : "NORMAL",
+      contentRestrictionMode: brief.healthContentAllowed === false ? "HEALTH_RESTRICTED" : "NORMAL",
+      keywordIds: Array.isArray(factory.keywordIds) ? factory.keywordIds.map(String) : [],
+      externalVideoIds: Array.isArray(factory.externalVideoIds) ? factory.externalVideoIds.map(String) : [],
+      additionalPrompt: String(brief.additionalPrompt || ""),
+    });
+    let generated: AiVideoCandidate[];
+    try {
+      generated = await this.aiContent.generateVideoCandidates({
+        platform: context.platform,
+        product: context.product,
+        keywords: context.keywords,
+        knowledge: context.knowledge,
+        assets: context.assets,
+        references: context.references,
+        topic: context.topic,
+        audience: context.audience,
+        objective: context.objective,
+        voiceoverMode: context.voiceoverMode,
+        generationMode: context.generationMode,
+        contentRestrictionMode: context.contentRestrictionMode,
+        scriptSource: "AI",
+        userProvidedDirections: [],
+      });
+    } catch {
+      generated = this.fallbackCandidates(context);
+    }
+    const candidate = {
+      ...(generated[0] || this.fallbackCandidates(context)[0]),
+      generationSource: "SYSTEM_AI",
+      generatedAt: new Date().toISOString(),
+    };
+    const current = Array.isArray(factory.scriptCandidates)
+      ? factory.scriptCandidates.filter((item) => object(item).generationSource !== "SYSTEM_AI")
+      : [];
+    const nextCandidates = [...current, candidate].slice(-2);
+    const nextSignals = signals.map((signal) => signal.type === "VIDEO_FACTORY"
+      ? { ...signal, scriptCandidates: nextCandidates }
+      : signal);
+    await this.prisma.$transaction([
+      this.prisma.contentPlan.update({
+        where: { id: contentPlanId },
+        data: {
+          productionStage: "FACTORY_SCRIPT_READY",
+          sourceSignals: nextSignals as unknown as Prisma.InputJsonValue,
+        },
+      }),
+      this.prisma.auditLog.create({
+        data: {
+          actor,
+          action: "VIDEO_FACTORY_SYSTEM_AI_SCRIPT_GENERATE",
+          entityType: "ContentPlan",
+          entityId: contentPlanId,
+          after: { candidateCount: nextCandidates.length },
+        },
+      }),
+    ]);
+    return this.project(contentPlanId);
+  }
+
   async updateDraftBrief(contentPlanId: string, input: ProjectCreateInput, actor: string) {
     const plan = await this.prisma.contentPlan.findUnique({ where: { id: contentPlanId } });
     if (!plan) throw new NotFoundException("智能视频项目不存在");
@@ -1153,6 +1248,17 @@ export class VideoFactoryService {
       soundPrompt: String(input.soundPrompt ?? currentBrief.soundPrompt ?? "").trim(),
       mustShowFacts: String(input.mustShowFacts ?? currentBrief.mustShowFacts ?? "").trim(),
       additionalPrompt: String(input.additionalPrompt ?? currentBrief.additionalPrompt ?? "").trim(),
+      videoType: String(input.videoType ?? currentBrief.videoType ?? "").trim(),
+      keywords: String(input.keywords ?? currentBrief.keywords ?? "").trim(),
+      reference: String(input.reference ?? currentBrief.reference ?? "").trim(),
+      hook: String(input.hook ?? currentBrief.hook ?? "").trim(),
+      scene: String(input.scene ?? currentBrief.scene ?? "").trim(),
+      painPoint: String(input.painPoint ?? currentBrief.painPoint ?? "").trim(),
+      audience: String(input.audience ?? currentBrief.audience ?? plan.audience ?? "").trim(),
+      scriptEngines: Array.from(new Set((input.scriptEngines?.length
+        ? input.scriptEngines
+        : Array.isArray(currentBrief.scriptEngines) ? currentBrief.scriptEngines.map(String) : ["REMOTE_CODEX", "SYSTEM_AI"])
+        .map((item) => String(item).toUpperCase()))).filter((item) => ["REMOTE_CODEX", "SYSTEM_AI"].includes(item)),
     };
     const nextSignals = signals.map((signal) => signal.type === "VIDEO_FACTORY" ? { ...signal, brief } : signal);
     await this.prisma.$transaction([
@@ -1216,6 +1322,113 @@ export class VideoFactoryService {
           action: approved ? "SCRIPT_APPROVE" : "SCRIPT_RETURN",
           actor,
           note: note.trim() || null,
+        },
+      }),
+    ]);
+    return this.project(contentPlanId);
+  }
+
+  async updateDraftScript(contentPlanId: string, input: {
+    title: string;
+    hook: string;
+    script: string;
+    coreTheme: string;
+    communicationGoal: string;
+    userPainPoint: string;
+    uniqueSellingPoint: string;
+    voiceoverLines: string[];
+    retentionDesign: string[];
+    subtitles: string[];
+    emphasisTexts: string[];
+    endingSummary: string;
+    endingInteraction: string;
+    endingVisual: string;
+  }, actor: string) {
+    const plan = await this.prisma.contentPlan.findUnique({ where: { id: contentPlanId } });
+    if (!plan) throw new NotFoundException("智能视频项目不存在");
+    if (plan.productionStage !== "FACTORY_SCRIPT_READY") throw new BadRequestException("只有待审核脚本可以直接修改");
+    const candidates = this.candidates(plan);
+    if (!candidates.length) throw new BadRequestException("当前项目没有可修改的脚本");
+    const signals = sourceSignals(plan);
+    const factory = signals.find((signal) => signal.type === "VIDEO_FACTORY") || {};
+    const selectedIndex = Math.max(0, Math.min(candidates.length - 1, Number(factory.selectedCandidateIndex || 0)));
+    const selected = candidates[selectedIndex] as unknown as Record<string, any>;
+    const scriptPackage = object(selected.scriptPackage) as Record<string, any>;
+    const positioning = object(scriptPackage.positioning) as Record<string, any>;
+    const goldenHook = object(scriptPackage.goldenHook) as Record<string, any>;
+    const ending = object(scriptPackage.ending) as Record<string, any>;
+    const currentScripts = object(selected.scripts) as Record<string, any>;
+    const currentVoiceover = Array.isArray(scriptPackage.voiceoverLines) ? scriptPackage.voiceoverLines as Array<Record<string, any>> : [];
+    const cleanLines = (values: string[]) => values.map((item) => item.trim()).filter(Boolean);
+    const voiceoverLines = cleanLines(input.voiceoverLines);
+    const currentScript = String(selected.script || currentScripts.zh30 || currentScripts.zh15 || "");
+    const nextCandidate = {
+      ...selected,
+      title: input.title.trim() || selected.title || selected.titleZh,
+      titleZh: input.title.trim() || selected.titleZh || selected.title,
+      hook: input.hook.trim() || selected.hook || goldenHook.copy,
+      script: input.script.trim() || currentScript,
+      scripts: {
+        ...currentScripts,
+        zh30: input.script.trim() || currentScript,
+        zh15: input.script.trim() || currentScript,
+      },
+      scriptPackage: {
+        ...scriptPackage,
+        positioning: {
+          coreTheme: input.coreTheme.trim() || positioning.coreTheme || "",
+          communicationGoal: input.communicationGoal.trim() || positioning.communicationGoal || "",
+          userPainPoint: input.userPainPoint.trim() || positioning.userPainPoint || "",
+          uniqueSellingPoint: input.uniqueSellingPoint.trim() || positioning.uniqueSellingPoint || "",
+        },
+        goldenHook: { ...goldenHook, copy: input.hook.trim() || goldenHook.copy || selected.hook || "" },
+        voiceoverLines: voiceoverLines.length
+          ? voiceoverLines.map((text, index) => ({
+            text,
+            tone: currentVoiceover[index]?.tone || "自然",
+            speed: currentVoiceover[index]?.speed || "中速",
+            emotion: currentVoiceover[index]?.emotion || "真诚",
+            durationSeconds: currentVoiceover[index]?.durationSeconds || 3,
+          }))
+          : currentVoiceover,
+        retentionDesign: cleanLines(input.retentionDesign).length ? cleanLines(input.retentionDesign) : strings(scriptPackage.retentionDesign),
+        subtitles: cleanLines(input.subtitles).length ? cleanLines(input.subtitles) : strings(scriptPackage.subtitles),
+        emphasisTexts: cleanLines(input.emphasisTexts).length ? cleanLines(input.emphasisTexts) : strings(scriptPackage.emphasisTexts),
+        ending: {
+          ...ending,
+          summary: input.endingSummary.trim() || ending.summary || "",
+          interaction: input.endingInteraction.trim() || ending.interaction || "",
+          visual: input.endingVisual.trim() || ending.visual || "",
+        },
+      },
+    };
+    const nextCandidates = candidates.map((candidate, index) => index === selectedIndex ? nextCandidate : candidate);
+    const nextSignals = signals.map((signal) => signal.type === "VIDEO_FACTORY"
+      ? { ...signal, scriptCandidates: nextCandidates, scriptEditedAt: new Date().toISOString(), scriptEditedBy: actor }
+      : signal);
+    await this.prisma.$transaction([
+      this.prisma.contentPlan.update({
+        where: { id: contentPlanId },
+        data: {
+          topic: input.title.trim() || plan.topic,
+          hook: input.hook.trim() || plan.hook,
+          sourceSignals: nextSignals as unknown as Prisma.InputJsonValue,
+        },
+      }),
+      this.prisma.contentVariant.updateMany({
+        where: { contentPlanId },
+        data: {
+          title: input.title.trim() || plan.topic,
+          body: input.script.trim() || currentScript,
+        },
+      }),
+      this.prisma.auditLog.create({
+        data: {
+          actor,
+          action: "VIDEO_FACTORY_SCRIPT_UPDATE",
+          entityType: "ContentPlan",
+          entityId: contentPlanId,
+          after: { selectedIndex, title: input.title.trim(), hook: input.hook.trim() },
         },
       }),
     ]);
@@ -1300,8 +1513,18 @@ export class VideoFactoryService {
   }) {
     const plan = await this.prisma.contentPlan.findUnique({ where: { id: input.contentPlanId } });
     if (!plan) throw new NotFoundException("智能视频项目不存在");
-    const candidates = input.scriptCandidates.slice(0, plan.workflowVersion >= 4 ? 1 : 3);
-    const selected = candidates.find((item) => item.selected) || candidates[0];
+    const signals = sourceSignals(plan);
+    const factory = signals.find((signal) => signal.type === "VIDEO_FACTORY") || {};
+    const existingSystemCandidates = Array.isArray(factory.scriptCandidates)
+      ? factory.scriptCandidates.filter((item) => object(item).generationSource === "SYSTEM_AI")
+      : [];
+    const remoteCandidates = input.scriptCandidates.slice(0, plan.workflowVersion >= 4 ? 1 : 3).map((item) => ({
+      ...item,
+      generationSource: "REMOTE_CODEX",
+      generatedAt: new Date().toISOString(),
+    }));
+    const candidates = [...remoteCandidates, ...existingSystemCandidates].slice(0, plan.workflowVersion >= 4 ? 2 : 3) as VideoScriptCandidateV3[];
+    const selected = remoteCandidates.find((item) => item.selected) || remoteCandidates[0] || candidates[0];
     if (!selected) throw new BadRequestException("Codex未返回有效脚本候选");
     const allAssetIds = Array.from(new Set(candidates.flatMap((candidate) => candidate.shots.flatMap((shot) => shot.selectedAssetIds))));
     const validAssets = allAssetIds.length
@@ -1323,7 +1546,6 @@ export class VideoFactoryService {
       durationSeconds: Math.max(2, Math.min(12, Math.round(number(shot.durationSeconds, 4)))),
       selectedAssetIds: shot.selectedAssetIds.filter((id) => validAssetIds.has(id)),
     }));
-    const signals = sourceSignals(plan);
     const nextSignals = [
       ...signals.map((signal) => signal.type === "VIDEO_FACTORY"
         ? { ...signal, scriptCandidates: candidates, selectedCandidateIndex: candidates.indexOf(selected), workflowVersion: plan.workflowVersion }

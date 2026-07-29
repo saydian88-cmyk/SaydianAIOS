@@ -299,6 +299,41 @@ export class WorkbenchService {
     }, session.name);
   }
 
+  async ensureVideoProjectTask(
+    employee: { employeeId: string; name: string },
+    project: { id: string; productionNo?: string | null; topic?: string | null; productionStage?: string | null },
+  ) {
+    const existing = await this.prisma.opsTask.findFirst({
+      where: {
+        sourceType: "VIDEO_PROJECT",
+        sourceId: project.id,
+        assigneeEmployeeId: employee.employeeId,
+        deletedAt: null,
+      },
+      include: this.taskInclude(),
+    });
+    if (existing) return existing;
+    return this.createTask({
+      title: project.topic || "视频项目",
+      description: `员工自建视频项目自动形成。项目编号：${project.productionNo || project.id}。请进入项目完成当前阶段。`,
+      expectedResult: "完成需求确认、脚本审核、素材补全、成片审核、封面标题与发布链接回传。",
+      category: "VIDEO_PROJECT",
+      priority: "MEDIUM",
+      owner: employee.name,
+      assigneeEmployeeId: employee.employeeId,
+      assignedByEmployeeId: employee.employeeId,
+      sourceType: "VIDEO_PROJECT",
+      sourceId: project.id,
+      evidence: {
+        taskType: "VIDEO_PROJECT",
+        contentPlanId: project.id,
+        productionNo: project.productionNo || null,
+        projectStage: project.productionStage || "PROJECT_BRIEF",
+        projectPath: `/data-center/video-projects/${project.id}`,
+      },
+    }, employee.name);
+  }
+
   private async createRecurringTask(session: SessionPayload, body: Record<string, unknown>, weekdays: number[]) {
     const title = value(body.title);
     if (!title) throw new BadRequestException("任务标题不能为空");
