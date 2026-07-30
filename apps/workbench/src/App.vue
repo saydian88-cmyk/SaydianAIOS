@@ -1853,6 +1853,26 @@ function toggleVideoProjectShots(projectId: string) {
     : [...expandedVideoProjectIds.value, projectId];
 }
 
+function projectShotForScriptLine(project: Row, scriptLine: Row, index: number) {
+  const shots = Array.isArray(project?.videoShots) ? project.videoShots : [];
+  const lineId = String(scriptLine?.lineId || "");
+  return shots.find((shot: Row) => String(shot?.metadata?.lineId || "") === lineId)
+    || shots.find((shot: Row) => Number(shot?.sequence) === index)
+    || shots[index];
+}
+
+function scriptLineVideoAssetId(project: Row, scriptLine: Row, index: number) {
+  const persistedShot = projectShotForScriptLine(project, scriptLine, index);
+  return String(persistedShot?.selectedAssetId || scriptLine?.selectedAssetIds?.[0] || "");
+}
+
+function previewScriptLineAsset(project: Row, scriptLine: Row, index: number) {
+  const persistedShot = projectShotForScriptLine(project, scriptLine, index);
+  const assetId = scriptLineVideoAssetId(project, scriptLine, index);
+  if (!assetId) return;
+  openAssetPreview(persistedShot?.selectedAsset || { id: assetId });
+}
+
 function shotStatusText(shot: Row) {
   if (shot.selectedAssetId) return "已有素材";
   if (shot.status === "GENERATING") return "AI生成中";
@@ -2901,6 +2921,12 @@ onMounted(() => void bootstrap());
                     <small>当前阶段 {{ videoFlowStep(taskVideoProjectDetail) }}/4</small>
                     <h3>{{ videoFlowSteps[videoFlowStep(taskVideoProjectDetail) - 1] }}</h3>
                     <p>{{ videoProjectTaskHint(task) }}</p>
+                    <div class="video-project-version-strip">
+                      <el-tag size="small">{{ taskVideoProjectDetail.productionNo || taskVideoProjectDetail.id }}</el-tag>
+                      <el-tag size="small" type="info">项目版本 v{{ taskVideoProjectDetail.workflowVersion || 1 }}</el-tag>
+                      <el-tag size="small" type="success">{{ videoProjectStageLabel(taskVideoProjectDetail.productionStage) }}</el-tag>
+                      <span>后续任务只使用当前已审核版本；旧版本任务会自动停止，不会覆盖新结果。</span>
+                    </div>
                   </div>
                   <el-button
                     @click="refreshTaskVideoProject"
@@ -2957,10 +2983,31 @@ onMounted(() => void bootstrap());
                             @update:model-value="updateCandidateLine(candidate, shotIndex, $event)"
                           />
                           <div class="script-line-asset">
-                            <el-tag size="small" :type="shot.selectedAssetIds?.length ? 'success' : 'warning'">
-                              {{ shot.selectedAssetIds?.length ? "已有素材" : "缺失素材" }}
+                            <el-tag size="small" :type="projectShotForScriptLine(taskVideoProjectDetail, shot, shotIndex)?.selectedAssetId || shot.selectedAssetIds?.length ? 'success' : 'warning'">
+                              {{ projectShotForScriptLine(taskVideoProjectDetail, shot, shotIndex)?.selectedAssetId || shot.selectedAssetIds?.length ? "已有素材" : "缺失素材" }}
                             </el-tag>
                             <small>{{ shot.materialMatchReason || shot.missingReason || shot.description }}</small>
+                            <div class="script-line-material-actions">
+                              <el-button
+                                v-if="scriptLineVideoAssetId(taskVideoProjectDetail, shot, shotIndex)"
+                                size="small"
+                                @click="previewScriptLineAsset(taskVideoProjectDetail, shot, shotIndex)"
+                              >预览</el-button>
+                              <template v-else-if="projectShotForScriptLine(taskVideoProjectDetail, shot, shotIndex)">
+                                <el-button
+                                  v-if="can('ASSET_UPLOAD')"
+                                  size="small"
+                                  @click="openShotUpload(taskVideoProjectDetail, projectShotForScriptLine(taskVideoProjectDetail, shot, shotIndex))"
+                                >上传补拍</el-button>
+                                <el-button
+                                  size="small"
+                                  type="primary"
+                                  plain
+                                  :loading="generatingShotId === projectShotForScriptLine(taskVideoProjectDetail, shot, shotIndex)?.id"
+                                  @click="generateWorkbenchShot(taskVideoProjectDetail, projectShotForScriptLine(taskVideoProjectDetail, shot, shotIndex))"
+                                >AI 生成</el-button>
+                              </template>
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -2984,23 +3031,6 @@ onMounted(() => void bootstrap());
                       </div>
                     </article>
                   </div>
-                  <template v-if="taskVideoProjectDetail.productionStage !== 'FACTORY_SCRIPT_READY'">
-                  <h4>缺失素材处理</h4>
-                  <p>缺失素材直接在本任务中上传补拍或调用 AI 生成，不再额外创建一条补拍任务。</p>
-                  <article v-for="(shot, shotIndex) in taskVideoProjectDetail.videoShots || []" :key="shot.id" class="task-shot-row">
-                    <div>
-                      <strong>{{ shotIndex + 1 }}. {{ shot.title || `镜头 ${shotIndex + 1}` }}</strong>
-                      <el-tag size="small" :type="shotStatusType(shot)">{{ shotStatusText(shot) }}</el-tag>
-                      <p>{{ shot.description || "暂未填写画面要求" }}</p>
-                      <small v-if="shot.selectedAsset">{{ shot.selectedAsset.displayName || shot.selectedAsset.fileName }}</small>
-                    </div>
-                    <div class="preview-actions">
-                      <el-button v-if="shot.selectedAsset" @click="openAssetPreview(shot.selectedAsset)">预览已有素材</el-button>
-                      <el-button v-if="!shot.selectedAssetId && can('ASSET_UPLOAD')" @click="openShotUpload(taskVideoProjectDetail, shot)">上传补拍素材</el-button>
-                      <el-button v-if="!shot.selectedAssetId && ['OPEN','FAILED'].includes(shot.status)" type="primary" plain @click="generateWorkbenchShot(taskVideoProjectDetail, shot)">调用 AI 生成</el-button>
-                    </div>
-                  </article>
-                  </template>
                 </section>
 
                 <section v-if="videoFlowStep(taskVideoProjectDetail) === 3" class="task-video-stage-panel">
@@ -3449,10 +3479,31 @@ onMounted(() => void bootstrap());
                         @update:model-value="updateCandidateLine(candidate, shotIndex, $event)"
                       />
                       <div class="script-line-asset">
-                        <el-tag size="small" :type="shot.selectedAssetIds?.length ? 'success' : 'warning'">
-                          {{ shot.selectedAssetIds?.length ? "已有素材" : "缺失素材" }}
+                        <el-tag size="small" :type="projectShotForScriptLine(project, shot, shotIndex)?.selectedAssetId || shot.selectedAssetIds?.length ? 'success' : 'warning'">
+                          {{ projectShotForScriptLine(project, shot, shotIndex)?.selectedAssetId || shot.selectedAssetIds?.length ? "已有素材" : "缺失素材" }}
                         </el-tag>
                         <small>{{ shot.materialMatchReason || shot.missingReason || shot.description }}</small>
+                        <div class="script-line-material-actions">
+                          <el-button
+                            v-if="scriptLineVideoAssetId(project, shot, shotIndex)"
+                            size="small"
+                            @click="previewScriptLineAsset(project, shot, shotIndex)"
+                          >预览</el-button>
+                          <template v-else-if="projectShotForScriptLine(project, shot, shotIndex)">
+                            <el-button
+                              v-if="can('ASSET_UPLOAD')"
+                              size="small"
+                              @click="openShotUpload(project, projectShotForScriptLine(project, shot, shotIndex))"
+                            >上传补拍</el-button>
+                            <el-button
+                              size="small"
+                              type="primary"
+                              plain
+                              :loading="generatingShotId === projectShotForScriptLine(project, shot, shotIndex)?.id"
+                              @click="generateWorkbenchShot(project, projectShotForScriptLine(project, shot, shotIndex))"
+                            >AI 生成</el-button>
+                          </template>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -4286,10 +4337,31 @@ onMounted(() => void bootstrap());
                 @update:model-value="updateCandidateLine(candidate, shotIndex, $event)"
               />
               <div class="script-line-asset">
-                <el-tag size="small" :type="shot.selectedAssetIds?.length ? 'success' : 'warning'">
-                  {{ shot.selectedAssetIds?.length ? "已有素材" : "缺失素材" }}
+                <el-tag size="small" :type="projectShotForScriptLine(taskVideoProjectDetail, shot, shotIndex)?.selectedAssetId || shot.selectedAssetIds?.length ? 'success' : 'warning'">
+                  {{ projectShotForScriptLine(taskVideoProjectDetail, shot, shotIndex)?.selectedAssetId || shot.selectedAssetIds?.length ? "已有素材" : "缺失素材" }}
                 </el-tag>
                 <small>{{ shot.materialMatchReason || shot.missingReason || shot.description }}</small>
+                <div class="script-line-material-actions">
+                  <el-button
+                    v-if="scriptLineVideoAssetId(taskVideoProjectDetail, shot, shotIndex)"
+                    size="small"
+                    @click="previewScriptLineAsset(taskVideoProjectDetail, shot, shotIndex)"
+                  >预览</el-button>
+                  <template v-else-if="projectShotForScriptLine(taskVideoProjectDetail, shot, shotIndex)">
+                    <el-button
+                      v-if="can('ASSET_UPLOAD')"
+                      size="small"
+                      @click="openShotUpload(taskVideoProjectDetail, projectShotForScriptLine(taskVideoProjectDetail, shot, shotIndex))"
+                    >上传补拍</el-button>
+                    <el-button
+                      size="small"
+                      type="primary"
+                      plain
+                      :loading="generatingShotId === projectShotForScriptLine(taskVideoProjectDetail, shot, shotIndex)?.id"
+                      @click="generateWorkbenchShot(taskVideoProjectDetail, projectShotForScriptLine(taskVideoProjectDetail, shot, shotIndex))"
+                    >AI 生成</el-button>
+                  </template>
+                </div>
               </div>
             </div>
           </div>

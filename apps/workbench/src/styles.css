@@ -145,6 +145,10 @@ main { grid-column: 2; width: min(1240px, calc(100% - 48px)); margin: 24px auto;
 .script-material-line > span { display: grid; width: 24px; height: 24px; place-items: center; border-radius: 50%; background: #f2f4f3; color: #6e7774; font-size: 12px; }
 .script-line-asset { display: grid; min-width: 0; gap: 4px; }
 .script-line-asset small { overflow: hidden; color: #69736f; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
+.script-line-material-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.script-line-material-actions .el-button + .el-button { margin-left: 0; }
+.video-project-version-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.video-project-version-strip > span:last-child { color: #69736f; font-size: 12px; }
 .task-shot-row, .task-finished-video-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .task-shot-row > div:first-child, .task-finished-video-row > div:first-child { min-width: 0; display: grid; gap: 6px; }
 .task-shot-row p { margin: 0; }

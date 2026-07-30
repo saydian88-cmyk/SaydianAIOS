@@ -216,13 +216,21 @@ function packageCodexCandidate(candidate: VideoScriptCandidateV3, context: {
       || currentRequirements[index]
       || {};
     const shot = candidate.shots[index];
+    const matchedVideoAssetIds = strings(previous.matchedVideoAssetIds).length
+      ? strings(previous.matchedVideoAssetIds)
+      : strings(shot?.selectedAssetIds);
+    const auxiliaryImageAssetIds = strings(previous.auxiliaryImageAssetIds).length
+      ? strings(previous.auxiliaryImageAssetIds)
+      : strings(object(shot).auxiliaryImageAssetIds);
     return {
       lineId: line.lineId,
       line: line.text,
       visual: String(previous.visual || shot?.visual || shot?.description || ""),
-      assetStatus: String(previous.assetStatus || (shot?.selectedAssetIds.length ? "COVERED" : "NEED_SHOOT")),
+      assetStatus: String(previous.assetStatus || (matchedVideoAssetIds.length ? "COVERED" : "NEED_SHOOT")),
       factualProof: String(previous.factualProof || shot?.visibleFacts?.join("；") || ""),
       audioVisualRequirement: String(previous.audioVisualRequirement || shot?.missingReason || shot?.alternativePlan || ""),
+      matchedVideoAssetIds,
+      auxiliaryImageAssetIds,
     };
   });
   const positioning = object(current.positioning);
@@ -585,6 +593,7 @@ export class VideoFactoryService {
           visual: shot.visual,
           assetStatus: shots[index]?.selectedAssetIds.length ? "COVERED" : "NEED_SHOOT",
           materialMatchReason: shots[index]?.materialMatchReason || "",
+          matchedVideoAssetIds: shots[index]?.selectedAssetIds || [],
           matchedAssetIds: shots[index]?.selectedAssetIds || [],
           auxiliaryImageAssetIds: shots[index]?.auxiliaryImageAssetIds || [],
         })),
@@ -2036,12 +2045,42 @@ export class VideoFactoryService {
       }
     }
     const nextCandidates = candidates.map((candidate, index) => index === selectedIndex ? rematchedCandidate : candidate);
+    const editedAt = new Date().toISOString();
+    const revisedShots = Array.isArray(rematchedCandidate.shots)
+      ? rematchedCandidate.shots as Array<Record<string, any>>
+      : [];
+    const revisionLines = Array.from(changedLineIds).map((lineId) => {
+      const before = existingShots.find((shot) => String(shot.lineId) === lineId) || {};
+      const after = revisedShots.find((shot) => String(shot.lineId) === lineId) || {};
+      return {
+        lineId,
+        beforeText: String(before.voiceover || ""),
+        afterText: String(after.voiceover || ""),
+        beforeAssetIds: strings(before.selectedAssetIds),
+        afterAssetIds: strings(after.selectedAssetIds),
+        auxiliaryImageAssetIds: strings(after.auxiliaryImageAssetIds),
+        materialBindingChanged: JSON.stringify(strings(before.selectedAssetIds)) !== JSON.stringify(strings(after.selectedAssetIds)),
+        materialMatchStatus: strings(after.selectedAssetIds).length ? "COVERED" : "MISSING",
+      };
+    });
     const nextSignals = signals.map((signal) => signal.type === "VIDEO_FACTORY"
       ? {
         ...signal,
         scriptCandidates: nextCandidates,
-        scriptEditedAt: new Date().toISOString(),
+        selectedCandidateIndex: selectedIndex,
+        scriptEditedAt: editedAt,
         scriptEditedBy: actor,
+        scriptRevisionHistory: [
+          ...(Array.isArray(signal.scriptRevisionHistory) ? signal.scriptRevisionHistory : []),
+          {
+            revision: (Array.isArray(signal.scriptRevisionHistory) ? signal.scriptRevisionHistory.length : 0) + 1,
+            candidateIndex: selectedIndex,
+            candidateGeneratedAt: String(selected.generatedAt || ""),
+            editedAt,
+            editedBy: actor,
+            lines: revisionLines,
+          },
+        ].slice(-20),
         materialReview: { status: "PENDING", invalidatedReason: "SCRIPT_EDITED" },
       }
       : signal);
@@ -3170,7 +3209,13 @@ export class VideoFactoryService {
             assetIds: item.matchedAssetIds,
             selectedAssetId,
             requestedModelId,
-            metadata: { reason: item.reason, imageAssetIds: item.auxiliaryImageAssetIds },
+            metadata: {
+              lineId: String(preMatchedShots[index]?.lineId || `line_${String(index + 1).padStart(2, "0")}`),
+              candidateIndex,
+              candidateGeneratedAt: String((selected as unknown as Record<string, unknown>).generatedAt || ""),
+              reason: item.reason,
+              imageAssetIds: item.auxiliaryImageAssetIds,
+            },
           },
         });
         if (!selectedAssetId && !input.prepareOnly) {

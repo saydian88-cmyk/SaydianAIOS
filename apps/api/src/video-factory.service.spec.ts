@@ -319,6 +319,23 @@ describe("VideoFactoryService model routing", () => {
       missingReason: "脚本文案已修改，需要重新匹配并确认素材",
     });
     expect(factory.scriptCandidates[0].scriptPackage.shotRequirements[0].assetStatus).toBe("REWRITABLE");
+    expect(factory.selectedCandidateIndex).toBe(0);
+    expect(factory.scriptRevisionHistory).toHaveLength(1);
+    expect(factory.scriptRevisionHistory[0]).toMatchObject({
+      revision: 1,
+      candidateIndex: 0,
+      editedBy: expect.any(String),
+      lines: [{
+        lineId: "line_01",
+        beforeAssetIds: ["asset-1"],
+        afterAssetIds: [],
+        materialBindingChanged: true,
+        materialMatchStatus: "MISSING",
+      }],
+    });
+    expect(factory.scriptRevisionHistory[0].lines[0].beforeText).not.toBe(
+      factory.scriptRevisionHistory[0].lines[0].afterText,
+    );
   });
 
   it("returns a failed single-project script task to the project brief", async () => {
@@ -530,6 +547,8 @@ describe("VideoFactoryService model routing", () => {
     expect(result.shots[0].selectedAssetIds).toEqual(["video-1"]);
     expect(result.shots[0].auxiliaryImageAssetIds).toEqual(["image-1"]);
     expect(result.shots[0].materialMatchStatus).toBe("COVERED");
+    expect(result.scriptPackage.shotRequirements[0].matchedVideoAssetIds).toEqual(["video-1"]);
+    expect(result.scriptPackage.shotRequirements[0].auxiliaryImageAssetIds).toEqual(["image-1"]);
     expect(result.missingAssets).toEqual([]);
   });
 });

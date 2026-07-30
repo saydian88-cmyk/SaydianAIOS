@@ -907,6 +907,23 @@ export class AiTaskCenterService implements OnModuleInit {
     for (const candidate of tasks) {
       const targetNodeCode = aiTaskTargetNodeCode(candidate);
       if (targetNodeCode && targetNodeCode !== node.nodeCode.toLowerCase()) continue;
+      const staleReason = await this.videoProjectTaskStaleReason(candidate);
+      if (staleReason) {
+        await this.prisma.aiTask.update({
+          where: { id: candidate.id },
+          data: {
+            status: "CANCELLED",
+            failureReason: staleReason,
+            progressMessage: `任务已自动停止：${staleReason}`,
+            finishedAt: new Date(),
+            lockedBy: null,
+            lockedAt: null,
+            heartbeatAt: null,
+          },
+        });
+        await this.syncSourceOpsTask(candidate, "CANCELLED", `任务已自动停止：${staleReason}`);
+        continue;
+      }
       const policy = await this.policy(candidate.type);
       if (!policy.enabled) continue;
       const running = await this.prisma.aiTask.count({ where: { type: candidate.type, status: { in: ["CLAIMED", "RUNNING", "QUALITY_CHECK", "UPLOADING"] } } });
@@ -1373,6 +1390,39 @@ export class AiTaskCenterService implements OnModuleInit {
   async runnerComplete(token: string, id: string, body: JsonRecord) {
     const node = await this.runner(token, text(body.nodeCode));
     const task = await this.ensureRunnerTask(node.nodeCode, id);
+    const staleReason = await this.videoProjectTaskStaleReason(task);
+    if (staleReason) {
+      await this.prisma.$transaction([
+        this.prisma.aiTask.update({
+          where: { id },
+          data: {
+            status: "CANCELLED",
+            failureReason: staleReason,
+            progressMessage: `结果未写入项目：${staleReason}`,
+            finishedAt: new Date(),
+            lockedBy: null,
+            lockedAt: null,
+            heartbeatAt: new Date(),
+          },
+        }),
+        this.prisma.aiTaskAttempt.updateMany({
+          where: { aiTaskId: id, workerNodeId: node.id, status: "RUNNING" },
+          data: { status: "CANCELLED", finishedAt: new Date() },
+        }),
+        this.prisma.aiWorkerNode.update({
+          where: { id: node.id },
+          data: {
+            status: "ONLINE",
+            currentTaskId: null,
+            currentSkill: null,
+            lastHeartbeatAt: new Date(),
+            lastError: staleReason,
+          },
+        }),
+      ]);
+      await this.syncSourceOpsTask(task, "CANCELLED", `结果未写入项目：${staleReason}`);
+      return { ok: false, status: "CANCELLED", message: staleReason };
+    }
     const activeAttempt = await this.prisma.aiTaskAttempt.findFirst({
       where: { aiTaskId: id, workerNodeId: node.id, status: "RUNNING" },
       orderBy: { attemptNo: "desc" },
@@ -2597,6 +2647,39 @@ export class AiTaskCenterService implements OnModuleInit {
         });
       }
     }
+  }
+
+  private async videoProjectTaskStaleReason(task: {
+    sourceType?: string | null;
+    sourceId?: string | null;
+    input?: unknown;
+  }) {
+    if (task.sourceType !== "VIDEO_FACTORY_PROJECT" || !task.sourceId) return "";
+    const input = object(task.input);
+    const mode = text(input.executionMode).toUpperCase();
+    const guard = object(input.workflowGuard);
+    const identity = object(input.scriptIdentity);
+    const expectedWorkflowVersion = number(
+      guard.workflowVersion ?? identity.workflowVersion ?? input.workflowVersion,
+    );
+    const plan = await this.prisma.contentPlan.findUnique({
+      where: { id: task.sourceId },
+      select: { workflowVersion: true, productionStage: true },
+    });
+    if (!plan) return "所属智能视频项目已不存在或已归档";
+    if (expectedWorkflowVersion && expectedWorkflowVersion !== plan.workflowVersion) {
+      return `项目版本已更新（任务v${expectedWorkflowVersion}，当前v${plan.workflowVersion}）`;
+    }
+    const allowedStages: Record<string, string[]> = {
+      SCRIPT_ONLY: ["PROJECT_BRIEF", "SCRIPT_RETURNED", "SCRIPT_GENERATING"],
+      FULL_VIDEO: ["READY_TO_EDIT", "EDITING"],
+      COVER_TITLE: ["VIDEO_APPROVED", "PLATFORM_PACKAGING", "PACKAGING_REVIEW"],
+    };
+    const allowed = allowedStages[mode];
+    if (allowed && !allowed.includes(plan.productionStage)) {
+      return `项目已不在${mode}对应阶段（当前：${plan.productionStage}）`;
+    }
+    return "";
   }
 
   private includeTask(full = false) {
