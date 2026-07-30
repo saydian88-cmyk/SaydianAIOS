@@ -6,6 +6,7 @@ import { OssStorageService } from "./oss-storage.service";
 import { PrismaService } from "./prisma.service";
 import { VideoFactoryWorkerService } from "./video-factory-worker.service";
 import { VideoFactoryService } from "./video-factory.service";
+import { WecomNotificationService } from "./wecom-notification.service";
 
 @Module({
   providers: [
@@ -13,6 +14,7 @@ import { VideoFactoryService } from "./video-factory.service";
     AiContentService,
     ContentGuardService,
     OssStorageService,
+    WecomNotificationService,
     VideoFactoryService,
     VideoFactoryWorkerService,
   ],
