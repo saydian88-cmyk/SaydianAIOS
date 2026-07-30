@@ -167,7 +167,7 @@ export class AiContentService {
     const noVoiceover = context.voiceoverMode === "NO_VOICEOVER";
     const assetPolicy = assetOnly
       ? "本次为快速成片模式：每一个镜头都必须能由输入中的已有素材覆盖，只能引用真实assetId；严禁设计任何需要补拍的新镜头，missingAssets必须为空。"
-      : "优先围绕输入中的已有素材设计镜头，在内容质量相近时选择现有素材覆盖率更高、需要补拍更少的方案；只有确实无法表达核心内容时才列出缺失素材。";
+      : "必须先学习并检索输入assets中的持久化结构化素材索引，再确定选题、卖点和逐句镜头。优先围绕已有视频素材能直接证明的事实设计脚本，在内容质量相近时选择素材覆盖率更高、需要补拍更少的方案；只有索引中确实没有合格视频画面时才列出缺失素材。";
     const restrictionPolicy = restricted
       ? `本次为健康内容受限模式。脚本、标题、字幕、封面、标签、镜头描述和画面规划均不得出现restrictedWords中的词及其谐音、拆字、缩写、暗示或变体；不得设计restrictedVisuals描述的画面。只能引用输入assets中的素材，输入素材已经过风险过滤，严禁引用其他素材。`
       : "本次为普通模式，不额外应用健康内容受限规则。";
@@ -180,6 +180,9 @@ export class AiContentService {
     const result = await this.callJson(
       `根据已审核的赛电产品知识、FAQ、高分自有素材和外部参考，生成${exactCount}个完整短视频脚本候选。
 只使用输入中的assetId、referenceId、产品事实和证据；缺素材写入missingAssets，不得虚构。
+assets是系统已经学习并持久化的素材知识，不需要也不得仅凭文件名重新猜测。必须综合aiIndex、tags、contentDescription、segments、indexConfidence和indexNeedsReview判断素材能证明什么；优先使用indexNeedsReview=false且indexConfidence较高的VIDEO。
+先在内部完成“产品型号→核心功能/场景→动作→景别→有效片段”的素材检索，再写内容定位、口播和逐句镜头。每个COVERED镜头必须返回真实assetId并与口播事实直接对应；外观、包装、佩戴空镜不能替代具体功能操作、过程或结果。
+IMAGE只能作为仍在播放的视频上的辅助层，不能单独构成带时长的主镜头。若只有图片没有视频，该镜头必须标记NEED_SHOOT。
 ${assetPolicy}
 ${restrictionPolicy}
 ${voiceoverPolicy}

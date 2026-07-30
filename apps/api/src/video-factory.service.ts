@@ -1208,6 +1208,7 @@ export class VideoFactoryService {
         keywords: context.keywords,
         knowledge: context.knowledge,
         assets: context.assets,
+        assetKnowledgePolicy: context.assetKnowledgePolicy,
         references: context.references,
         topic: context.topic,
         audience: context.audience,
@@ -2036,10 +2037,19 @@ export class VideoFactoryService {
       select: {
         id: true, assetNo: true, displayName: true, kind: true, contentDescription: true,
         model: true, scene: true, qualityScore: true, objectKey: true,
+        aiIndex: true, searchText: true, indexVersion: true, indexConfidence: true, indexNeedsReview: true,
         tags: { select: { tag: { select: { namespace: true, code: true, label: true } } } },
+        segments: {
+          select: {
+            id: true, moduleType: true, startSeconds: true, endSeconds: true,
+            transcript: true, confidence: true, status: true,
+          },
+          orderBy: { startSeconds: "asc" },
+          take: 20,
+        },
       },
-      orderBy: [{ qualityScore: "desc" }, { updatedAt: "desc" }],
-      take: 40,
+      orderBy: [{ indexNeedsReview: "asc" }, { qualityScore: "desc" }, { useCount: "asc" }, { updatedAt: "desc" }],
+      take: 80,
     });
     const references = input.externalVideoIds?.length
       ? await this.prisma.externalVideo.findMany({
@@ -2078,6 +2088,13 @@ export class VideoFactoryService {
       keywords,
       knowledge,
       assets,
+      assetKnowledgePolicy: {
+        source: "PERSISTENT_STRUCTURED_ASSET_INDEX",
+        instruction: "写脚本前先按产品、功能、动作、场景、景别和有效时段检索assets中的持久化索引；优先围绕高置信度已有VIDEO素材设计逐句镜头。不得凭文件名推断功能，不得把图片当主镜头。只有索引无法提供直接视频证据时才列为缺失素材。",
+        minimumPreferredIndexConfidence: 0.75,
+        learnedAssetCount: assets.filter((asset) => asset.indexVersion >= 4).length,
+        reviewRequiredAssetCount: assets.filter((asset) => asset.indexNeedsReview).length,
+      },
       references,
       assetGapTask,
       topic: conciseVideoTopic(String(references[0]?.title || input.topic || keywords[0]?.keyword || `${input.productModel || "赛电产品"}短视频`)),
@@ -2234,6 +2251,7 @@ export class VideoFactoryService {
         keywords: context.keywords,
         knowledge: context.knowledge,
         assets: context.assets,
+        assetKnowledgePolicy: context.assetKnowledgePolicy,
         references: context.references,
         topic: context.topic,
         audience: context.audience,
