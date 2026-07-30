@@ -812,10 +812,14 @@ export class WorkbenchController {
         }),
       ])
       : Promise.resolve(undefined);
-    const [[assetTotal, knowledgeTotal, keywordTotal, viralTotal, videoProjectTotal, pendingTotal], sectionData, options] = await Promise.all([
+    const materialIndexPromise = section === "assets"
+      ? this.aiTasks.systemMaterialIndexStatus()
+      : Promise.resolve(undefined);
+    const [[assetTotal, knowledgeTotal, keywordTotal, viralTotal, videoProjectTotal, pendingTotal], sectionData, options, materialIndex] = await Promise.all([
       summaryPromise,
       sectionPromise,
       optionsPromise,
+      materialIndexPromise,
     ]);
     const assetPage = section === "assets"
       ? sectionData as { items: Array<Record<string, unknown>>; total: number; page: number; pageSize: number }
@@ -842,7 +846,7 @@ export class WorkbenchController {
         viralVideos: viralTotal,
         videoProjects: videoProjectTotal,
       },
-      ...(section === "assets" ? { assets, pagination: assetPage } : {}),
+      ...(section === "assets" ? { assets, pagination: assetPage, materialIndex } : {}),
       ...(section === "knowledge" ? { knowledge } : {}),
       ...(section === "keywords" ? { keywords } : {}),
       ...(section === "viral" ? { viralKeywords: viralData?.[0], viralTrend: viralData?.[1] } : {}),
