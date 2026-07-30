@@ -474,21 +474,40 @@ function previewKind(output?: Row) {
   return "DOCUMENT";
 }
 
+function cleanVideoScriptVoiceover(value: unknown) {
+  let raw = String(value || "").trim();
+  if (!raw) return "";
+  raw = raw
+    .replace(/[。！？]?\s*预计\s*\d+(?:\.\d+)?\s*秒[；;].*$/s, "。")
+    .replace(/\s*健康提示(?:仅作[^：:]*|)[：:].*$/s, "")
+    .trim();
+  const lineMarker = /\[(?:C\d+-)?L\d+\]\s*/gi;
+  const parts = raw.split(lineMarker).map((line) => line.trim()).filter(Boolean);
+  const lines = (parts.length > 1 ? parts : raw.split(/\r?\n/))
+    .map((line) => line.replace(/^(?:C\d+-)?L\d+\s*[:：.\-、]?\s*/i, "").trim())
+    .filter((line) => line && !/^预计\s*\d+(?:\.\d+)?\s*秒/.test(line) && !/^健康提示/.test(line));
+  return lines.join("\n");
+}
+
 function previewText(output?: Row) {
   if (output?.kind === "VIDEO_SCRIPT") {
     const script = output.metadata?.script || {};
+    const packageLines = Array.isArray(script.scriptPackage?.voiceoverLines)
+      ? script.scriptPackage.voiceoverLines.map((item: Row) => String(item?.text || "").trim()).filter(Boolean)
+      : [];
+    const voiceover = packageLines.length
+      ? packageLines.join("\n")
+      : cleanVideoScriptVoiceover(script.script);
     const shots = Array.isArray(script.shots) ? script.shots : [];
+    const covered = shots.filter((shot: Row) =>
+      ["COVERED", "APPROVED"].includes(String(shot.assetStatus || shot.coverageStatus || "").toUpperCase())
+      || (Array.isArray(shot.selectedAssetIds) && shot.selectedAssetIds.length > 0),
+    ).length;
     const sections = [
-      script.hook ? `黄金三秒钩子\n${script.hook}` : "",
-      script.script ? `完整口播\n${script.script}` : "",
-      script.cta ? `结尾互动\n${script.cta}` : "",
-      shots.length ? `分镜与素材\n${shots.map((shot: Row, index: number) => [
-        `${index + 1}. ${shot.title || shot.moduleType || "镜头"}`,
-        shot.voiceover ? `口播：${shot.voiceover}` : "",
-        shot.visual ? `画面：${shot.visual}` : "",
-        shot.missingReason ? `缺失：${shot.missingReason}` : "",
-        shot.alternativePlan ? `补充方案：${shot.alternativePlan}` : "",
-      ].filter(Boolean).join("\n")).join("\n\n")}` : "",
+      script.direction ? `方向\n${script.direction}` : "",
+      script.estimatedDurationSeconds ? `预计时长\n约${script.estimatedDurationSeconds}秒` : "",
+      voiceover ? `完整口播\n${voiceover}` : "",
+      shots.length ? `素材状态\n已覆盖 ${covered} 句 · 待补充或重新匹配 ${Math.max(0, shots.length - covered)} 句` : "",
     ];
     return sections.filter(Boolean).join("\n\n");
   }
