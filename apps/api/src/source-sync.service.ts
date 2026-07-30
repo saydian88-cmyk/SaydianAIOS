@@ -1,5 +1,5 @@
 import { Injectable } from "@nestjs/common";
-import { AssetKind, IntegrationKind, IntegrationState, Prisma, RecordStatus } from "@prisma/client";
+import { AssetKind, AssetPurpose, IntegrationKind, IntegrationState, PackagingResourceCategory, Prisma, RecordStatus } from "@prisma/client";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir, readdir, readFile, stat } from "node:fs/promises";
@@ -43,6 +43,25 @@ function mediaType(extension: string): string {
   if (videoExtensions.has(extension)) return "VIDEO";
   if ([".mp3", ".wav", ".m4a", ".aac"].includes(extension)) return "AUDIO";
   return "DOCUMENT";
+}
+
+export type OssLibraryKind = "EDITING_FOOTAGE" | "PACKAGING_RESOURCE";
+
+export function ossLibraryPrefix(kind: OssLibraryKind): string {
+  const folder = kind === "PACKAGING_RESOURCE" ? "包装资源包" : "赛电品牌素材库";
+  return `${opsConfig.oss.prefix}/${folder}/`;
+}
+
+export function packagingCategoryFromPath(path: string): PackagingResourceCategory {
+  if (/(^|\/)BGM(\/|$)/iu.test(path)) return "BGM";
+  if (/(^|\/)音效(\/|$)/u.test(path)) return "SOUND_EFFECT";
+  if (/(^|\/)贴纸素材?(\/|$)/u.test(path)) return "STICKER";
+  if (/(^|\/)字体(\/|$)/u.test(path)) return "FONT";
+  if (/(^|\/)品牌元素(\/|$)/u.test(path)) return "BRAND_ELEMENT";
+  if (/(^|\/)授权资料(\/|$)/u.test(path)) return "LICENSE_DOCUMENT";
+  if (/(^|\/)文字特效(\/|$)/u.test(path)) return "TEXT_EFFECT";
+  if (/(^|\/)视频特效(\/|$)/u.test(path)) return "VIDEO_EFFECT";
+  return "OTHER";
 }
 
 function publicAssetNo(kind: string): string {
@@ -118,6 +137,8 @@ function qualityScore(input: { mediaType: string; width?: number; height?: numbe
 
 @Injectable()
 export class SourceSyncService {
+  private readonly activeOssImports = new Set<OssLibraryKind>();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly oss: OssStorageService,
@@ -147,6 +168,212 @@ export class SourceSyncService {
         lastSuccessAt: data.state === "HEALTHY" ? new Date() : undefined,
       },
     });
+  }
+
+  async importOssLibrary(library: OssLibraryKind, actor: string) {
+    const purpose = library as AssetPurpose;
+    const prefix = ossLibraryPrefix(library);
+    const objects = await this.oss.listObjects(prefix);
+    const actorEmployee = await this.prisma.employee.findFirst({ where: { name: actor, status: "ACTIVE" } });
+    const batch = await this.prisma.uploadBatch.create({
+      data: {
+        batchNo: `OSS-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${randomUUID().slice(0, 8).toUpperCase()}`,
+        status: "PROCESSING",
+        sourceType: library === "PACKAGING_RESOURCE" ? "OSS_PACKAGING_IMPORT" : "OSS_EDITING_IMPORT",
+        uploadedByEmployeeId: actorEmployee?.id,
+        uploadedBy: actor,
+        productIds: [],
+      },
+    });
+    let created = 0;
+    let updated = 0;
+    let unchanged = 0;
+    let skipped = 0;
+    let queued = 0;
+    const errors: string[] = [];
+    for (const object of objects) {
+      const extension = extname(object.name).toLowerCase();
+      if (library === "EDITING_FOOTAGE" && !mediaExtensions.has(extension)) {
+        skipped += 1;
+        continue;
+      }
+      try {
+        const kind = mediaType(extension) as AssetKind;
+        const sourceKey = `ALIYUN_OSS:${opsConfig.oss.bucket}:${object.name}`;
+        const existing = await this.prisma.asset.findUnique({ where: { sourceKey } });
+        const fingerprint = createHash("sha256")
+          .update(`oss:${opsConfig.oss.bucket}:${object.name}:${object.etag || ""}:${object.size}`)
+          .digest("hex");
+        const unchangedObject = Boolean(
+          existing
+          && existing.objectKey === object.name
+          && existing.etag === object.etag
+          && existing.sizeBytes === BigInt(object.size),
+        );
+        if (unchangedObject) {
+          unchanged += 1;
+          continue;
+        }
+        const relativePath = object.name.slice(prefix.length);
+        const pathParts = relativePath.split("/").filter(Boolean);
+        const fileName = decodeURIComponent(pathParts.at(-1) || object.name);
+        const scene = pathParts.length > 1 ? decodeURIComponent(pathParts.slice(0, -1).join(" / ")) : undefined;
+        const packagingCategory = library === "PACKAGING_RESOURCE"
+          ? packagingCategoryFromPath(object.name)
+          : undefined;
+        const asset = await this.prisma.asset.upsert({
+          where: { sourceKey },
+          create: {
+            sourceKey,
+            sourceType: library === "PACKAGING_RESOURCE" ? "OSS_PACKAGING_IMPORT" : "OSS_EDITING_IMPORT",
+            sourcePath: `oss://${opsConfig.oss.bucket}/${object.name}`,
+            fileName,
+            extension,
+            mediaType: kind,
+            sha256: fingerprint,
+            sizeBytes: object.size,
+            modifiedAt: object.lastModified,
+            model: detectModel(relativePath),
+            scene,
+            evidenceIds: [],
+            status: "READY",
+            qualityScore: object.size > 20_000 ? 70 : 50,
+            sourceSnapshot: {
+              importPrefix: prefix,
+              relativePath,
+              ossEtag: object.etag,
+              importedAt: new Date().toISOString(),
+              aiRename: library === "EDITING_FOOTAGE",
+            },
+            storageProvider: "ALIYUN_OSS",
+            objectKey: object.name,
+            etag: object.etag,
+            storageUrl: `oss://${opsConfig.oss.bucket}/${object.name}`,
+            storageSyncedAt: new Date(),
+            discoveredBy: actor,
+            assetNo: publicAssetNo(kind),
+            displayName: fileName.replace(/\.[^.]+$/u, ""),
+            kind,
+            purpose,
+            packagingCategory,
+            packagingMetadata: library === "PACKAGING_RESOURCE"
+              ? { sourceFolder: scene || "", searchablePath: relativePath }
+              : {},
+            level: "ORIGINAL",
+            productScope: detectModel(relativePath) ? "MODEL" : "COMMON",
+            processingStatus: ["IMAGE", "VIDEO"].includes(kind) ? "ANALYZING" : "STORED",
+            reviewStatus: "APPROVED",
+            availabilityStatus: "ACTIVE",
+            rightsStatus: library === "PACKAGING_RESOURCE" ? "EDIT_ONLY" : "COMMERCIAL",
+            originalFileName: fileName,
+            contentDescription: scene ? `${scene} / ${fileName.replace(/\.[^.]+$/u, "")}` : fileName.replace(/\.[^.]+$/u, ""),
+            isOriginal: true,
+            createdByEmployeeId: actorEmployee?.id,
+          },
+          update: {
+            sha256: fingerprint,
+            sizeBytes: object.size,
+            modifiedAt: object.lastModified,
+            objectKey: object.name,
+            etag: object.etag,
+            storageUrl: `oss://${opsConfig.oss.bucket}/${object.name}`,
+            storageSyncedAt: new Date(),
+            storageError: null,
+            purpose,
+            packagingCategory,
+            scene,
+            model: detectModel(relativePath),
+            sourceSnapshot: {
+              importPrefix: prefix,
+              relativePath,
+              ossEtag: object.etag,
+              importedAt: new Date().toISOString(),
+              aiRename: library === "EDITING_FOOTAGE",
+            },
+          },
+        });
+        await this.prisma.assetVersion.create({
+          data: {
+            assetId: asset.id,
+            version: (await this.prisma.assetVersion.count({ where: { assetId: asset.id } })) + 1,
+            sha256: fingerprint,
+            sourcePath: asset.sourcePath,
+            objectKey: object.name,
+            etag: object.etag,
+            storageUrl: asset.storageUrl,
+            createdByEmployeeId: actorEmployee?.id,
+            createdBy: actor,
+            originalFileName: fileName,
+            extension,
+            sizeBytes: object.size,
+          },
+        });
+        if (!existing) {
+          created += 1;
+          await this.prisma.uploadEvent.create({
+            data: {
+              uploadBatchId: batch.id,
+              assetId: asset.id,
+              uploadedByEmployeeId: actorEmployee?.id,
+              originalFileName: fileName,
+              sha256: fingerprint,
+              sizeBytes: object.size,
+              result: "CREATED",
+            },
+          });
+        } else {
+          updated += 1;
+        }
+        if (kind === "IMAGE" || kind === "VIDEO") {
+          await this.assetAi.enqueue(asset.id, kind, asset.analysisVersion + 1);
+          queued += 1;
+        }
+      } catch (error) {
+        errors.push(`${object.name}: ${error instanceof Error ? error.message : "登记失败"}`);
+      }
+    }
+    await this.prisma.uploadBatch.update({
+      where: { id: batch.id },
+      data: {
+        status: errors.length ? "PARTIAL" : "COMPLETED",
+        receivedCount: objects.length,
+        createdCount: created,
+        duplicateCount: unchanged,
+        failedCount: errors.length,
+        completedAt: new Date(),
+      },
+    });
+    await this.prisma.auditLog.create({
+      data: {
+        actor,
+        action: "OSS_LIBRARY_IMPORTED",
+        entityType: "Asset",
+        entityId: library,
+        after: { library, prefix, scanned: objects.length, created, updated, unchanged, skipped, queued, errors: errors.slice(0, 50) },
+      },
+    });
+    return { library, prefix, scanned: objects.length, created, updated, unchanged, skipped, queued, errors };
+  }
+
+  queueOssLibraryImport(library: OssLibraryKind, actor: string) {
+    if (this.activeOssImports.has(library)) {
+      return { queued: false, library, message: "该 OSS 素材目录正在登记中" };
+    }
+    this.activeOssImports.add(library);
+    void this.importOssLibrary(library, actor)
+      .catch(async (error) => {
+        await this.prisma.auditLog.create({
+          data: {
+            actor,
+            action: "OSS_LIBRARY_IMPORT_FAILED",
+            entityType: "Asset",
+            entityId: library,
+            after: { message: error instanceof Error ? error.message : "OSS 素材登记失败" },
+          },
+        }).catch(() => undefined);
+      })
+      .finally(() => this.activeOssImports.delete(library));
+    return { queued: true, library, message: "OSS 素材目录已加入后台登记与AI学习队列" };
   }
 
   async syncAssets(actor = "系统素材扫描"): Promise<{ scanned: number; created: number; updated: number; unchanged: number; ossSynced: number; errors: string[] }> {

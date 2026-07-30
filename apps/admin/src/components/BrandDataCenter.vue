@@ -941,6 +941,18 @@ async function saveDocumentContent() {
   }, "正文已保存为新版本");
 }
 async function syncAssets() { await run(async () => { await post("/api/v1/jobs/run/SYNC_ASSETS"); await reload(); }, "只读扫描与OSS同步任务已加入队列"); }
+async function importOssLibrary(library: "EDITING_FOOTAGE" | "PACKAGING_RESOURCE") {
+  const label = library === "PACKAGING_RESOURCE" ? "包装资源库" : "品牌剪辑素材库";
+  await ElMessageBox.confirm(
+    `系统将只读扫描 OSS 中的${label}目录，增量登记新文件并加入AI学习队列。不会移动、改名或删除OSS原文件。是否继续？`,
+    `登记${label}`,
+    { confirmButtonText: "开始登记", cancelButtonText: "取消", type: "info" },
+  );
+  await run(async () => {
+    const result = await post<Row>("/api/v1/brand-data/assets/import-oss-library", { library });
+    ElMessage.success(String(result.message || `${label}已加入后台登记队列`));
+  });
+}
 async function rebuildAssetIndex() {
   await ElMessageBox.confirm("将为素材库中的图片和视频重新执行AI理解、命名和结构化标签。任务会在后台运行，是否继续？", "重建AI素材索引", {
     confirmButtonText: "开始重建",
@@ -1180,7 +1192,7 @@ onMounted(reload);
     </template>
 
     <template v-else-if="activeTab === 'assets'">
-      <div class="workspace-heading"><div><h3>素材库</h3><p>按型号、用途、功能、场景、动作和景别建立AI剪辑索引。</p></div><div><el-button type="danger" plain @click="trashAssets(true)">清空素材库</el-button><el-button @click="rebuildAssetIndex">重建AI索引</el-button><el-button :icon="Refresh" @click="syncAssets">扫描同步</el-button><el-button type="primary" :icon="Plus" @click="openBatchUpload">上传素材</el-button></div></div>
+      <div class="workspace-heading"><div><h3>素材库</h3><p>按型号、用途、功能、场景、动作和景别建立AI剪辑索引。</p></div><div><el-button type="danger" plain @click="trashAssets(true)">清空素材库</el-button><el-button @click="rebuildAssetIndex">重建AI索引</el-button><el-button @click="importOssLibrary('EDITING_FOOTAGE')">登记品牌素材</el-button><el-button @click="importOssLibrary('PACKAGING_RESOURCE')">登记包装资源</el-button><el-button :icon="Refresh" @click="syncAssets">扫描同步</el-button><el-button type="primary" :icon="Plus" @click="openBatchUpload">上传素材</el-button></div></div>
       <el-segmented v-model="assetView" :options="[{ label: `素材 ${assetTotal}`, value: 'list' }, { label: `待审核 ${overview?.assets.pending || 0}`, value: 'review' }, { label: `回收站 ${overview?.assets.trash || 0}`, value: 'trash' }, { label: '视频切片', value: 'video' }, { label: `AI处理 ${jobs.length}`, value: 'jobs' }, { label: `缺口 ${overview?.assets.gapCount || 0}`, value: 'gaps' }, { label: '日报', value: 'report' }, { label: '增长闭环', value: 'loop' }]" @change="handleAssetViewChange" />
 
       <template v-if="assetView === 'loop'">
