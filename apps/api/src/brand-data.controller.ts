@@ -630,6 +630,19 @@ export class BrandDataController {
     return this.brandData.rebuildAssetIndex(this.actor(authorization, requestedActor));
   }
 
+  @Post("assets/import-oss-library")
+  importOssLibrary(
+    @Headers("authorization") authorization: string | undefined,
+    @Headers("x-ops-actor") requestedActor: string | undefined,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const library = String(body.library || "");
+    if (library !== "EDITING_FOOTAGE" && library !== "PACKAGING_RESOURCE") {
+      throw new BadRequestException("请选择剪辑素材库或包装资源库");
+    }
+    return this.sourceSync.queueOssLibraryImport(library, this.actor(authorization, requestedActor));
+  }
+
   @Post("assets/:id/usages")
   recordAssetUsage(@Headers("authorization") authorization: string | undefined, @Headers("x-ops-actor") requestedActor: string | undefined, @Param("id") id: string, @Body() body: Record<string, unknown>) {
     return this.brandData.recordAssetUsage(id, body, this.actor(authorization, requestedActor));

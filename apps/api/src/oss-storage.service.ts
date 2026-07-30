@@ -12,6 +12,13 @@ export interface OssUploadResult {
   uploadedAt: Date;
 }
 
+export interface OssObjectSummary {
+  name: string;
+  size: number;
+  etag?: string;
+  lastModified: Date;
+}
+
 function headerValue(value: string): string {
   return encodeURIComponent(value).slice(0, 512);
 }
@@ -75,6 +82,32 @@ export class OssStorageService {
     } catch (error) {
       return { ok: false, message: error instanceof Error ? error.message : "OSS 连接失败" };
     }
+  }
+
+  async listObjects(prefix: string, maximum = 50_000): Promise<OssObjectSummary[]> {
+    const normalizedPrefix = prefix.replace(/^\/+/u, "");
+    const allowedRoot = `${opsConfig.oss.prefix}/`;
+    if (!normalizedPrefix.startsWith(allowedRoot) || normalizedPrefix.includes("../")) {
+      throw new Error("OSS 扫描目录不在允许的素材库范围内");
+    }
+    const client = this.client();
+    const objects: OssObjectSummary[] = [];
+    let marker: string | undefined;
+    do {
+      const result = await client.list({ prefix: normalizedPrefix, marker, "max-keys": 1000 }, {});
+      for (const item of result.objects || []) {
+        if (!item.name.startsWith(normalizedPrefix) || item.name.endsWith("/")) continue;
+        objects.push({
+          name: item.name,
+          size: Number(item.size || 0),
+          etag: String(item.etag || "").replace(/^"|"$/gu, "") || undefined,
+          lastModified: item.lastModified ? new Date(item.lastModified) : new Date(),
+        });
+        if (objects.length >= maximum) return objects;
+      }
+      marker = result.isTruncated ? result.nextMarker : undefined;
+    } while (marker);
+    return objects;
   }
 
   async deleteAssetObjects(assetIds: string[], objectKeys: string[]): Promise<{ deleted: number }> {
