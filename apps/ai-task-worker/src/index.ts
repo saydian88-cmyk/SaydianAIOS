@@ -38,7 +38,7 @@ const runnerToken = String(process.env.AI_TASK_RUNNER_TOKEN || "");
 const nodeCode = String(process.env.AI_TASK_RUNNER_NODE_CODE || "windows-codex-01");
 const runnerVersion = String(process.env.AI_TASK_RUNNER_VERSION || "3.0.0");
 const workRoot = resolve(String(process.env.AI_TASK_WORKDIR || join(process.cwd(), ".ai-task-runner")));
-const pollMs = Math.max(2_000, Number(process.env.AI_TASK_POLL_MS || 10_000));
+const pollMs = Math.max(2_000, Number(process.env.AI_TASK_POLL_MS || 60_000));
 const heartbeatMs = Math.max(10_000, Number(process.env.AI_TASK_HEARTBEAT_MS || 30_000));
 const codexExecutable = String(process.env.CODEX_EXECUTABLE || (process.platform === "win32" ? "codex.cmd" : "codex"));
 const ffmpegExecutable = String(process.env.FFMPEG_EXECUTABLE || "ffmpeg");
@@ -82,6 +82,43 @@ const baseProperties = {
 
 function outputSchema(type: string, executionMode = "", requestedCardCount = 10) {
   if (type === "VIDEO") {
+    if (executionMode === "COVER_TITLE") {
+      return {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          ...baseProperties,
+          packaging: {
+            type: "array",
+            minItems: 1,
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                platform: { type: "string" },
+                title: { type: "string" },
+                body: { type: "string" },
+                coverText: { type: "string" },
+                hashtags: { type: "array", items: { type: "string" } },
+                coverFile: { type: "string" },
+                contentFingerprint: { type: "string" },
+                compliance: {
+                  type: "object",
+                  additionalProperties: false,
+                  properties: {
+                    passed: { type: "boolean" },
+                    findings: { type: "array", items: { type: "string" } },
+                  },
+                  required: ["passed", "findings"],
+                },
+              },
+              required: ["platform", "title", "body", "coverText", "hashtags", "coverFile", "contentFingerprint", "compliance"],
+            },
+          },
+        },
+        required: ["summary", "outputFiles", "packaging"],
+      };
+    }
     if (executionMode === "TOPIC_CARD_BATCH") {
       const cardCount = Math.max(1, Math.min(30, Math.round(requestedCardCount || 10)));
       const scoreProperties = {
@@ -227,6 +264,7 @@ function outputSchema(type: string, executionMode = "", requestedCardCount = 10)
         "requiredAssetTags", "selectedAssetIds", "sourcePreference", "missingReason", "alternativePlan",
       ],
     };
+    const scriptCandidateCount = executionMode === "SCRIPT_ONLY" ? 1 : 3;
     return {
       type: "object",
       additionalProperties: false,
@@ -247,8 +285,8 @@ function outputSchema(type: string, executionMode = "", requestedCardCount = 10)
             allowFallback: { type: "boolean" },
             scriptCandidates: {
               type: "array",
-              minItems: 3,
-              maxItems: 3,
+              minItems: scriptCandidateCount,
+              maxItems: scriptCandidateCount,
               items: {
                 type: "object",
                 additionalProperties: false,
@@ -471,8 +509,11 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
       `任务包JSON：\n${JSON.stringify(taskPackage, null, 2)}`,
     ].join("\n\n");
   }
+  const videoInstruction = executionMode === "SCRIPT_ONLY"
+    ? "只生成1套最终完整脚本，禁止先生成多套候选再筛选。该唯一脚本的selected必须为true；包含标题、Hook、逐句正文、CTA、结构化分镜和逐镜头素材建议。不得为了比较方案增加候选、占位稿或备用稿。只提取外部爆款的Hook、节奏和结构，不复用外部商业镜头。"
+    : "生成恰好3套脚本候选并选择1套主方案。每套包含标题、Hook、正文、CTA、评分、评分依据、结构化分镜和逐镜头素材建议。只提取外部爆款的Hook、节奏和结构，不复用外部商业镜头。";
   const instructions: Record<string, string> = {
-    VIDEO: "生成恰好3套脚本候选并选择1套主方案。每套包含标题、Hook、正文、CTA、评分、评分依据、结构化分镜和逐镜头素材建议。只提取外部爆款的Hook、节奏和结构，不复用外部商业镜头。",
+    VIDEO: videoInstruction,
     IMAGE: "本任务必须调用 $imagegen Skill，使用Codex内置图片生成能力完成图片成品并写入outputFiles。不得调用或要求配置第三方图片模型；生成前读取产品图片和任务快照，成品保存到当前任务工作区。",
     ARTICLE: "本任务必须调用 $build-health-brand-trust-content Skill，生成公众号、小红书和企业微信版本。每段简短，产品事实只能来自输入快照，不得调用或要求配置第三方文本模型。",
     STORE_ANALYSIS: "先依据确定性指标和异常数据，再解释原因、影响和可执行动作。证据不足的判断标记为推断。",
@@ -486,15 +527,19 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
       `必须先完整读取并严格执行：${detectedSkill.skillPath}`,
       `Skill版本：${detectedSkill.version}。不得改用其他 Skill 或第三方模型。`,
     ].join("\n");
-  const requiredVideoSkill = type === "VIDEO" && ["FULL_VIDEO", "SCRIPT_ONLY"].includes(executionMode)
+  const requiredVideoSkill = type === "VIDEO" && ["FULL_VIDEO", "SCRIPT_ONLY", "SIMILAR_VIDEO", "NO_VOICE_VIDEO", "COVER_TITLE"].includes(executionMode)
     ? [
-      "本任务必须使用 $video-editing-from-media-library-share 完成正式剪辑，并完整遵循该Skill的初始化、素材只读、镜头连续性、内容禁止库、质检和交付规则。",
-      `先验证本机active-config.json及全部根目录和索引均为ready和在线；health_content_allowed=${execution.healthContentAllowed !== false ? "true" : "false"}。`,
+      `本任务必须先使用 $saidian-ai-task-dispatcher 执行系统任务调度，再由其调用 $${detectedSkill.downstreamSkillName || "video-editing-from-media-library"} 完成当前视频阶段。`,
+      `下游视频Skill路径：${detectedSkill.downstreamSkillPath || "未配置"}。必须完整读取并遵循其素材只读、镜头连续性、内容禁止库、质检和交付规则。`,
+      `系统任务素材模式已启用；health_content_allowed=${execution.healthContentAllowed !== false ? "true" : "false"}。`,
+      "任务包中的assets与materialBindings是本次任务的唯一素材白名单，禁止从本地素材库另选白名单外素材。",
       "主时间线只能使用真实视频素材。图片、详情图和产品图只能作为绑定underlying_shot_id的短时辅助层，禁止图片轮播、静态图推拉或无关镜头补时长。",
       "每个功能镜头必须有直接对应画面；任何reshoot缺口都要停止受影响成片渲染，并输出明确补拍清单。",
-      executionMode === "FULL_VIDEO"
-        ? "最终必须输出该Skill质检通过的1080×1920、30fps MP4，并在outputFiles中登记为VIDEO_MASTER。"
-        : "本次只执行脚本和分镜阶段，outputFiles不得包含VIDEO_MASTER，也不得调用付费成片能力。",
+      executionMode === "COVER_TITLE"
+        ? "本次必须由视频剪辑 Skill 调用 $feng-mian-biao-ti 子 Skill；分析系统提供的已审核成片，为每个目标平台生成封面、标题和标题汇总表。每个封面文件须在outputFiles登记，kind=COVER_IMAGE，metadata.platform须对应平台。"
+        : ["FULL_VIDEO", "SIMILAR_VIDEO", "NO_VOICE_VIDEO"].includes(executionMode)
+          ? "最终必须输出该Skill质检通过的1080×1920、30fps MP4，并在outputFiles中登记为VIDEO_MASTER。"
+          : "本次只执行脚本和分镜阶段，只允许返回1套selected=true的最终完整脚本；禁止生成三套候选、比较稿或占位稿。outputFiles不得包含VIDEO_MASTER，也不得调用付费成片能力。",
     ].join("\n")
     : "";
   return [
@@ -523,6 +568,7 @@ function fileMime(path: string) {
     json: "application/json",
     md: "text/markdown",
     txt: "text/plain",
+    xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   }[extension || ""] || "application/octet-stream";
 }
 
@@ -553,25 +599,12 @@ async function verifyVideoSkillRuntime(taskPackageValue: JsonRecord, detectedSki
   const task = record(taskPackageValue.task);
   const execution = record(taskPackageValue.execution);
   if (String(task.type || "") !== "VIDEO"
-    || !["FULL_VIDEO", "SCRIPT_ONLY"].includes(String(execution.mode || ""))
-    || detectedSkill.key !== "video-editing-from-media-library-share") return;
-  const localAppData = String(process.env.LOCALAPPDATA || "");
-  if (!localAppData) throw new Error("本机LOCALAPPDATA不可用，无法验证视频剪辑Skill");
-  const activePath = join(localAppData, "Codex", "video-editing-from-media-library-share", "active-config.json");
-  const active = record(JSON.parse(await readFile(activePath, "utf8")));
-  const configPath = String(active.config_path || "");
-  if (!configPath) throw new Error("视频剪辑Skill未初始化");
-  const config = record(JSON.parse(await readFile(configPath, "utf8")));
-  if (String(config.skill_name || "") !== "video-editing-from-media-library-share"
-    || String(config.initialization_status || "") !== "ready"
-    || String(active.computer_id || "") !== String(config.computer_id || "")) {
-    throw new Error("视频剪辑Skill本机配置未就绪");
-  }
-  for (const field of ["library_root", "packaging_root", "workspace_root", "output_root", "config_root", "material_index", "packaging_index"]) {
-    const path = String(config[field] || "");
-    if (!path) throw new Error(`视频剪辑Skill缺少${field}`);
-    await stat(path);
-  }
+    || !["FULL_VIDEO", "SCRIPT_ONLY", "SIMILAR_VIDEO", "NO_VOICE_VIDEO", "COVER_TITLE"].includes(String(execution.mode || ""))
+    || detectedSkill.key !== "saidian-ai-task-dispatcher") return;
+  const downstreamPath = String(detectedSkill.downstreamSkillPath || "");
+  if (!downstreamPath) throw new Error("调度Skill未配置下游视频剪辑Skill");
+  const downstream = await stat(downstreamPath);
+  if (!downstream.isFile()) throw new Error("本地视频剪辑Skill不可用");
 }
 
 async function downloadInputs(taskPackageValue: JsonRecord, workspace: string): Promise<JsonRecord> {
@@ -695,7 +728,7 @@ async function renderLocalVideo(result: JsonRecord, taskPackageValue: JsonRecord
   const candidates = Array.isArray(project.scriptCandidates) ? project.scriptCandidates.map(record) : [];
   const selected = candidates.find((item) => item.selected === true) || candidates[0] || {};
   const shots = Array.isArray(selected.shots) ? selected.shots.map(record) : [];
-  if (String(execution.requiredSkill || "") === "video-editing-from-media-library-share") {
+  if (String(execution.requiredSkill || "") === "saidian-ai-task-dispatcher") {
     const missing = Array.isArray(selected.missingAssets) ? selected.missingAssets : [];
     selected.missingAssets = missing.length ? missing : [{
       moduleType: "VIDEO_MASTER",
@@ -1101,6 +1134,8 @@ async function execute(claimed: JsonRecord) {
         executionMode: detectedSkill.executionMode,
         routeReason: detectedSkill.reason,
         fallbackOrder: detectedSkill.fallbackOrder,
+        downstreamSkill: detectedSkill.downstreamSkillName,
+        downstreamSkillPath: detectedSkill.downstreamSkillPath,
         startedAt: startedAt.toISOString(),
         finishedAt: finishedAt.toISOString(),
         durationMs: Math.max(0, finishedAt.getTime() - startedAt.getTime()),

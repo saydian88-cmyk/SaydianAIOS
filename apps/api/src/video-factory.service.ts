@@ -197,6 +197,35 @@ function sourceSignals(plan: { sourceSignals: unknown }) {
   return Array.isArray(plan.sourceSignals) ? plan.sourceSignals.map(object) : [];
 }
 
+function materialBindingFingerprint(shots: Array<{
+  requirementKey: string;
+  sequence: number;
+  selectedAssetId: string | null;
+  metadata: unknown;
+}>) {
+  return shots
+    .slice()
+    .sort((left, right) => left.sequence - right.sequence)
+    .map((shot) => {
+      const metadata = object(shot.metadata);
+      return [
+        shot.requirementKey,
+        shot.selectedAssetId || "",
+        String(metadata.sourceIn ?? ""),
+        String(metadata.sourceOut ?? ""),
+      ].join(":");
+    })
+    .join("|");
+}
+
+export function materialReviewApproved(plan: { sourceSignals: unknown; workflowVersion: number }, fingerprint?: string) {
+  const factory = sourceSignals(plan).find((item) => item.type === "VIDEO_FACTORY") || {};
+  const review = object(factory.materialReview);
+  return review.status === "APPROVED"
+    && Number(review.workflowVersion) === plan.workflowVersion
+    && (!fingerprint || String(review.bindingFingerprint || "") === fingerprint);
+}
+
 function number(value: unknown, fallback = 0) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -1145,7 +1174,7 @@ export class VideoFactoryService {
     return this.project(plan.id);
   }
 
-  async attachRemoteTask(contentPlanId: string, aiTaskId: string, mode: "SCRIPT_ONLY" | "FULL_VIDEO", actor: string) {
+  async attachRemoteTask(contentPlanId: string, aiTaskId: string, mode: "SCRIPT_ONLY" | "FULL_VIDEO" | "COVER_TITLE", actor: string) {
     const plan = await this.prisma.contentPlan.findUnique({ where: { id: contentPlanId } });
     if (!plan) throw new NotFoundException("智能视频项目不存在");
     const signals = sourceSignals(plan);
@@ -1154,6 +1183,7 @@ export class VideoFactoryService {
         ...signal,
         aiTaskId: mode === "SCRIPT_ONLY" ? aiTaskId : signal.aiTaskId,
         videoAiTaskId: mode === "FULL_VIDEO" ? aiTaskId : signal.videoAiTaskId,
+        coverAiTaskId: mode === "COVER_TITLE" ? aiTaskId : signal.coverAiTaskId,
         lastTaskMode: mode,
         scriptEngineStatus: mode === "SCRIPT_ONLY"
           ? { ...object(signal.scriptEngineStatus), REMOTE_CODEX: "RUNNING" }
@@ -1164,14 +1194,18 @@ export class VideoFactoryService {
       this.prisma.contentPlan.update({
         where: { id: contentPlanId },
         data: {
-          productionStage: mode === "SCRIPT_ONLY" ? "SCRIPT_GENERATING" : "EDITING",
+          productionStage: mode === "SCRIPT_ONLY" ? "SCRIPT_GENERATING" : mode === "COVER_TITLE" ? "PLATFORM_PACKAGING" : "EDITING",
           sourceSignals: nextSignals as unknown as Prisma.InputJsonValue,
         },
       }),
       this.prisma.auditLog.create({
         data: {
           actor,
-          action: mode === "SCRIPT_ONLY" ? "VIDEO_FACTORY_SCRIPT_TASK_SUBMIT" : "VIDEO_FACTORY_VIDEO_TASK_SUBMIT",
+          action: mode === "SCRIPT_ONLY"
+            ? "VIDEO_FACTORY_SCRIPT_TASK_SUBMIT"
+            : mode === "COVER_TITLE"
+              ? "VIDEO_FACTORY_COVER_TITLE_TASK_SUBMIT"
+              : "VIDEO_FACTORY_VIDEO_TASK_SUBMIT",
           entityType: "ContentPlan",
           entityId: contentPlanId,
           after: { aiTaskId, mode },
@@ -1368,6 +1402,91 @@ export class VideoFactoryService {
       }),
     ]);
     return this.project(contentPlanId);
+  }
+
+  async reviewMaterials(contentPlanId: string, approved: boolean, note: string, actor: string) {
+    const plan = await this.prisma.contentPlan.findUnique({
+      where: { id: contentPlanId },
+      include: {
+        videoShots: {
+          orderBy: { sequence: "asc" },
+          include: { selectedAsset: true },
+        },
+      },
+    });
+    if (!plan) throw new NotFoundException("智能视频项目不存在");
+    if (!["MATERIAL_REVIEW", "MATERIAL_RETURNED"].includes(plan.productionStage)) {
+      throw new BadRequestException("当前项目不在素材确认阶段");
+    }
+    if (!approved && !note.trim()) throw new BadRequestException("退回素材时必须填写具体原因");
+    if (approved) {
+      if (!plan.videoShots.length || plan.videoShots.some((shot) => shot.status !== "DONE" || !shot.selectedAssetId)) {
+        throw new BadRequestException("仍有镜头缺少已确认素材");
+      }
+      const invalid = plan.videoShots.filter((shot) =>
+        !shot.selectedAsset
+        || shot.selectedAsset.kind !== "VIDEO"
+        || shot.selectedAsset.reviewStatus !== "APPROVED"
+        || shot.selectedAsset.availabilityStatus !== "ACTIVE"
+        || !["COMMERCIAL", "EDIT_ONLY"].includes(shot.selectedAsset.rightsStatus));
+      if (invalid.length) throw new BadRequestException(`仍有${invalid.length}个镜头素材未通过系统素材审核`);
+    }
+    const reviewedAt = new Date();
+    const bindingFingerprint = materialBindingFingerprint(plan.videoShots);
+    const signals = sourceSignals(plan);
+    const nextSignals = signals.map((signal) => signal.type === "VIDEO_FACTORY"
+      ? {
+        ...signal,
+        materialReview: {
+          status: approved ? "APPROVED" : "RETURNED",
+          note: note.trim(),
+          actor,
+          reviewedAt: reviewedAt.toISOString(),
+          workflowVersion: plan.workflowVersion,
+          bindingFingerprint,
+        },
+      }
+      : signal);
+    await this.prisma.$transaction([
+      this.prisma.contentPlan.update({
+        where: { id: contentPlanId },
+        data: {
+          productionStage: approved ? "READY_TO_EDIT" : "MATERIAL_RETURNED",
+          sourceSignals: nextSignals as Prisma.InputJsonValue,
+        },
+      }),
+      this.prisma.approval.create({
+        data: {
+          contentPlanId,
+          action: approved ? "MATERIAL_APPROVE" : "MATERIAL_RETURN",
+          actor,
+          note: note.trim() || null,
+        },
+      }),
+      this.prisma.auditLog.create({
+        data: {
+          actor,
+          action: approved ? "VIDEO_PROJECT_MATERIAL_APPROVE" : "VIDEO_PROJECT_MATERIAL_RETURN",
+          entityType: "ContentPlan",
+          entityId: contentPlanId,
+          after: { workflowVersion: plan.workflowVersion, bindingFingerprint, note: note.trim() || null },
+        },
+      }),
+    ]);
+    return this.project(contentPlanId);
+  }
+
+  async assertMaterialsApproved(contentPlanId: string) {
+    const plan = await this.prisma.contentPlan.findUnique({
+      where: { id: contentPlanId },
+      include: { videoShots: { orderBy: { sequence: "asc" } } },
+    });
+    if (!plan) throw new NotFoundException("智能视频项目不存在");
+    const fingerprint = materialBindingFingerprint(plan.videoShots);
+    if (!materialReviewApproved(plan, fingerprint)) {
+      throw new BadRequestException("素材尚未由用户确认，不能生成成片");
+    }
+    return plan;
   }
 
   async updateDraftScript(contentPlanId: string, input: {
@@ -1768,13 +1887,19 @@ export class VideoFactoryService {
     const singleProjectFlow = plan.workflowVersion >= 4;
     let productionStage = plan.productionStage;
     if (["CLAIMED", "RUNNING", "QUALITY_CHECK", "UPLOADING"].includes(taskStatus)) {
-      productionStage = singleProjectFlow && lastTaskMode === "SCRIPT_ONLY"
+      productionStage = lastTaskMode === "SCRIPT_ONLY"
         ? "SCRIPT_GENERATING"
-        : "FACTORY_GENERATING";
+        : lastTaskMode === "COVER_TITLE"
+          ? "PLATFORM_PACKAGING"
+          : "EDITING";
     } else if (["FAILED", "RETURNED", "CANCELLED"].includes(taskStatus)) {
-      productionStage = singleProjectFlow
-        ? (this.candidates(plan).length ? "SCRIPT_RETURNED" : "PROJECT_BRIEF")
-        : (this.candidates(plan).length ? "FACTORY_SCRIPT_READY" : "TOPIC_CARD_APPROVED");
+      productionStage = lastTaskMode === "COVER_TITLE"
+        ? "PLATFORM_PACKAGING"
+        : lastTaskMode === "FULL_VIDEO"
+          ? "READY_TO_EDIT"
+          : singleProjectFlow
+            ? (this.candidates(plan).length ? "SCRIPT_RETURNED" : "PROJECT_BRIEF")
+            : (this.candidates(plan).length ? "FACTORY_SCRIPT_READY" : "TOPIC_CARD_APPROVED");
     }
     if (productionStage === plan.productionStage) return plan;
     return this.prisma.contentPlan.update({ where: { id: contentPlanId }, data: { productionStage } });
@@ -2434,15 +2559,12 @@ export class VideoFactoryService {
       },
     });
 
-    const generated = await this.generateProject(created.id, {
+    await this.generateProject(created.id, {
       candidateIndex: 0,
       routingMode: String(factory.routingMode || "AUTO"),
       requestedModelId: factory.requestedModelId ? String(factory.requestedModelId) : undefined,
       allowFallback: factory.allowFallback !== false,
     }, actor);
-    const ready = generated.videoShots?.length
-      && generated.videoShots.every((shot) => shot.status === "DONE" && shot.selectedAssetId);
-    if (ready) await this.enqueueRender(created.id, actor);
     return this.project(created.id);
   }
 
@@ -2605,7 +2727,7 @@ export class VideoFactoryService {
           sourceSignals: nextSignals as Prisma.InputJsonValue,
           shootRequirements: requirements as Prisma.InputJsonValue,
           productionStage: requirements.every((item) => item.status === "DONE")
-            ? "READY_TO_EDIT"
+            ? "MATERIAL_REVIEW"
             : (input.prepareOnly ? "SCRIPT_APPROVED" : "FACTORY_GENERATING"),
           masterVideoStatus: "PENDING",
         },
@@ -3132,7 +3254,7 @@ export class VideoFactoryService {
       where: { id: contentPlanId },
       data: {
         shootRequirements: requirements as Prisma.InputJsonValue,
-        productionStage: allDone ? "READY_TO_EDIT" : "FACTORY_GENERATING",
+        productionStage: allDone ? "MATERIAL_REVIEW" : "FACTORY_GENERATING",
       },
     });
   }

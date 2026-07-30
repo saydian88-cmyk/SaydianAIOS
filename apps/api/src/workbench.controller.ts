@@ -85,7 +85,7 @@ function compileVideoScriptTaskPrompt(project: Record<string, any>, brief: Recor
     `补充AI提示词：${value("additionalPrompt")}`,
     "",
     "【必须执行】",
-    "使用 video-editing-from-media-library-share Skill 的素材学习、索引与路径规则。",
+    "由 saidian-ai-task-dispatcher 调用 video-editing-from-media-library Skill，并遵循其素材学习、索引与路径规则。",
     "读取素材库索引、包装资源索引、系统风险词库和风险画面库；不得仅凭文件名推断素材内容。",
     "具体功能口播必须绑定能够直接证明该功能的操作、过程或结果视频；外观、包装、佩戴空镜和静态图片不能替代。",
     "已有素材需返回素材ID、远程可访问路径、有效入点/出点、画面事实和匹配分。",
@@ -131,6 +131,67 @@ export class WorkbenchController {
       throw new ForbiddenException("当前岗位没有此数据中心权限");
     }
     return employee;
+  }
+
+  private async submitCoverTitleTask(id: string, outputAssetId: string, employee: { employeeId?: string | null; name: string }) {
+    const project = await this.prisma.contentPlan.findUnique({
+      where: { id },
+      include: { variants: true },
+    });
+    if (!project || project.kind !== "VIDEO") throw new ForbiddenException("智能视频项目不存在");
+    const existingTasks = await this.prisma.aiTask.findMany({
+      where: {
+        type: "VIDEO",
+        sourceType: "VIDEO_FACTORY_PROJECT",
+        sourceId: id,
+        status: { in: ["PENDING", "CLAIMED", "RUNNING", "QUALITY_CHECK", "UPLOADING", "PENDING_REVIEW"] },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 20,
+    });
+    const active = existingTasks.find((item) => String((item.input as Record<string, unknown>)?.executionMode || "") === "COVER_TITLE");
+    if (active) return { project: await this.videoFactory.project(id), task: active, duplicate: true };
+    const historical = await this.prisma.aiTask.findMany({
+      where: { type: "VIDEO", sourceType: "VIDEO_FACTORY_PROJECT", sourceId: id },
+      select: { input: true },
+    });
+    const revision = historical.filter((item) => String((item.input as Record<string, unknown>)?.executionMode || "") === "COVER_TITLE").length + 1;
+    const returned = project.variants
+      .filter((variant) => variant.packagingStatus === "RETURNED")
+      .map((variant) => ({ platform: variant.platform, reason: variant.packagingRejectedReason || "请按审核意见重做" }));
+    const task = await this.aiTasks.createTask({
+      type: "VIDEO",
+      title: `${project.topic} · 封面标题`,
+      platform: project.targetPlatforms[0] || "DOUYIN",
+      productModel: project.productModel,
+      ownerEmployeeId: employee.employeeId,
+      reviewerEmployeeId: employee.employeeId,
+      sourceType: "VIDEO_FACTORY_PROJECT",
+      sourceId: id,
+      idempotencyKey: `ai-task:video-project:${id}:cover-title:v${revision}`,
+      instructions: "先由视频剪辑素材库 Skill 交接，再调用封面标题子 Skill。必须分析已审核成片，为各目标平台生成一张真实成片关键帧封面和标题；退回原因必须逐条落实。",
+      input: {
+        executionMode: "COVER_TITLE",
+        existingContentPlanId: id,
+        masterAssetId: outputAssetId,
+        skillName: "video-editing-from-media-library",
+        childSkillName: "feng-mian-biao-ti",
+        targetPlatforms: project.targetPlatforms,
+        existingVariants: project.variants.map((variant) => ({
+          platform: variant.platform,
+          title: variant.title,
+          body: variant.body,
+          rejectedReason: variant.packagingRejectedReason,
+        })),
+        revisionFeedback: returned,
+        requiredOutputs: ["platform_titles", "cover_images", "title_workbook", "content_fingerprint", "compliance_report"],
+      },
+      modelPolicy: { strategy: "CODEX_FIRST", allowExternalGeneration: false, allowFallback: false },
+      estimatedCost: 0,
+      skipPaidBudget: true,
+    }, employee.name) as Record<string, any>;
+    await this.videoFactory.attachRemoteTask(id, task.id, "COVER_TITLE", employee.name);
+    return { project: await this.videoFactory.project(id), task, duplicate: false };
   }
 
   @Get("me")
@@ -888,7 +949,7 @@ export class WorkbenchController {
         executionMode: "SCRIPT_ONLY",
         existingContentPlanId: project.id,
         singleScript: true,
-        skillName: "video-editing-from-media-library-share",
+        skillName: "video-editing-from-media-library",
         compiledPrompt,
         projectBrief: brief,
         healthContentAllowed: brief.healthContentAllowed !== false,
@@ -999,6 +1060,25 @@ export class WorkbenchController {
     }, employee.name);
   }
 
+  @Post("data-center/video-projects/:id/material-review")
+  async reviewVideoProjectMaterials(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    if (!employee.roles.some((role) => ["CONTENT_OPERATOR", "VIDEO_SPECIALIST"].includes(role))) {
+      throw new ForbiddenException("只有运营和视频专员可以确认镜头素材");
+    }
+    const project = await this.videoFactory.project(id) as Record<string, any>;
+    if (project.createdBy !== employee.name) throw new ForbiddenException("只能确认自己创建的视频项目素材");
+    const action = String(body.action || "").trim().toUpperCase();
+    const note = String(body.note || "").trim();
+    if (!["APPROVE", "RETURN"].includes(action)) throw new ForbiddenException("素材审核动作不正确");
+    if (action === "RETURN" && !note) throw new ForbiddenException("退回素材时必须填写具体原因");
+    return this.videoFactory.reviewMaterials(id, action === "APPROVE", note, employee.name);
+  }
+
   @Post("data-center/video-projects/:id/video-task")
   async submitRemoteVideoTask(
     @Headers("authorization") authorization: string | undefined,
@@ -1010,9 +1090,10 @@ export class WorkbenchController {
     }
     const project = await this.videoFactory.project(id) as Record<string, any>;
     if (project.createdBy !== employee.name) throw new ForbiddenException("只能提交自己创建的视频项目");
-    if (!["SCRIPT_APPROVED", "READY_TO_EDIT", "EDITING"].includes(String(project.productionStage))) {
-      throw new ForbiddenException("脚本尚未审核通过");
+    if (!["READY_TO_EDIT", "EDITING"].includes(String(project.productionStage))) {
+      throw new ForbiddenException("素材尚未由用户确认");
     }
+    await this.videoFactory.assertMaterialsApproved(id);
     const missingShots = (project.videoShots || []).filter((shot: Record<string, unknown>) => !shot.selectedAssetId);
     if (missingShots.length) throw new ForbiddenException(`仍有${missingShots.length}个镜头缺少已确认素材`);
     const materialBindings = (project.videoShots || []).map((shot: Record<string, any>) => ({
@@ -1045,7 +1126,7 @@ export class WorkbenchController {
       input: {
         executionMode: "FULL_VIDEO",
         existingContentPlanId: project.id,
-        skillName: "video-editing-from-media-library-share",
+        skillName: "video-editing-from-media-library",
         approvedScriptOnly: true,
         projectBrief: factory.brief || {},
         materialBindings,
@@ -1222,7 +1303,7 @@ export class WorkbenchController {
     if (render.outputAsset.reviewStatus !== "APPROVED") {
       await this.videoFactory.reviewOutput(outputAssetId, true, employee.name, "成片预览确认满意并生成平台包装");
     }
-    return this.content.generatePackaging(id, employee.name);
+    return this.submitCoverTitleTask(id, outputAssetId, employee);
   }
 
   @Post("data-center/video-projects/:id/packaging/:variantId/review")
@@ -1241,13 +1322,42 @@ export class WorkbenchController {
     if (!approved && !note) throw new ForbiddenException("退回封面和标题时必须填写具体修改说明");
     const variant = await this.prisma.contentVariant.findFirst({
       where: { id: variantId, contentPlanId: id },
-      select: { id: true, packagingStatus: true },
+      select: { id: true, packagingStatus: true, metadata: true },
     });
     if (!variant) throw new ForbiddenException("平台包装与当前视频项目不匹配");
     if (!["PENDING_REVIEW", "RETURNED"].includes(variant.packagingStatus)) {
       throw new ForbiddenException("该平台包装当前不能重复审核");
     }
-    return this.content.reviewPackaging(variantId, approved, employee.name, { note });
+    const reviewed = await this.content.reviewPackaging(variantId, approved, employee.name, { note });
+    const variantMetadata = variant.metadata && typeof variant.metadata === "object" && !Array.isArray(variant.metadata)
+      ? variant.metadata as Record<string, unknown>
+      : {};
+    const coverAiTaskId = String(variantMetadata.coverAiTaskId || "").trim();
+    if (approved) {
+      const remaining = await this.prisma.contentVariant.count({
+        where: { contentPlanId: id, platform: { in: (reviewed as Record<string, any>).targetPlatforms || [] }, packagingStatus: { not: "APPROVED" } },
+      });
+      if (coverAiTaskId && remaining === 0) {
+        await this.prisma.aiTask.updateMany({
+          where: { id: coverAiTaskId, status: "PENDING_REVIEW" },
+          data: { status: "COMPLETED", finishedAt: new Date(), reviewedAt: new Date(), reviewedBy: employee.name },
+        });
+      }
+      return reviewed;
+    }
+    if (coverAiTaskId) {
+      await this.prisma.aiTask.updateMany({
+        where: { id: coverAiTaskId, status: "PENDING_REVIEW" },
+        data: { status: "RETURNED", reviewNote: note, reviewedAt: new Date(), reviewedBy: employee.name },
+      });
+    }
+    const master = await this.prisma.videoRenderJob.findFirst({
+      where: { contentPlanId: id, status: "SUCCEEDED", outputAsset: { reviewStatus: "APPROVED" } },
+      orderBy: { createdAt: "desc" },
+      select: { outputAssetId: true },
+    });
+    if (!master?.outputAssetId) throw new ForbiddenException("没有可用于重做封面标题的已审核成片");
+    return this.submitCoverTitleTask(id, master.outputAssetId, employee);
   }
 
   @Post("data-center/video-projects/:id/manual-publish")
@@ -1358,6 +1468,16 @@ export class WorkbenchController {
       type: "image/jpeg",
       disposition: `inline; filename="${file.fileName}"`,
     });
+  }
+
+  @Get("data-center/video-projects/:id/packaging/:variantId/cover-url")
+  videoPackagingCoverUrl(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Param("variantId") variantId: string,
+  ) {
+    this.requirePermission(authorization, "DATA_CENTER_VIEW");
+    return this.content.packagingCoverUrl(id, variantId);
   }
 
   @Post("data-center/video-scripts/generate")

@@ -708,7 +708,7 @@ function videoFlowStep(project: Row) {
   const stage = String(project.productionStage || "");
   if (["PROJECT_BRIEF", "SCRIPT_GENERATING", "SCRIPT_RETURNED"].includes(stage)) return 2;
   if (["FACTORY_SCRIPT_READY"].includes(stage)) return 3;
-  if (["SCRIPT_APPROVED", "FACTORY_GENERATING", "READY_TO_EDIT"].includes(stage)) return 4;
+  if (["SCRIPT_APPROVED", "FACTORY_GENERATING", "MATERIAL_REVIEW", "MATERIAL_RETURNED", "READY_TO_EDIT"].includes(stage)) return 4;
   if (["EDITING"].includes(stage)) return 5;
   if (["VIDEO_REVIEW"].includes(stage)) return 6;
   if (["PLATFORM_PACKAGING", "PACKAGING_REVIEW", "READY_TO_PUBLISH", "PUBLISHING", "TRACKING"].includes(stage)) return 7;
@@ -1737,6 +1737,8 @@ function videoProjectStageLabel(stage?: string) {
     SCRIPT_APPROVED: "脚本已通过",
     FACTORY_SCRIPT_READY: "项目脚本已生成",
     FACTORY_GENERATING: "素材准备中",
+    MATERIAL_REVIEW: "素材待确认",
+    MATERIAL_RETURNED: "素材已退回",
     READY_TO_EDIT: "可进入AI剪辑",
     EDITING: "AI剪辑中",
     VIDEO_REVIEW: "成片待审核",
@@ -1811,10 +1813,49 @@ function renderStatusType(job: Row) {
 
 function projectReadyToRender(project: Row) {
   return Boolean(
-    ["SCRIPT_APPROVED", "READY_TO_EDIT", "EDITING"].includes(project.productionStage)
+    ["READY_TO_EDIT", "EDITING"].includes(project.productionStage)
     && project.videoShots?.length
     && project.videoShots.every((shot: Row) => shot.status === "DONE" && shot.selectedAssetId),
   );
+}
+
+function projectMaterialReview(project: Row) {
+  const factory = Array.isArray(project.sourceSignals)
+    ? project.sourceSignals.find((item: Row) => item?.type === "VIDEO_FACTORY")
+    : undefined;
+  return factory?.materialReview || {};
+}
+
+function projectMaterialsComplete(project: Row) {
+  return Boolean(
+    project.videoShots?.length
+    && project.videoShots.every((shot: Row) => shot.status === "DONE" && shot.selectedAssetId),
+  );
+}
+
+async function reviewProjectMaterials(project: Row, approved: boolean) {
+  let note = "";
+  if (approved) {
+    await ElMessageBox.confirm(
+      "确认当前脚本的所有镜头素材、有效时间段和画面事实均正确吗？确认后才可提交成片任务。",
+      "确认素材齐全",
+      { confirmButtonText: "确认素材齐全", cancelButtonText: "继续检查", type: "warning" },
+    );
+  } else {
+    const result = await ElMessageBox.prompt(
+      "请填写需要重新匹配、替换或补拍的具体原因。",
+      "退回素材匹配",
+      { confirmButtonText: "确认退回", cancelButtonText: "取消", inputType: "textarea", inputValidator: (value) => Boolean(String(value || "").trim()) || "请填写退回原因" },
+    );
+    note = String(result.value || "").trim();
+  }
+  await post(`/api/v1/workbench/data-center/video-projects/${project.id}/material-review`, {
+    action: approved ? "APPROVE" : "RETURN",
+    note,
+  });
+  ElMessage.success(approved ? "素材已确认，可以提交成片任务" : "素材已退回，原因已记录");
+  await invalidateDataCenterSection("videoFactory");
+  await loadDataCenter(true);
 }
 
 function projectHasApprovedMaster(project: Row) {
@@ -1925,7 +1966,7 @@ async function generateProjectPackaging(project: Row, job: Row) {
     await post(`/api/v1/workbench/data-center/video-projects/${project.id}/packaging`, {
       outputAssetId: job.outputAsset.id,
     });
-    ElMessage.success("封面和标题已生成，已进入平台包装审核");
+    ElMessage.success("封面标题 AI 任务已提交，完成后会自动进入审核");
     await invalidateDataCenterSection("videoFactory");
     await loadDataCenter(true);
   } finally {
@@ -1999,16 +2040,11 @@ function openPublishedVideo(url: string) {
 }
 
 async function openPackagingPreview(project: Row, variant: Row) {
-  if (packagingPreviewUrl.value) URL.revokeObjectURL(packagingPreviewUrl.value);
-  const response = await fetch(
-    `/api/v1/workbench/data-center/video-projects/${project.id}/packaging/${variant.id}/cover`,
-    { headers: { authorization: `Bearer ${getToken()}` } },
+  if (packagingPreviewUrl.value.startsWith("blob:")) URL.revokeObjectURL(packagingPreviewUrl.value);
+  const result = await api<{ url: string }>(
+    `/api/v1/workbench/data-center/video-projects/${project.id}/packaging/${variant.id}/cover-url`,
   );
-  if (!response.ok) {
-    const result = await response.json().catch(() => ({}));
-    throw new Error(String(result.message || "封面预览加载失败"));
-  }
-  packagingPreviewUrl.value = URL.createObjectURL(await response.blob());
+  packagingPreviewUrl.value = result.url;
   packagingPreviewProject.value = project;
   packagingPreviewVariant.value = variant;
   packagingPreviewVisible.value = true;
@@ -3210,6 +3246,16 @@ onMounted(() => void bootstrap());
                   <span>已形成 {{ project.videoShots.length }} 个镜头任务 · {{ project.videoShots.filter((shot: Row) => !shot.selectedAssetId).length }} 个镜头待补拍或生成</span>
                   <b>{{ expandedVideoProjectIds.includes(project.id) ? "收起镜头任务" : "查看镜头任务" }}</b>
                 </button>
+                <div v-if="canGenerateVideoScript && projectMaterialsComplete(project) && ['MATERIAL_REVIEW','MATERIAL_RETURNED'].includes(project.productionStage)" class="preview-actions">
+                  <el-button type="success" @click="reviewProjectMaterials(project, true)">确认素材齐全</el-button>
+                  <el-button type="danger" plain @click="reviewProjectMaterials(project, false)">退回素材匹配</el-button>
+                </div>
+                <el-alert
+                  v-if="projectMaterialReview(project).status === 'RETURNED'"
+                  :title="`素材退回原因：${projectMaterialReview(project).note || '未填写'}`"
+                  type="warning"
+                  :closable="false"
+                />
                 <el-button
                   v-if="canGenerateVideoScript && projectReadyToRender(project) && !project.videoRenderJobs?.some((job: Row) => ['PENDING','RUNNING','RETRY'].includes(job.status))"
                   type="primary"

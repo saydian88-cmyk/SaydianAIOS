@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
-import { AiTaskCenterService } from "./ai-task-center.service";
+import {
+  AiTaskCenterService,
+  aiTaskTargetNodeCode,
+  videoScriptOutputMetadata,
+} from "./ai-task-center.service";
 
 function serviceWith(overrides: Record<string, unknown> = {}) {
   const create = vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({
@@ -25,6 +29,7 @@ function serviceWith(overrides: Record<string, unknown> = {}) {
         timeoutSeconds: 1200,
       }),
     },
+    contentPlan: { findUnique: vi.fn().mockResolvedValue(null) },
     smartKeyword: { findMany: vi.fn().mockResolvedValue([]) },
     knowledgeEntry: { findMany: vi.fn().mockResolvedValue([]) },
     asset: { findMany: vi.fn().mockResolvedValue([]) },
@@ -44,11 +49,42 @@ function serviceWith(overrides: Record<string, unknown> = {}) {
 }
 
 describe("AiTaskCenterService", () => {
+  it("builds a previewable result from the selected video script", () => {
+    expect(videoScriptOutputMetadata([
+      { title: "候选一", selected: false },
+      { title: "最终脚本", selected: true, script: "完整口播" },
+    ])).toEqual({
+      script: { title: "最终脚本", selected: true, script: "完整口播" },
+      scriptCount: 2,
+      selectedCandidate: 1,
+    });
+  });
+
+  it("routes legacy smart-video project tasks to the primary video computer", () => {
+    expect(aiTaskTargetNodeCode({
+      sourceType: "VIDEO_FACTORY_PROJECT",
+      input: { executionMode: "SCRIPT_ONLY" },
+    })).toBe("windows-codex-video-01");
+  });
+
+  it("honors an explicit target node without routing unrelated content tasks", () => {
+    expect(aiTaskTargetNodeCode({
+      sourceType: "VIDEO_FACTORY_PROJECT",
+      input: { preferredNodeCode: "WINDOWS-CODEX-VIDEO-02" },
+    })).toBe("windows-codex-video-02");
+    expect(aiTaskTargetNodeCode({
+      sourceType: "WORKBENCH_CONTENT_REQUEST",
+      input: { executionMode: "ARTICLE" },
+    })).toBe("");
+  });
+
   it("closes obsolete reshoot tasks after local masters are registered", async () => {
     const prisma = {
       aiTaskPolicy: { upsert: vi.fn().mockResolvedValue({}) },
       aiTaskOutput: {
-        findMany: vi.fn().mockResolvedValue([{ aiTaskId: "task-with-master" }]),
+        findMany: vi.fn()
+          .mockResolvedValueOnce([{ aiTaskId: "task-with-master" }])
+          .mockResolvedValueOnce([]),
       },
       opsTask: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
     };
@@ -87,6 +123,23 @@ describe("AiTaskCenterService", () => {
     expect(create).toHaveBeenCalledOnce();
     expect(create.mock.calls[0][0].data.status).toBe("PENDING");
     expect(create.mock.calls[0][0].data.type).toBe("ARTICLE");
+  });
+
+  it("records the primary computer on newly created smart-video tasks", async () => {
+    const { service, create } = serviceWith();
+
+    await service.createTask({
+      type: "VIDEO",
+      sourceType: "VIDEO_FACTORY_PROJECT",
+      sourceId: "video-project-1",
+      input: { executionMode: "SCRIPT_ONLY" },
+      estimatedCost: 0,
+    }, "测试管理员");
+
+    expect(create.mock.calls[0][0].data.input).toMatchObject({
+      executionMode: "SCRIPT_ONLY",
+      preferredNodeCode: "windows-codex-video-01",
+    });
   });
 
   it("does not require a daily budget for zero-cost local Codex tasks", async () => {
@@ -280,7 +333,7 @@ describe("AiTaskCenterService", () => {
       mode: "FULL_VIDEO",
       strategy: "CODEX_FIRST",
       allowExternalGeneration: false,
-      requiredSkill: "video-editing-from-media-library-share",
+      requiredSkill: "saidian-ai-task-dispatcher",
       healthContentAllowed: true,
     });
     expect(result.assets[0]).toMatchObject({
