@@ -41,10 +41,16 @@ const runnerVersion = String(process.env.AI_TASK_RUNNER_VERSION || "3.0.0");
 const workRoot = resolve(String(process.env.AI_TASK_WORKDIR || join(process.cwd(), ".ai-task-runner")));
 const pollMs = Math.max(2_000, Number(process.env.AI_TASK_POLL_MS || 60_000));
 const heartbeatMs = Math.max(10_000, Number(process.env.AI_TASK_HEARTBEAT_MS || 30_000));
+const materialSyncMs = Math.max(60_000, Number(process.env.AI_TASK_MATERIAL_SYNC_MS || 5 * 60_000));
 const codexExecutable = String(process.env.CODEX_EXECUTABLE || (process.platform === "win32" ? "codex.cmd" : "codex"));
 const ffmpegExecutable = String(process.env.FFMPEG_EXECUTABLE || "ffmpeg");
 const ffprobeExecutable = String(process.env.FFPROBE_EXECUTABLE || "ffprobe");
 const execFileAsync = promisify(execFile);
+const systemMaterialRoot = join(workRoot, "system-material-library");
+const systemMaterialAssetsRoot = join(systemMaterialRoot, "assets");
+const systemMaterialIndexPath = join(systemMaterialRoot, "material-index.json");
+const systemMaterialStatePath = join(systemMaterialRoot, "sync-state.json");
+let lastMaterialSyncAt = 0;
 
 if (!runnerToken) {
   throw new Error("AI_TASK_RUNNER_TOKEN 未配置");
@@ -721,6 +727,49 @@ async function taskPackage(taskId: string) {
   return api<JsonRecord>(`/api/v1/ai-tasks/runner/tasks/${taskId}/package?nodeCode=${encodeURIComponent(nodeCode)}`);
 }
 
+async function syncSystemMaterialIndex(force = false) {
+  const now = Date.now();
+  if (!force && now - lastMaterialSyncAt < materialSyncMs) return;
+  await mkdir(systemMaterialAssetsRoot, { recursive: true });
+  const state = record(await readJson(systemMaterialStatePath));
+  const storedIndex = record(await readJson(systemMaterialIndexPath));
+  const indexedAssets = record(storedIndex.assets);
+  let cursor = String(state.cursor || "");
+  let revision = String(state.revision || "");
+  let hasMore = true;
+  let changed = 0;
+  while (hasMore) {
+    const query = new URLSearchParams({ nodeCode });
+    if (cursor) query.set("cursor", cursor);
+    const page = await api<JsonRecord>(`/api/v1/ai-tasks/runner/material-index?${query.toString()}`);
+    const changes = Array.isArray(page.changes) ? page.changes.map(record) : [];
+    for (const change of changes) {
+      const id = String(change.id || "");
+      if (!id) continue;
+      const { downloadUrl: _downloadUrl, ...metadata } = change;
+      indexedAssets[id] = metadata;
+      changed += 1;
+    }
+    cursor = String(page.cursor || cursor);
+    revision = String(page.revision || revision);
+    hasMore = page.hasMore === true && changes.length > 0;
+  }
+  await writeJsonAtomic(systemMaterialIndexPath, {
+    source: "SYSTEM_ASSET_LIBRARY",
+    transport: "ALIYUN_OSS",
+    revision,
+    syncedAt: new Date().toISOString(),
+    assets: indexedAssets,
+  });
+  await writeJsonAtomic(systemMaterialStatePath, {
+    cursor,
+    revision,
+    changed,
+    syncedAt: new Date().toISOString(),
+  });
+  lastMaterialSyncAt = now;
+}
+
 async function verifyVideoSkillRuntime(taskPackageValue: JsonRecord, detectedSkill: DetectedSkill) {
   const task = record(taskPackageValue.task);
   const execution = record(taskPackageValue.execution);
@@ -742,15 +791,25 @@ async function downloadInputs(taskPackageValue: JsonRecord, workspace: string): 
     const id = String(asset.id || `asset-${downloaded.length + 1}`);
     const extension = String(asset.extension || extname(String(asset.displayName || "")) || (String(asset.kind) === "IMAGE" ? ".jpg" : ".mp4"));
     const target = join(inputsDir, `${safeName(id)}${extension.startsWith(".") ? extension : `.${extension}`}`);
+    const expectedHash = String(asset.sha256 || "").toLowerCase();
+    const cacheDir = join(systemMaterialAssetsRoot, safeName(id));
+    const cacheTarget = join(cacheDir, `${safeName(expectedHash || "current")}${extension.startsWith(".") ? extension : `.${extension}`}`);
     let buffer: Buffer | undefined;
     const downloadUrl = String(asset.downloadUrl || "");
     const localPath = String(asset.localPath || "");
-    const expectedHash = String(asset.sha256 || "").toLowerCase();
     try {
       const existing = await readFile(target);
       if (expectedHash && verifySha256(existing, expectedHash)) buffer = existing;
     } catch {
       buffer = undefined;
+    }
+    if (!buffer) {
+      try {
+        const cached = await readFile(cacheTarget);
+        if (!expectedHash || verifySha256(cached, expectedHash)) buffer = cached;
+      } catch {
+        buffer = undefined;
+      }
     }
     if (!buffer && downloadUrl) {
       const response = await fetch(downloadUrl, { signal: AbortSignal.timeout(180_000) });
@@ -766,6 +825,13 @@ async function downloadInputs(taskPackageValue: JsonRecord, workspace: string): 
     if (!buffer) continue;
     const actualHash = sha256(buffer);
     if (!verifySha256(buffer, expectedHash)) throw new Error(`素材校验失败：${id}`);
+    await mkdir(cacheDir, { recursive: true });
+    try {
+      const cached = await readFile(cacheTarget);
+      if (sha256(cached) !== actualHash) await writeFile(cacheTarget, buffer);
+    } catch {
+      await writeFile(cacheTarget, buffer);
+    }
     try {
       const existing = await readFile(target);
       if (sha256(existing) !== actualHash) await writeFile(target, buffer);
@@ -1371,8 +1437,12 @@ async function execute(claimed: JsonRecord) {
 
 async function main() {
   await mkdir(workRoot, { recursive: true });
+  await syncSystemMaterialIndex(true).catch((error) => {
+    process.stderr.write(`${new Date().toISOString()} system-material-index ${error instanceof Error ? error.message : String(error)}\n`);
+  });
   for (;;) {
     try {
+      await syncSystemMaterialIndex();
       const claimed = await api<JsonRecord>("/api/v1/ai-tasks/runner/claim", {
         method: "POST",
         body: JSON.stringify({ nodeCode, version: runnerVersion }),

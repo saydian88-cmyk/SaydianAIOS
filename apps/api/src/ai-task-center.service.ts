@@ -1026,9 +1026,32 @@ export class AiTaskCenterService implements OnModuleInit {
           reviewStatus: true,
           availabilityStatus: true,
           rightsStatus: true,
+          updatedAt: true,
+          aiIndex: true,
+          searchText: true,
+          indexVersion: true,
+          indexConfidence: true,
+          indexNeedsReview: true,
+          products: { select: { productId: true, scope: true, confidence: true, confirmed: true } },
+          tags: { select: { confidence: true, source: true, tag: { select: { code: true, label: true, namespace: true } } } },
+          segments: {
+            orderBy: { startSeconds: "asc" },
+            select: {
+              id: true,
+              startSeconds: true,
+              endSeconds: true,
+              transcript: true,
+              moduleType: true,
+              confidence: true,
+              status: true,
+              analysisVersion: true,
+              materializedAssetId: true,
+            },
+          },
         },
       })
       : [];
+    const libraryState = await this.systemMaterialIndexStatus();
     const input = object(task.input);
     const modelPolicy = object(task.modelPolicy);
     return {
@@ -1105,6 +1128,134 @@ export class AiTaskCenterService implements OnModuleInit {
           ? { aspectRatio: "9:16", width: 1080, height: 1920, format: "mp4" }
           : undefined,
       },
+      materialLibrary: {
+        source: "SYSTEM_ASSET_LIBRARY",
+        transport: "ALIYUN_OSS",
+        revision: libraryState.revision,
+        indexedAssets: libraryState.indexedAssets,
+        pendingLearning: libraryState.pendingLearning,
+        taskWhitelistFrozenAt: new Date().toISOString(),
+      },
+    };
+  }
+
+  async runnerMaterialIndex(token: string, body: JsonRecord) {
+    await this.runner(token, text(body.nodeCode));
+    const rawCursor = text(body.cursor);
+    const [cursorTime = "", cursorId = ""] = rawCursor.split("|");
+    const parsedCursor = cursorTime ? new Date(cursorTime) : null;
+    const cursor = parsedCursor && !Number.isNaN(parsedCursor.getTime()) ? parsedCursor : null;
+    const assets = await this.prisma.asset.findMany({
+      where: cursor ? {
+        OR: [
+          { updatedAt: { gt: cursor } },
+          ...(cursorId ? [{ updatedAt: cursor, id: { gt: cursorId } }] : []),
+        ],
+      } : {},
+      orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
+      take: 500,
+      select: {
+        id: true,
+        assetNo: true,
+        displayName: true,
+        kind: true,
+        mediaType: true,
+        extension: true,
+        sha256: true,
+        sizeBytes: true,
+        width: true,
+        height: true,
+        durationSeconds: true,
+        contentDescription: true,
+        objectKey: true,
+        storageUrl: true,
+        reviewStatus: true,
+        availabilityStatus: true,
+        rightsStatus: true,
+        deletedAt: true,
+        updatedAt: true,
+        aiIndex: true,
+        searchText: true,
+        indexVersion: true,
+        indexConfidence: true,
+        indexNeedsReview: true,
+        products: { select: { productId: true, scope: true, confidence: true, confirmed: true } },
+        tags: { select: { confidence: true, source: true, tag: { select: { code: true, label: true, namespace: true } } } },
+        segments: {
+          orderBy: { startSeconds: "asc" },
+          select: {
+            id: true,
+            startSeconds: true,
+            endSeconds: true,
+            transcript: true,
+            moduleType: true,
+            confidence: true,
+            status: true,
+            analysisVersion: true,
+            materializedAssetId: true,
+          },
+        },
+      },
+    });
+    const state = await this.systemMaterialIndexStatus();
+    const nextCursor = assets.length
+      ? `${assets[assets.length - 1]!.updatedAt.toISOString()}|${assets[assets.length - 1]!.id}`
+      : rawCursor || `${state.revision}|${state.revisionAssetId || ""}`;
+    return {
+      ...state,
+      source: "SYSTEM_ASSET_LIBRARY",
+      transport: "ALIYUN_OSS",
+      revision: state.revision,
+      cursor: nextCursor,
+      hasMore: assets.length === 500,
+      changes: assets.map(({ objectKey, sizeBytes, ...asset }) => {
+        const usable = !asset.deletedAt
+          && asset.reviewStatus === "APPROVED"
+          && asset.availabilityStatus === "ACTIVE"
+          && ["COMMERCIAL", "EDIT_ONLY"].includes(asset.rightsStatus);
+        let downloadUrl: string | null = null;
+        if (usable && objectKey) {
+          try { downloadUrl = this.oss.signedDownloadUrl(objectKey, 7_200); } catch { downloadUrl = null; }
+        }
+        return {
+          ...asset,
+          sizeBytes: sizeBytes.toString(),
+          updatedAt: asset.updatedAt.toISOString(),
+          deletedAt: asset.deletedAt?.toISOString() || null,
+          usable,
+          downloadUrl,
+        };
+      }),
+    };
+  }
+
+  async systemMaterialIndexStatus() {
+    const [latest, totalAssets, indexedAssets, pendingLearning, disabledAssets] = await Promise.all([
+      this.prisma.asset.findFirst({ orderBy: [{ updatedAt: "desc" }, { id: "desc" }], select: { id: true, updatedAt: true } }),
+      this.prisma.asset.count({ where: { deletedAt: null } }),
+      this.prisma.asset.count({ where: { deletedAt: null, indexVersion: { gte: 4 }, indexNeedsReview: false } }),
+      this.prisma.asset.count({
+        where: {
+          deletedAt: null,
+          OR: [{ indexVersion: { lt: 4 } }, { indexNeedsReview: true }],
+        },
+      }),
+      this.prisma.asset.count({
+        where: {
+          OR: [{ deletedAt: { not: null } }, { availabilityStatus: { not: "ACTIVE" } }],
+        },
+      }),
+    ]);
+    return {
+      revision: latest ? latest.updatedAt.toISOString() : new Date(0).toISOString(),
+      revisionAssetId: latest?.id || null,
+      totalAssets,
+      indexedAssets,
+      pendingLearning,
+      disabledAssets,
+      learningProvider: "ALIYUN_BAILIAN",
+      transport: "ALIYUN_OSS",
+      indexVersion: 4,
     };
   }
 

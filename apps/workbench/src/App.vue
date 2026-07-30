@@ -215,6 +215,7 @@ const dataCenter = reactive<Row>({
   permissions: [],
   summary: {},
   assets: [],
+  materialIndex: {},
   knowledge: [],
   pendingAssets: [],
   keywords: { total: 0, items: [] },
@@ -3249,6 +3250,17 @@ onMounted(() => void bootstrap());
         </section>
 
         <section v-if="dataCenterTab === 'assets'" v-loading="dataCenterLoading">
+          <div class="workspace-summary asset-summary material-index-summary">
+            <strong>系统素材索引 v{{ dataCenter.materialIndex?.indexVersion || 4 }}</strong>
+            <span>
+              百炼增量学习 · OSS 中转 · 已学习 {{ dataCenter.materialIndex?.indexedAssets || 0 }} 条
+              · 待学习 {{ dataCenter.materialIndex?.pendingLearning || 0 }} 条
+              · 已停用 {{ dataCenter.materialIndex?.disabledAssets || 0 }} 条
+            </span>
+            <el-tag :type="Number(dataCenter.materialIndex?.pendingLearning || 0) ? 'warning' : 'success'">
+              {{ Number(dataCenter.materialIndex?.pendingLearning || 0) ? "增量同步中" : "索引已就绪" }}
+            </el-tag>
+          </div>
           <div class="workspace-summary asset-summary">
             <strong>素材检索结果 {{ dataCenter.summary.assetResults || 0 }} 条</strong>
             <span>全库可用素材 {{ dataCenter.summary.assets || 0 }} 条，按评级优先展示；输入型号、场景或模块可检索全库。</span>

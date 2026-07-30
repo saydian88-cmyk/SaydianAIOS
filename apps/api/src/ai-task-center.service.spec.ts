@@ -299,6 +299,11 @@ describe("AiTaskCenterService", () => {
         findUnique: vi.fn().mockResolvedValue(task),
       },
       asset: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: "asset-1",
+          updatedAt: new Date("2026-07-31T00:00:00.000Z"),
+        }),
+        count: vi.fn().mockResolvedValue(1),
         findMany: vi.fn().mockResolvedValue([{
           id: "asset-1",
           assetNo: "AST-1",
