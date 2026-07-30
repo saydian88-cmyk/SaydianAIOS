@@ -22,12 +22,25 @@ const localJobs: AssetJobType[] = ["TECHNICAL_METADATA", "THUMBNAIL", "NEAR_DUPL
 const imageAiJobs: AssetJobType[] = ["OCR", "CONTENT_UNDERSTANDING", "TAGGING"];
 const videoJobs: AssetJobType[] = ["PROXY_VIDEO", "KEYFRAMES", "SCENE_SEGMENTATION", "TRANSCRIPTION", "CONTENT_UNDERSTANDING", "TAGGING"];
 const retryMinutes = [1, 5, 30];
+const assetKnowledgeIndexVersion = 4;
 
 type JsonRecord = Record<string, unknown>;
 
 export function shouldApplyAiRename(sourceSnapshot: JsonRecord, currentName: string): boolean {
   return sourceSnapshot.aiRename === true
     || (sourceSnapshot.aiRename === undefined && isIrregularAssetName(currentName));
+}
+
+export function isAssetKnowledgeCurrent(input: {
+  sha256: string;
+  indexVersion: number;
+  sourceSnapshot: unknown;
+}): boolean {
+  const snapshot = input.sourceSnapshot && typeof input.sourceSnapshot === "object" && !Array.isArray(input.sourceSnapshot)
+    ? input.sourceSnapshot as JsonRecord
+    : {};
+  return input.indexVersion >= assetKnowledgeIndexVersion
+    && text(snapshot.learnedSha256) === input.sha256;
 }
 
 function json(value: unknown): Prisma.InputJsonValue {
@@ -48,6 +61,7 @@ function hamming(left: string, right: string): number {
 @Injectable()
 export class AssetAiService {
   private processing = false;
+  private scanningLibrary = false;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -281,6 +295,66 @@ export class AssetAiService {
     await this.prisma.asset.update({ where: { id: assetId }, data: { processingStatus: "ANALYZING", analysisVersion } });
     void this.processPending();
     return capabilities;
+  }
+
+  @Cron("0 8,14,20 * * *", { timeZone: "Asia/Shanghai" })
+  async scanIncrementalLibrary() {
+    if (this.scanningLibrary) return { queued: 0, skipped: 0, reason: "SCAN_ALREADY_RUNNING" };
+    this.scanningLibrary = true;
+    try {
+      const assets = await this.prisma.asset.findMany({
+        where: {
+          deletedAt: null,
+          status: { not: "ARCHIVED" },
+          objectKey: { not: null },
+          kind: { in: ["IMAGE", "VIDEO"] },
+        },
+        select: {
+          id: true,
+          kind: true,
+          sha256: true,
+          analysisVersion: true,
+          indexVersion: true,
+          sourceSnapshot: true,
+          analysisJobs: {
+            where: { status: { in: ["PENDING", "RUNNING", "RETRY"] } },
+            select: { id: true },
+            take: 1,
+          },
+        },
+        orderBy: { createdAt: "asc" },
+        take: 5000,
+      });
+      let queued = 0;
+      let skipped = 0;
+      for (const asset of assets) {
+        const learned = isAssetKnowledgeCurrent(asset);
+        if (learned || asset.analysisJobs.length) {
+          skipped += 1;
+          continue;
+        }
+        await this.enqueue(asset.id, asset.kind || "IMAGE", asset.analysisVersion + 1);
+        queued += 1;
+      }
+      await this.prisma.auditLog.create({
+        data: {
+          actor: "阿里云AI素材增量学习",
+          action: "ASSET_LIBRARY_INCREMENTAL_SCAN",
+          entityType: "Asset",
+          entityId: "LIBRARY",
+          after: {
+            queued,
+            skipped,
+            scanned: assets.length,
+            indexVersion: assetKnowledgeIndexVersion,
+            schedule: "Asia/Shanghai 08:00,14:00,20:00",
+          },
+        },
+      });
+      return { queued, skipped, scanned: assets.length, indexVersion: assetKnowledgeIndexVersion };
+    } finally {
+      this.scanningLibrary = false;
+    }
   }
 
   @Cron("*/1 * * * *")
@@ -606,10 +680,17 @@ suggestedName必须使用“型号-用途-核心功能或画面”作为基础�
         ...(displayName ? { displayName } : {}),
         aiIndex: json(aiIndex),
         searchText,
-        indexVersion: 3,
+        indexVersion: assetKnowledgeIndexVersion,
         indexConfidence,
         indexNeedsReview: indexConfidence < 0.75,
         indexReviewedAt: new Date(),
+        sourceSnapshot: json({
+          ...sourceSnapshot,
+          learnedSha256: asset?.sha256,
+          learnedAt: new Date().toISOString(),
+          learningProvider: "阿里云百炼",
+          knowledgeIndexVersion: assetKnowledgeIndexVersion,
+        }),
       },
     });
     if (jobType === "TAGGING" && indexConfidence < 0.75 && asset && asset.indexReviewCount < 1 && asset.kind) {

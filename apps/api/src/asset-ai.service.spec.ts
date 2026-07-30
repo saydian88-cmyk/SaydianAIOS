@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildAiAssetName, isIrregularAssetName } from "./asset-naming";
-import { AssetAiService, shouldApplyAiRename } from "./asset-ai.service";
+import { AssetAiService, isAssetKnowledgeCurrent, shouldApplyAiRename } from "./asset-ai.service";
 
 describe("AssetAiService capabilities", () => {
   it("separates local media capabilities from external AI configuration", () => {
@@ -40,5 +40,28 @@ describe("AI asset naming", () => {
     expect(shouldApplyAiRename({ aiRename: false }, "18")).toBe(false);
     expect(shouldApplyAiRename({}, "IMG_0018.jpg")).toBe(true);
     expect(shouldApplyAiRename({}, "W9父母健康场景")).toBe(false);
+  });
+});
+
+describe("persistent asset knowledge", () => {
+  it("does not relearn an unchanged asset whose current hash is already indexed", () => {
+    expect(isAssetKnowledgeCurrent({
+      sha256: "same-content",
+      indexVersion: 4,
+      sourceSnapshot: { learnedSha256: "same-content" },
+    })).toBe(true);
+  });
+
+  it("relearns changed files and legacy indexes", () => {
+    expect(isAssetKnowledgeCurrent({
+      sha256: "new-content",
+      indexVersion: 4,
+      sourceSnapshot: { learnedSha256: "old-content" },
+    })).toBe(false);
+    expect(isAssetKnowledgeCurrent({
+      sha256: "same-content",
+      indexVersion: 3,
+      sourceSnapshot: { learnedSha256: "same-content" },
+    })).toBe(false);
   });
 });
