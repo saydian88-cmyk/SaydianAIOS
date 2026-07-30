@@ -474,4 +474,62 @@ describe("VideoFactoryService model routing", () => {
     )).rejects.toBeInstanceOf(BadRequestException);
     expect(prisma.contentPlan.update).not.toHaveBeenCalled();
   });
+
+  it("preserves material IDs returned with each generated script line", async () => {
+    const result = await (service as any).preMatchScriptCandidate({
+      topic: "W9S素材优先脚本",
+      audience: "给父母挑健康手表的人",
+      objective: "展示气囊测量过程",
+      hook: "先看腕带会不会动",
+      outline: ["启动后气囊开始变化"],
+      score: 90,
+      scoreBreakdown: {},
+      assetIds: [],
+      referenceIds: [],
+      missingAssets: [],
+      titleZh: "先看腕带会不会动",
+      titleEn: "",
+      coverTextZh: "",
+      coverTextEn: "",
+      hashtags: [],
+      scripts: { zh15: "", en15: "", zh30: "", en30: "" },
+      scriptPackage: {
+        voiceoverLines: [{
+          lineId: "line_01",
+          text: "启动后气囊开始变化",
+          durationSeconds: 4,
+        }],
+        shotRequirements: [{
+          lineId: "line_01",
+          line: "启动后气囊开始变化",
+          visual: "佩戴近景，完整展示气囊变化",
+          matchedVideoAssetIds: ["video-1"],
+          auxiliaryImageAssetIds: ["image-1"],
+          assetStatus: "COVERED",
+          factualProof: "真实操作视频",
+          audioVisualRequirement: "动作完整",
+        }],
+      },
+    }, [
+      {
+        id: "video-1",
+        kind: "VIDEO",
+        displayName: "W9S气囊测量.mp4",
+        contentDescription: "佩戴后启动测量，气囊完整变化",
+        tags: [],
+      },
+      {
+        id: "image-1",
+        kind: "IMAGE",
+        displayName: "W9S结构图.jpg",
+        contentDescription: "气囊表带结构",
+        tags: [],
+      },
+    ]);
+
+    expect(result.shots[0].selectedAssetIds).toEqual(["video-1"]);
+    expect(result.shots[0].auxiliaryImageAssetIds).toEqual(["image-1"]);
+    expect(result.shots[0].materialMatchStatus).toBe("COVERED");
+    expect(result.missingAssets).toEqual([]);
+  });
 });
