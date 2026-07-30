@@ -1082,12 +1082,16 @@ export class VideoFactoryService {
     const productionNo = `VF-${localDateKey(new Date()).replaceAll("-", "")}-${randomUUID().slice(0, 6).toUpperCase()}`;
     const topic = conciseVideoTopic(String(input.topic || `${productModel} 智能视频项目`));
     const brief = {
-      platform,
-      voiceoverMode: String(input.voiceoverMode || "VOICEOVER").toUpperCase(),
-      accountType: String(input.accountType || "BRAND").toUpperCase(),
-      estimatedDurationSeconds: Math.max(15, Math.min(180, Math.round(number(input.estimatedDurationSeconds, 30)))),
-      healthContentAllowed: input.healthContentAllowed !== false,
-      materialPolicy: String(input.generationMode || "NORMAL").toUpperCase() === "ASSET_ONLY" ? "ASSET_ONLY" : "REAL_ASSET_FIRST",
+      ...(input.platform ? { platform } : {}),
+      ...(input.voiceoverMode ? { voiceoverMode: String(input.voiceoverMode).toUpperCase() } : {}),
+      ...(input.accountType ? { accountType: String(input.accountType).toUpperCase() } : {}),
+      ...(input.estimatedDurationSeconds
+        ? { estimatedDurationSeconds: Math.max(15, Math.min(180, Math.round(number(input.estimatedDurationSeconds, 30)))) }
+        : {}),
+      ...(typeof input.healthContentAllowed === "boolean" ? { healthContentAllowed: input.healthContentAllowed } : {}),
+      ...(input.generationMode
+        ? { materialPolicy: String(input.generationMode).toUpperCase() === "ASSET_ONLY" ? "ASSET_ONLY" : "REAL_ASSET_FIRST" }
+        : {}),
       missingMaterialStrategies: ["RESHOOT", "AI_GENERATE"],
       soundPrompt: String(input.soundPrompt || "").trim(),
       mustShowFacts: String(input.mustShowFacts || "").trim(),
@@ -1227,9 +1231,13 @@ export class VideoFactoryService {
       topic: String(brief.keywords || plan.topic),
       audience: String(brief.audience || plan.audience),
       objective: String(brief.videoType || plan.objective),
-      voiceoverMode: String(brief.voiceoverMode || "VOICEOVER"),
-      generationMode: String(brief.materialPolicy || "REAL_ASSET_FIRST") === "ASSET_ONLY" ? "ASSET_ONLY" : "NORMAL",
-      contentRestrictionMode: brief.healthContentAllowed === false ? "HEALTH_RESTRICTED" : "NORMAL",
+      ...(brief.voiceoverMode ? { voiceoverMode: String(brief.voiceoverMode) } : {}),
+      ...(brief.materialPolicy
+        ? { generationMode: String(brief.materialPolicy) === "ASSET_ONLY" ? "ASSET_ONLY" : "NORMAL" }
+        : {}),
+      ...(typeof brief.healthContentAllowed === "boolean"
+        ? { contentRestrictionMode: brief.healthContentAllowed === false ? "HEALTH_RESTRICTED" : "NORMAL" }
+        : {}),
       keywordIds: Array.isArray(factory.keywordIds) ? factory.keywordIds.map(String) : [],
       externalVideoIds: Array.isArray(factory.externalVideoIds) ? factory.externalVideoIds.map(String) : [],
       additionalPrompt: String(brief.additionalPrompt || ""),
@@ -1247,27 +1255,33 @@ export class VideoFactoryService {
         topic: context.topic,
         audience: context.audience,
         objective: context.objective,
-        voiceoverMode: context.voiceoverMode,
-        generationMode: context.generationMode,
-        contentRestrictionMode: context.contentRestrictionMode,
+        ...(brief.voiceoverMode ? { voiceoverMode: context.voiceoverMode } : {}),
+        ...(brief.materialPolicy ? { generationMode: context.generationMode } : {}),
+        ...(typeof brief.healthContentAllowed === "boolean"
+          ? { contentRestrictionMode: context.contentRestrictionMode }
+          : {}),
         scriptSource: "AI",
         userProvidedDirections: [],
         exactCount: 1,
         projectBrief: {
           videoType: brief.videoType,
           keywords: brief.keywords,
-          reference: brief.reference,
-          requestedHook: brief.hook,
-          scene: brief.scene,
-          painPoint: brief.painPoint,
-          targetAudience: brief.audience,
-          soundPrompt: brief.soundPrompt,
-          mustShowFacts: brief.mustShowFacts,
-          additionalPrompt: brief.additionalPrompt,
-          accountType: brief.accountType,
-          estimatedDurationSeconds: brief.estimatedDurationSeconds,
-          healthContentAllowed: brief.healthContentAllowed !== false,
-          materialPolicy: brief.materialPolicy,
+          ...(brief.reference ? { reference: brief.reference } : {}),
+          ...(brief.hook ? { requestedHook: brief.hook } : {}),
+          ...(brief.scene ? { scene: brief.scene } : {}),
+          ...(brief.painPoint ? { painPoint: brief.painPoint } : {}),
+          ...(brief.audience ? { targetAudience: brief.audience } : {}),
+          ...(brief.soundPrompt ? { soundPrompt: brief.soundPrompt } : {}),
+          ...(brief.mustShowFacts ? { mustShowFacts: brief.mustShowFacts } : {}),
+          ...(brief.additionalPrompt ? { additionalPrompt: brief.additionalPrompt } : {}),
+          ...(brief.accountType ? { accountType: brief.accountType } : {}),
+          ...(brief.estimatedDurationSeconds
+            ? { estimatedDurationSeconds: brief.estimatedDurationSeconds }
+            : {}),
+          ...(typeof brief.healthContentAllowed === "boolean"
+            ? { healthContentAllowed: brief.healthContentAllowed }
+            : {}),
+          ...(brief.materialPolicy ? { materialPolicy: brief.materialPolicy } : {}),
         },
       });
     } catch (error) {
@@ -2866,11 +2880,36 @@ export class VideoFactoryService {
       throw new BadRequestException("只能删除自己创建的视频项目");
     }
     if (plan.productionStage === "VIDEO_FACTORY_ARCHIVED") return { id, archived: true };
-    if (plan.videoGenerationJobs.length || plan.videoRenderJobs.length) {
-      throw new BadRequestException("项目仍有正在生成或剪辑的任务，请等待任务结束后再删除");
-    }
     const archivedAt = new Date();
     const purgeAfter = new Date(archivedAt.getTime() + 3 * 24 * 60 * 60 * 1000);
+    const activeAiStatuses = [
+      "PENDING",
+      "WAITING_CONFIRMATION",
+      "CLAIMED",
+      "RUNNING",
+      "WAITING_INPUT",
+      "QUALITY_CHECK",
+      "UPLOADING",
+      "PENDING_REVIEW",
+      "RETURNED",
+      "RETRY",
+    ] as const;
+    const activeJobStatuses = ["PENDING", "RUNNING", "RETRY"] as const;
+    const [aiTaskCount, generationJobCount, renderJobCount] = await Promise.all([
+      this.prisma.aiTask.count({
+        where: {
+          sourceType: "VIDEO_FACTORY_PROJECT",
+          sourceId: id,
+          status: { in: [...activeAiStatuses] },
+        },
+      }),
+      this.prisma.videoGenerationJob.count({
+        where: { contentPlanId: id, status: { in: [...activeJobStatuses] } },
+      }),
+      this.prisma.videoRenderJob.count({
+        where: { contentPlanId: id, status: { in: [...activeJobStatuses] } },
+      }),
+    ]);
     const nextSignals = sourceSignals(plan).map((item) => item.type === "VIDEO_FACTORY" ? {
       ...item,
       archivedAt: archivedAt.toISOString(),
@@ -2886,6 +2925,38 @@ export class VideoFactoryService {
           sourceSignals: nextSignals as Prisma.InputJsonValue,
         },
       }),
+      this.prisma.aiTask.updateMany({
+        where: {
+          sourceType: "VIDEO_FACTORY_PROJECT",
+          sourceId: id,
+          status: { in: [...activeAiStatuses] },
+        },
+        data: {
+          status: "CANCELLED",
+          progressMessage: "所属视频项目已删除，任务同步取消",
+          finishedAt: archivedAt,
+          lockedBy: null,
+          lockedAt: null,
+          heartbeatAt: null,
+        },
+      }),
+      this.prisma.videoGenerationJob.updateMany({
+        where: { contentPlanId: id, status: { in: [...activeJobStatuses] } },
+        data: {
+          status: "CANCELLED",
+          finishedAt: archivedAt,
+          failureReason: "所属视频项目已删除，生成任务同步取消",
+          nextAttemptAt: null,
+        },
+      }),
+      this.prisma.videoRenderJob.updateMany({
+        where: { contentPlanId: id, status: { in: [...activeJobStatuses] } },
+        data: {
+          status: "CANCELLED",
+          finishedAt: archivedAt,
+          failureReason: "所属视频项目已删除，剪辑任务同步取消",
+        },
+      }),
       this.prisma.opsTask.updateMany({
         where: {
           sourceType: "VIDEO_PROJECT",
@@ -2895,6 +2966,7 @@ export class VideoFactoryService {
         data: {
           deletedAt: archivedAt,
           purgeAfter,
+          status: "CANCELLED",
         },
       }),
       this.prisma.auditLog.create({
@@ -2904,11 +2976,25 @@ export class VideoFactoryService {
           entityType: "ContentPlan",
           entityId: id,
           before: { productionStage: plan.productionStage },
-          after: { productionStage: "VIDEO_FACTORY_ARCHIVED", archivedAt, purgeAfter },
+          after: {
+            productionStage: "VIDEO_FACTORY_ARCHIVED",
+            archivedAt,
+            purgeAfter,
+            cancelledAiTasks: aiTaskCount,
+            cancelledGenerationJobs: generationJobCount,
+            cancelledRenderJobs: renderJobCount,
+          },
         },
       }),
     ]);
-    return { id, archived: true, purgeAfter };
+    return {
+      id,
+      archived: true,
+      purgeAfter,
+      cancelledAiTasks: aiTaskCount,
+      cancelledGenerationJobs: generationJobCount,
+      cancelledRenderJobs: renderJobCount,
+    };
   }
 
   async recycledProjects(actor: string) {
@@ -3028,6 +3114,12 @@ export class VideoFactoryService {
     const taskStatus = String(taskOutput?.aiTask?.status || "");
     if (["CLAIMED", "RUNNING", "QUALITY_CHECK", "UPLOADING", "RETRY"].includes(taskStatus)) return "FACTORY_GENERATING";
     if (taskOutput?.kind === "VIDEO_MASTER" && taskStatus === "PENDING_REVIEW") return "VIDEO_REVIEW";
+    const completedScriptOutput = row.aiTaskOutputs?.some((output) =>
+      output.kind === "VIDEO_PROJECT"
+      && ["COMPLETED", "PENDING_REVIEW"].includes(String(output.aiTask?.status || "")));
+    if (completedScriptOutput && ["PROJECT_BRIEF", "SCRIPT_GENERATING"].includes(persistedStage)) {
+      return "FACTORY_SCRIPT_READY";
+    }
     return row.productionStage || "FACTORY_SCRIPT_READY";
   }
 

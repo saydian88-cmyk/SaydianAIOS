@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>员工任务一站式视频项目预览</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;background:#f5f3ee;color:#202927;font:14px/1.6 Arial,"Microsoft YaHei",sans-serif}
+    main{width:min(1180px,calc(100% - 32px));margin:28px auto}.bar,.card,.workspace,.modal{border:1px solid #e5e0d8;border-radius:20px;background:#fff}
+    .bar{display:flex;justify-content:space-between;gap:14px;padding:18px}.filters,.actions,.buttons{display:flex;flex-wrap:wrap;gap:9px}
+    button,.pill{border:1px solid #dcd7ce;border-radius:8px;background:#fff;padding:8px 13px;color:#34403d}button.primary{border-color:#409eff;background:#409eff;color:#fff}button.danger{border-color:#f1a3a0;color:#c93630}
+    .card{margin-top:14px;padding:20px}.meta{display:flex;flex-wrap:wrap;gap:8px;color:#7f8884;font-size:12px}.tag{border-radius:6px;background:#eaf3ff;color:#2873ba;padding:3px 8px}.tag.green{background:#eaf7ed;color:#31804a}
+    h2,h3,h4,p{margin-top:0}.task-head{display:flex;align-items:center;justify-content:space-between;gap:20px}.steps{display:flex;gap:6px;overflow:auto}.steps span{white-space:nowrap;border-radius:7px;background:#efefec;color:#7c8581;padding:6px 9px}.steps .done{background:#eaf7ed;color:#31804a}.steps .active{background:#c52e26;color:#fff;font-weight:700}
+    .need{margin:12px 0 0;color:#b32620;font-weight:700}.workspace{display:grid;gap:16px;margin-top:18px;padding:18px;background:#fcfbf8}.workspace-head{display:flex;justify-content:space-between;gap:16px}
+    .stage-tabs{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}.stage-tabs button{min-height:44px;font-size:12px}.stage-tabs .done{background:#eaf7ed;color:#31804a}.stage-tabs .active{background:#c52e26;color:#fff}
+    .candidate-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.candidate{border:1px solid #e4dfd7;border-radius:14px;background:#fff;padding:16px}.script{max-height:150px;overflow:auto;border:1px solid #ebe6de;border-radius:10px;padding:12px;background:#faf9f6}
+    .notice{border-left:4px solid #409eff;background:#edf6ff;padding:11px 14px}.modal-wrap{position:fixed;inset:0;display:none;place-items:center;padding:18px;background:#0007}.modal-wrap.open{display:grid}.modal{width:min(930px,100%);max-height:92vh;overflow:auto;padding:22px}
+    .required{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;padding:16px;border:1px solid #e5e0d8;border-radius:14px}.field label{display:block;margin-bottom:6px;font-weight:700}.field input,.field select{width:100%;height:38px;border:1px solid #d9d4cb;border-radius:7px;padding:0 10px}
+    details{margin-top:12px;border:1px solid #e5e0d8;border-radius:14px;padding:14px}summary{cursor:pointer;font-weight:700}.summary{margin-left:18px;color:#7b8581;font-weight:400}
+    .footer{display:flex;justify-content:flex-end;gap:10px;margin-top:16px}.danger-note{margin-top:14px;border-radius:10px;background:#fff2f0;color:#a82e28;padding:12px}
+    @media(max-width:760px){.task-head,.workspace-head{align-items:stretch;flex-direction:column}.candidate-grid,.required{grid-template-columns:1fr}.stage-tabs{display:flex;overflow:auto}.stage-tabs button{min-width:110px}}
+  </style>
+</head>
+<body>
+<main>
+  <h2>任务中心 · 本次改动预览</h2>
+  <section class="bar">
+    <div class="filters"><button class="primary">我的任务</button><button>可领取</button><button>全部状态</button><button>全部任务类型</button></div>
+    <div class="actions"><button>任务回收站</button><button class="primary" onclick="openModal()">快速新建视频项目</button></div>
+  </section>
+
+  <article class="card">
+    <div class="task-head">
+      <div>
+        <div class="meta"><span class="tag">视频项目任务</span><span class="tag green">脚本审核</span><span>VF-20260730-NEWEST</span><span>刚刚创建</span><span>W9S · 功能演示型</span></div>
+        <h3>W9S 气囊测量功能演示</h3>
+        <p>关键词：气囊血压测量　｜　创建人：当前员工　｜　脚本引擎：系统 AI + 远程 Codex</p>
+      </div>
+      <div class="buttons"><button>查看详情</button><button class="primary" onclick="toggleWorkspace()">收起项目</button></div>
+    </div>
+    <div class="steps"><span class="done">1 项目创建</span><span class="done">2 脚本生成</span><span class="active">3 脚本审核</span><span>4 素材补全</span><span>5 视频生成</span><span>6 成片审核</span><span>7 封面标题与发布</span></div>
+    <p class="need">现在需要：对比两种脚本，直接修改并选择一版通过</p>
+
+    <section id="workspace" class="workspace">
+      <div class="workspace-head">
+        <div><small>当前阶段 3 / 7</small><h3>脚本审核</h3><p>项目所有操作留在员工任务页，不跳转视频工厂。</p></div>
+        <button class="danger" onclick="confirmDelete()">删除项目</button>
+      </div>
+      <nav class="stage-tabs"><button class="done">1 项目创建</button><button class="done">2 脚本生成</button><button class="active">3 脚本审核</button><button>4 素材补全</button><button>5 视频生成</button><button>6 成片审核</button><button>7 发布</button></nav>
+      <div class="notice">远程 Codex 已回传候选脚本，员工端立即显示“已完成”，不再停留在生成中。</div>
+      <div class="candidate-grid">
+        <article class="candidate"><span class="tag green">系统 AI 脚本工厂 · 已完成</span><h4>功能过程直观演示</h4><p><b>HOOK：</b>为什么同一块表，每次测量结果差别这么大？</p><div class="script"><b>完整脚本：</b><br>先展示佩戴位置，再完整展示气囊充气、测量过程和结果页。说明正确姿势对稳定读取的重要性，并以真实过程画面承接每句口播。</div><div class="buttons"><button>查看并直接修改</button><button class="primary">通过此版本</button></div></article>
+        <article class="candidate"><span class="tag green">远程 Codex + 剪辑 Skill · 已完成</span><h4>用户痛点切入</h4><p><b>HOOK：</b>测得不准，可能不是表的问题。</p><div class="script"><b>完整脚本：</b><br>从常见错误佩戴切入，再通过素材库中已确认的操作镜头展示正确流程。逐句绑定素材路径；缺失处自动进入本项目素材补全阶段。</div><div class="buttons"><button>查看并直接修改</button><button class="primary">通过此版本</button></div></article>
+      </div>
+    </section>
+  </article>
+</main>
+
+<div id="modalWrap" class="modal-wrap">
+  <section class="modal">
+    <div class="workspace-head"><h3>新建智能视频项目</h3><button onclick="closeModal()">关闭</button></div>
+    <p>只有三项必填。其他未设置项不会进入 AI 任务包。</p>
+    <div class="required">
+      <div class="field"><label>视频类型 *</label><select><option>功能演示型</option><option>场景种草型</option><option>痛点解决型</option></select></div>
+      <div class="field"><label>产品型号 *</label><select><option>W9S · 赛电智能血压手表</option></select></div>
+      <div class="field"><label>关键词 *</label><select><option>气囊血压测量 · 爆款研究</option></select></div>
+    </div>
+    <details open><summary>可选创作信息 <span class="summary">模仿参考、钩子、场景、目标用户、痛点、补充 AI 提示词</span></summary><p>员工任务页默认展开；不填写的字段不提交给 AI。</p></details>
+    <details><summary>默认设置 <span class="summary">平台不限 · 时长不限 · 账号不限 · 健康内容不限 · 素材策略不限 · 口播不限</span></summary><p>只有用户主动修改的设置才进入 AI 任务包。</p></details>
+    <div class="footer"><button onclick="closeModal()">取消</button><button class="primary">创建并提交脚本生成</button></div>
+    <div class="danger-note">删除项目：同步取消未完成 AI/素材生成/剪辑任务，并从员工任务和视频工厂同时移除；回收站保留 3 天。</div>
+  </section>
+</div>
+<script>
+  function openModal(){document.getElementById('modalWrap').classList.add('open')}
+  function closeModal(){document.getElementById('modalWrap').classList.remove('open')}
+  function toggleWorkspace(){const el=document.getElementById('workspace');el.hidden=!el.hidden}
+  function confirmDelete(){alert('预期结果：项目、员工任务及未完成 AI/剪辑任务同步取消；项目进入 3 天回收站。')}
+</script>
+</body>
+</html>
