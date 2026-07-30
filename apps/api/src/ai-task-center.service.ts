@@ -1167,7 +1167,6 @@ export class AiTaskCenterService implements OnModuleInit {
         height: true,
         durationSeconds: true,
         contentDescription: true,
-        objectKey: true,
         storageUrl: true,
         reviewStatus: true,
         availabilityStatus: true,
@@ -1208,22 +1207,17 @@ export class AiTaskCenterService implements OnModuleInit {
       revision: state.revision,
       cursor: nextCursor,
       hasMore: assets.length === 500,
-      changes: assets.map(({ objectKey, sizeBytes, ...asset }) => {
+      changes: assets.map(({ sizeBytes, ...asset }) => {
         const usable = !asset.deletedAt
           && asset.reviewStatus === "APPROVED"
           && asset.availabilityStatus === "ACTIVE"
           && ["COMMERCIAL", "EDIT_ONLY"].includes(asset.rightsStatus);
-        let downloadUrl: string | null = null;
-        if (usable && objectKey) {
-          try { downloadUrl = this.oss.signedDownloadUrl(objectKey, 7_200); } catch { downloadUrl = null; }
-        }
         return {
           ...asset,
           sizeBytes: sizeBytes.toString(),
           updatedAt: asset.updatedAt.toISOString(),
           deletedAt: asset.deletedAt?.toISOString() || null,
           usable,
-          downloadUrl,
         };
       }),
     };
