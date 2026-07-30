@@ -56,11 +56,15 @@ docker compose --env-file "$production_env" --env-file "$images" -f "$compose" r
   node_modules/.bin/tsx prisma/backfill-video-factory.ts
 docker compose --env-file "$production_env" --env-file "$images" -f "$compose" run --rm ops-api \
   node_modules/.bin/tsx prisma/backfill-task-projection-v2.ts --apply
-docker compose --env-file "$production_env" --env-file "$images" -f "$compose" up -d --remove-orphans
+if ! docker compose --env-file "$production_env" --env-file "$images" -f "$compose" up -d --remove-orphans; then
+  echo "compose startup did not reach healthy state yet; continuing with bounded health verification" >&2
+  docker compose --env-file "$production_env" --env-file "$images" -f "$compose" ps -a >&2 || true
+  docker compose --env-file "$production_env" --env-file "$images" -f "$compose" logs --tail 120 ops-api >&2 || true
+fi
 docker compose --env-file "$production_env" --env-file "$images" -f "$compose" restart gateway
 
 healthy=0
-for _ in $(seq 1 30); do
+for _ in $(seq 1 60); do
   if curl -fsS http://127.0.0.1/health >/dev/null \
     && curl -fsS -H 'Host: stest.saydian.cn' https://127.0.0.1/saidian-admin/ -k >/dev/null \
     && curl -fsS -H 'Host: stest.saydian.cn' https://127.0.0.1/saidian-work/ -k >/dev/null; then healthy=1; break; fi
