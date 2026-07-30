@@ -123,6 +123,7 @@ export type VideoScriptCandidateV3 = {
     alternative: string;
   }>;
   selected: boolean;
+  scriptPackage?: Record<string, unknown>;
 };
 
 export const VIDEO_OPPORTUNITY_SCORE_MAX = {

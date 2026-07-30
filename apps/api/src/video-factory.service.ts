@@ -168,6 +168,115 @@ function object(value: unknown): JsonRow {
   return value && typeof value === "object" && !Array.isArray(value) ? value as JsonRow : {};
 }
 
+function cleanVoiceoverText(value: unknown) {
+  return String(value || "")
+    .replace(/\[(?:C\d+-)?L\d+\]\s*/gi, "")
+    .replace(/健康监测数据仅供日常健康管理参考[。.]?/g, "")
+    .trim();
+}
+
+function comparableScriptText(value: unknown) {
+  return cleanVoiceoverText(value).replace(/[\s，。！？；：,.!?;:、“”‘’"'（）()]/g, "");
+}
+
+function packageCodexCandidate(candidate: VideoScriptCandidateV3, context: {
+  productModel: string;
+  platform: string;
+  audience: string;
+  objective: string;
+  accountType: string;
+  estimatedDurationSeconds: number;
+  healthContentAllowed: boolean;
+}) {
+  const current = object(candidate.scriptPackage);
+  const currentVoiceover = Array.isArray(current.voiceoverLines) ? current.voiceoverLines.map(object) : [];
+  const scriptLines = String(candidate.script || "")
+    .split(/\r?\n/)
+    .map(cleanVoiceoverText)
+    .filter(Boolean);
+  const sourceLines = currentVoiceover.length
+    ? currentVoiceover.map((line) => cleanVoiceoverText(line.text)).filter(Boolean)
+    : candidate.shots.map((shot) => cleanVoiceoverText(shot.voiceover)).filter(Boolean);
+  const voiceTexts = sourceLines.length ? sourceLines : scriptLines;
+  const voiceoverLines = voiceTexts.map((line, index) => {
+    const previous = currentVoiceover[index] || {};
+    return {
+      lineId: String(previous.lineId || candidate.shots[index]?.lineId || `line_${String(index + 1).padStart(2, "0")}`),
+      text: line,
+      tone: String(previous.tone || "亲切自然"),
+      speed: String(previous.speed || "自然短句"),
+      emotion: String(previous.emotion || "真诚"),
+      durationSeconds: number(previous.durationSeconds, candidate.shots[index]?.durationSeconds || 3),
+    };
+  });
+  const currentRequirements = Array.isArray(current.shotRequirements) ? current.shotRequirements.map(object) : [];
+  const shotRequirements = voiceoverLines.map((line, index) => {
+    const previous = currentRequirements.find((item) => String(item.lineId || "") === line.lineId)
+      || currentRequirements[index]
+      || {};
+    const shot = candidate.shots[index];
+    return {
+      lineId: line.lineId,
+      line: line.text,
+      visual: String(previous.visual || shot?.visual || shot?.description || ""),
+      assetStatus: String(previous.assetStatus || (shot?.selectedAssetIds.length ? "COVERED" : "NEED_SHOOT")),
+      factualProof: String(previous.factualProof || shot?.visibleFacts?.join("；") || ""),
+      audioVisualRequirement: String(previous.audioVisualRequirement || shot?.missingReason || shot?.alternativePlan || ""),
+    };
+  });
+  const positioning = object(current.positioning);
+  const goldenHook = object(current.goldenHook);
+  const ending = object(current.ending);
+  return {
+    ...candidate,
+    script: voiceoverLines.map((line) => line.text).join("\n"),
+    scriptPackage: {
+      ...current,
+      basicInfo: {
+        ...object(current.basicInfo),
+        productModel: context.productModel,
+        videoType: "VOICEOVER",
+        platform: context.platform,
+        accountType: context.accountType,
+        targetAudience: context.audience,
+        estimatedDurationSeconds: context.estimatedDurationSeconds,
+        healthContentAllowed: context.healthContentAllowed,
+      },
+      positioning: {
+        coreTheme: String(positioning.coreTheme || candidate.title),
+        communicationGoal: String(positioning.communicationGoal || context.objective),
+        userPainPoint: String(positioning.userPainPoint || ""),
+        uniqueSellingPoint: String(positioning.uniqueSellingPoint || ""),
+      },
+      goldenHook: {
+        copy: String(goldenHook.copy || candidate.hook),
+        type: String(goldenHook.type || candidate.templateCode),
+        visual: String(goldenHook.visual || candidate.shots[0]?.visual || ""),
+        retentionReason: String(goldenHook.retentionReason || ""),
+        openingSound: String(goldenHook.openingSound || ""),
+      },
+      voiceoverLines,
+      structure: Array.isArray(current.structure) ? current.structure : [],
+      shotRequirements,
+      retentionDesign: strings(current.retentionDesign),
+      subtitles: strings(current.subtitles).length
+        ? strings(current.subtitles)
+        : voiceoverLines.map((line) => line.text.replace(/[，。！？；：,.!?;:]/g, "")),
+      emphasisTexts: strings(current.emphasisTexts),
+      soundDesign: object(current.soundDesign),
+      complianceChecks: Array.isArray(current.complianceChecks) ? current.complianceChecks : [],
+      ending: {
+        summary: String(ending.summary || candidate.cta),
+        interaction: String(ending.interaction || candidate.cta),
+        visual: String(ending.visual || candidate.shots.at(-1)?.visual || ""),
+        safeTailSeconds: number(ending.safeTailSeconds, 0.35),
+      },
+      materialGaps: Array.isArray(current.materialGaps) ? current.materialGaps : candidate.missingAssets,
+      overlayNotice: String(current.overlayNotice || (context.healthContentAllowed ? "健康监测数据仅供日常健康管理参考" : "")),
+    },
+  };
+}
+
 function jsonSafe<T>(value: T): T {
   return JSON.parse(JSON.stringify(value, (_key, item) => typeof item === "bigint" ? item.toString() : item)) as T;
 }
@@ -1524,18 +1633,74 @@ export class VideoFactoryService {
     const currentScripts = object(selected.scripts) as Record<string, any>;
     const currentVoiceover = Array.isArray(scriptPackage.voiceoverLines) ? scriptPackage.voiceoverLines as Array<Record<string, any>> : [];
     const cleanLines = (values: string[]) => values.map((item) => item.trim()).filter(Boolean);
-    const voiceoverLines = cleanLines(input.voiceoverLines);
+    const voiceoverLines = cleanLines(input.voiceoverLines).length
+      ? cleanLines(input.voiceoverLines)
+      : cleanLines(input.script.split(/\r?\n/).map(cleanVoiceoverText));
     const currentScript = String(selected.script || currentScripts.zh30 || currentScripts.zh15 || "");
+    const existingShots = Array.isArray(selected.shots) ? selected.shots as Array<Record<string, any>> : [];
+    const currentRequirements = Array.isArray(scriptPackage.shotRequirements)
+      ? scriptPackage.shotRequirements as Array<Record<string, any>>
+      : [];
+    const nextVoiceover = voiceoverLines.length
+      ? voiceoverLines.map((line, index) => {
+        const exactIndex = currentVoiceover.findIndex((item) => comparableScriptText(item.text) === comparableScriptText(line));
+        const previous = currentVoiceover[exactIndex >= 0 ? exactIndex : index] || {};
+        return {
+          text: line,
+          lineId: previous.lineId || existingShots[index]?.lineId || `line_${String(index + 1).padStart(2, "0")}`,
+          tone: previous.tone || "亲切自然",
+          speed: previous.speed || "自然短句",
+          emotion: previous.emotion || "真诚",
+          durationSeconds: previous.durationSeconds || existingShots[index]?.durationSeconds || 3,
+        };
+      })
+      : currentVoiceover;
+    const nextShots = nextVoiceover.map((line, index) => {
+      const previous = existingShots.find((item) => item.lineId === line.lineId) || existingShots[index] || {};
+      const meaningChanged = Boolean(previous.voiceover)
+        && comparableScriptText(previous.voiceover) !== comparableScriptText(line.text);
+      return {
+        ...previous,
+        lineId: line.lineId,
+        sequence: index,
+        voiceover: line.text,
+        subtitle: line.text.replace(/[，。！？；：,.!?;:]/g, ""),
+        ...(meaningChanged ? {
+          selectedAssetIds: [],
+          missingReason: "脚本文案已修改，需要重新匹配并确认素材",
+          alternativePlan: previous.alternativePlan || "重新检索系统素材库或补拍直接对应画面",
+        } : {}),
+      };
+    });
+    const nextRequirements = nextVoiceover.map((line, index) => {
+      const previous = currentRequirements.find((item) => item.lineId === line.lineId) || currentRequirements[index] || {};
+      const shot = (nextShots[index] || {}) as Record<string, any>;
+      const meaningChanged = Boolean(previous.line)
+        && comparableScriptText(previous.line) !== comparableScriptText(line.text);
+      return {
+        ...previous,
+        lineId: line.lineId,
+        line: line.text,
+        visual: previous.visual || shot.visual || shot.description || "",
+        assetStatus: meaningChanged ? "REWRITABLE" : previous.assetStatus || (shot.selectedAssetIds?.length ? "COVERED" : "NEED_SHOOT"),
+        factualProof: previous.factualProof || "",
+        audioVisualRequirement: meaningChanged
+          ? "脚本文案语义已改变，保存后自动进入素材重新匹配"
+          : previous.audioVisualRequirement || "",
+      };
+    });
+    const cleanScript = nextVoiceover.map((line) => line.text).join("\n") || input.script.trim() || currentScript;
     const nextCandidate = {
       ...selected,
       title: input.title.trim() || selected.title || selected.titleZh,
       titleZh: input.title.trim() || selected.titleZh || selected.title,
       hook: input.hook.trim() || selected.hook || goldenHook.copy,
-      script: input.script.trim() || currentScript,
+      script: cleanScript,
+      shots: nextShots,
       scripts: {
         ...currentScripts,
-        zh30: input.script.trim() || currentScript,
-        zh15: input.script.trim() || currentScript,
+        zh30: cleanScript,
+        zh15: cleanScript,
       },
       scriptPackage: {
         ...scriptPackage,
@@ -1546,17 +1711,12 @@ export class VideoFactoryService {
           uniqueSellingPoint: input.uniqueSellingPoint.trim() || positioning.uniqueSellingPoint || "",
         },
         goldenHook: { ...goldenHook, copy: input.hook.trim() || goldenHook.copy || selected.hook || "" },
-        voiceoverLines: voiceoverLines.length
-          ? voiceoverLines.map((text, index) => ({
-            text,
-            tone: currentVoiceover[index]?.tone || "自然",
-            speed: currentVoiceover[index]?.speed || "中速",
-            emotion: currentVoiceover[index]?.emotion || "真诚",
-            durationSeconds: currentVoiceover[index]?.durationSeconds || 3,
-          }))
-          : currentVoiceover,
+        voiceoverLines: nextVoiceover,
+        shotRequirements: nextRequirements,
         retentionDesign: cleanLines(input.retentionDesign).length ? cleanLines(input.retentionDesign) : strings(scriptPackage.retentionDesign),
-        subtitles: cleanLines(input.subtitles).length ? cleanLines(input.subtitles) : strings(scriptPackage.subtitles),
+        subtitles: cleanLines(input.subtitles).length
+          ? cleanLines(input.subtitles)
+          : nextVoiceover.map((line) => line.text.replace(/[，。！？；：,.!?;:]/g, "")),
         emphasisTexts: cleanLines(input.emphasisTexts).length ? cleanLines(input.emphasisTexts) : strings(scriptPackage.emphasisTexts),
         ending: {
           ...ending,
@@ -1568,7 +1728,13 @@ export class VideoFactoryService {
     };
     const nextCandidates = candidates.map((candidate, index) => index === selectedIndex ? nextCandidate : candidate);
     const nextSignals = signals.map((signal) => signal.type === "VIDEO_FACTORY"
-      ? { ...signal, scriptCandidates: nextCandidates, scriptEditedAt: new Date().toISOString(), scriptEditedBy: actor }
+      ? {
+        ...signal,
+        scriptCandidates: nextCandidates,
+        scriptEditedAt: new Date().toISOString(),
+        scriptEditedBy: actor,
+        materialReview: { status: "PENDING", invalidatedReason: "SCRIPT_EDITED" },
+      }
       : signal);
     await this.prisma.$transaction([
       this.prisma.contentPlan.update({
@@ -1583,7 +1749,7 @@ export class VideoFactoryService {
         where: { contentPlanId },
         data: {
           title: input.title.trim() || plan.topic,
-          body: input.script.trim() || currentScript,
+          body: cleanScript,
         },
       }),
       this.prisma.auditLog.create({
@@ -1682,8 +1848,17 @@ export class VideoFactoryService {
     const existingSystemCandidates = Array.isArray(factory.scriptCandidates)
       ? factory.scriptCandidates.filter((item) => object(item).generationSource === "SYSTEM_AI")
       : [];
+    const brief = object(factory.brief);
     const remoteCandidates = input.scriptCandidates.slice(0, plan.workflowVersion >= 4 ? 1 : 3).map((item) => ({
-      ...item,
+      ...packageCodexCandidate(item, {
+        productModel: plan.productModel || "",
+        platform: String(plan.targetPlatforms[0] || "DOUYIN"),
+        audience: plan.audience || "目标用户",
+        objective: plan.objective || "普通种草",
+        accountType: String(brief.accountType || "BRAND"),
+        estimatedDurationSeconds: number(brief.estimatedDurationSeconds, 30),
+        healthContentAllowed: brief.healthContentAllowed !== false,
+      }),
       generationSource: "REMOTE_CODEX",
       generatedAt: new Date().toISOString(),
     }));
@@ -1710,7 +1885,6 @@ export class VideoFactoryService {
       durationSeconds: Math.max(2, Math.min(12, Math.round(number(shot.durationSeconds, 4)))),
       selectedAssetIds: shot.selectedAssetIds.filter((id) => validAssetIds.has(id)),
     }));
-    const brief = object(factory.brief);
     const requestedEngines = Array.isArray(brief.scriptEngines)
       ? brief.scriptEngines.map(String)
       : ["REMOTE_CODEX", "SYSTEM_AI"];

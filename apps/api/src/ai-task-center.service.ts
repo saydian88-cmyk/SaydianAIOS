@@ -157,6 +157,7 @@ function normalizeVideoScriptCandidates(value: unknown): VideoScriptCandidateV3[
       };
     });
     const scoreBreakdown = object(candidate.scoreBreakdown);
+    const scriptPackage = object(candidate.scriptPackage);
     return {
       title: text(candidate.title) || `脚本候选${candidateIndex + 1}`,
       hook: text(candidate.hook),
@@ -173,6 +174,7 @@ function normalizeVideoScriptCandidates(value: unknown): VideoScriptCandidateV3[
         alternative: text(item.alternative) || "产品图动画、本地程序化镜头或员工补拍",
       })),
       selected: candidate.selected === true || candidateIndex === 0,
+      scriptPackage,
     };
   });
 }
