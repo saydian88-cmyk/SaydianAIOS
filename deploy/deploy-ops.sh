@@ -80,7 +80,18 @@ if [[ "$healthy" != "1" ]]; then
   exit 1
 fi
 
-if ! docker compose --env-file "$production_env" --env-file "$images" -f "$compose" ps --status running -q video-worker | grep -q .; then
+worker_healthy=0
+for _ in $(seq 1 20); do
+  if docker compose --env-file "$production_env" --env-file "$images" -f "$compose" ps --status running -q video-worker | grep -q .; then
+    worker_healthy=1
+    break
+  fi
+  sleep 3
+done
+
+if [[ "$worker_healthy" != "1" ]]; then
+  docker compose --env-file "$production_env" --env-file "$images" -f "$compose" ps -a >&2 || true
+  docker compose --env-file "$production_env" --env-file "$images" -f "$compose" logs --tail 120 video-worker >&2 || true
   echo "video worker health check failed" >&2
   exit 1
 fi
