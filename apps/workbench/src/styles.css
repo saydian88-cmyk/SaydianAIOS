@@ -127,7 +127,7 @@ main { grid-column: 2; width: min(1240px, calc(100% - 48px)); margin: 24px auto;
 .task-video-workspace-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
 .task-video-workspace-head small { color: #78817e; }
 .task-video-workspace-head h3 { margin: 5px 0; }
-.task-video-stage-tabs { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+.task-video-stage-tabs { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
 .task-video-stage-tabs button { min-height: 42px; padding: 7px; border: 0; border-radius: 9px; color: #7c8581; background: #efefec; font-size: 12px; }
 .task-video-stage-tabs button.done { color: #31804a; background: #eaf7ed; }
 .task-video-stage-tabs button.active { color: #fff; background: #c52e26; font-weight: 700; }
@@ -138,6 +138,7 @@ main { grid-column: 2; width: min(1240px, calc(100% - 48px)); margin: 24px auto;
 .task-script-candidates article { display: grid; align-content: start; gap: 8px; }
 .task-script-candidates article h4, .task-script-candidates article p { margin: 0; }
 .task-script-candidates .candidate-full-script { max-height: 160px; overflow: auto; white-space: pre-wrap; }
+.script-material-summary { display: grid; gap: 5px; max-height: 180px; padding: 10px 12px; overflow: auto; border: 1px solid #d9eadc; border-radius: 9px; background: #f5fbf6; color: #3e5f46; }
 .task-shot-row, .task-finished-video-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .task-shot-row > div:first-child, .task-finished-video-row > div:first-child { min-width: 0; display: grid; gap: 6px; }
 .task-shot-row p { margin: 0; }
