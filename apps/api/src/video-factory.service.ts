@@ -1328,7 +1328,7 @@ export class VideoFactoryService {
     return this.project(contentPlanId);
   }
 
-  async generateSystemScriptCandidate(contentPlanId: string, actor: string) {
+  async generateSystemScriptCandidate(contentPlanId: string, actor: string, regenerationPrompt = "") {
     const plan = await this.prisma.contentPlan.findUnique({ where: { id: contentPlanId } });
     if (!plan) throw new NotFoundException("智能视频项目不存在");
     const signals = sourceSignals(plan);
@@ -1349,7 +1349,7 @@ export class VideoFactoryService {
         : {}),
       keywordIds: Array.isArray(factory.keywordIds) ? factory.keywordIds.map(String) : [],
       externalVideoIds: Array.isArray(factory.externalVideoIds) ? factory.externalVideoIds.map(String) : [],
-      additionalPrompt: String(brief.additionalPrompt || ""),
+      additionalPrompt: [String(brief.additionalPrompt || "").trim(), regenerationPrompt.trim()].filter(Boolean).join("\n"),
     });
     let generated: AiVideoCandidate[];
     try {
@@ -1382,7 +1382,9 @@ export class VideoFactoryService {
           ...(brief.audience ? { targetAudience: brief.audience } : {}),
           ...(brief.soundPrompt ? { soundPrompt: brief.soundPrompt } : {}),
           ...(brief.mustShowFacts ? { mustShowFacts: brief.mustShowFacts } : {}),
-          ...(brief.additionalPrompt ? { additionalPrompt: brief.additionalPrompt } : {}),
+          ...((brief.additionalPrompt || regenerationPrompt.trim())
+            ? { additionalPrompt: [String(brief.additionalPrompt || "").trim(), regenerationPrompt.trim()].filter(Boolean).join("\n") }
+            : {}),
           ...(brief.accountType ? { accountType: brief.accountType } : {}),
           ...(brief.estimatedDurationSeconds
             ? { estimatedDurationSeconds: brief.estimatedDurationSeconds }
@@ -1431,11 +1433,10 @@ export class VideoFactoryService {
       ...generated[0],
       generationSource: "SYSTEM_AI",
       generatedAt: new Date().toISOString(),
+      regenerationPrompt: regenerationPrompt.trim() || undefined,
     };
-    const current = Array.isArray(factory.scriptCandidates)
-      ? factory.scriptCandidates.filter((item) => object(item).generationSource !== "SYSTEM_AI")
-      : [];
-    const nextCandidates = [...current, candidate].slice(-2);
+    const current = Array.isArray(factory.scriptCandidates) ? factory.scriptCandidates : [];
+    const nextCandidates = [...current, candidate].slice(-6);
     const requestedEngines = Array.isArray(brief.scriptEngines)
       ? brief.scriptEngines.map(String)
       : ["REMOTE_CODEX", "SYSTEM_AI"];
@@ -1445,7 +1446,18 @@ export class VideoFactoryService {
     };
     const allRequestedEnginesCompleted = requestedEngines.every((engine) => scriptEngineStatus[engine] === "COMPLETED");
     const nextSignals = signals.map((signal) => signal.type === "VIDEO_FACTORY"
-      ? { ...signal, scriptCandidates: nextCandidates, scriptEngineStatus }
+      ? {
+        ...signal,
+        scriptCandidates: nextCandidates,
+        scriptEngineStatus,
+        systemRegenerationHistory: [
+          ...(Array.isArray(signal.systemRegenerationHistory) ? signal.systemRegenerationHistory : []),
+          {
+            generatedAt: candidate.generatedAt,
+            prompt: regenerationPrompt.trim(),
+          },
+        ].slice(-20),
+      }
       : signal);
     await this.prisma.$transaction([
       this.prisma.contentPlan.update({
@@ -1461,7 +1473,11 @@ export class VideoFactoryService {
           action: "VIDEO_FACTORY_SYSTEM_AI_SCRIPT_GENERATE",
           entityType: "ContentPlan",
           entityId: contentPlanId,
-          after: { candidateCount: nextCandidates.length, scriptEngineStatus } as Prisma.InputJsonValue,
+          after: {
+            candidateCount: nextCandidates.length,
+            scriptEngineStatus,
+            regenerationPrompt: regenerationPrompt.trim(),
+          } as Prisma.InputJsonValue,
         },
       }),
     ]);
@@ -1494,6 +1510,15 @@ export class VideoFactoryService {
     const nextSignals = signals.map((signal) => signal.type === "VIDEO_FACTORY"
       ? {
         ...signal,
+        ...(!approved
+          ? {
+            brief: { ...brief, scriptEngines: ["REMOTE_CODEX"] },
+            scriptEngineStatus: {
+              ...scriptEngineStatus,
+              REMOTE_CODEX: "PENDING",
+            },
+          }
+          : {}),
         selectedCandidateIndex,
         scriptReview: {
           status: approved ? "APPROVED" : "RETURNED",

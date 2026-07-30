@@ -262,7 +262,7 @@ const videoFactoryForm = reactive({
   hook: "",
   scene: "",
   painPoint: "",
-  scriptEngines: ["REMOTE_CODEX", "SYSTEM_AI"] as string[],
+  scriptEngines: ["SYSTEM_AI"] as string[],
   keywordIds: [] as string[],
   externalVideoIds: [] as string[],
 });
@@ -286,6 +286,7 @@ const editingScriptProject = ref<Row>();
 const editingScriptCandidateIndex = ref(0);
 const savingScript = ref(false);
 const advancedScriptEdit = ref(false);
+const regeneratingSystemScriptProjectId = ref("");
 const scriptEditorForm = reactive({
   title: "",
   hook: "",
@@ -679,6 +680,16 @@ function projectScriptEngineStatus(project: Row) {
   return status;
 }
 
+function requestedProjectScriptEngines(project: Row) {
+  const factory = Array.isArray(project.sourceSignals)
+    ? project.sourceSignals.find((item: Row) => item.type === "VIDEO_FACTORY")
+    : undefined;
+  const engines = Array.isArray(factory?.brief?.scriptEngines)
+    ? factory.brief.scriptEngines.map((engine: unknown) => String(engine))
+    : [];
+  return engines.length ? engines : ["SYSTEM_AI"];
+}
+
 function projectWaitingForScripts(project: Row) {
   if (!isSingleScriptProject(project)) return false;
   const factory = Array.isArray(project.sourceSignals)
@@ -994,6 +1005,32 @@ async function saveEditedScript() {
   }
 }
 
+async function regenerateSystemScript(project: Row) {
+  const result = await ElMessageBox.prompt(
+    "可以填写希望系统 AI 调整的方向；不填写则按原项目要求重新生成。",
+    "系统 AI 重新生成脚本",
+    {
+      confirmButtonText: "重新生成",
+      cancelButtonText: "取消",
+      inputType: "textarea",
+      inputPlaceholder: "例如：钩子更生活化；增加真实操作过程；不要在开头讲完全部重点。",
+    },
+  ).catch(() => null);
+  if (!result) return;
+  regeneratingSystemScriptProjectId.value = project.id;
+  try {
+    await post(`/api/v1/workbench/data-center/video-projects/${project.id}/system-script-regenerate`, {
+      prompt: result.value.trim(),
+    });
+    ElMessage.success("系统 AI 已重新生成脚本，原版本已保留");
+    await invalidateDataCenterSection("videoFactory");
+    if (expandedTaskVideoProjectId.value === project.id) await refreshTaskVideoProject();
+    else await loadDataCenter(true);
+  } finally {
+    regeneratingSystemScriptProjectId.value = "";
+  }
+}
+
 const bulkDeletableTasks = computed(() => tasks.value.filter((task) => task.sourceType === "SELF_CREATED" && task.status === "CANCELLED"));
 
 function toggleTaskSelection(task: Row, checked: boolean) {
@@ -1231,6 +1268,7 @@ async function ensureContentTaskOptions() {
 async function openNewVideoProjectDialog() {
   try {
     await ensureContentTaskOptions();
+    videoFactoryForm.scriptEngines = ["SYSTEM_AI"];
     videoProjectCollapseNames.value = active.value === "tasks" ? ["optional"] : [];
     newVideoProjectVisible.value = true;
   } catch (error) {
@@ -1615,7 +1653,7 @@ async function createVideoFactoryProject() {
   if (!videoFactoryForm.productModel) return ElMessage.warning("请选择产品型号");
   if (!videoFactoryForm.videoType.trim()) return ElMessage.warning("请选择或填写视频类型");
   if (!videoFactoryForm.keywords.trim() && !videoFactoryForm.keywordIds.length) return ElMessage.warning("请填写或选择关键词");
-  if (!videoFactoryForm.scriptEngines.length) return ElMessage.warning("请至少选择一种脚本生成方式");
+  videoFactoryForm.scriptEngines = ["SYSTEM_AI"];
   creatingVideoProject.value = true;
   try {
     await post("/api/v1/workbench/data-center/video-projects", {
@@ -2930,10 +2968,16 @@ onMounted(() => void bootstrap());
                   <h4>脚本生成中</h4>
                   <p>系统 AI 可直接生成；远程 Codex 会按素材库与风险规则生成。结果返回后会在这里直接编辑。</p>
                   <div class="script-engine-progress">
-                    <span :class="{ done: projectScriptEngineStatus(taskVideoProjectDetail).SYSTEM_AI === 'COMPLETED' }">
+                    <span
+                      v-if="requestedProjectScriptEngines(taskVideoProjectDetail).includes('SYSTEM_AI')"
+                      :class="{ done: projectScriptEngineStatus(taskVideoProjectDetail).SYSTEM_AI === 'COMPLETED' }"
+                    >
                       系统 AI 脚本工厂 · {{ projectScriptEngineStatus(taskVideoProjectDetail).SYSTEM_AI === "COMPLETED" ? "已完成" : "生成中" }}
                     </span>
-                    <span :class="{ done: projectScriptEngineStatus(taskVideoProjectDetail).REMOTE_CODEX === 'COMPLETED' }">
+                    <span
+                      v-if="requestedProjectScriptEngines(taskVideoProjectDetail).includes('REMOTE_CODEX')"
+                      :class="{ done: projectScriptEngineStatus(taskVideoProjectDetail).REMOTE_CODEX === 'COMPLETED' }"
+                    >
                       远程 Codex + 剪辑 Skill · {{ projectScriptEngineStatus(taskVideoProjectDetail).REMOTE_CODEX === "COMPLETED" ? "已完成" : "生成中" }}
                     </span>
                   </div>
@@ -2950,8 +2994,13 @@ onMounted(() => void bootstrap());
                       <div class="preview-actions">
                         <el-button v-if="candidate.scriptPackage" @click="openScriptPackage(candidate)">查看完整脚本</el-button>
                         <el-button @click="openScriptEditor(taskVideoProjectDetail, candidate, index)">直接编辑并保存</el-button>
+                        <el-button
+                          v-if="candidate.generationSource === 'SYSTEM_AI'"
+                          :loading="regeneratingSystemScriptProjectId === taskVideoProjectDetail.id"
+                          @click="regenerateSystemScript(taskVideoProjectDetail)"
+                        >填写提示词重新生成</el-button>
                         <el-button type="success" @click="reviewProjectScript(taskVideoProjectDetail, true, index)">通过并进入素材匹配</el-button>
-                        <el-button type="danger" plain @click="reviewProjectScript(taskVideoProjectDetail, false, index)">退回并填写原因</el-button>
+                        <el-button type="danger" plain @click="reviewProjectScript(taskVideoProjectDetail, false, index)">转交 Codex 并填写要求</el-button>
                       </div>
                     </article>
                   </div>
@@ -3410,6 +3459,11 @@ onMounted(() => void bootstrap());
                   <template v-if="project.productionStage === 'FACTORY_SCRIPT_READY'">
                     <el-button @click="openScriptEditor(project, candidate, index)">直接修改脚本</el-button>
                     <el-button
+                      v-if="candidate.generationSource === 'SYSTEM_AI'"
+                      :loading="regeneratingSystemScriptProjectId === project.id"
+                      @click="regenerateSystemScript(project)"
+                    >填写提示词重新生成</el-button>
+                    <el-button
                       type="success"
                       :loading="reviewingScriptProjectId === project.id"
                       @click="reviewProjectScript(project, true, index)"
@@ -3419,7 +3473,7 @@ onMounted(() => void bootstrap());
                       plain
                       :loading="reviewingScriptProjectId === project.id"
                       @click="reviewProjectScript(project, false, index)"
-                    >退回并填写原因</el-button>
+                    >转交 Codex 并填写要求</el-button>
                   </template>
                   <el-tag v-else-if="project.productionStage === 'SCRIPT_APPROVED'" type="success">脚本已审核通过</el-tag>
                 </article>
@@ -4196,24 +4250,16 @@ onMounted(() => void bootstrap());
         </el-collapse-item>
       </el-collapse>
 
-      <section class="prototype-form-section">
-        <header><strong>脚本生成方式</strong><span>可选择一种，也可以同时生成两种用于比较</span></header>
-        <el-checkbox-group v-model="videoFactoryForm.scriptEngines" class="script-engine-grid">
-          <el-checkbox value="REMOTE_CODEX" border>
-            <strong>远程 Codex + 剪辑 Skill</strong>
-            <small>深度读取素材索引、包装资源和风险规则，返回逐句素材绑定。</small>
-          </el-checkbox>
-          <el-checkbox value="SYSTEM_AI" border>
-            <strong>系统 AI 脚本工厂</strong>
-            <small>直接调用系统模型快速生成另一版完整脚本，用于对比选择。</small>
-          </el-checkbox>
-        </el-checkbox-group>
-      </section>
+      <el-alert
+        title="创建项目后由系统 AI 立即生成可编辑脚本；不满意时可填写提示词重新生成，或转交远程 Codex 重写。"
+        type="info"
+        :closable="false"
+      />
     </div>
     <template #footer>
       <el-button @click="newVideoProjectVisible = false">取消</el-button>
       <el-button @click="checkNewVideoProjectBrief">AI检查任务信息</el-button>
-      <el-button type="primary" :loading="creatingVideoProject" @click="createVideoFactoryProject">创建项目</el-button>
+      <el-button type="primary" :loading="creatingVideoProject" @click="createVideoFactoryProject">创建项目并生成脚本</el-button>
     </template>
   </el-dialog>
 

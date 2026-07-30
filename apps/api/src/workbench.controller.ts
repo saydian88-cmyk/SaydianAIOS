@@ -979,6 +979,26 @@ export class WorkbenchController {
     return { project: await this.videoFactory.project(id), task, scriptEngines };
   }
 
+  @Post("data-center/video-projects/:id/system-script-regenerate")
+  async regenerateSystemVideoScript(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    if (!employee.roles.some((role) => ["CONTENT_OPERATOR", "VIDEO_SPECIALIST"].includes(role))) {
+      throw new ForbiddenException("只有运营和视频专员可以重新生成视频脚本");
+    }
+    const project = await this.videoFactory.project(id) as Record<string, any>;
+    if (project.createdBy !== employee.name) {
+      throw new ForbiddenException("只能重新生成自己创建的视频项目脚本");
+    }
+    if (!["FACTORY_SCRIPT_READY", "SCRIPT_GENERATING"].includes(String(project.productionStage))) {
+      throw new ForbiddenException("当前项目阶段不能重新生成系统 AI 脚本");
+    }
+    return this.videoFactory.generateSystemScriptCandidate(id, employee.name, String(body.prompt || "").trim());
+  }
+
   @Get("data-center/video-projects/:id")
   async videoProjectDetail(
     @Headers("authorization") authorization: string | undefined,
