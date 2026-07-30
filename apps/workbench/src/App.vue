@@ -285,6 +285,7 @@ const scriptEditorVisible = ref(false);
 const editingScriptProject = ref<Row>();
 const editingScriptCandidateIndex = ref(0);
 const savingScript = ref(false);
+const advancedScriptEdit = ref(false);
 const scriptEditorForm = reactive({
   title: "",
   hook: "",
@@ -949,10 +950,11 @@ function openScriptEditor(project: Row, candidate: Row, candidateIndex = 0) {
   const ending = scriptPackage.ending || {};
   editingScriptProject.value = project;
   editingScriptCandidateIndex.value = candidateIndex;
+  advancedScriptEdit.value = false;
   Object.assign(scriptEditorForm, {
     title: candidate.titleZh || candidate.title || candidate.topic || project.topic || "",
     hook: candidate.hook || scriptPackage.goldenHook?.copy || "",
-    script: candidate.scripts?.zh30 || candidate.scripts?.zh15 || candidate.script || "",
+    script: candidateVoiceover(candidate),
     coreTheme: positioning.coreTheme || "",
     communicationGoal: positioning.communicationGoal || "",
     userPainPoint: positioning.userPainPoint || "",
@@ -978,9 +980,9 @@ async function saveEditedScript() {
     await post(`/api/v1/workbench/data-center/video-projects/${project.id}/script`, {
       ...scriptEditorForm,
       candidateIndex: editingScriptCandidateIndex.value,
-      voiceoverLines: lines(scriptEditorForm.voiceoverText),
+      voiceoverLines: lines(scriptEditorForm.script),
       retentionDesign: lines(scriptEditorForm.retentionText),
-      subtitles: lines(scriptEditorForm.subtitlesText),
+      subtitles: [],
       emphasisTexts: lines(scriptEditorForm.emphasisText),
     });
     scriptEditorVisible.value = false;
@@ -1028,10 +1030,36 @@ async function copyCompleteVideoScript() {
   const payload = {
     direction: candidate.topic,
     hook: candidate.hook,
-    fullScript: candidate.scripts?.zh30 || candidate.scripts?.zh15 || "",
+    fullScript: candidateVoiceover(candidate),
     ...candidate.scriptPackage,
   };
   await copyTaskContent(JSON.stringify(payload, null, 2), "完整脚本");
+}
+
+function candidateVoiceover(candidate: Row) {
+  const packageLines = (candidate.scriptPackage?.voiceoverLines || [])
+    .map((item: Row) => String(item.text || "").trim())
+    .filter(Boolean);
+  if (packageLines.length) return packageLines.join("\n");
+  const shotLines = (candidate.shots || [])
+    .map((item: Row) => String(item.voiceover || "").trim())
+    .filter(Boolean);
+  const source = packageLines.length
+    ? packageLines.join("\n")
+    : shotLines.length
+      ? shotLines.join("\n")
+      : String(candidate.script || candidate.scripts?.zh30 || candidate.scripts?.zh15 || "");
+  return source
+    .replace(/\[(?:C\d+-)?L\d+\]\s*/gi, "")
+    .replace(/健康监测数据仅供日常健康管理参考[。.]?/g, "")
+    .trim();
+}
+
+function candidateCoverageSummary(candidate: Row) {
+  const requirements = candidate.scriptPackage?.shotRequirements || [];
+  const covered = requirements.filter((item: Row) => item.assetStatus === "COVERED").length;
+  const missing = requirements.filter((item: Row) => ["NEED_SHOOT", "REWRITABLE"].includes(item.assetStatus)).length;
+  return requirements.length ? `已有素材 ${covered} 句 · 待匹配或补拍 ${missing} 句` : "素材覆盖将在脚本下方自动整理";
 }
 
 function assetCoverageLabel(status?: string) {
@@ -3375,7 +3403,9 @@ onMounted(() => void bootstrap());
                   <small>{{ scriptEngineLabel(candidate) }} · {{ candidate.score || 0 }}分</small>
                   <h4>{{ candidate.title || candidate.topic }}</h4>
                   <p><b>HOOK：</b>{{ candidate.hook }}</p>
-                  <p class="candidate-full-script"><b>完整脚本：</b>{{ candidate.script || candidate.scripts?.zh30 || candidate.scripts?.zh15 || candidate.outline?.join("；") }}</p>
+                  <p><b>方向：</b>{{ candidate.scriptPackage?.positioning?.coreTheme || project.topic }} · 预计{{ candidate.scriptPackage?.basicInfo?.estimatedDurationSeconds || 30 }}秒</p>
+                  <p class="candidate-full-script"><b>完整口播：</b><span style="white-space: pre-line">{{ candidateVoiceover(candidate) }}</span></p>
+                  <p><b>素材：</b>{{ candidateCoverageSummary(candidate) }}</p>
                   <el-button v-if="candidate.scriptPackage" @click="openScriptPackage(candidate)">查看完整脚本</el-button>
                   <template v-if="project.productionStage === 'FACTORY_SCRIPT_READY'">
                     <el-button @click="openScriptEditor(project, candidate, index)">直接修改脚本</el-button>
@@ -4189,26 +4219,24 @@ onMounted(() => void bootstrap());
 
   <el-dialog v-model="scriptEditorVisible" title="直接修改完整脚本" width="min(980px, 96vw)" destroy-on-close>
     <div class="script-editor-dialog">
-      <el-alert title="修改后会保留原有逐句素材绑定和镜头编号，脚本仍停留在审核阶段；审核通过后才进入素材补全。" type="info" :closable="false" />
+      <el-alert title="通常只需修改完整口播并保存。系统会自动同步字幕和镜头；语义变化的句子会自动重新匹配素材。" type="info" :closable="false" />
       <div class="script-editor-grid">
         <el-form-item label="脚本标题"><el-input v-model="scriptEditorForm.title" /></el-form-item>
         <el-form-item label="黄金三秒钩子" required><el-input v-model="scriptEditorForm.hook" /></el-form-item>
+      </div>
+      <el-form-item label="完整口播（每行一句）" required>
+        <el-input v-model="scriptEditorForm.script" type="textarea" :rows="14" />
+      </el-form-item>
+      <el-button text type="primary" @click="advancedScriptEdit = !advancedScriptEdit">{{ advancedScriptEdit ? "收起高级修改" : "高级修改" }}</el-button>
+      <div v-if="advancedScriptEdit" class="script-editor-grid">
         <el-form-item label="核心主题"><el-input v-model="scriptEditorForm.coreTheme" /></el-form-item>
         <el-form-item label="传播目标"><el-input v-model="scriptEditorForm.communicationGoal" /></el-form-item>
         <el-form-item label="用户痛点"><el-input v-model="scriptEditorForm.userPainPoint" /></el-form-item>
         <el-form-item label="唯一核心卖点"><el-input v-model="scriptEditorForm.uniqueSellingPoint" /></el-form-item>
-      </div>
-      <el-form-item label="完整脚本" required>
-        <el-input v-model="scriptEditorForm.script" type="textarea" :rows="8" />
-      </el-form-item>
-      <div class="script-editor-grid">
-        <el-form-item label="逐句口播（每行一句）"><el-input v-model="scriptEditorForm.voiceoverText" type="textarea" :rows="7" /></el-form-item>
-        <el-form-item label="字幕稿（每行一组）"><el-input v-model="scriptEditorForm.subtitlesText" type="textarea" :rows="7" /></el-form-item>
-        <el-form-item label="留人设计（每行一个节点）"><el-input v-model="scriptEditorForm.retentionText" type="textarea" :rows="5" /></el-form-item>
-        <el-form-item label="重点文字（每行一个词组）"><el-input v-model="scriptEditorForm.emphasisText" type="textarea" :rows="5" /></el-form-item>
+        <el-form-item label="留人设计"><el-input v-model="scriptEditorForm.retentionText" type="textarea" :rows="4" /></el-form-item>
+        <el-form-item label="重点文字"><el-input v-model="scriptEditorForm.emphasisText" type="textarea" :rows="4" /></el-form-item>
         <el-form-item label="结尾总结"><el-input v-model="scriptEditorForm.endingSummary" type="textarea" :rows="3" /></el-form-item>
         <el-form-item label="互动提问"><el-input v-model="scriptEditorForm.endingInteraction" type="textarea" :rows="3" /></el-form-item>
-        <el-form-item label="结尾画面与安全尾帧"><el-input v-model="scriptEditorForm.endingVisual" type="textarea" :rows="3" /></el-form-item>
       </div>
     </div>
     <template #footer>
@@ -4219,6 +4247,17 @@ onMounted(() => void bootstrap());
 
   <el-dialog v-model="scriptPackageVisible" title="完整视频脚本包" width="min(980px, 96vw)" class="script-package-dialog">
     <div v-if="scriptPackageCandidate?.scriptPackage" class="script-package">
+      <section>
+        <h3>{{ scriptPackageCandidate.titleZh || scriptPackageCandidate.title || "完整脚本" }}</h3>
+        <p><b>方向：</b>{{ scriptPackageCandidate.scriptPackage.positioning?.coreTheme || scriptPackageCandidate.topic }}</p>
+        <p><b>预计时长：</b>{{ scriptPackageCandidate.scriptPackage.basicInfo?.estimatedDurationSeconds || 30 }}秒</p>
+        <p><b>完整口播：</b></p>
+        <p style="white-space: pre-line; line-height: 1.9">{{ candidateVoiceover(scriptPackageCandidate) }}</p>
+        <p><b>素材状态：</b>{{ candidateCoverageSummary(scriptPackageCandidate) }}</p>
+        <p v-if="scriptPackageCandidate.scriptPackage.overlayNotice"><b>画面小字：</b>{{ scriptPackageCandidate.scriptPackage.overlayNotice }}</p>
+      </section>
+      <el-collapse>
+        <el-collapse-item title="查看脚本结构、镜头、字幕、声音和合规详情" name="advanced-script-package">
       <section>
         <h3>基础任务信息</h3>
         <dl class="script-package-grid">
@@ -4281,6 +4320,8 @@ onMounted(() => void bootstrap());
         </article>
         <el-empty v-if="!scriptPackageCandidate.scriptPackage.materialGaps.length" :image-size="48" description="暂无素材缺口" />
       </section>
+        </el-collapse-item>
+      </el-collapse>
     </div>
     <template #footer>
       <el-button @click="copyCompleteVideoScript">一键复制完整脚本</el-button>

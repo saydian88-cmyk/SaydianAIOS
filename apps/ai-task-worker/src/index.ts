@@ -265,6 +265,114 @@ function outputSchema(type: string, executionMode = "", requestedCardCount = 10)
       ],
     };
     const scriptCandidateCount = executionMode === "SCRIPT_ONLY" ? 1 : 3;
+    const textArray = { type: "array", items: { type: "string" } };
+    const scriptPackageSchema = {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        basicInfo: {
+          type: "object", additionalProperties: false,
+          properties: {
+            productModel: { type: "string" }, videoType: { type: "string" }, platform: { type: "string" },
+            accountType: { type: "string" }, targetAudience: { type: "string" },
+            estimatedDurationSeconds: { type: "number", minimum: 10, maximum: 60 },
+            healthContentAllowed: { type: "boolean" },
+          },
+          required: ["productModel", "videoType", "platform", "accountType", "targetAudience", "estimatedDurationSeconds", "healthContentAllowed"],
+        },
+        positioning: {
+          type: "object", additionalProperties: false,
+          properties: {
+            coreTheme: { type: "string" }, communicationGoal: { type: "string" },
+            userPainPoint: { type: "string" }, uniqueSellingPoint: { type: "string" },
+          },
+          required: ["coreTheme", "communicationGoal", "userPainPoint", "uniqueSellingPoint"],
+        },
+        goldenHook: {
+          type: "object", additionalProperties: false,
+          properties: {
+            copy: { type: "string" }, type: { type: "string" }, visual: { type: "string" },
+            retentionReason: { type: "string" }, openingSound: { type: "string" },
+          },
+          required: ["copy", "type", "visual", "retentionReason", "openingSound"],
+        },
+        voiceoverLines: {
+          type: "array", minItems: 3,
+          items: {
+            type: "object", additionalProperties: false,
+            properties: {
+              lineId: { type: "string" }, text: { type: "string" }, tone: { type: "string" },
+              speed: { type: "string" }, emotion: { type: "string" }, durationSeconds: { type: "number", minimum: 1 },
+            },
+            required: ["lineId", "text", "tone", "speed", "emotion", "durationSeconds"],
+          },
+        },
+        structure: {
+          type: "array",
+          items: {
+            type: "object", additionalProperties: false,
+            properties: { stage: { type: "string" }, purpose: { type: "string" }, content: { type: "string" } },
+            required: ["stage", "purpose", "content"],
+          },
+        },
+        shotRequirements: {
+          type: "array", minItems: 3,
+          items: {
+            type: "object", additionalProperties: false,
+            properties: {
+              lineId: { type: "string" }, line: { type: "string" }, visual: { type: "string" },
+              assetStatus: { type: "string", enum: ["COVERED", "REWRITABLE", "NEED_SHOOT", "PROHIBITED"] },
+              factualProof: { type: "string" }, audioVisualRequirement: { type: "string" },
+            },
+            required: ["lineId", "line", "visual", "assetStatus", "factualProof", "audioVisualRequirement"],
+          },
+        },
+        retentionDesign: textArray,
+        subtitles: textArray,
+        emphasisTexts: textArray,
+        soundDesign: {
+          type: "object", additionalProperties: false,
+          properties: {
+            voiceProfile: { type: "string" }, tone: { type: "string" }, emotion: { type: "string" },
+            speed: { type: "string" }, openingSfx: { type: "string" }, keySfx: textArray, ambientSound: { type: "string" },
+          },
+          required: ["voiceProfile", "tone", "emotion", "speed", "openingSfx", "keySfx", "ambientSound"],
+        },
+        complianceChecks: {
+          type: "array",
+          items: {
+            type: "object", additionalProperties: false,
+            properties: { category: { type: "string" }, status: { type: "string", enum: ["PASS", "REVIEW", "BLOCK"] }, note: { type: "string" } },
+            required: ["category", "status", "note"],
+          },
+        },
+        ending: {
+          type: "object", additionalProperties: false,
+          properties: {
+            summary: { type: "string" }, interaction: { type: "string" }, visual: { type: "string" },
+            safeTailSeconds: { type: "number", minimum: 0.25 },
+          },
+          required: ["summary", "interaction", "visual", "safeTailSeconds"],
+        },
+        materialGaps: {
+          type: "array",
+          items: {
+            type: "object", additionalProperties: false,
+            properties: {
+              product: { type: "string" }, action: { type: "string" }, shotSize: { type: "string" },
+              processOrResult: { type: "string" }, shootingMethod: { type: "string" },
+            },
+            required: ["product", "action", "shotSize", "processOrResult", "shootingMethod"],
+          },
+        },
+        overlayNotice: { type: "string" },
+      },
+      required: [
+        "basicInfo", "positioning", "goldenHook", "voiceoverLines", "structure", "shotRequirements",
+        "retentionDesign", "subtitles", "emphasisTexts", "soundDesign", "complianceChecks", "ending",
+        "materialGaps", "overlayNotice",
+      ],
+    };
     return {
       type: "object",
       additionalProperties: false,
@@ -328,10 +436,11 @@ function outputSchema(type: string, executionMode = "", requestedCardCount = 10)
                     },
                   },
                   selected: { type: "boolean" },
+                  scriptPackage: scriptPackageSchema,
                 },
                 required: [
                   "title", "hook", "script", "shots", "cta", "score", "scoreBreakdown",
-                  "templateCode", "missingAssets", "selected",
+                  "templateCode", "missingAssets", "selected", "scriptPackage",
                 ],
               },
             },
@@ -542,11 +651,22 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
           : "本次只执行脚本和分镜阶段，只允许返回1套selected=true的最终完整脚本；禁止生成三套候选、比较稿或占位稿。outputFiles不得包含VIDEO_MASTER，也不得调用付费成片能力。",
     ].join("\n")
     : "";
+  const videoInstructionPriority = type === "VIDEO"
+    ? [
+      "视频任务的创作规则优先级固定为：下游视频 Skill 及其 references 的硬性规则 > 已审核产品事实与素材可见事实 > 系统任务包中的创作提示 > 通用默认值。",
+      "系统任务包是型号、功能、素材、审核状态和合规边界的事实来源，但任务要求、项目描述、方向、关键词、Hook 或推荐场景只作为辅助提示词；不得覆盖视频 Skill 的脚本结构、账号口吻、短句节奏、网感、素材证明和合规规则。",
+      "禁止机械复述系统要求，禁止把任务包长句直接拼入口播，禁止为了逐项响应系统字段把脚本写成产品说明书或功能菜单。",
+      executionMode === "SCRIPT_ONLY"
+        ? "单脚本必须保持亲切导购型口吻：有态度或生活处境开头，短句推进，先讲用户利益再讲功能，用具体动作代替“支持、具备、可以”等说明书句式；中段至少一次轻反差或价值发现，结尾使用与本条核心内容相关的自然选择建议。scriptPackage是系统编辑器的统一数据源，必须完整填写；voiceoverLines与shotRequirements使用相同稳定lineId。candidate.script只能由voiceoverLines.text按换行拼接，只含干净口播，禁止混入lineId、预计时长、账号说明、素材缺口或健康提示。健康提示只写入scriptPackage.overlayNotice，不写入口播。"
+        : "脚本、画面、配音、包装和质检均以视频 Skill 的硬性规则为准；系统提示只能在不冲突时补充方向。",
+    ].join("\n")
+    : "";
   return [
     "你是赛电总管理后台AI任务中心的Codex执行器。",
     skillInstruction,
     instructions[type] || "按输入快照完成任务。",
     requiredVideoSkill,
+    videoInstructionPriority,
     "必须以提供的JSON快照为事实边界；缺失数据明确写未配置或缺失，不编造数据、认证、费用和执行结果。",
     "优先使用manifest中已审核真实素材。VIDEO任务的每个镜头必须通过selectedAssetIds绑定具体素材ID；缺少素材时写清missingReason、alternativePlan和missingAssets，不得拿文件顺序代替镜头匹配。",
     `固定回退顺序：${detectedSkill.fallbackOrder.join(" -> ")}。`,

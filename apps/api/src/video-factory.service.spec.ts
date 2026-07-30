@@ -43,6 +43,9 @@ describe("VideoFactoryService model routing", () => {
         findUnique: vi.fn(),
         update: vi.fn(),
       },
+      contentVariant: {
+        updateMany: vi.fn(),
+      },
       aiTask: {
         count: vi.fn(),
         updateMany: vi.fn(),
@@ -233,6 +236,89 @@ describe("VideoFactoryService model routing", () => {
 
     expect(result?.productionStage).toBe("SCRIPT_GENERATING");
     expect(prisma.contentPlan.update).not.toHaveBeenCalled();
+  });
+
+  it("keeps line ids and material bindings for punctuation-only script edits", async () => {
+    prisma.contentPlan.findUnique.mockResolvedValue({
+      id: "project-script",
+      topic: "原标题",
+      hook: "原钩子",
+      productionStage: "FACTORY_SCRIPT_READY",
+      sourceSignals: [{
+        type: "VIDEO_FACTORY",
+        selectedCandidateIndex: 0,
+        scriptCandidates: [{
+          title: "原标题",
+          hook: "原钩子",
+          script: "消息来了抬腕看",
+          scripts: {},
+          shots: [{ lineId: "line_01", voiceover: "消息来了抬腕看", selectedAssetIds: ["asset-1"] }],
+          scriptPackage: {
+            voiceoverLines: [{ lineId: "line_01", text: "消息来了抬腕看" }],
+            shotRequirements: [{ lineId: "line_01", line: "消息来了抬腕看", assetStatus: "COVERED" }],
+          },
+        }],
+      }],
+    });
+    prisma.contentPlan.update.mockResolvedValue({});
+    prisma.contentVariant.updateMany.mockResolvedValue({ count: 1 });
+    prisma.auditLog.create.mockResolvedValue({});
+
+    await service.updateDraftScript("project-script", {
+      title: "原标题", hook: "原钩子", script: "消息来了，抬腕看。",
+      coreTheme: "", communicationGoal: "", userPainPoint: "", uniqueSellingPoint: "",
+      voiceoverLines: ["消息来了，抬腕看。"], retentionDesign: [], subtitles: [], emphasisTexts: [],
+      endingSummary: "", endingInteraction: "", endingVisual: "",
+    }, "测试用户");
+
+    const signals = prisma.contentPlan.update.mock.calls[0][0].data.sourceSignals;
+    const candidate = signals[0].scriptCandidates[0];
+    expect(candidate.shots[0]).toMatchObject({ lineId: "line_01", selectedAssetIds: ["asset-1"] });
+    expect(candidate.script).toBe("消息来了，抬腕看。");
+  });
+
+  it("marks meaning-changed script lines for material rematching", async () => {
+    prisma.contentPlan.findUnique.mockResolvedValue({
+      id: "project-script",
+      topic: "原标题",
+      hook: "原钩子",
+      productionStage: "FACTORY_SCRIPT_READY",
+      sourceSignals: [{
+        type: "VIDEO_FACTORY",
+        selectedCandidateIndex: 0,
+        materialReview: { status: "APPROVED" },
+        scriptCandidates: [{
+          title: "原标题",
+          hook: "原钩子",
+          script: "消息来了抬腕看",
+          scripts: {},
+          shots: [{ lineId: "line_01", voiceover: "消息来了抬腕看", selectedAssetIds: ["asset-1"] }],
+          scriptPackage: {
+            voiceoverLines: [{ lineId: "line_01", text: "消息来了抬腕看" }],
+            shotRequirements: [{ lineId: "line_01", line: "消息来了抬腕看", assetStatus: "COVERED" }],
+          },
+        }],
+      }],
+    });
+    prisma.contentPlan.update.mockResolvedValue({});
+    prisma.contentVariant.updateMany.mockResolvedValue({ count: 1 });
+    prisma.auditLog.create.mockResolvedValue({});
+
+    await service.updateDraftScript("project-script", {
+      title: "原标题", hook: "原钩子", script: "电话来了腕上接",
+      coreTheme: "", communicationGoal: "", userPainPoint: "", uniqueSellingPoint: "",
+      voiceoverLines: ["电话来了腕上接"], retentionDesign: [], subtitles: [], emphasisTexts: [],
+      endingSummary: "", endingInteraction: "", endingVisual: "",
+    }, "测试用户");
+
+    const factory = prisma.contentPlan.update.mock.calls[0][0].data.sourceSignals[0];
+    expect(factory.materialReview).toMatchObject({ status: "PENDING", invalidatedReason: "SCRIPT_EDITED" });
+    expect(factory.scriptCandidates[0].shots[0]).toMatchObject({
+      lineId: "line_01",
+      selectedAssetIds: [],
+      missingReason: "脚本文案已修改，需要重新匹配并确认素材",
+    });
+    expect(factory.scriptCandidates[0].scriptPackage.shotRequirements[0].assetStatus).toBe("REWRITABLE");
   });
 
   it("returns a failed single-project script task to the project brief", async () => {
