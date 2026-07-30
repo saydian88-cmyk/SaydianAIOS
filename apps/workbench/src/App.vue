@@ -284,6 +284,7 @@ const scriptPackageCandidate = ref<Row>();
 const savingInlineScriptKey = ref("");
 const regeneratingSystemScriptProjectId = ref("");
 const newVideoProjectVisible = ref(false);
+const videoProjectOptionsLoading = ref(false);
 const creatingVideoProject = ref(false);
 const createdVideoProjectDialogId = ref("");
 const reviewingScriptProjectId = ref("");
@@ -1257,14 +1258,18 @@ async function ensureContentTaskOptions() {
 }
 
 async function openNewVideoProjectDialog() {
+  videoFactoryForm.scriptEngines = ["SYSTEM_AI"];
+  videoProjectCollapseNames.value = active.value === "tasks" ? ["optional"] : [];
+  createdVideoProjectDialogId.value = "";
+  newVideoProjectVisible.value = true;
+  if (contentTaskOptionsLoaded.value) return;
+  videoProjectOptionsLoading.value = true;
   try {
     await ensureContentTaskOptions();
-    videoFactoryForm.scriptEngines = ["SYSTEM_AI"];
-    videoProjectCollapseNames.value = active.value === "tasks" ? ["optional"] : [];
-    createdVideoProjectDialogId.value = "";
-    newVideoProjectVisible.value = true;
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : "产品和关键词加载失败，请稍后重试");
+  } finally {
+    videoProjectOptionsLoading.value = false;
   }
 }
 
@@ -2843,16 +2848,19 @@ onMounted(() => void bootstrap());
             <el-button v-if="selectedTaskIds.length" type="danger" :loading="bulkDeletingTasks" @click="bulkTrashCancelledTasks">批量删除（{{ selectedTaskIds.length }}）</el-button>
             <el-button @click="openTaskRecycleBin">任务回收站</el-button>
             <el-button @click="openSelfTask">新建普通任务</el-button>
-            <el-dropdown split-button type="primary" @click="quickCreateProject('VIDEO')" @command="quickCreateProject">
-              快速新建视频项目
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item command="VIDEO">新建视频项目</el-dropdown-item>
-                  <el-dropdown-item command="IMAGE">新建图文项目（待完善）</el-dropdown-item>
-                  <el-dropdown-item command="ARTICLE">新建软文项目（待完善）</el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
+            <el-button-group>
+              <el-button type="primary" @click="openNewVideoProjectDialog">快速新建视频项目</el-button>
+              <el-dropdown trigger="click" @command="quickCreateProject">
+                <el-button type="primary" aria-label="选择项目类型">⌄</el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="VIDEO">新建视频项目</el-dropdown-item>
+                    <el-dropdown-item command="IMAGE">新建图文项目（待完善）</el-dropdown-item>
+                    <el-dropdown-item command="ARTICLE">新建软文项目（待完善）</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </el-button-group>
           </div>
         </section>
         <section class="section-card task-list">
@@ -4223,7 +4231,7 @@ onMounted(() => void bootstrap());
   </el-dialog>
 
   <el-dialog v-model="newVideoProjectVisible" title="新建智能视频项目" width="min(980px, 96vw)" destroy-on-close>
-    <div v-if="!createdVideoProjectDialogId" class="prototype-project-form">
+    <div v-if="!createdVideoProjectDialogId" v-loading="videoProjectOptionsLoading" class="prototype-project-form">
       <el-alert title="填写项目要求并创建后，系统 AI 会立即生成脚本并同步匹配素材；不满意时可重新生成或转交 Codex。" type="info" :closable="false" />
 
       <section class="prototype-form-section">
