@@ -15,7 +15,7 @@ import {
   UseInterceptors,
 } from "@nestjs/common";
 import { FileInterceptor, FilesInterceptor } from "@nestjs/platform-express";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, mkdirSync } from "node:fs";
 import { extname, resolve } from "node:path";
 import { diskStorage } from "multer";
@@ -951,6 +951,13 @@ export class WorkbenchController {
       input: {
         executionMode: "SCRIPT_ONLY",
         existingContentPlanId: project.id,
+        workflowVersion: project.workflowVersion,
+        workflowGuard: {
+          projectId: project.id,
+          workflowVersion: project.workflowVersion,
+          stage: "SCRIPT_ONLY",
+          allowedProjectStages: ["PROJECT_BRIEF", "SCRIPT_RETURNED", "SCRIPT_GENERATING"],
+        },
         singleScript: true,
         skillName: "video-editing-from-media-library",
         compiledPrompt,
@@ -1126,7 +1133,7 @@ export class WorkbenchController {
     const missingShots = (project.videoShots || []).filter((shot: Record<string, unknown>) => !shot.selectedAssetId);
     if (missingShots.length) throw new ForbiddenException(`仍有${missingShots.length}个镜头缺少已确认素材`);
     const materialBindings = (project.videoShots || []).map((shot: Record<string, any>) => ({
-      lineId: shot.requirementKey,
+      lineId: String(shot.metadata?.lineId || shot.requirementKey),
       sequence: shot.sequence,
       scriptLine: shot.voiceover || shot.subtitle || shot.description,
       assetId: shot.selectedAssetId,
@@ -1141,6 +1148,46 @@ export class WorkbenchController {
     const factory = Array.isArray(project.sourceSignals)
       ? project.sourceSignals.find((item: Record<string, unknown>) => item?.type === "VIDEO_FACTORY") || {}
       : {};
+    const candidates = Array.isArray(project.scriptCandidates) ? project.scriptCandidates : [];
+    const selectedCandidateIndex = Math.max(0, Math.min(
+      candidates.length - 1,
+      Number(factory.selectedCandidateIndex || 0),
+    ));
+    const selectedCandidate = candidates[selectedCandidateIndex];
+    if (!selectedCandidate) throw new ForbiddenException("当前项目没有已审核通过的最终脚本");
+    const candidateShots = Array.isArray(selectedCandidate.shots) ? selectedCandidate.shots : [];
+    const finalMaterialBindings = materialBindings.map((binding: Record<string, unknown>, index: number) => ({
+      ...binding,
+      lineId: String((candidateShots[index] as Record<string, unknown> | undefined)?.lineId || binding.lineId || ""),
+    }));
+    const candidateLineIds = new Set(candidateShots.map((shot: Record<string, unknown>) => String(shot.lineId || "")));
+    const bindingLineIds = new Set(finalMaterialBindings.map((binding: Record<string, unknown>) => String(binding.lineId || "")));
+    if (candidateLineIds.size !== bindingLineIds.size
+      || [...candidateLineIds].some((lineId) => !lineId || !bindingLineIds.has(lineId))) {
+      throw new ForbiddenException("最终脚本与素材绑定版本不一致，请刷新项目并重新确认脚本素材");
+    }
+    const scriptRevisionHistory = Array.isArray(factory.scriptRevisionHistory)
+      ? factory.scriptRevisionHistory
+      : [];
+    const finalScriptSnapshot = {
+      contentPlanId: project.id,
+      projectNo: project.productionNo || project.id,
+      workflowVersion: project.workflowVersion,
+      candidateIndex: selectedCandidateIndex,
+      generationSource: selectedCandidate.generationSource || "UNKNOWN",
+      candidateGeneratedAt: selectedCandidate.generatedAt || null,
+      scriptEditedAt: factory.scriptEditedAt || null,
+      scriptEditedBy: factory.scriptEditedBy || null,
+      approvedAt: project.approvedAt || null,
+      title: selectedCandidate.title || selectedCandidate.titleZh || project.topic,
+      hook: selectedCandidate.hook || "",
+      script: selectedCandidate.script || selectedCandidate.scripts?.zh30 || "",
+      scriptPackage: selectedCandidate.scriptPackage || {},
+      shots: candidateShots,
+    };
+    const scriptFingerprint = createHash("sha256")
+      .update(JSON.stringify(finalScriptSnapshot))
+      .digest("hex");
     const task = await this.aiTasks.createTask({
       type: "VIDEO",
       title: `${project.topic} · 远程剪辑成片`,
@@ -1150,15 +1197,40 @@ export class WorkbenchController {
       reviewerEmployeeId: employee.employeeId,
       sourceType: "VIDEO_FACTORY_PROJECT",
       sourceId: project.id,
-      idempotencyKey: `ai-task:video-project:${project.id}:full-video:v${project.workflowVersion}`,
+      idempotencyKey: `ai-task:video-project:${project.id}:full-video:v${project.workflowVersion}:${scriptFingerprint.slice(0, 16)}`,
       instructions: "使用已审核单脚本和系统提供的素材—脚本绑定执行剪辑。补拍或AI生成素材必须按指定lineId和路径使用，不得重新错配。",
       input: {
         executionMode: "FULL_VIDEO",
         existingContentPlanId: project.id,
         skillName: "video-editing-from-media-library",
         approvedScriptOnly: true,
+        scriptIdentity: {
+          contentPlanId: project.id,
+          projectNo: project.productionNo || project.id,
+          workflowVersion: project.workflowVersion,
+          candidateIndex: selectedCandidateIndex,
+          generationSource: selectedCandidate.generationSource || "UNKNOWN",
+          candidateGeneratedAt: selectedCandidate.generatedAt || null,
+          scriptFingerprint,
+        },
+        workflowGuard: {
+          projectId: project.id,
+          workflowVersion: project.workflowVersion,
+          stage: "FULL_VIDEO",
+          allowedProjectStages: ["READY_TO_EDIT", "EDITING"],
+          scriptFingerprint,
+          materialBindingFingerprint: factory.materialReview?.bindingFingerprint || null,
+        },
+        finalScriptSnapshot,
+        scriptRevisionHistory,
         projectBrief: factory.brief || {},
-        materialBindings,
+        materialBindings: finalMaterialBindings,
+        materialBindingPolicy: {
+          bindBy: "lineId",
+          rejectUnknownLineId: true,
+          rejectMissingAssetId: true,
+          changedLinesUseFinalBindingOnly: true,
+        },
         coverTitleTiming: "AFTER_VIDEO_APPROVAL",
       },
       modelPolicy: { strategy: "CODEX_FIRST", allowExternalGeneration: false, allowFallback: false },
