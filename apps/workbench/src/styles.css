@@ -58,7 +58,7 @@ main { grid-column: 2; width: min(1240px, calc(100% - 48px)); margin: 24px auto;
 .home-grid { display: grid; grid-template-columns: minmax(0, 1.75fr) minmax(300px, .75fr); gap: 18px; align-items: start; }
 .home-side { display: grid; gap: 18px; }
 .task-list { display: grid; gap: 12px; }
-.task-card { display: flex; align-items: center; justify-content: space-between; gap: 22px; padding: 20px; border: 1px solid #ece8e0; border-radius: 18px; background: #fcfbf8; }
+.task-card { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 22px; padding: 20px; border: 1px solid #ece8e0; border-radius: 18px; background: #fcfbf8; }
 .task-select-checkbox { flex: 0 0 auto; }
 .task-main { min-width: 0; flex: 1; }
 .task-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; color: #858d89; font-size: 12px; }
@@ -123,6 +123,24 @@ main { grid-column: 2; width: min(1240px, calc(100% - 48px)); margin: 24px auto;
 .video-task-steps span.active { color: #fff; background: #c52e26; font-weight: 700; }
 .task-card .video-task-next { margin-top: 10px; color: #33423e; }
 .video-task-next b { color: #b32620; }
+.task-video-workspace { width: 100%; display: grid; gap: 16px; padding: 18px; border: 1px solid #dfe8e5; border-radius: 16px; background: #fff; }
+.task-video-workspace-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.task-video-workspace-head small { color: #78817e; }
+.task-video-workspace-head h3 { margin: 5px 0; }
+.task-video-stage-tabs { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+.task-video-stage-tabs button { min-height: 42px; padding: 7px; border: 0; border-radius: 9px; color: #7c8581; background: #efefec; font-size: 12px; }
+.task-video-stage-tabs button.done { color: #31804a; background: #eaf7ed; }
+.task-video-stage-tabs button.active { color: #fff; background: #c52e26; font-weight: 700; }
+.task-video-stage-panel { display: grid; gap: 12px; padding: 16px; border: 1px solid #e9e4dc; border-radius: 14px; background: #faf9f6; }
+.task-video-stage-panel > h4, .task-video-stage-panel > p { margin: 0; }
+.task-script-candidates { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.task-script-candidates article, .task-shot-row, .task-finished-video-row { padding: 14px; border: 1px solid #e5e0d8; border-radius: 12px; background: #fff; }
+.task-script-candidates article { display: grid; align-content: start; gap: 8px; }
+.task-script-candidates article h4, .task-script-candidates article p { margin: 0; }
+.task-script-candidates .candidate-full-script { max-height: 160px; overflow: auto; white-space: pre-wrap; }
+.task-shot-row, .task-finished-video-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.task-shot-row > div:first-child, .task-finished-video-row > div:first-child { min-width: 0; display: grid; gap: 6px; }
+.task-shot-row p { margin: 0; }
 .prototype-collapse-title { display: grid; grid-template-columns: minmax(130px, .45fr) minmax(0, 1fr); align-items: center; width: 100%; gap: 18px; padding-right: 12px; }
 .prototype-collapse-title strong { color: #25302d; font-size: 14px; }
 .prototype-collapse-title small { overflow: hidden; color: #79837f; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
@@ -450,6 +468,11 @@ main { grid-column: 2; width: min(1240px, calc(100% - 48px)); margin: 24px auto;
   .task-card { display: block; padding: 16px; }
   .task-actions { justify-content: flex-start; margin-top: 14px; }
   .task-actions .el-button { margin-left: 0; }
+  .task-video-workspace { margin-top: 14px; padding: 13px; }
+  .task-video-workspace-head, .task-shot-row, .task-finished-video-row { align-items: stretch; flex-direction: column; }
+  .task-video-stage-tabs { display: flex; overflow-x: auto; }
+  .task-video-stage-tabs button { min-width: 104px; flex: 0 0 auto; }
+  .task-script-candidates { grid-template-columns: 1fr; }
   .action-grid { grid-template-columns: repeat(2, 1fr); }
   .toolbar { display: grid; }
   .toolbar .el-select { width: 100%; }

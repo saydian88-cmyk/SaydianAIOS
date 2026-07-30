@@ -244,15 +244,15 @@ const dataCenterFilters = reactive({
   minimumScore: "60",
 });
 const videoFactoryForm = reactive({
-  platform: "DOUYIN",
-  voiceoverMode: "VOICEOVER",
-  accountType: "BRAND",
-  estimatedDurationSeconds: 30,
-  healthContentAllowed: true,
+  platform: "AUTO",
+  voiceoverMode: "AUTO",
+  accountType: "AUTO",
+  estimatedDurationSeconds: 0,
+  healthContentAllowed: null as boolean | null,
   productModel: "",
   topic: "",
   audience: "",
-  objective: "种草与转化",
+  objective: "",
   soundPrompt: "",
   mustShowFacts: "",
   additionalPrompt: "",
@@ -271,12 +271,12 @@ const videoDefaultsOpen = ref(false);
 const videoProjectCollapseNames = ref<string[]>([]);
 const videoTypeOptions = ["痛点解决型", "场景种草型", "功能演示型", "用户开箱型", "FAQ异议型", "优惠成交型"];
 const videoProjectDefaultSummary = computed(() => {
-  const platform = platformLabel(videoFactoryForm.platform);
-  const duration = `${videoFactoryForm.estimatedDurationSeconds || 30}秒`;
-  const account = ({ BRAND: "品牌账号", CREATOR: "达人账号", EMPLOYEE: "员工账号" } as Record<string, string>)[videoFactoryForm.accountType] || "品牌账号";
-  const health = videoFactoryForm.healthContentAllowed ? "允许健康内容" : "不允许健康内容";
-  const material = videoScriptMode.value === "ASSET_ONLY" ? "仅用已有素材" : "优先已有素材";
-  const voiceover = videoFactoryForm.voiceoverMode === "NO_VOICEOVER" ? "无口播" : "有口播";
+  const platform = videoFactoryForm.platform === "AUTO" ? "平台不限" : platformLabel(videoFactoryForm.platform);
+  const duration = videoFactoryForm.estimatedDurationSeconds ? `${videoFactoryForm.estimatedDurationSeconds}秒` : "时长不限";
+  const account = ({ AUTO: "账号不限", BRAND: "品牌账号", CREATOR: "达人账号", EMPLOYEE: "员工账号" } as Record<string, string>)[videoFactoryForm.accountType] || "账号不限";
+  const health = videoFactoryForm.healthContentAllowed === null ? "健康内容不限" : videoFactoryForm.healthContentAllowed ? "允许健康内容" : "不允许健康内容";
+  const material = videoScriptMode.value === "ASSET_ONLY" ? "仅用已有素材" : videoScriptMode.value === "ASSET_FIRST" ? "优先已有素材" : "素材策略不限";
+  const voiceover = videoFactoryForm.voiceoverMode === "NO_VOICEOVER" ? "无口播" : videoFactoryForm.voiceoverMode === "VOICEOVER" ? "有口播" : "口播不限";
   return `${platform} · ${duration} · ${account} · ${health} · ${material} · ${voiceover}`;
 });
 const scriptPackageVisible = ref(false);
@@ -352,8 +352,11 @@ const publishLinkRecords = ref<Array<{ platform: string; remoteUrl: string; publ
 const expandedVideoProjectIds = ref<string[]>([]);
 const activeVideoProjectId = ref("");
 const activeVideoProject = computed(() => (dataCenter.videoProjects || []).find((project: Row) => project.id === activeVideoProjectId.value));
+const expandedTaskVideoProjectId = ref("");
+const taskVideoProjectDetail = ref<Row>();
+const taskVideoProjectLoading = ref(false);
 const lockedShotUpload = ref<Row>();
-const videoScriptMode = ref("ASSET_FIRST");
+const videoScriptMode = ref("AUTO");
 const videoScriptRestriction = ref("NORMAL");
 const analyzingAssetGaps = ref(false);
 const creatingGapTasks = ref(false);
@@ -669,6 +672,10 @@ function projectScriptEngineStatus(project: Row) {
     const source = String(candidate.generationSource || "");
     if (source === "REMOTE_CODEX" || source === "SYSTEM_AI") status[source] = "COMPLETED";
   }
+  const remoteOutputCompleted = (project.aiTaskOutputs || []).some((output: Row) =>
+    output.kind === "VIDEO_PROJECT"
+    && ["COMPLETED", "PENDING_REVIEW"].includes(String(output.aiTask?.status || "")));
+  if (remoteOutputCompleted) status.REMOTE_CODEX = "COMPLETED";
   return status;
 }
 
@@ -900,16 +907,33 @@ function openScriptPackage(candidate: Row) {
 }
 
 async function openVideoProjectFromTask(task: Row) {
-  active.value = "data";
-  dataCenterTab.value = "videoFactory";
-  await loadDataCenter();
   const projectId = task.sourceId || task.evidence?.contentPlanId;
-  const project = (dataCenter.videoProjects || []).find((item: Row) => item.id === projectId);
-  if (project) {
-    openVideoProject(project);
+  if (!projectId) return ElMessage.warning("该任务未关联视频项目");
+  if (expandedTaskVideoProjectId.value === projectId) {
+    expandedTaskVideoProjectId.value = "";
+    taskVideoProjectDetail.value = undefined;
     return;
   }
-  ElMessage.warning("项目不在当前缓存中，请在视频工厂手动重新拉取后查看");
+  taskVideoProjectLoading.value = true;
+  try {
+    taskVideoProjectDetail.value = await api<Row>(`/api/v1/workbench/data-center/video-projects/${projectId}`);
+    expandedTaskVideoProjectId.value = projectId;
+    if (taskVideoProjectDetail.value?.videoShots?.length
+      && !expandedVideoProjectIds.value.includes(projectId)) {
+      expandedVideoProjectIds.value.push(projectId);
+    }
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "视频项目加载失败");
+  } finally {
+    taskVideoProjectLoading.value = false;
+  }
+}
+
+async function refreshTaskVideoProject() {
+  const projectId = expandedTaskVideoProjectId.value;
+  if (!projectId) return;
+  taskVideoProjectDetail.value = await api<Row>(`/api/v1/workbench/data-center/video-projects/${projectId}`);
+  await loadTasks();
 }
 
 async function quickCreateProject(command: string) {
@@ -1207,6 +1231,7 @@ async function ensureContentTaskOptions() {
 async function openNewVideoProjectDialog() {
   try {
     await ensureContentTaskOptions();
+    videoProjectCollapseNames.value = active.value === "tasks" ? ["optional"] : [];
     newVideoProjectVisible.value = true;
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : "产品和关键词加载失败，请稍后重试");
@@ -1595,8 +1620,10 @@ async function createVideoFactoryProject() {
   try {
     await post("/api/v1/workbench/data-center/video-projects", {
       ...videoFactoryForm,
-      generationMode: videoScriptMode.value === "ASSET_ONLY" ? "ASSET_ONLY" : "NORMAL",
-      contentRestrictionMode: videoFactoryForm.healthContentAllowed ? "NORMAL" : "HEALTH_RESTRICTED",
+      generationMode: videoScriptMode.value === "ASSET_ONLY" ? "ASSET_ONLY" : videoScriptMode.value === "ASSET_FIRST" ? "ASSET_FIRST" : "AUTO",
+      contentRestrictionMode: videoFactoryForm.healthContentAllowed === null
+        ? "AUTO"
+        : videoFactoryForm.healthContentAllowed ? "NORMAL" : "HEALTH_RESTRICTED",
     });
     videoProjectPage.value = 1;
     videoProjectStatus.value = "";
@@ -1644,6 +1671,7 @@ async function reviewProjectScript(project: Row, approved: boolean, candidateInd
     ElMessage.success(approved ? "脚本审核通过，可以补齐缺失素材" : "脚本已退回，系统已根据退回原因提交重写任务");
     await invalidateDataCenterSection("videoFactory");
     await loadDataCenter(true);
+    await refreshTaskVideoProject();
   } finally {
     reviewingScriptProjectId.value = "";
   }
@@ -1683,6 +1711,7 @@ async function generateVideoProject(project: Row, candidateIndex = 0) {
     dataCenterTab.value = "videoFactory";
     await invalidateDataCenterSection("videoFactory");
     await loadDataCenter(true);
+    await refreshTaskVideoProject();
   } finally {
     generatingProjectId.value = "";
   }
@@ -1695,20 +1724,21 @@ function videoProjectHasActiveJob(project: Row) {
 }
 
 async function archiveVideoProject(project: Row) {
-  if (videoProjectHasActiveJob(project)) {
-    return ElMessage.warning("该项目仍在生成素材或剪辑，任务结束后才能删除");
-  }
   await ElMessageBox.confirm(
-    `确认删除“${project.topic}”？项目会从视频工厂隐藏，历史镜头、成片和审核记录仍会安全保留。`,
+    `确认删除“${project.topic}”？系统会同步取消该项目尚未完成的 AI、素材生成和剪辑任务，并从员工任务与视频工厂同时移除。项目在回收站保留 3 天。`,
     "删除视频项目",
     { confirmButtonText: "确认删除", cancelButtonText: "取消", type: "warning" },
   );
   archivingVideoProjectId.value = project.id;
   try {
     await post(`/api/v1/workbench/data-center/video-projects/${project.id}/archive`);
-    ElMessage.success("视频项目已删除");
+    ElMessage.success("视频项目、员工任务及未完成 AI 任务已同步处理");
+    if (expandedTaskVideoProjectId.value === project.id) {
+      expandedTaskVideoProjectId.value = "";
+      taskVideoProjectDetail.value = undefined;
+    }
     await invalidateDataCenterSection("videoFactory");
-    await loadDataCenter(true);
+    await Promise.all([loadTasks(), loadDataCenter(true)]);
     if (videoRecycleBinVisible.value) await loadVideoRecycleBin();
   } finally {
     archivingVideoProjectId.value = "";
@@ -1815,6 +1845,7 @@ async function generateWorkbenchShot(project: Row, shot: Row) {
     ElMessage.success("AI镜头生成任务已提交，可在这里查看进度");
     await invalidateDataCenterSection("videoFactory");
     await loadDataCenter(true);
+    await refreshTaskVideoProject();
     if (!expandedVideoProjectIds.value.includes(project.id)) {
       expandedVideoProjectIds.value.push(project.id);
     }
@@ -1897,6 +1928,7 @@ async function renderWorkbenchProject(project: Row) {
     ElMessage.success("远程剪辑任务已提交，成片完成后会自动进入待审核状态");
     await invalidateDataCenterSection("videoFactory");
     await loadDataCenter(true);
+    await refreshTaskVideoProject();
   } finally {
     renderingProjectId.value = "";
   }
@@ -1930,6 +1962,7 @@ async function reviewWorkbenchVideo() {
       : "成片已退回，修改说明已同步到后台优化流程");
     await invalidateDataCenterSection("videoFactory");
     await loadDataCenter(true);
+    await refreshTaskVideoProject();
   } finally {
     reviewingVideoAssetId.value = "";
   }
@@ -1968,6 +2001,7 @@ async function createSimilarVideo() {
     similarVideoVisible.value = false;
     await invalidateDataCenterSection("videoFactory");
     await loadDataCenter(true);
+    await refreshTaskVideoProject();
     if (result.videoShots?.every((shot: Row) => shot.selectedAssetId)) {
       ElMessage.success("相似视频项目已生成，素材齐全，已自动进入AI剪辑");
     } else {
@@ -1997,6 +2031,7 @@ async function generateProjectPackaging(project: Row, job: Row) {
     ElMessage.success("封面标题 AI 任务已提交，完成后会自动进入审核");
     await invalidateDataCenterSection("videoFactory");
     await loadDataCenter(true);
+    await refreshTaskVideoProject();
   } finally {
     generatingPackagingProjectId.value = "";
   }
@@ -2057,6 +2092,7 @@ async function savePublishLink() {
     ElMessage.success("发布链接已回传，系统将按计划跟踪视频数据");
     await invalidateDataCenterSection("videoFactory");
     await loadDataCenter(true);
+    await refreshTaskVideoProject();
   } finally {
     savingPublishLink.value = false;
   }
@@ -2318,6 +2354,7 @@ async function submitAsset() {
     return ElMessage.warning("请选择包装资源分类");
   }
   uploading.value = true;
+  const uploadedForVideoShot = Boolean(lockedShotUpload.value);
   uploadProgress.value = 0;
   uploadEta.value = "计算中";
   uploadStage.value = "准备上传";
@@ -2348,9 +2385,11 @@ async function submitAsset() {
       ElMessage.success("素材批次已进入AI处理流水线");
     }
     await invalidateDataCenterSection("assets");
-    if (lockedShotUpload.value) await invalidateDataCenterSection("videoFactory");
+    if (uploadedForVideoShot) await invalidateDataCenterSection("videoFactory");
     if (active.value === "data") await loadDataCenter(true);
-    else await loadDashboard();
+    else if (active.value === "tasks") {
+      await refreshTaskVideoProject();
+    } else await loadDashboard();
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : "上传失败");
   } finally {
@@ -2844,7 +2883,12 @@ onMounted(() => void bootstrap());
             </div>
             <div class="task-actions">
               <el-button @click="openTaskDetail(task)">查看详情</el-button>
-              <el-button v-if="isVideoProjectTask(task)" type="primary" @click="openVideoProjectFromTask(task)">进入视频项目</el-button>
+              <el-button
+                v-if="isVideoProjectTask(task)"
+                type="primary"
+                :loading="taskVideoProjectLoading && expandedTaskVideoProjectId === (task.sourceId || task.evidence?.contentPlanId)"
+                @click="openVideoProjectFromTask(task)"
+              >{{ expandedTaskVideoProjectId === (task.sourceId || task.evidence?.contentPlanId) ? "收起项目" : "继续处理项目" }}</el-button>
               <el-button v-if="!task.assigneeEmployeeId && task.status === 'OPEN'" type="primary" @click="acceptTask(task)">领取</el-button>
               <el-button v-if="!isAiContentTask(task) && task.assigneeEmployeeId === user.id && ['ACCEPTED','RETURNED'].includes(task.status)" type="primary" @click="startTask(task)">开始</el-button>
               <el-button v-if="!isAiContentTask(task) && task.assigneeEmployeeId === user.id && ['ACCEPTED','IN_PROGRESS','RETURNED'].includes(task.status)" @click="openSubmit(task)">提交成果</el-button>
@@ -2853,6 +2897,115 @@ onMounted(() => void bootstrap());
               <el-button v-if="task.sourceType === 'SELF_CREATED' && task.status === 'CANCELLED'" @click="openSelfTaskCopy(task)">复制再次添加</el-button>
               <el-button v-if="task.sourceType === 'SELF_CREATED' && task.status === 'CANCELLED'" type="danger" plain :loading="trashingTaskId === task.id" @click="trashCancelledTask(task)">删除</el-button>
             </div>
+            <section
+              v-if="isVideoProjectTask(task) && expandedTaskVideoProjectId === (task.sourceId || task.evidence?.contentPlanId)"
+              v-loading="taskVideoProjectLoading"
+              class="task-video-workspace"
+            >
+              <template v-if="taskVideoProjectDetail">
+                <header class="task-video-workspace-head">
+                  <div>
+                    <small>当前阶段 {{ videoFlowStep(taskVideoProjectDetail) }}/7</small>
+                    <h3>{{ videoFlowSteps[videoFlowStep(taskVideoProjectDetail) - 1] }}</h3>
+                    <p>{{ videoProjectTaskHint(task) }}</p>
+                  </div>
+                  <el-button
+                    type="danger"
+                    plain
+                    :loading="archivingVideoProjectId === taskVideoProjectDetail.id"
+                    @click="archiveVideoProject(taskVideoProjectDetail)"
+                  >删除项目</el-button>
+                </header>
+
+                <nav class="task-video-stage-tabs" aria-label="视频项目阶段">
+                  <button
+                    v-for="(step, index) in videoFlowSteps"
+                    :key="step"
+                    type="button"
+                    :class="{ active: videoFlowStep(taskVideoProjectDetail) === index + 1, done: videoFlowStep(taskVideoProjectDetail) > index + 1 }"
+                  >{{ index + 1 }} {{ step }}</button>
+                </nav>
+
+                <section v-if="videoFlowStep(taskVideoProjectDetail) === 2" class="task-video-stage-panel">
+                  <h4>脚本生成中</h4>
+                  <p>系统 AI 可直接生成；远程 Codex 会按素材库与风险规则生成。结果返回后会在这里直接编辑。</p>
+                  <div class="script-engine-progress">
+                    <span :class="{ done: projectScriptEngineStatus(taskVideoProjectDetail).SYSTEM_AI === 'COMPLETED' }">
+                      系统 AI 脚本工厂 · {{ projectScriptEngineStatus(taskVideoProjectDetail).SYSTEM_AI === "COMPLETED" ? "已完成" : "生成中" }}
+                    </span>
+                    <span :class="{ done: projectScriptEngineStatus(taskVideoProjectDetail).REMOTE_CODEX === 'COMPLETED' }">
+                      远程 Codex + 剪辑 Skill · {{ projectScriptEngineStatus(taskVideoProjectDetail).REMOTE_CODEX === "COMPLETED" ? "已完成" : "生成中" }}
+                    </span>
+                  </div>
+                </section>
+
+                <section v-if="videoFlowStep(taskVideoProjectDetail) === 3" class="task-video-stage-panel">
+                  <h4>查看、修改并确认脚本</h4>
+                  <div class="task-script-candidates">
+                    <article v-for="(candidate, index) in displayedProjectCandidates(taskVideoProjectDetail)" :key="`${taskVideoProjectDetail.id}-task-${index}`">
+                      <small>{{ scriptEngineLabel(candidate) }} · {{ candidate.score || 0 }}分</small>
+                      <h4>{{ candidate.title || candidate.topic }}</h4>
+                      <p><b>HOOK：</b>{{ candidate.hook }}</p>
+                      <p class="candidate-full-script"><b>完整脚本：</b>{{ candidate.script || candidate.scripts?.zh30 || candidate.scripts?.zh15 || candidate.outline?.join("；") }}</p>
+                      <div class="preview-actions">
+                        <el-button v-if="candidate.scriptPackage" @click="openScriptPackage(candidate)">查看完整脚本</el-button>
+                        <el-button @click="openScriptEditor(taskVideoProjectDetail, candidate, index)">直接编辑并保存</el-button>
+                        <el-button type="success" @click="reviewProjectScript(taskVideoProjectDetail, true, index)">通过并进入素材匹配</el-button>
+                        <el-button type="danger" plain @click="reviewProjectScript(taskVideoProjectDetail, false, index)">退回并填写原因</el-button>
+                      </div>
+                    </article>
+                  </div>
+                </section>
+
+                <section v-if="videoFlowStep(taskVideoProjectDetail) === 4" class="task-video-stage-panel">
+                  <h4>逐句素材匹配与缺口处理</h4>
+                  <p>缺失素材直接在本任务中上传补拍或调用 AI 生成，不再额外创建一条补拍任务。</p>
+                  <article v-for="(shot, shotIndex) in taskVideoProjectDetail.videoShots || []" :key="shot.id" class="task-shot-row">
+                    <div>
+                      <strong>{{ shotIndex + 1 }}. {{ shot.title || `镜头 ${shotIndex + 1}` }}</strong>
+                      <el-tag size="small" :type="shotStatusType(shot)">{{ shotStatusText(shot) }}</el-tag>
+                      <p>{{ shot.description || "暂未填写画面要求" }}</p>
+                      <small v-if="shot.selectedAsset">{{ shot.selectedAsset.displayName || shot.selectedAsset.fileName }}</small>
+                    </div>
+                    <div class="preview-actions">
+                      <el-button v-if="shot.selectedAsset" @click="openAssetPreview(shot.selectedAsset)">预览已有素材</el-button>
+                      <el-button v-if="!shot.selectedAssetId && can('ASSET_UPLOAD')" @click="openShotUpload(taskVideoProjectDetail, shot)">上传补拍素材</el-button>
+                      <el-button v-if="!shot.selectedAssetId && ['OPEN','FAILED'].includes(shot.status)" type="primary" plain @click="generateWorkbenchShot(taskVideoProjectDetail, shot)">调用 AI 生成</el-button>
+                    </div>
+                  </article>
+                  <el-button
+                    v-if="projectReadyToRender(taskVideoProjectDetail)"
+                    type="primary"
+                    :loading="renderingProjectId === taskVideoProjectDetail.id"
+                    @click="renderWorkbenchProject(taskVideoProjectDetail)"
+                  >素材齐全，提交视频生成任务</el-button>
+                </section>
+
+                <section v-if="videoFlowStep(taskVideoProjectDetail) === 5" class="task-video-stage-panel">
+                  <h4>视频生成中</h4>
+                  <p>远程节点正在按已确认脚本、素材路径、有效时间段和画面事实剪辑，完成后会自动进入成片审核。</p>
+                </section>
+
+                <section v-if="videoFlowStep(taskVideoProjectDetail) >= 6" class="task-video-stage-panel">
+                  <h4>{{ videoFlowStep(taskVideoProjectDetail) === 6 ? "成片审核" : "封面标题、发布与回传" }}</h4>
+                  <article v-for="job in taskVideoProjectDetail.videoRenderJobs || []" :key="job.id" class="task-finished-video-row">
+                    <div>
+                      <strong>{{ job.outputAsset?.displayName || "视频成片" }}</strong>
+                      <el-tag size="small" :type="renderStatusType(job)">{{ renderStatusText(job) }}</el-tag>
+                    </div>
+                    <div class="preview-actions">
+                      <el-button v-if="job.outputAsset" @click="openAssetPreview(job.outputAsset, '成片预览')">预览成片</el-button>
+                      <template v-if="job.status === 'SUCCEEDED' && job.outputAsset?.reviewStatus === 'PENDING'">
+                        <el-button type="success" @click="openVideoReview(taskVideoProjectDetail, job, 'APPROVE')">审核通过</el-button>
+                        <el-button type="danger" plain @click="openVideoReview(taskVideoProjectDetail, job, 'RETURN')">退回并填写原因</el-button>
+                      </template>
+                      <el-button v-if="job.outputAsset?.reviewStatus === 'APPROVED'" type="primary" @click="generateProjectPackaging(taskVideoProjectDetail, job)">生成封面和标题</el-button>
+                      <el-button v-if="job.outputAsset?.reviewStatus === 'APPROVED'" @click="openPublishLink(taskVideoProjectDetail, job)">回传发布链接</el-button>
+                    </div>
+                  </article>
+                </section>
+              </template>
+            </section>
           </article>
           <el-empty v-if="!tasks.length" description="没有符合条件的任务" />
         </section>
@@ -4033,12 +4186,12 @@ onMounted(() => void bootstrap());
             </span>
           </template>
           <div class="prototype-default-grid">
-            <el-form-item label="发布平台"><el-select v-model="videoFactoryForm.platform"><el-option label="抖音" value="DOUYIN" /><el-option label="小红书" value="XIAOHONGSHU" /><el-option label="B站" value="BILIBILI" /><el-option label="视频号" value="WECHAT_CHANNELS" /><el-option label="快手" value="KUAISHOU" /><el-option label="TikTok" value="TIKTOK" /></el-select></el-form-item>
-            <el-form-item label="视频时长"><el-select v-model="videoFactoryForm.estimatedDurationSeconds"><el-option label="15秒" :value="15" /><el-option label="30秒" :value="30" /><el-option label="60秒" :value="60" /></el-select></el-form-item>
-            <el-form-item label="账号类型"><el-select v-model="videoFactoryForm.accountType"><el-option label="品牌账号" value="BRAND" /><el-option label="达人账号" value="CREATOR" /><el-option label="员工账号" value="EMPLOYEE" /></el-select></el-form-item>
-            <el-form-item label="健康相关内容"><el-select v-model="videoFactoryForm.healthContentAllowed"><el-option label="允许健康相关内容" :value="true" /><el-option label="不允许健康相关内容" :value="false" /></el-select></el-form-item>
-            <el-form-item label="素材使用"><el-select v-model="videoScriptMode"><el-option label="优先使用素材库已有素材" value="ASSET_FIRST" /><el-option label="仅使用已有素材（缺少则改写）" value="ASSET_ONLY" /></el-select></el-form-item>
-            <el-form-item label="口播"><el-select v-model="videoFactoryForm.voiceoverMode"><el-option label="有口播视频" value="VOICEOVER" /><el-option label="无口播视频" value="NO_VOICEOVER" /></el-select></el-form-item>
+            <el-form-item label="发布平台"><el-select v-model="videoFactoryForm.platform"><el-option label="不限，由 AI 决定" value="AUTO" /><el-option label="抖音" value="DOUYIN" /><el-option label="小红书" value="XIAOHONGSHU" /><el-option label="B站" value="BILIBILI" /><el-option label="视频号" value="WECHAT_CHANNELS" /><el-option label="快手" value="KUAISHOU" /><el-option label="TikTok" value="TIKTOK" /></el-select></el-form-item>
+            <el-form-item label="视频时长"><el-select v-model="videoFactoryForm.estimatedDurationSeconds"><el-option label="不限，由 AI 决定" :value="0" /><el-option label="15秒" :value="15" /><el-option label="30秒" :value="30" /><el-option label="60秒" :value="60" /></el-select></el-form-item>
+            <el-form-item label="账号类型"><el-select v-model="videoFactoryForm.accountType"><el-option label="不限，由 AI 决定" value="AUTO" /><el-option label="品牌账号" value="BRAND" /><el-option label="达人账号" value="CREATOR" /><el-option label="员工账号" value="EMPLOYEE" /></el-select></el-form-item>
+            <el-form-item label="健康相关内容"><el-select v-model="videoFactoryForm.healthContentAllowed"><el-option label="不限，由 AI 决定" :value="null" /><el-option label="允许健康相关内容" :value="true" /><el-option label="不允许健康相关内容" :value="false" /></el-select></el-form-item>
+            <el-form-item label="素材使用"><el-select v-model="videoScriptMode"><el-option label="不限，由 AI 决定" value="AUTO" /><el-option label="优先使用素材库已有素材" value="ASSET_FIRST" /><el-option label="仅使用已有素材（缺少则改写）" value="ASSET_ONLY" /></el-select></el-form-item>
+            <el-form-item label="口播"><el-select v-model="videoFactoryForm.voiceoverMode"><el-option label="不限，由 AI 决定" value="AUTO" /><el-option label="有口播视频" value="VOICEOVER" /><el-option label="无口播视频" value="NO_VOICEOVER" /></el-select></el-form-item>
           </div>
         </el-collapse-item>
       </el-collapse>

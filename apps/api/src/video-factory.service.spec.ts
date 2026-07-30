@@ -38,11 +38,20 @@ describe("VideoFactoryService model routing", () => {
         findMany: vi.fn(),
       },
       contentPlan: {
+        count: vi.fn(),
         findMany: vi.fn(),
         findUnique: vi.fn(),
         update: vi.fn(),
       },
       contentVariant: {
+        updateMany: vi.fn(),
+      },
+      aiTask: {
+        count: vi.fn(),
+        updateMany: vi.fn(),
+      },
+      videoGenerationJob: {
+        count: vi.fn(),
         updateMany: vi.fn(),
       },
       asset: {
@@ -52,6 +61,8 @@ describe("VideoFactoryService model routing", () => {
         findMany: vi.fn(),
       },
       videoRenderJob: {
+        count: vi.fn(),
+        updateMany: vi.fn(),
         upsert: vi.fn(),
       },
       videoQualityCheck: {
@@ -160,6 +171,57 @@ describe("VideoFactoryService model routing", () => {
     const result = await service.projects({});
 
     expect(result[0].productionStage).toBe("TRACKING");
+  });
+
+  it("projects completed Codex script outputs into script review for legacy records", async () => {
+    prisma.contentPlan.findMany.mockResolvedValue([{
+      id: "project-script-complete",
+      productionStage: "SCRIPT_GENERATING",
+      videoRenderJobs: [],
+      aiTaskOutputs: [{
+        kind: "VIDEO_PROJECT",
+        aiTask: { status: "COMPLETED" },
+      }],
+      videoShots: [],
+    }]);
+
+    const result = await service.projects({});
+
+    expect(result[0].productionStage).toBe("FACTORY_SCRIPT_READY");
+  });
+
+  it("archives a project and cancels linked AI, generation, render, and employee tasks", async () => {
+    prisma.contentPlan.findUnique.mockResolvedValue({
+      id: "project-delete",
+      kind: "VIDEO",
+      createdBy: "运营甲",
+      productionStage: "SCRIPT_GENERATING",
+      sourceSignals: [{ type: "VIDEO_FACTORY" }],
+    });
+    prisma.aiTask.count.mockResolvedValue(1);
+    prisma.videoGenerationJob.count.mockResolvedValue(2);
+    prisma.videoRenderJob.count.mockResolvedValue(1);
+
+    const result = await service.archiveProject("project-delete", "运营甲");
+
+    expect(result).toMatchObject({
+      archived: true,
+      cancelledAiTasks: 1,
+      cancelledGenerationJobs: 2,
+      cancelledRenderJobs: 1,
+    });
+    expect(prisma.aiTask.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: "CANCELLED" }),
+    }));
+    expect(prisma.videoGenerationJob.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: "CANCELLED" }),
+    }));
+    expect(prisma.videoRenderJob.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: "CANCELLED" }),
+    }));
+    expect(prisma.opsTask.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: "CANCELLED" }),
+    }));
   });
 
   it("keeps a single-project script task in the dedicated generating stage", async () => {

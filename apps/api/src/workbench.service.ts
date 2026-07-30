@@ -1987,9 +1987,21 @@ export class WorkbenchService {
     return actions;
   }
 
-  private sortTasks<T extends { priority: string; dueAt: Date | null; createdAt: Date }>(tasks: T[]) {
+  private sortTasks<T extends {
+    priority: string;
+    dueAt: Date | null;
+    createdAt: Date;
+    sourceType?: string | null;
+    category?: string | null;
+  }>(tasks: T[]): T[] {
     const weight: Record<string, number> = { URGENT: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
     return [...tasks].sort((left, right) => {
+      const leftVideoProject = left.sourceType === "VIDEO_PROJECT" || left.category === "VIDEO_PROJECT";
+      const rightVideoProject = right.sourceType === "VIDEO_PROJECT" || right.category === "VIDEO_PROJECT";
+      if (leftVideoProject !== rightVideoProject) return leftVideoProject ? -1 : 1;
+      if (leftVideoProject && rightVideoProject) {
+        return right.createdAt.getTime() - left.createdAt.getTime();
+      }
       const priority = (weight[left.priority] ?? 9) - (weight[right.priority] ?? 9);
       if (priority) return priority;
       const due = (left.dueAt?.getTime() ?? Number.MAX_SAFE_INTEGER) - (right.dueAt?.getTime() ?? Number.MAX_SAFE_INTEGER);

@@ -162,16 +162,19 @@ export class AiContentService {
 
   async generateVideoCandidates(context: JsonRecord): Promise<AiVideoCandidate[]> {
     const exactCount = Math.max(1, Math.min(3, Math.round(Number(context.exactCount) || 3)));
+    const hasGenerationMode = Object.prototype.hasOwnProperty.call(context, "generationMode");
+    const hasContentRestrictionMode = Object.prototype.hasOwnProperty.call(context, "contentRestrictionMode");
+    const hasVoiceoverMode = Object.prototype.hasOwnProperty.call(context, "voiceoverMode");
     const assetOnly = context.generationMode === "ASSET_ONLY";
     const restricted = context.contentRestrictionMode === "HEALTH_RESTRICTED";
     const noVoiceover = context.voiceoverMode === "NO_VOICEOVER";
-    const assetPolicy = assetOnly
+    const assetPolicy = !hasGenerationMode ? "" : assetOnly
       ? "本次为快速成片模式：每一个镜头都必须能由输入中的已有素材覆盖，只能引用真实assetId；严禁设计任何需要补拍的新镜头，missingAssets必须为空。"
       : "必须先学习并检索输入assets中的持久化结构化素材索引，再确定选题、卖点和逐句镜头。优先围绕已有视频素材能直接证明的事实设计脚本，在内容质量相近时选择素材覆盖率更高、需要补拍更少的方案；只有索引中确实没有合格视频画面时才列出缺失素材。";
-    const restrictionPolicy = restricted
+    const restrictionPolicy = !hasContentRestrictionMode ? "" : restricted
       ? `本次为健康内容受限模式。脚本、标题、字幕、封面、标签、镜头描述和画面规划均不得出现restrictedWords中的词及其谐音、拆字、缩写、暗示或变体；不得设计restrictedVisuals描述的画面。只能引用输入assets中的素材，输入素材已经过风险过滤，严禁引用其他素材。`
       : "本次为普通模式，不额外应用健康内容受限规则。";
-    const voiceoverPolicy = noVoiceover
+    const voiceoverPolicy = !hasVoiceoverMode ? "" : noVoiceover
       ? "本次必须生成无口播视频：不得设计人物口播、旁白、配音或对话；用连续视频画面、动作、音乐节奏、音效和屏幕字幕完整表达内容。scripts字段填写分段屏幕字幕与画面节奏，不得写成朗读稿。"
       : "本次生成有口播视频：提供自然简洁的中文/英文口播，并让口播与镜头动作逐段对应。";
     const userScriptPolicy = context.scriptSource === "USER"

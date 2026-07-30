@@ -53,10 +53,18 @@ const workbenchBatchUploadStorage = diskStorage({
 
 function compileVideoScriptTaskPrompt(project: Record<string, any>, brief: Record<string, unknown>) {
   const value = (key: string, fallback = "未填写") => String(brief[key] ?? fallback).trim() || fallback;
-  const platform = String(project.targetPlatforms?.[0] || brief.platform || "DOUYIN");
-  const healthPolicy = brief.healthContentAllowed !== false
-    ? "允许健康相关内容；仍须读取系统风险词与风险画面库进行合规检查"
-    : "禁止健康相关内容；必须读取系统风险词与风险画面库，并过滤相关文案、字幕、配音和画面";
+  const optionalLines = [
+    brief.platform ? `发布平台：${brief.platform}` : "",
+    brief.accountType ? `账号类型：${brief.accountType}` : "",
+    brief.estimatedDurationSeconds ? `预计时长：${brief.estimatedDurationSeconds}秒` : "",
+    brief.voiceoverMode ? `口播模式：${brief.voiceoverMode}` : "",
+    typeof brief.healthContentAllowed === "boolean"
+      ? `健康内容规则：${brief.healthContentAllowed
+        ? "允许健康相关内容；仍须读取系统风险词与风险画面库进行合规检查"
+        : "禁止健康相关内容；必须读取系统风险词与风险画面库，并过滤相关文案、字幕、配音和画面"}`
+      : "",
+    brief.materialPolicy ? `素材策略：${brief.materialPolicy}` : "",
+  ].filter(Boolean);
 
   return [
     "【任务类型】当前视频项目候选脚本生成（本引擎返回一份完整候选脚本，不生成成片）",
@@ -65,12 +73,7 @@ function compileVideoScriptTaskPrompt(project: Record<string, any>, brief: Recor
     `项目编号：${project.productionNo || project.id}`,
     `产品型号：${project.productModel || "未填写"}`,
     `视频类型：${value("videoType")}`,
-    `发布平台：${platform}`,
-    `账号类型：${value("accountType", "BRAND")}`,
-    `预计时长：${value("estimatedDurationSeconds", "30")}秒`,
-    `口播模式：${value("voiceoverMode", "VOICEOVER")}`,
-    `健康内容规则：${healthPolicy}`,
-    `素材策略：${value("materialPolicy", "REAL_ASSET_FIRST")}`,
+    ...optionalLines,
     "",
     "【内容需求】",
     `核心关键词：${value("keywords", project.topic || "未填写")}`,
@@ -858,12 +861,12 @@ export class WorkbenchController {
       throw new ForbiddenException("只有运营和视频专员可以创建视频项目");
     }
     const project = await this.videoFactory.createProject({
-      platform: String(body.platform || "DOUYIN"),
-      voiceoverMode: String(body.voiceoverMode || "VOICEOVER"),
-      accountType: String(body.accountType || "BRAND"),
-      estimatedDurationSeconds: Number(body.estimatedDurationSeconds || 30),
-      contentRestrictionMode: String(body.contentRestrictionMode || "NORMAL"),
-      generationMode: String(body.generationMode || "NORMAL"),
+      platform: body.platform && body.platform !== "AUTO" ? String(body.platform) : undefined,
+      voiceoverMode: body.voiceoverMode && body.voiceoverMode !== "AUTO" ? String(body.voiceoverMode) : undefined,
+      accountType: body.accountType && body.accountType !== "AUTO" ? String(body.accountType) : undefined,
+      estimatedDurationSeconds: Number(body.estimatedDurationSeconds) > 0 ? Number(body.estimatedDurationSeconds) : undefined,
+      contentRestrictionMode: body.contentRestrictionMode && body.contentRestrictionMode !== "AUTO" ? String(body.contentRestrictionMode) : undefined,
+      generationMode: body.generationMode && body.generationMode !== "AUTO" ? String(body.generationMode) : undefined,
       scriptSource: String(body.scriptSource || "AI"),
       userProvidedDirections: Array.isArray(body.userProvidedDirections)
         ? body.userProvidedDirections.map((item, index) => {
@@ -880,7 +883,7 @@ export class WorkbenchController {
       routingMode: "AUTO",
       allowFallback: true,
       deferScriptGeneration: true,
-      healthContentAllowed: body.healthContentAllowed !== false,
+      healthContentAllowed: typeof body.healthContentAllowed === "boolean" ? body.healthContentAllowed : undefined,
       soundPrompt: body.soundPrompt ? String(body.soundPrompt) : undefined,
       mustShowFacts: body.mustShowFacts ? String(body.mustShowFacts) : undefined,
       additionalPrompt: body.additionalPrompt ? String(body.additionalPrompt) : undefined,
@@ -974,6 +977,19 @@ export class WorkbenchController {
       await this.videoFactory.generateSystemScriptCandidate(id, employee.name);
     }
     return { project: await this.videoFactory.project(id), task, scriptEngines };
+  }
+
+  @Get("data-center/video-projects/:id")
+  async videoProjectDetail(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+  ) {
+    const employee = this.requirePermission(authorization, "DATA_CENTER_VIEW");
+    const project = await this.videoFactory.project(id) as Record<string, any>;
+    if (project.createdBy !== employee.name && project.owner !== employee.name && project.assignedTo !== employee.name) {
+      throw new ForbiddenException("只能查看自己负责的视频项目");
+    }
+    return project;
   }
 
   @Post("data-center/video-projects/:id/script-review")
