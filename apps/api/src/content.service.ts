@@ -1417,6 +1417,25 @@ export class ContentService {
     return { path: variant.coverPath, fileName: `${variant.id}.jpg` };
   }
 
+  async packagingCoverUrl(planId: string, variantId: string) {
+    const variant = await this.prisma.contentVariant.findFirst({
+      where: { id: variantId, contentPlanId: planId },
+      select: { id: true, coverPath: true, metadata: true },
+    });
+    if (!variant?.coverPath) throw new NotFoundException("封面尚未生成");
+    const metadata = variant.metadata && typeof variant.metadata === "object" && !Array.isArray(variant.metadata)
+      ? variant.metadata as Record<string, unknown>
+      : {};
+    const coverAssetId = String(metadata.coverAssetId || "").trim();
+    if (coverAssetId && this.oss) {
+      const asset = await this.prisma.asset.findUnique({ where: { id: coverAssetId }, select: { objectKey: true, storageUrl: true } });
+      if (asset?.objectKey) return { url: this.oss.signedDownloadUrl(asset.objectKey, 1_800) };
+      if (asset?.storageUrl && /^https?:\/\//iu.test(asset.storageUrl)) return { url: asset.storageUrl };
+    }
+    if (/^https?:\/\//iu.test(variant.coverPath)) return { url: variant.coverPath };
+    return { url: `/api/v1/workbench/data-center/video-projects/${planId}/packaging/${variantId}/cover` };
+  }
+
   async recordManualPublish(variantId: string, actor: string, input: { remoteUrl?: string; remoteId?: string; publishedAt?: string }) {
     const variant = await this.prisma.contentVariant.findUnique({ where: { id: variantId }, include: { contentPlan: true } });
     if (!variant) throw new NotFoundException("平台版本不存在");

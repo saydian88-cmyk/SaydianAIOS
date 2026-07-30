@@ -1,6 +1,25 @@
 import { BadRequestException } from "@nestjs/common";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { VideoFactoryService } from "./video-factory.service";
+import { materialReviewApproved, VideoFactoryService } from "./video-factory.service";
+
+describe("material review gate", () => {
+  it("accepts only the approved current workflow and binding fingerprint", () => {
+    const plan = {
+      workflowVersion: 4,
+      sourceSignals: [{
+        type: "VIDEO_FACTORY",
+        materialReview: {
+          status: "APPROVED",
+          workflowVersion: 4,
+          bindingFingerprint: "shot-1:asset-1:0:3",
+        },
+      }],
+    };
+    expect(materialReviewApproved(plan, "shot-1:asset-1:0:3")).toBe(true);
+    expect(materialReviewApproved(plan, "shot-1:asset-2:0:3")).toBe(false);
+    expect(materialReviewApproved({ ...plan, workflowVersion: 5 }, "shot-1:asset-1:0:3")).toBe(false);
+  });
+});
 
 describe("VideoFactoryService model routing", () => {
   let prisma: Record<string, any>;

@@ -23,6 +23,8 @@ const executionSchema = {
     executionMode: { type: "string" },
     routeReason: { type: "string" },
     fallbackOrder: { type: "array", items: { type: "string" } },
+    downstreamSkill: { type: "string" },
+    downstreamSkillPath: { type: "string" },
     startedAt: { type: "string" },
     finishedAt: { type: "string" },
     durationMs: { type: "number", minimum: 0 },

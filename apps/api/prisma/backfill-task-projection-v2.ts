@@ -26,7 +26,7 @@ function opsStatus(status: AiTaskStatus, current: string) {
 }
 
 function skillFor(type: string) {
-  if (type === "VIDEO") return "video-editing-from-media-library-share";
+  if (type === "VIDEO") return "saidian-ai-task-dispatcher";
   if (type === "IMAGE") return "imagegen";
   if (type === "ARTICLE") return "build-health-brand-trust-content";
   return "Codex本地分析";

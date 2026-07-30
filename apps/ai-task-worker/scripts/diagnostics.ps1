@@ -1,21 +1,35 @@
 $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..\..")).Path
 $configPath = Join-Path $env:LOCALAPPDATA "SaydianAiTaskRunner\runner.env"
-$taskName = "Saydian AI Task Runner"
+$safeConfig = @{}
+if (Test-Path -LiteralPath $configPath -PathType Leaf) {
+  Get-Content -LiteralPath $configPath -Encoding UTF8 | ForEach-Object {
+    $parts = $_ -split "=", 2
+    if ($parts.Count -eq 2 -and $parts[0] -ne "AI_TASK_RUNNER_TOKEN") { $safeConfig[$parts[0]] = $parts[1] }
+  }
+}
 $checks = @(
-  @{ Name = "Node"; Command = "node" },
-  @{ Name = "pnpm"; Command = "pnpm.cmd" },
-  @{ Name = "Codex"; Command = "codex.cmd" },
-  @{ Name = "FFmpeg"; Command = "ffmpeg.exe" }
-  @{ Name = "FFprobe"; Command = "ffprobe.exe" }
+  @{ Name = "Node"; Command = "node"; Config = "" },
+  @{ Name = "pnpm"; Command = "pnpm.cmd"; Config = "PNPM_EXECUTABLE" },
+  @{ Name = "Codex"; Command = "codex.cmd"; Config = "CODEX_EXECUTABLE" },
+  @{ Name = "FFmpeg"; Command = "ffmpeg.exe"; Config = "FFMPEG_EXECUTABLE" },
+  @{ Name = "FFprobe"; Command = "ffprobe.exe"; Config = "FFPROBE_EXECUTABLE" }
 )
 
 foreach ($check in $checks) {
   $command = Get-Command $check.Command -ErrorAction SilentlyContinue
+  $configuredPath = if ($check.Config) { [string]$safeConfig[$check.Config] } else { "" }
+  $resolvedPath = if ($configuredPath -and (Test-Path -LiteralPath $configuredPath -PathType Leaf)) {
+    $configuredPath
+  } elseif ($command) {
+    $command.Source
+  } else {
+    ""
+  }
   [pscustomobject]@{
     Check = $check.Name
-    Status = if ($command) { "OK" } else { "MISSING" }
-    Path = if ($command) { $command.Source } else { "" }
+    Status = if ($resolvedPath) { "OK" } else { "MISSING" }
+    Path = $resolvedPath
   }
 }
 
@@ -34,10 +48,15 @@ foreach ($check in $checks) {
 $codexHome = [Environment]::GetEnvironmentVariable("CODEX_HOME", "Process")
 if (-not $codexHome) { $codexHome = [Environment]::GetEnvironmentVariable("CODEX_HOME", "User") }
 $codexBase = if ($codexHome) { $codexHome } else { "CODEX_HOME_UNCONFIGURED" }
+$configuredVideoSkillPath = [string]$safeConfig["AI_TASK_VIDEO_SKILL_PATH"]
+if (-not $configuredVideoSkillPath) {
+  $configuredVideoSkillPath = Join-Path $codexBase "skills\video-editing-from-media-library\SKILL.md"
+}
 $skills = @(
-  @{ Name = "Skill:imagegen"; Path = Join-Path $codexBase "skills\.system\imagegen\SKILL.md" },
-  @{ Name = "Skill:article"; Path = Join-Path $codexBase "skills\build-health-brand-trust-content\SKILL.md" },
-  @{ Name = "Skill:video"; Path = Join-Path $codexBase "plugins\cache\personal\video-editing-from-media-library-share\0.1.0\skills\video-editing-from-media-library-share\SKILL.md" }
+  @{ Name = "Skill:dispatcher"; Path = Join-Path $codexBase "skills\saidian-ai-task-dispatcher\SKILL.md" },
+  @{ Name = "Skill:video"; Path = $configuredVideoSkillPath },
+  @{ Name = "Skill:script"; Path = Join-Path $codexBase "skills\video-script-generation\SKILL.md" },
+  @{ Name = "Skill:cover"; Path = Join-Path $codexBase "skills\feng-mian-biao-ti\SKILL.md" }
 )
 foreach ($skill in $skills) {
   [pscustomobject]@{
@@ -47,39 +66,28 @@ foreach ($skill in $skills) {
   }
 }
 
-$videoConfigPath = Join-Path $env:LOCALAPPDATA "Codex\video-editing-from-media-library-share\active-config.json"
+$videoConfigPath = $configuredVideoSkillPath
 $videoReady = $false
-if (Test-Path -LiteralPath $videoConfigPath -PathType Leaf) {
-  try {
-    $active = Get-Content -Raw -LiteralPath $videoConfigPath -Encoding UTF8 | ConvertFrom-Json
-    $runtime = Get-Content -Raw -LiteralPath $active.config_path -Encoding UTF8 | ConvertFrom-Json
-    $videoReady = $runtime.initialization_status -eq "ready"
-  } catch {
-    $videoReady = $false
-  }
-}
+if (Test-Path -LiteralPath $videoConfigPath -PathType Leaf) { $videoReady = $true }
 [pscustomobject]@{
   Check = "VideoSkillRuntime"
   Status = if ($videoReady) { "OK" } else { "UNCONFIGURED" }
   Path = $videoConfigPath
 }
 
-$scheduled = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+$sessionRunner = Get-CimInstance Win32_Process | Where-Object {
+  $_.CommandLine -like "*ai-task-worker*src*index.ts*"
+} | Select-Object -First 1
 [pscustomobject]@{
-  Check = "ScheduledTask"
-  Status = if ($scheduled) { [string]$scheduled.State } else { "MISSING" }
-  Path = $taskName
+  Check = "SessionRunner"
+  Status = if ($sessionRunner) { "RUNNING" } else { "STOPPED" }
+  Path = if ($sessionRunner) { [string]$sessionRunner.ProcessId } else { "" }
 }
 
 if (Test-Path -LiteralPath $configPath -PathType Leaf) {
-  $safeConfig = @{}
-  Get-Content -LiteralPath $configPath -Encoding UTF8 | ForEach-Object {
-    $parts = $_ -split "=", 2
-    if ($parts.Count -eq 2 -and $parts[0] -ne "AI_TASK_RUNNER_TOKEN") { $safeConfig[$parts[0]] = $parts[1] }
-  }
   [pscustomobject]@{
     Check = "PollInterval"
-    Status = if ($safeConfig["AI_TASK_POLL_MS"] -eq "10000") { "OK" } else { "INVALID" }
+    Status = if ($safeConfig["AI_TASK_POLL_MS"] -eq "60000") { "OK" } else { "INVALID" }
     Path = [string]$safeConfig["AI_TASK_POLL_MS"]
   }
   [pscustomobject]@{

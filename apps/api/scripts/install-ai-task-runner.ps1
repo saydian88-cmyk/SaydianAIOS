@@ -24,7 +24,8 @@ if (-not $codexHome) { throw "CODEX_HOME is not configured" }
 $requiredSkills = @(
   (Join-Path $codexHome "skills\.system\imagegen\SKILL.md"),
   (Join-Path $codexHome "skills\build-health-brand-trust-content\SKILL.md"),
-  (Join-Path $codexHome "plugins\cache\personal\video-editing-from-media-library-share\0.1.0\skills\video-editing-from-media-library-share\SKILL.md")
+  (Join-Path $codexHome "skills\saidian-ai-task-dispatcher\SKILL.md")
+  (Join-Path $codexHome "skills\video-editing-from-media-library\SKILL.md")
 )
 foreach ($skillPath in $requiredSkills) {
   if (-not (Test-Path -LiteralPath $skillPath -PathType Leaf)) {
@@ -49,7 +50,7 @@ $lines = @(
   "AI_TASK_RUNNER_NODE_CODE=$NodeCode"
   "AI_TASK_RUNNER_VERSION=3.0.0"
   "AI_TASK_WORKDIR=$workPath"
-  "AI_TASK_POLL_MS=10000"
+  "AI_TASK_POLL_MS=60000"
   "AI_TASK_HEARTBEAT_MS=30000"
   "AI_TASK_REPO_PATH=$repoPath"
   "CODEX_HOME=$codexHome"

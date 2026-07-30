@@ -10,8 +10,11 @@ describe("skill task router", () => {
   it.each([
     ["IMAGE", "DEFAULT", "imagegen"],
     ["ARTICLE", "DEFAULT", "build-health-brand-trust-content"],
-    ["VIDEO", "FULL_VIDEO", "video-editing-from-media-library-share"],
-    ["VIDEO", "SCRIPT_ONLY", "video-editing-from-media-library-share"],
+    ["VIDEO", "FULL_VIDEO", "saidian-ai-task-dispatcher"],
+    ["VIDEO", "SCRIPT_ONLY", "saidian-ai-task-dispatcher"],
+    ["VIDEO", "SIMILAR_VIDEO", "saidian-ai-task-dispatcher"],
+    ["VIDEO", "NO_VOICE_VIDEO", "saidian-ai-task-dispatcher"],
+    ["VIDEO", "COVER_TITLE", "saidian-ai-task-dispatcher"],
   ])("routes %s/%s to %s", (type, mode, skill) => {
     expect(routeTask({
       task: { type },
@@ -26,6 +29,39 @@ describe("skill task router", () => {
     }, { ...process.env, CODEX_HOME: routeOnlyCodexHome })).toMatchObject({
       key: "legacy-codex",
       strategy: "CODEX_TOPIC_CARD",
+    });
+  });
+
+  it("uses the configured share-edition video Skill for colleague nodes", () => {
+    const shareSkillPath = join(routeOnlyCodexHome, "skills", "video-editing-from-media-library-share", "SKILL.md");
+    expect(routeTask({
+      task: { type: "VIDEO" },
+      execution: { mode: "FULL_VIDEO", strategy: "CODEX_SKILL", requiredSkill: "saidian-ai-task-dispatcher" },
+    }, {
+      ...process.env,
+      CODEX_HOME: routeOnlyCodexHome,
+      AI_TASK_VIDEO_SKILL_NAME: "video-editing-from-media-library-share",
+      AI_TASK_VIDEO_SKILL_PATH: shareSkillPath,
+    })).toMatchObject({
+      downstreamSkillName: "video-editing-from-media-library-share",
+      downstreamSkillPath: shareSkillPath,
+    });
+  });
+
+  it("accepts legacy task packages that name the share video Skill directly", () => {
+    expect(routeTask({
+      task: { type: "VIDEO", input: { executionMode: "SCRIPT_ONLY" } },
+      execution: {
+        mode: "SCRIPT_ONLY",
+        strategy: "CODEX_SKILL",
+        requiredSkill: "video-editing-from-media-library-share",
+      },
+    }, {
+      ...process.env,
+      CODEX_HOME: routeOnlyCodexHome,
+    })).toMatchObject({
+      key: "saidian-ai-task-dispatcher",
+      downstreamSkillName: "video-editing-from-media-library",
     });
   });
 

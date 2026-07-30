@@ -199,7 +199,7 @@ function displayProgress(task?: Row) {
 function outputKindLabel(value: string) {
   const labels: Row = {
     VIDEO_MASTER: "视频成片", VIDEO_PROJECT: "视频项目", VIDEO_COVER: "视频封面",
-    SCRIPT_CANDIDATES_JSON: "脚本方案", STORYBOARD_JSON: "分镜方案",
+    VIDEO_SCRIPT: "完整脚本", SCRIPT_CANDIDATES_JSON: "脚本方案", STORYBOARD_JSON: "分镜方案",
     IMAGE_MASTER: "图片成品", IMAGE: "图片成品", ARTICLE_OUTPUT: "软文成品",
     ARTICLE: "软文成品", QUALITY_REPORT: "质检报告", RESHOOT_BRIEF: "补拍清单",
     OPS_TASK: "关联员工任务",
@@ -469,11 +469,29 @@ function previewKind(output?: Row) {
   if (!output) return "DOCUMENT";
   if (output.kind === "VIDEO_MASTER" || String(output.mimeType || output.asset?.mediaType || "").startsWith("video/")) return "VIDEO";
   if (String(output.mimeType || output.asset?.mediaType || "").startsWith("image/") || ["IMAGE", "IMAGE_ASSET", "IMAGE_OUTPUT", "IMAGE_GENERATED"].includes(output.kind)) return "IMAGE";
+  if (output.kind === "VIDEO_SCRIPT") return "SCRIPT";
   if (["ARTICLE", "ARTICLE_OUTPUT"].includes(output.kind) || output.contentPlan?.variants?.length) return "ARTICLE";
   return "DOCUMENT";
 }
 
 function previewText(output?: Row) {
+  if (output?.kind === "VIDEO_SCRIPT") {
+    const script = output.metadata?.script || {};
+    const shots = Array.isArray(script.shots) ? script.shots : [];
+    const sections = [
+      script.hook ? `黄金三秒钩子\n${script.hook}` : "",
+      script.script ? `完整口播\n${script.script}` : "",
+      script.cta ? `结尾互动\n${script.cta}` : "",
+      shots.length ? `分镜与素材\n${shots.map((shot: Row, index: number) => [
+        `${index + 1}. ${shot.title || shot.moduleType || "镜头"}`,
+        shot.voiceover ? `口播：${shot.voiceover}` : "",
+        shot.visual ? `画面：${shot.visual}` : "",
+        shot.missingReason ? `缺失：${shot.missingReason}` : "",
+        shot.alternativePlan ? `补充方案：${shot.alternativePlan}` : "",
+      ].filter(Boolean).join("\n")).join("\n\n")}` : "",
+    ];
+    return sections.filter(Boolean).join("\n\n");
+  }
   return (output?.contentPlan?.variants || []).map((item: Row) => `${item.title}\n\n${item.body}`).join("\n\n");
 }
 
@@ -754,7 +772,7 @@ onMounted(load);
             <strong>{{ output.title }}</strong>
             <span>{{ outputKindLabel(output.kind) }} · {{ reviewStatusLabel(output.reviewStatus) }}<template v-if="output.metadata?.sizeBytes"> · {{ output.metadata.sizeBytes }} bytes</template></span>
           </div>
-          <el-button v-if="output.assetId || output.url || output.contentPlan?.variants?.length" link type="primary" @click="openOutput(output)">预览</el-button>
+          <el-button v-if="output.assetId || output.url || output.contentPlan?.variants?.length || previewText(output)" link type="primary" @click="openOutput(output)">预览</el-button>
         </div>
       </template>
     </el-drawer>
@@ -766,7 +784,7 @@ onMounted(load);
         </div>
         <video v-if="previewKind(outputPreview) === 'VIDEO' && outputPreviewUrl" :src="outputPreviewUrl" controls playsinline preload="metadata" />
         <img v-else-if="previewKind(outputPreview) === 'IMAGE' && outputPreviewUrl" :src="outputPreviewUrl" :alt="outputPreview.title" />
-        <pre v-else-if="previewKind(outputPreview) === 'ARTICLE' && previewText(outputPreview)">{{ previewText(outputPreview) }}</pre>
+        <pre v-else-if="['ARTICLE', 'SCRIPT'].includes(previewKind(outputPreview)) && previewText(outputPreview)">{{ previewText(outputPreview) }}</pre>
         <el-empty v-else description="当前成果没有可直接预览的文件" />
         <dl v-if="outputPreview.asset" class="preview-meta">
           <div><dt>尺寸</dt><dd>{{ outputPreview.asset.width || "—" }} × {{ outputPreview.asset.height || "—" }}</dd></div>

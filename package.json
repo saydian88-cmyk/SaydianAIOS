@@ -20,6 +20,8 @@
     "sync:packaging-resources": "pnpm --filter @saidian-ops/api exec tsx scripts/packaging-resource-agent.ts",
     "collector:douyin": "pnpm --filter @saidian-ops/douyin-local-collector start",
     "collector:douyin:install": "powershell -NoProfile -ExecutionPolicy Bypass -File apps/douyin-local-collector/scripts/install-windows-task.ps1",
-    "ai-task-runner:install": "powershell -NoProfile -ExecutionPolicy Bypass -File apps/api/scripts/install-ai-task-runner.ps1"
+    "ai-task-runner:install": "powershell -NoProfile -ExecutionPolicy Bypass -File apps/api/scripts/install-ai-task-runner.ps1",
+    "ai-task-runner:configure-session": "powershell -NoProfile -ExecutionPolicy Bypass -File apps/ai-task-worker/scripts/configure-codex-session.ps1",
+    "ai-task-runner:codex-session": "powershell -NoProfile -ExecutionPolicy Bypass -File apps/ai-task-worker/scripts/start-codex-session.ps1"
   }
 }

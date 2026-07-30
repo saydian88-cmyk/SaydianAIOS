@@ -34,6 +34,8 @@ const taskTypes: AiTaskType[] = [
 ];
 const claimableStatuses: AiTaskStatus[] = ["PENDING", "RETRY"];
 const reviewableStatuses: AiTaskStatus[] = ["PENDING_REVIEW", "RETURNED"];
+const smartVideoPrimaryNodeCode = text(process.env.AI_TASK_SMART_VIDEO_PRIMARY_NODE_CODE)
+  || "windows-codex-video-01";
 const platformKinds: IntegrationKind[] = [
   "DOUYIN", "TIKTOK", "WECHAT_OFFICIAL", "XIAOHONGSHU", "WECOM", "WECHAT_CHANNELS",
   "AMAZON", "SHOPIFY", "TMALL", "JD", "PINDUODUO",
@@ -72,6 +74,15 @@ function object(value: unknown): JsonRecord {
   return value && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : {};
 }
 
+export function aiTaskTargetNodeCode(task: {
+  sourceType?: string | null;
+  input?: Prisma.JsonValue | JsonRecord | null;
+}) {
+  const requestedNodeCode = text(object(task.input).preferredNodeCode).toLowerCase();
+  if (requestedNodeCode) return requestedNodeCode;
+  return task.sourceType === "VIDEO_FACTORY_PROJECT" ? smartVideoPrimaryNodeCode : "";
+}
+
 function normalizeTaskOutputSizes<T>(task: T): T {
   const source = object(task);
   if (!Array.isArray(source.outputs)) return task;
@@ -94,6 +105,16 @@ function normalizeTaskOutputSizes<T>(task: T): T {
 
 function strings(value: unknown): string[] {
   return Array.isArray(value) ? value.map(text).filter(Boolean) : [];
+}
+
+export function videoScriptOutputMetadata(candidates: unknown[]) {
+  const normalized = candidates.map(object);
+  const selected = normalized.find((candidate) => candidate.selected === true) || normalized[0] || {};
+  return {
+    script: selected,
+    scriptCount: normalized.length,
+    selectedCandidate: Math.max(0, normalized.indexOf(selected)),
+  };
 }
 
 function hash(value: string | Buffer) {
@@ -237,6 +258,76 @@ export class AiTaskCenterService implements OnModuleInit {
         },
       });
     }
+    await this.backfillVideoScriptOutputs();
+  }
+
+  private async backfillVideoScriptOutputs() {
+    const projectOutputs = await this.prisma.aiTaskOutput.findMany({
+      where: {
+        kind: "VIDEO_PROJECT",
+        contentPlanId: { not: null },
+        aiTask: {
+          type: "VIDEO",
+          sourceType: "VIDEO_FACTORY_PROJECT",
+        },
+      },
+      select: {
+        aiTaskId: true,
+        contentPlanId: true,
+        aiTask: {
+          select: {
+            input: true,
+            platform: true,
+            productModel: true,
+          },
+        },
+        contentPlan: {
+          select: {
+            topic: true,
+            productModel: true,
+            sourceSignals: true,
+          },
+        },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 200,
+    });
+    for (const output of projectOutputs) {
+      if (!output.contentPlanId || !output.contentPlan) continue;
+      if (text(object(output.aiTask.input).executionMode).toUpperCase() !== "SCRIPT_ONLY") continue;
+      const exists = await this.prisma.aiTaskOutput.findFirst({
+        where: {
+          aiTaskId: output.aiTaskId,
+          kind: "VIDEO_SCRIPT",
+          contentPlanId: output.contentPlanId,
+        },
+        select: { id: true },
+      });
+      if (exists) continue;
+      const factory = (Array.isArray(output.contentPlan.sourceSignals)
+        ? output.contentPlan.sourceSignals.map(object)
+        : []).find((signal) => text(signal.type).toUpperCase() === "VIDEO_FACTORY");
+      const candidates = Array.isArray(factory?.scriptCandidates) ? factory.scriptCandidates : [];
+      if (!candidates.length) continue;
+      const scriptMetadata = videoScriptOutputMetadata(candidates);
+      const selectedScript = object(scriptMetadata.script);
+      await this.prisma.aiTaskOutput.create({
+        data: {
+          aiTaskId: output.aiTaskId,
+          kind: "VIDEO_SCRIPT",
+          title: text(selectedScript.title) || `${output.contentPlan.topic} · 完整脚本`,
+          contentPlanId: output.contentPlanId,
+          reviewStatus: "PENDING",
+          metadata: json({
+            ...scriptMetadata,
+            executionMode: "SCRIPT_ONLY",
+            productModel: output.contentPlan.productModel || output.aiTask.productModel,
+            platform: output.aiTask.platform,
+            backfilled: true,
+          }),
+        },
+      });
+    }
   }
 
   async overview() {
@@ -356,7 +447,14 @@ export class AiTaskCenterService implements OnModuleInit {
         ownerEmployeeId: text(body.ownerEmployeeId) || null,
         reviewerEmployeeId: text(body.reviewerEmployeeId) || null,
         modelPolicy: json({ ...modelPolicy, executionClass }),
-        input: json({ ...object(body.input), executionClass, budgetState }),
+        input: json({
+          ...object(body.input),
+          ...(sourceType === "VIDEO_FACTORY_PROJECT"
+            ? { preferredNodeCode: aiTaskTargetNodeCode({ sourceType, input: object(body.input) }) }
+            : {}),
+          executionClass,
+          budgetState,
+        }),
         estimatedCost,
         budgetLimit,
         maxRetries: policy.maxAttempts,
@@ -805,6 +903,8 @@ export class AiTaskCenterService implements OnModuleInit {
       take: 20,
     });
     for (const candidate of tasks) {
+      const targetNodeCode = aiTaskTargetNodeCode(candidate);
+      if (targetNodeCode && targetNodeCode !== node.nodeCode.toLowerCase()) continue;
       const policy = await this.policy(candidate.type);
       if (!policy.enabled) continue;
       const running = await this.prisma.aiTask.count({ where: { type: candidate.type, status: { in: ["CLAIMED", "RUNNING", "QUALITY_CHECK", "UPLOADING"] } } });
@@ -964,8 +1064,8 @@ export class AiTaskCenterService implements OnModuleInit {
           ? false
           : modelPolicy.allowExternalGeneration === true,
         requiredSkill: task.type === "VIDEO"
-          && ["FULL_VIDEO", "SCRIPT_ONLY"].includes(text(input.executionMode).toUpperCase() || "FULL_VIDEO")
-          ? "video-editing-from-media-library-share"
+          && ["FULL_VIDEO", "SCRIPT_ONLY", "SIMILAR_VIDEO", "NO_VOICE_VIDEO", "COVER_TITLE"].includes(text(input.executionMode).toUpperCase() || "FULL_VIDEO")
+          ? "saidian-ai-task-dispatcher"
           : task.type === "IMAGE"
             ? "imagegen"
             : task.type === "ARTICLE"
@@ -1578,7 +1678,7 @@ export class AiTaskCenterService implements OnModuleInit {
       const taskInput = object(task.input);
       const executionMode = enumValue(
         taskInput.executionMode,
-        ["TOPIC_CARD_BATCH", "SCRIPT_ONLY", "FULL_VIDEO"] as const,
+        ["TOPIC_CARD_BATCH", "SCRIPT_ONLY", "FULL_VIDEO", "SIMILAR_VIDEO", "NO_VOICE_VIDEO", "COVER_TITLE"] as const,
         "FULL_VIDEO",
       );
       if (executionMode === "TOPIC_CARD_BATCH") {
@@ -1618,6 +1718,67 @@ export class AiTaskCenterService implements OnModuleInit {
           message: `已生成${persisted.created.length}张选题卡，${persisted.skipped.length}张重复或无效卡片已跳过，等待管理员确认`,
         };
       }
+      if (executionMode === "COVER_TITLE") {
+        const contentPlanId = text(taskInput.existingContentPlanId);
+        const packaging = Array.isArray(result.packaging) ? result.packaging.map(object) : [];
+        if (!contentPlanId || !packaging.length) {
+          return { status: "WAITING_INPUT" as AiTaskStatus, message: "Codex未返回可回写的封面标题结果" };
+        }
+        const plan = await this.prisma.contentPlan.findUnique({
+          where: { id: contentPlanId },
+          include: { variants: true },
+        });
+        if (!plan) return { status: "WAITING_INPUT" as AiTaskStatus, message: "智能视频项目不存在" };
+        const outputs = await this.prisma.aiTaskOutput.findMany({
+          where: { aiTaskId: task.id, assetId: { not: null }, mimeType: { startsWith: "image/" } },
+          orderBy: { createdAt: "desc" },
+        });
+        const updates = [];
+        for (const item of packaging) {
+          const platform = text(item.platform).toUpperCase();
+          const variant = plan.variants.find((candidate) => candidate.platform === platform);
+          const coverOutput = outputs.find((candidate) => text(object(candidate.metadata).platform).toUpperCase() === platform)
+            || (outputs.length === 1 ? outputs[0] : undefined);
+          if (!variant || !coverOutput?.url || !text(item.title) || !text(item.coverText)) continue;
+          updates.push(this.prisma.contentVariant.update({
+            where: { id: variant.id },
+            data: {
+              title: text(item.title),
+              body: text(item.body),
+              coverPath: coverOutput.url,
+              coverSpec: json({
+                coverText: text(item.coverText),
+                hashtags: strings(item.hashtags),
+                contentFingerprint: text(item.contentFingerprint),
+                compliance: object(item.compliance),
+                coverAssetId: coverOutput.assetId,
+                aiTaskId: task.id,
+              }),
+              packagingStatus: "PENDING_REVIEW",
+              packagedAt: new Date(),
+              packagingRejectedReason: null,
+              metadata: json({
+                ...object(variant.metadata),
+                coverAssetId: coverOutput.assetId,
+                coverAiTaskId: task.id,
+              }),
+            },
+          }));
+          updates.push(this.prisma.aiTaskOutput.update({
+            where: { id: coverOutput.id },
+            data: { contentPlanId, reviewStatus: "PENDING" },
+          }));
+        }
+        if (!updates.length) {
+          return { status: "WAITING_INPUT" as AiTaskStatus, message: "封面文件未按平台登记，无法回写项目" };
+        }
+        updates.push(this.prisma.contentPlan.update({
+          where: { id: contentPlanId },
+          data: { productionStage: "PACKAGING_REVIEW" },
+        }));
+        await this.prisma.$transaction(updates);
+        return { status: "PENDING_REVIEW" as AiTaskStatus, message: "封面和标题已回传，等待用户审核" };
+      }
       let scriptCandidates = normalizeVideoScriptCandidates(
         Array.isArray(projectInput.scriptCandidates) ? projectInput.scriptCandidates : result.scriptCandidates,
       );
@@ -1628,8 +1789,9 @@ export class AiTaskCenterService implements OnModuleInit {
       const existingProject = existingContentPlanId
         ? await this.prisma.contentPlan.findUnique({ where: { id: existingContentPlanId } })
         : null;
-      if (existingProject?.workflowVersion && existingProject.workflowVersion >= 4) {
-        scriptCandidates = scriptCandidates.slice(0, 1).map((candidate) => ({ ...candidate, selected: true }));
+      if (executionMode === "SCRIPT_ONLY") {
+        const selectedScript = scriptCandidates.find((candidate) => candidate.selected) || scriptCandidates[0];
+        scriptCandidates = [{ ...selectedScript, selected: true }];
       }
       const project = existingProject || await this.videoFactory.createCodexProject({
         platform: enumValue(projectInput.platform || task.platform, ["DOUYIN", "TIKTOK"] as const, "DOUYIN"),
@@ -1644,7 +1806,7 @@ export class AiTaskCenterService implements OnModuleInit {
       await this.videoFactory.applyCodexProjectResult({
         contentPlanId: project.id,
         aiTaskId: task.id,
-        executionMode,
+        executionMode: executionMode === "SCRIPT_ONLY" ? "SCRIPT_ONLY" : "FULL_VIDEO",
         scriptCandidates,
         actor,
       });
@@ -1669,11 +1831,31 @@ export class AiTaskCenterService implements OnModuleInit {
         });
       }
       if (executionMode === "SCRIPT_ONLY") {
+        const scriptMetadata = videoScriptOutputMetadata(scriptCandidates);
+        const selectedScript = object(scriptMetadata.script);
+        const existingScriptOutput = await this.prisma.aiTaskOutput.findFirst({
+          where: { aiTaskId: task.id, kind: "VIDEO_SCRIPT", contentPlanId: project.id },
+        });
+        if (!existingScriptOutput) {
+          await this.prisma.aiTaskOutput.create({
+            data: {
+              aiTaskId: task.id,
+              kind: "VIDEO_SCRIPT",
+              title: text(selectedScript.title) || `${project.topic} · 完整脚本`,
+              contentPlanId: project.id,
+              reviewStatus: "PENDING",
+              metadata: json({
+                ...scriptMetadata,
+                executionMode,
+                productModel: project.productModel,
+                platform: task.platform,
+              }),
+            },
+          });
+        }
         return {
           status: "PENDING_REVIEW" as AiTaskStatus,
-          message: existingProject?.workflowVersion && existingProject.workflowVersion >= 4
-            ? "单套完整脚本、逐句素材绑定和缺口清单已进入视频工厂，等待审核"
-            : "三套脚本和分镜已进入视频工厂，等待审核",
+          message: "单套完整脚本、逐句素材绑定和缺口清单已进入视频工厂，等待审核",
         };
       }
 
@@ -1868,6 +2050,68 @@ export class AiTaskCenterService implements OnModuleInit {
     const productModel = text(body.productModel);
     const baseInput = object(body.input);
     const executionMode = text(baseInput.executionMode || body.executionMode).toUpperCase();
+    if (type === "VIDEO" && executionMode === "COVER_TITLE") {
+      const contentPlanId = text(baseInput.existingContentPlanId || body.sourceId);
+      const masterAssetId = text(baseInput.masterAssetId);
+      const [contentPlan, masterAsset] = await Promise.all([
+        contentPlanId
+          ? this.prisma.contentPlan.findUnique({
+            where: { id: contentPlanId },
+            include: { variants: true },
+          })
+          : Promise.resolve(null),
+        masterAssetId
+          ? this.prisma.asset.findFirst({
+            where: {
+              id: masterAssetId,
+              reviewStatus: "APPROVED",
+              availabilityStatus: "ACTIVE",
+              rightsStatus: { in: ["COMMERCIAL", "EDIT_ONLY"] },
+              deletedAt: null,
+            },
+            select: {
+              id: true,
+              assetNo: true,
+              displayName: true,
+              kind: true,
+              mediaType: true,
+              contentDescription: true,
+              storageUrl: true,
+              sha256: true,
+              width: true,
+              height: true,
+              durationSeconds: true,
+              qualityScore: true,
+            },
+          })
+          : Promise.resolve(null),
+      ]);
+      const missingFields: string[] = [];
+      if (!contentPlan) missingFields.push("智能视频项目");
+      if (!masterAsset) missingFields.push("已审核成片");
+      return {
+        payload: {
+          ...baseInput,
+          contentPlan: contentPlan
+            ? {
+              id: contentPlan.id,
+              productionNo: contentPlan.productionNo,
+              topic: contentPlan.topic,
+              productModel: contentPlan.productModel,
+              targetPlatforms: contentPlan.targetPlatforms,
+              variants: contentPlan.variants.map((variant) => ({
+                platform: variant.platform,
+                title: variant.title,
+                body: variant.body,
+                rejectedReason: variant.packagingRejectedReason,
+              })),
+            }
+            : null,
+          assets: masterAsset ? [masterAsset] : [],
+        },
+        missingFields,
+      };
+    }
     if (type === "VIDEO" && executionMode === "TOPIC_CARD_BATCH") {
       const platform = enumValue(baseInput.platform || body.platform, ["DOUYIN", "TIKTOK"] as const, "DOUYIN");
       const market = platform === "TIKTOK" ? "US" : "CN";

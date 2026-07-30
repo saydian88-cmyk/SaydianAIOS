@@ -60,4 +60,27 @@ describe("unified result contract", () => {
     expect(() => validateResult({ summary: "ok", outputFiles: [] }, schema, true))
       .toThrow(ResultSchemaError);
   });
+
+  it("accepts downstream Skill trace fields added by the dispatcher", () => {
+    expect(() => validateResult({
+      summary: "ok",
+      outputFiles: [],
+      execution: {
+        skill: "saidian-ai-task-dispatcher",
+        skillVersion: "sha256-test",
+        skillDigest: "digest",
+        strategy: "CODEX_SKILL",
+        executionMode: "SCRIPT_ONLY",
+        routeReason: "dispatcher route",
+        fallbackOrder: ["SCRIPT_AND_STORYBOARD_ONLY"],
+        downstreamSkill: "video-editing-from-media-library",
+        downstreamSkillPath: "G:/CodexHome/skills/video-editing-from-media-library/SKILL.md",
+        startedAt: "2026-07-30T06:30:00.000Z",
+        finishedAt: "2026-07-30T06:40:00.000Z",
+        durationMs: 600000,
+        resumed: false,
+        schemaAttempts: 1,
+      },
+    }, schema, true)).not.toThrow();
+  });
 });

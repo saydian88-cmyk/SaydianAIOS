@@ -7,7 +7,7 @@ export type JsonRecord = Record<string, unknown>;
 export type SkillKey =
   | "imagegen"
   | "build-health-brand-trust-content"
-  | "video-editing-from-media-library-share"
+  | "saidian-ai-task-dispatcher"
   | "legacy-codex";
 
 export type SkillRoute = {
@@ -18,6 +18,8 @@ export type SkillRoute = {
   reason: string;
   fallbackOrder: string[];
   skillPath?: string;
+  downstreamSkillName?: string;
+  downstreamSkillPath?: string;
 };
 
 export type DetectedSkill = SkillRoute & {
@@ -57,26 +59,34 @@ export function skillRegistry(env: NodeJS.ProcessEnv = process.env): Record<Excl
       env.AI_TASK_ARTICLE_SKILL_PATH
       || join(home, "skills", "build-health-brand-trust-content", "SKILL.md"),
     )),
-    "video-editing-from-media-library-share": resolve(String(
-      env.AI_TASK_VIDEO_SKILL_PATH
-      || join(
-        home,
-        "plugins",
-        "cache",
-        "personal",
-        "video-editing-from-media-library-share",
-        "0.1.0",
-        "skills",
-        "video-editing-from-media-library-share",
-        "SKILL.md",
-      ),
+    "saidian-ai-task-dispatcher": resolve(String(
+      env.AI_TASK_DISPATCHER_SKILL_PATH
+      || join(home, "skills", "saidian-ai-task-dispatcher", "SKILL.md"),
     )),
   };
 }
 
-function assertPackageRoute(execution: JsonRecord, key: SkillKey, allowedStrategies: string[]) {
+function videoSkillPath(env: NodeJS.ProcessEnv) {
+  const home = codexHome(env);
+  return resolve(String(
+    env.AI_TASK_VIDEO_SKILL_PATH
+    || join(home, "skills", "video-editing-from-media-library", "SKILL.md"),
+  ));
+}
+
+function videoSkillName(env: NodeJS.ProcessEnv) {
+  return String(env.AI_TASK_VIDEO_SKILL_NAME || "video-editing-from-media-library").trim();
+}
+
+function assertPackageRoute(
+  execution: JsonRecord,
+  key: SkillKey,
+  allowedStrategies: string[],
+  compatibleRequiredSkills: string[] = [],
+) {
   const requiredSkill = String(execution.requiredSkill || "").trim();
-  if (requiredSkill && requiredSkill !== key) {
+  const allowedRequiredSkills = new Set([key, ...compatibleRequiredSkills].filter(Boolean));
+  if (requiredSkill && !allowedRequiredSkills.has(requiredSkill)) {
     throw new SkillRouteError(
       `任务包 requiredSkill=${requiredSkill} 与固定路由 ${key} 不一致`,
       "REQUIRED_SKILL_MISMATCH",
@@ -130,21 +140,28 @@ export function routeTask(taskPackage: JsonRecord, env: NodeJS.ProcessEnv = proc
     };
   }
 
-  if (type === "VIDEO" && ["FULL_VIDEO", "SCRIPT_ONLY"].includes(executionMode)) {
+  if (type === "VIDEO" && ["FULL_VIDEO", "SCRIPT_ONLY", "SIMILAR_VIDEO", "NO_VOICE_VIDEO", "COVER_TITLE"].includes(executionMode)) {
     assertPackageRoute(
       execution,
-      "video-editing-from-media-library-share",
+      "saidian-ai-task-dispatcher",
       ["CODEX_SKILL", "CODEX_FIRST"],
+      [
+        videoSkillName(env),
+        "video-editing-from-media-library",
+        "video-editing-from-media-library-share",
+      ],
     );
     return {
-      key: "video-editing-from-media-library-share",
+      key: "saidian-ai-task-dispatcher",
       taskType: type,
       executionMode,
       strategy: "CODEX_SKILL",
-      reason: executionMode === "FULL_VIDEO"
-        ? "VIDEO/FULL_VIDEO 固定使用素材库分享版剪辑 Skill"
-        : "VIDEO/SCRIPT_ONLY 使用同一 Skill 的脚本与分镜阶段",
-      fallbackOrder: executionMode === "FULL_VIDEO"
+      reason: executionMode === "COVER_TITLE"
+        ? "VIDEO/COVER_TITLE 由赛电调度 Skill 调用本地素材库剪辑 Skill，再交接封面标题子 Skill"
+        : executionMode === "SCRIPT_ONLY"
+          ? "VIDEO/SCRIPT_ONLY 由赛电调度 Skill 调用本地素材库剪辑 Skill 的脚本阶段"
+          : `VIDEO/${executionMode} 由赛电调度 Skill 调用本地素材库剪辑 Skill`,
+      fallbackOrder: ["FULL_VIDEO", "SIMILAR_VIDEO", "NO_VOICE_VIDEO"].includes(executionMode)
         ? [
           "APPROVED_REAL_VIDEO",
           "PRODUCT_IMAGE_AUXILIARY_OVERLAY",
@@ -152,8 +169,12 @@ export function routeTask(taskPackage: JsonRecord, env: NodeJS.ProcessEnv = proc
           "EXTERNAL_VISUAL_IF_EXPLICITLY_ALLOWED",
           "RESHOOT_OPS_TASK",
         ]
-        : ["SCRIPT_AND_STORYBOARD_ONLY"],
-      skillPath: registry()["video-editing-from-media-library-share"],
+        : executionMode === "COVER_TITLE"
+          ? ["FENG_MIAN_BIAO_TI_CHILD_SKILL"]
+          : ["SCRIPT_AND_STORYBOARD_ONLY"],
+      skillPath: registry()["saidian-ai-task-dispatcher"],
+      downstreamSkillName: videoSkillName(env),
+      downstreamSkillPath: videoSkillPath(env),
     };
   }
 
