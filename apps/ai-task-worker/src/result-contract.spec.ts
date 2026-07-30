@@ -4,6 +4,7 @@ import {
   ResultSchemaError,
   runWithSchemaRetry,
   validateResult,
+  validateVideoScriptMaterialIds,
 } from "./result-contract";
 
 const schema = {
@@ -82,5 +83,50 @@ describe("unified result contract", () => {
         schemaAttempts: 1,
       },
     }, schema, true)).not.toThrow();
+  });
+
+  it("accepts covered script lines only when they bind real task VIDEO asset IDs", () => {
+    expect(() => validateVideoScriptMaterialIds({
+      candidates: [{
+        scriptPackage: {
+          shotRequirements: [{
+            assetStatus: "COVERED",
+            matchedVideoAssetIds: ["video-1"],
+            auxiliaryImageAssetIds: ["image-1"],
+          }],
+        },
+      }],
+    }, [
+      { id: "video-1", kind: "VIDEO" },
+      { id: "image-1", kind: "IMAGE" },
+    ])).not.toThrow();
+  });
+
+  it("rejects covered lines without a real task VIDEO asset ID", () => {
+    expect(() => validateVideoScriptMaterialIds({
+      candidates: [{
+        scriptPackage: {
+          shotRequirements: [{
+            assetStatus: "COVERED",
+            matchedVideoAssetIds: [],
+            auxiliaryImageAssetIds: ["image-1"],
+          }],
+        },
+      }],
+    }, [{ id: "image-1", kind: "IMAGE" }])).toThrow("没有回传matchedVideoAssetIds");
+  });
+
+  it("rejects asset IDs outside the current task material library whitelist", () => {
+    expect(() => validateVideoScriptMaterialIds({
+      candidates: [{
+        scriptPackage: {
+          shotRequirements: [{
+            assetStatus: "COVERED",
+            matchedVideoAssetIds: ["other-task-video"],
+            auxiliaryImageAssetIds: [],
+          }],
+        },
+      }],
+    }, [{ id: "video-1", kind: "VIDEO" }])).toThrow("非任务白名单VIDEO素材ID");
   });
 });

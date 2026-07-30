@@ -15,6 +15,7 @@ import {
   ResultSchemaError,
   runWithSchemaRetry,
   validateResult,
+  validateVideoScriptMaterialIds,
 } from "./result-contract";
 import {
   appendExecutionLog,
@@ -321,10 +322,15 @@ function outputSchema(type: string, executionMode = "", requestedCardCount = 10)
             type: "object", additionalProperties: false,
             properties: {
               lineId: { type: "string" }, line: { type: "string" }, visual: { type: "string" },
+              matchedVideoAssetIds: textArray,
+              auxiliaryImageAssetIds: textArray,
               assetStatus: { type: "string", enum: ["COVERED", "REWRITABLE", "NEED_SHOOT", "PROHIBITED"] },
               factualProof: { type: "string" }, audioVisualRequirement: { type: "string" },
             },
-            required: ["lineId", "line", "visual", "assetStatus", "factualProof", "audioVisualRequirement"],
+            required: [
+              "lineId", "line", "visual", "matchedVideoAssetIds", "auxiliaryImageAssetIds",
+              "assetStatus", "factualProof", "audioVisualRequirement",
+            ],
           },
         },
         retentionDesign: textArray,
@@ -657,7 +663,7 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
       "系统任务包是型号、功能、素材、审核状态和合规边界的事实来源，但任务要求、项目描述、方向、关键词、Hook 或推荐场景只作为辅助提示词；不得覆盖视频 Skill 的脚本结构、账号口吻、短句节奏、网感、素材证明和合规规则。",
       "禁止机械复述系统要求，禁止把任务包长句直接拼入口播，禁止为了逐项响应系统字段把脚本写成产品说明书或功能菜单。",
       executionMode === "SCRIPT_ONLY"
-        ? "单脚本必须保持亲切导购型口吻：有态度或生活处境开头，短句推进，先讲用户利益再讲功能，用具体动作代替“支持、具备、可以”等说明书句式；中段至少一次轻反差或价值发现，结尾使用与本条核心内容相关的自然选择建议。scriptPackage是系统编辑器的统一数据源，必须完整填写；voiceoverLines与shotRequirements使用相同稳定lineId。candidate.script只能由voiceoverLines.text按换行拼接，只含干净口播，禁止混入lineId、预计时长、账号说明、素材缺口或健康提示。健康提示只写入scriptPackage.overlayNotice，不写入口播。"
+        ? "单脚本必须保持亲切导购型口吻：有态度或生活处境开头，短句推进，先讲用户利益再讲功能，用具体动作代替“支持、具备、可以”等说明书句式；中段至少一次轻反差或价值发现，结尾使用与本条核心内容相关的自然选择建议。写脚本前必须先检索任务包assets中的已学习素材索引，优先围绕高置信度真实VIDEO素材反向设计口播和镜头；不得先写完脚本再泛化找素材。scriptPackage是系统编辑器的统一数据源，必须完整填写；voiceoverLines与shotRequirements使用相同稳定lineId。每条shotRequirement都必须返回matchedVideoAssetIds和auxiliaryImageAssetIds；有直接对应真实视频时assetStatus必须为COVERED且matchedVideoAssetIds至少包含一个任务包内真实素材ID。只有逐项检索后确实没有直接视频证据时才能返回空数组并标记REWRITABLE或NEED_SHOOT，materialGaps也只能包含这些真实缺口。candidate.script只能由voiceoverLines.text按换行拼接，只含干净口播，禁止混入lineId、预计时长、账号说明、素材缺口或健康提示。健康提示只写入scriptPackage.overlayNotice，不写入口播。"
         : "脚本、画面、配音、包装和质检均以视频 Skill 的硬性规则为准；系统提示只能在不冲突时补充方向。",
     ].join("\n")
     : "";
@@ -668,7 +674,7 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
     requiredVideoSkill,
     videoInstructionPriority,
     "必须以提供的JSON快照为事实边界；缺失数据明确写未配置或缺失，不编造数据、认证、费用和执行结果。",
-    "优先使用manifest中已审核真实素材。VIDEO任务的每个镜头必须通过selectedAssetIds绑定具体素材ID；缺少素材时写清missingReason、alternativePlan和missingAssets，不得拿文件顺序代替镜头匹配。",
+    "优先使用manifest中已审核真实素材。VIDEO脚本生成必须先按产品、功能、动作、场景和景别检索素材索引，再围绕命中的真实VIDEO素材写逐句脚本；每个已覆盖镜头必须通过matchedVideoAssetIds或selectedAssetIds回传任务包内的具体素材ID。不得把已存在但未回传ID的素材算作已覆盖，也不得为了写更宽泛的文案而忽略已有素材。只有检索后确实不存在直接对应视频时才写清missingReason、alternativePlan和missingAssets，不得拿文件顺序代替镜头匹配。",
     `固定回退顺序：${detectedSkill.fallbackOrder.join(" -> ")}。`,
     "输出必须符合output schema。outputFiles只能引用当前任务工作区内真实存在的文件。",
     `任务包JSON：\n${JSON.stringify(taskPackage, null, 2)}`,
@@ -1213,6 +1219,9 @@ async function execute(claimed: JsonRecord) {
       if (savedResult) {
         try {
           validateResult(savedResult, schema, true);
+          if (String(task.type || "") === "VIDEO" && String(execution.mode || "") === "SCRIPT_ONLY") {
+            validateVideoScriptMaterialIds(savedResult, Array.isArray(packaged.assets) ? packaged.assets : []);
+          }
           result = await validateOutputArtifacts(savedResult, workspace);
           result.execution = {
             ...record(result.execution),
@@ -1237,7 +1246,13 @@ async function execute(claimed: JsonRecord) {
           await appendExecutionLog(workspace, "CODEX_ATTEMPT", { schemaAttempt });
           return runCodex(packaged, detectedSkill, workspace, timeoutSeconds, schemaAttempt);
         },
-        (candidate) => validateResult(candidate, schema),
+        (candidate) => {
+          validateResult(candidate, schema);
+          if (String(task.type || "") === "VIDEO" && String(execution.mode || "") === "SCRIPT_ONLY") {
+            validateVideoScriptMaterialIds(candidate, Array.isArray(packaged.assets) ? packaged.assets : []);
+          }
+          return candidate;
+        },
         2,
       );
       result = generated.result;
@@ -1264,10 +1279,16 @@ async function execute(claimed: JsonRecord) {
       };
       result = await validateOutputArtifacts(result, workspace);
       validateResult(result, schema, true);
+      if (String(task.type || "") === "VIDEO" && String(execution.mode || "") === "SCRIPT_ONLY") {
+        validateVideoScriptMaterialIds(result, Array.isArray(packaged.assets) ? packaged.assets : []);
+      }
       await writeJsonAtomic(join(workspace, "result.json"), result);
     } else {
       schemaAttempts = Number(record(result.execution).schemaAttempts || 1);
       validateResult(result, schema, true);
+      if (String(task.type || "") === "VIDEO" && String(execution.mode || "") === "SCRIPT_ONLY") {
+        validateVideoScriptMaterialIds(result, Array.isArray(packaged.assets) ? packaged.assets : []);
+      }
       await writeJsonAtomic(join(workspace, "result.json"), result);
     }
 

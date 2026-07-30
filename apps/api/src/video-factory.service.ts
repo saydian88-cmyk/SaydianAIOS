@@ -493,6 +493,7 @@ export class VideoFactoryService {
       description: asset.contentDescription,
       tags: asset.tags.map((item) => item.tag.label),
     }));
+    const assetKinds = new Map(analysisAssets.map((asset) => [asset.id, asset.kind]));
     let coverage: Array<{
       description: string;
       matchedAssetIds: string[];
@@ -501,27 +502,47 @@ export class VideoFactoryService {
       coverage: "EXISTING" | "MISSING";
       reason: string;
     }> = [];
-    try {
-      coverage = (await this.aiContent.analyzeVideoAssetCoverage({
-        productModel: scriptPackage.basicInfo?.productModel,
-        script: candidate,
-        assets: analysisAssets,
-      })).shots;
-    } catch {
-      coverage = descriptions.map((description) => ({
-        description,
-        matchedAssetIds: [],
-        matchedVideoAssetIds: [],
-        auxiliaryImageAssetIds: [],
-        coverage: "MISSING" as const,
-        reason: "素材索引暂未找到可直接证明该句内容的连续视频镜头",
-      }));
+    const needsCoverageFallback = descriptions.some((_, index) =>
+      !strings(shotRequirements[index]?.matchedVideoAssetIds)
+        .some((assetId) => assetKinds.get(assetId) === "VIDEO"));
+    if (needsCoverageFallback) {
+      try {
+        coverage = (await this.aiContent.analyzeVideoAssetCoverage({
+          productModel: scriptPackage.basicInfo?.productModel,
+          script: candidate,
+          assets: analysisAssets,
+        })).shots;
+      } catch {
+        coverage = descriptions.map((description) => ({
+          description,
+          matchedAssetIds: [],
+          matchedVideoAssetIds: [],
+          auxiliaryImageAssetIds: [],
+          coverage: "MISSING" as const,
+          reason: "素材索引暂未找到可直接证明该句内容的连续视频镜头",
+        }));
+      }
     }
     const shots = descriptions.map((description, index) => {
       const matched = coverage[index] || coverage.find((item) => item.description === description);
       const requirement = shotRequirements[index] || {};
       const line = String(requirement.line || voiceoverLines[index]?.text || candidate.outline[index] || description);
-      const selectedAssetIds = matched?.matchedVideoAssetIds || [];
+      // 脚本生成模型已经基于持久化素材索引选出了真实 assetId。
+      // 这些逐句绑定是第一优先级；二次覆盖分析只为模型未返回有效 ID 的句子兜底，
+      // 不能把脚本阶段已经选准的素材覆盖掉。
+      const generatedVideoAssetIds = strings(requirement.matchedVideoAssetIds)
+        .filter((assetId) => assetKinds.get(assetId) === "VIDEO");
+      const generatedImageAssetIds = strings(requirement.auxiliaryImageAssetIds)
+        .filter((assetId) => assetKinds.get(assetId) === "IMAGE");
+      const selectedAssetIds = generatedVideoAssetIds.length
+        ? generatedVideoAssetIds
+        : strings(matched?.matchedVideoAssetIds).filter((assetId) => assetKinds.get(assetId) === "VIDEO");
+      const auxiliaryImageAssetIds = generatedImageAssetIds.length
+        ? generatedImageAssetIds
+        : strings(matched?.auxiliaryImageAssetIds).filter((assetId) => assetKinds.get(assetId) === "IMAGE");
+      const materialMatchReason = generatedVideoAssetIds.length
+        ? String(requirement.factualProof || requirement.audioVisualRequirement || "脚本生成阶段已按素材索引返回并绑定真实视频素材ID")
+        : String(matched?.reason || "");
       return {
         lineId: String(requirement.lineId || `line_${String(index + 1).padStart(2, "0")}`),
         sequence: index,
@@ -534,11 +555,11 @@ export class VideoFactoryService {
         durationSeconds: Math.max(2, Math.round(Number(voiceoverLines[index]?.durationSeconds) || 4)),
         sourcePreference: selectedAssetIds.length ? "REAL_ASSET" : "REAL_ASSET_FIRST",
         selectedAssetIds,
-        auxiliaryImageAssetIds: matched?.auxiliaryImageAssetIds || [],
+        auxiliaryImageAssetIds,
         requiredAssetTags: [],
         missingReason: selectedAssetIds.length ? "" : matched?.reason || "缺少直接匹配的视频素材",
         alternativePlan: selectedAssetIds.length ? "" : "可由真人补拍或调用AI生成，并绑定到本句脚本",
-        materialMatchReason: matched?.reason || "",
+        materialMatchReason,
         materialMatchStatus: selectedAssetIds.length ? "COVERED" : "MISSING",
       };
     });

@@ -83,6 +83,51 @@ export function validateResult(result: JsonRecord, schema: JsonRecord, final = f
   throw new ResultSchemaError(`result.json Schema校验失败：${message}`, validate.errors || []);
 }
 
+export function validateVideoScriptMaterialIds(
+  result: JsonRecord,
+  assets: Array<{ id?: unknown; kind?: unknown }>,
+) {
+  const assetKinds = new Map(
+    assets
+      .map((asset) => [String(asset.id || ""), String(asset.kind || "").toUpperCase()] as const)
+      .filter(([id]) => id),
+  );
+  const candidates = Array.isArray(result.candidates) ? result.candidates : [];
+  for (const [candidateIndex, rawCandidate] of candidates.entries()) {
+    const candidate = rawCandidate && typeof rawCandidate === "object" ? rawCandidate as JsonRecord : {};
+    const scriptPackage = candidate.scriptPackage && typeof candidate.scriptPackage === "object"
+      ? candidate.scriptPackage as JsonRecord
+      : {};
+    const requirements = Array.isArray(scriptPackage.shotRequirements) ? scriptPackage.shotRequirements : [];
+    for (const [requirementIndex, rawRequirement] of requirements.entries()) {
+      const requirement = rawRequirement && typeof rawRequirement === "object" ? rawRequirement as JsonRecord : {};
+      const videoIds = Array.isArray(requirement.matchedVideoAssetIds)
+        ? requirement.matchedVideoAssetIds.map(String).filter(Boolean)
+        : [];
+      const imageIds = Array.isArray(requirement.auxiliaryImageAssetIds)
+        ? requirement.auxiliaryImageAssetIds.map(String).filter(Boolean)
+        : [];
+      const invalidVideoIds = videoIds.filter((id) => assetKinds.get(id) !== "VIDEO");
+      const invalidImageIds = imageIds.filter((id) => assetKinds.get(id) !== "IMAGE");
+      const location = `候选${candidateIndex + 1}第${requirementIndex + 1}句`;
+      if (invalidVideoIds.length) {
+        throw new ResultSchemaError(`${location}回传了非任务白名单VIDEO素材ID：${invalidVideoIds.join("、")}`);
+      }
+      if (invalidImageIds.length) {
+        throw new ResultSchemaError(`${location}回传了非任务白名单IMAGE辅助素材ID：${invalidImageIds.join("、")}`);
+      }
+      const status = String(requirement.assetStatus || "").toUpperCase();
+      if (status === "COVERED" && !videoIds.length) {
+        throw new ResultSchemaError(`${location}标记为COVERED但没有回传matchedVideoAssetIds`);
+      }
+      if (videoIds.length && status !== "COVERED") {
+        throw new ResultSchemaError(`${location}已绑定真实视频素材ID但assetStatus不是COVERED`);
+      }
+    }
+  }
+  return result;
+}
+
 export async function runWithSchemaRetry<T extends JsonRecord>(
   execute: (schemaAttempt: number) => Promise<T>,
   validate: (result: T) => T,
