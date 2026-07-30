@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import { AssetKind, BusinessSnapshotType, IntegrationKind, Prisma } from "@prisma/client";
 import { PrismaService } from "./prisma.service";
+import { AssetAiService } from "./asset-ai.service";
 import { safeJson, stringValue, toDate } from "./utils";
 
 const snapshotTypes = new Set<string>([
@@ -48,7 +49,10 @@ function stringList(value: unknown): string[] {
 
 @Injectable()
 export class LedgerService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly assetAi: AssetAiService,
+  ) {}
 
   async overview() {
     const [departments, employees, products, accounts, stores, imports, snapshots, attributions, sourceHealth] = await Promise.all([
@@ -433,8 +437,15 @@ export class LedgerService {
       }
       assetIds.push(asset.id);
       await this.audit(actor, existing ? "ASSET_UPDATED" : "ASSET_ADDED", "Asset", asset.id, { fileName: asset.fileName, sourceType: asset.sourceType, mediaType: asset.mediaType, model: asset.model, sha256: asset.sha256, qualityScore: asset.qualityScore, storageProvider: asset.storageProvider, objectKey: asset.objectKey, storageSyncedAt: asset.storageSyncedAt?.toISOString() });
-      if (existing) updated += 1;
-      else created += 1;
+      if (existing) {
+        updated += 1;
+        if (existing.sha256 !== sha256 || existing.objectVersionId !== asset.objectVersionId) {
+          await this.assetAi.enqueue(asset.id, kind, asset.analysisVersion + 1);
+        }
+      } else {
+        created += 1;
+        await this.assetAi.enqueue(asset.id, kind, 1);
+      }
     }
     return { received: rows.length, created, updated, duplicates, rejected: errors.length, errors, assetIds: Array.from(new Set(assetIds)) };
   }

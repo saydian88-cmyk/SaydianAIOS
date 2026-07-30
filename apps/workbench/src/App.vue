@@ -693,12 +693,19 @@ function closeVideoProject() {
   activeVideoProjectId.value = "";
 }
 
+async function refreshActiveVideoProject() {
+  const projectId = activeVideoProjectId.value;
+  if (!projectId) return;
+  const refreshed = await api<Row>(`/api/v1/workbench/data-center/video-projects/${projectId}`);
+  const current = Array.isArray(dataCenter.videoProjects) ? dataCenter.videoProjects : [];
+  dataCenter.videoProjects = current.map((project: Row) => project.id === projectId ? refreshed : project);
+  ElMessage.success("项目状态已刷新");
+}
+
 const videoFlowSteps = [
   "项目创建",
-  "脚本生成与素材预匹配",
-  "脚本审核与素材补全",
-  "视频生成",
-  "成片审核",
+  "脚本与素材准备",
+  "视频生成与成片审核",
   "封面标题与发布",
 ];
 
@@ -706,10 +713,9 @@ function videoFlowStep(project: Row) {
   if (projectWaitingForScripts(project)) return 2;
   const stage = String(project.productionStage || "");
   if (["PROJECT_BRIEF", "SCRIPT_GENERATING", "SCRIPT_RETURNED"].includes(stage)) return 2;
-  if (["FACTORY_SCRIPT_READY", "SCRIPT_APPROVED", "FACTORY_GENERATING", "MATERIAL_REVIEW", "MATERIAL_RETURNED"].includes(stage)) return 3;
-  if (["READY_TO_EDIT", "EDITING"].includes(stage)) return 4;
-  if (["VIDEO_REVIEW"].includes(stage)) return 5;
-  if (["PLATFORM_PACKAGING", "PACKAGING_REVIEW", "READY_TO_PUBLISH", "PUBLISHING", "TRACKING"].includes(stage)) return 6;
+  if (["FACTORY_SCRIPT_READY", "SCRIPT_APPROVED", "FACTORY_GENERATING", "MATERIAL_REVIEW", "MATERIAL_RETURNED"].includes(stage)) return 2;
+  if (["READY_TO_EDIT", "EDITING", "VIDEO_REVIEW"].includes(stage)) return 3;
+  if (["PLATFORM_PACKAGING", "PACKAGING_REVIEW", "READY_TO_PUBLISH", "PUBLISHING", "TRACKING"].includes(stage)) return 4;
   return 1;
 }
 
@@ -934,23 +940,54 @@ async function quickCreateProject(command: string) {
   ElMessage.info(command === "IMAGE" ? "图文项目稍后完善" : "软文项目稍后完善");
 }
 
+function editableCandidateLines(candidate: Row) {
+  if (Array.isArray(candidate.shots) && candidate.shots.length) return candidate.shots;
+  return candidateVoiceover(candidate).split("\n").map((line: string, index: number) => ({
+    lineId: `line_${String(index + 1).padStart(2, "0")}`,
+    voiceover: line,
+    description: line,
+    selectedAssetIds: [],
+  }));
+}
+
+function updateCandidateLine(candidate: Row, lineIndex: number, value: string) {
+  const lines = editableCandidateLines(candidate);
+  const line = lines[lineIndex];
+  if (!line) return;
+  line.__editedVoiceover = value;
+  const original = String(line.voiceover || line.description || "");
+  line.__dirty = value.trim() !== original.trim();
+  candidate.__dirtyLineIds = lines
+    .filter((item: Row) => item.__dirty)
+    .map((item: Row) => String(item.lineId));
+}
+
 async function saveInlineProjectScript(project: Row, candidate: Row, candidateIndex = 0) {
   const title = String(candidate.__editedTitle ?? candidate.titleZh ?? candidate.title ?? candidate.topic ?? project.topic ?? "").trim();
   const hook = String(candidate.__editedHook ?? candidate.hook ?? candidate.scriptPackage?.goldenHook?.copy ?? "").trim();
-  const script = String(candidate.__editedScript ?? candidateVoiceover(candidate)).trim();
+  const editableLines = editableCandidateLines(candidate);
+  const voiceoverLines = editableLines
+    .map((line: Row) => String(line.__editedVoiceover ?? line.voiceover ?? line.description ?? "").trim())
+    .filter(Boolean);
+  const script = String(candidate.__editedScript ?? voiceoverLines.join("\n") ?? candidateVoiceover(candidate)).trim();
   if (!hook || !script) return ElMessage.warning("钩子和完整脚本不能为空");
   const key = `${project.id}:${candidateIndex}`;
   savingInlineScriptKey.value = key;
   try {
-    const voiceoverLines = script.split("\n").map((item) => item.trim()).filter(Boolean);
     await post(`/api/v1/workbench/data-center/video-projects/${project.id}/script`, {
       candidateIndex,
       title,
       hook,
       script,
       voiceoverLines,
+      changedLineIds: Array.isArray(candidate.__dirtyLineIds) ? candidate.__dirtyLineIds : [],
     });
-    ElMessage.success("脚本修改已保存，仍处于待审核状态");
+    candidate.__dirtyLineIds = [];
+    editableLines.forEach((line: Row) => {
+      if (line.__editedVoiceover !== undefined) line.voiceover = line.__editedVoiceover;
+      line.__dirty = false;
+    });
+    ElMessage.success("修改已保存；仅重新匹配语义发生变化的句子");
     await invalidateDataCenterSection("videoFactory");
     if (expandedTaskVideoProjectId.value === project.id) await refreshTaskVideoProject();
     else await loadDataCenter(true);
@@ -1784,23 +1821,23 @@ async function filterVideoProjects() {
 
 function videoProjectStageLabel(stage?: string) {
   return ({
-    PROJECT_BRIEF: "脚本任务提交中",
-    SCRIPT_GENERATING: "脚本生成中",
-    SCRIPT_RETURNED: "脚本重写任务提交中",
-    SCRIPT_APPROVED: "脚本已通过",
-    FACTORY_SCRIPT_READY: "项目脚本已生成",
-    FACTORY_GENERATING: "素材准备中",
-    MATERIAL_REVIEW: "素材待确认",
-    MATERIAL_RETURNED: "素材已退回",
-    READY_TO_EDIT: "可进入AI剪辑",
-    EDITING: "AI剪辑中",
+    PROJECT_BRIEF: "项目创建",
+    SCRIPT_GENERATING: "脚本与素材生成中",
+    SCRIPT_RETURNED: "脚本与素材重写中",
+    SCRIPT_APPROVED: "脚本与素材准备",
+    FACTORY_SCRIPT_READY: "脚本与素材待确认",
+    FACTORY_GENERATING: "脚本与素材匹配中",
+    MATERIAL_REVIEW: "脚本与素材待确认",
+    MATERIAL_RETURNED: "脚本与素材待处理",
+    READY_TO_EDIT: "视频生成待提交",
+    EDITING: "视频生成中",
     VIDEO_REVIEW: "成片待审核",
-    PLATFORM_PACKAGING: "最终成品",
-    PACKAGING_REVIEW: "包装待审核",
+    PLATFORM_PACKAGING: "封面标题与发布",
+    PACKAGING_REVIEW: "封面标题待审核",
     READY_TO_PUBLISH: "待发布",
     PUBLISHING: "发布中",
-    TRACKING: "已发布并跟踪",
-  } as Record<string, string>)[String(stage || "")] || stage || "项目脚本已生成";
+    TRACKING: "发布完成",
+  } as Record<string, string>)[String(stage || "")] || stage || "项目创建";
 }
 
 function videoVoiceoverLabel(project: Row) {
@@ -1871,45 +1908,6 @@ function projectReadyToRender(project: Row) {
     && project.videoShots?.length
     && project.videoShots.every((shot: Row) => shot.status === "DONE" && shot.selectedAssetId),
   );
-}
-
-function projectMaterialReview(project: Row) {
-  const factory = Array.isArray(project.sourceSignals)
-    ? project.sourceSignals.find((item: Row) => item?.type === "VIDEO_FACTORY")
-    : undefined;
-  return factory?.materialReview || {};
-}
-
-function projectMaterialsComplete(project: Row) {
-  return Boolean(
-    project.videoShots?.length
-    && project.videoShots.every((shot: Row) => shot.status === "DONE" && shot.selectedAssetId),
-  );
-}
-
-async function reviewProjectMaterials(project: Row, approved: boolean) {
-  let note = "";
-  if (approved) {
-    await ElMessageBox.confirm(
-      "确认当前脚本的所有镜头素材、有效时间段和画面事实均正确吗？确认后才可提交成片任务。",
-      "确认素材齐全",
-      { confirmButtonText: "确认素材齐全", cancelButtonText: "继续检查", type: "warning" },
-    );
-  } else {
-    const result = await ElMessageBox.prompt(
-      "请填写需要重新匹配、替换或补拍的具体原因。",
-      "退回素材匹配",
-      { confirmButtonText: "确认退回", cancelButtonText: "取消", inputType: "textarea", inputValidator: (value) => Boolean(String(value || "").trim()) || "请填写退回原因" },
-    );
-    note = String(result.value || "").trim();
-  }
-  await post(`/api/v1/workbench/data-center/video-projects/${project.id}/material-review`, {
-    action: approved ? "APPROVE" : "RETURN",
-    note,
-  });
-  ElMessage.success(approved ? "素材已确认，可以提交成片任务" : "素材已退回，原因已记录");
-  await invalidateDataCenterSection("videoFactory");
-  await loadDataCenter(true);
 }
 
 function projectHasApprovedMaster(project: Row) {
@@ -2900,10 +2898,13 @@ onMounted(() => void bootstrap());
               <template v-if="taskVideoProjectDetail">
                 <header class="task-video-workspace-head">
                   <div>
-                    <small>当前阶段 {{ videoFlowStep(taskVideoProjectDetail) }}/7</small>
+                    <small>当前阶段 {{ videoFlowStep(taskVideoProjectDetail) }}/4</small>
                     <h3>{{ videoFlowSteps[videoFlowStep(taskVideoProjectDetail) - 1] }}</h3>
                     <p>{{ videoProjectTaskHint(task) }}</p>
                   </div>
+                  <el-button
+                    @click="refreshTaskVideoProject"
+                  >刷新</el-button>
                   <el-button
                     type="danger"
                     plain
@@ -2921,8 +2922,8 @@ onMounted(() => void bootstrap());
                   >{{ index + 1 }} {{ step }}</button>
                 </nav>
 
-                <section v-if="videoFlowStep(taskVideoProjectDetail) === 2" class="task-video-stage-panel">
-                  <h4>脚本生成中</h4>
+                <section v-if="videoFlowStep(taskVideoProjectDetail) === 2 && projectWaitingForScripts(taskVideoProjectDetail)" class="task-video-stage-panel">
+                  <h4>脚本与素材匹配中</h4>
                   <p>系统 AI 可直接生成；远程 Codex 会按素材库与风险规则生成。结果返回后会在这里直接编辑。</p>
                   <div class="script-engine-progress">
                     <span
@@ -2940,36 +2941,28 @@ onMounted(() => void bootstrap());
                   </div>
                 </section>
 
-                <section v-if="videoFlowStep(taskVideoProjectDetail) === 3" class="task-video-stage-panel">
-                  <h4>查看、修改并确认脚本</h4>
-                  <div class="task-script-candidates">
+                <section v-if="videoFlowStep(taskVideoProjectDetail) === 2 && !projectWaitingForScripts(taskVideoProjectDetail)" class="task-video-stage-panel">
+                  <h4>脚本与对应素材</h4>
+                  <div class="task-script-candidates" :class="{ single: displayedProjectCandidates(taskVideoProjectDetail).length === 1 }">
                     <article v-for="(candidate, index) in displayedProjectCandidates(taskVideoProjectDetail)" :key="`${taskVideoProjectDetail.id}-task-${index}`">
                       <small>{{ scriptEngineLabel(candidate) }} · {{ candidate.score || 0 }}分</small>
-                      <el-form-item label="脚本标题">
-                        <el-input
-                          :model-value="candidate.__editedTitle ?? candidate.titleZh ?? candidate.title ?? candidate.topic"
-                          @update:model-value="candidate.__editedTitle = $event"
-                        />
-                      </el-form-item>
-                      <el-form-item label="黄金三秒钩子" required>
-                        <el-input
-                          :model-value="candidate.__editedHook ?? candidate.hook ?? candidate.scriptPackage?.goldenHook?.copy"
-                          @update:model-value="candidate.__editedHook = $event"
-                        />
-                      </el-form-item>
-                      <el-form-item label="完整口播" required>
-                        <el-input
-                          :model-value="candidate.__editedScript ?? candidateVoiceover(candidate)"
-                          type="textarea"
-                          :autosize="{ minRows: 5, maxRows: 10 }"
-                          @update:model-value="candidate.__editedScript = $event"
-                        />
-                      </el-form-item>
-                      <div v-if="candidate.shots?.length" class="script-material-summary">
-                        <strong>素材预匹配：{{ candidateCoverageSummary(candidate) }}</strong>
-                        <small v-for="(shot, shotIndex) in candidate.shots" :key="shot.lineId || shotIndex">
-                          {{ shotIndex + 1 }}. {{ shot.voiceover || shot.description }} · {{ shot.selectedAssetIds?.length ? "已有素材" : "需真人补拍或AI生成" }}
-                        </small>
+                      <div class="script-material-summary compact-script-materials">
+                        <strong>逐句脚本与素材：{{ candidateCoverageSummary(candidate) }}</strong>
+                        <div v-for="(shot, shotIndex) in editableCandidateLines(candidate)" :key="shot.lineId || shotIndex" class="script-material-line">
+                          <span>{{ shotIndex + 1 }}</span>
+                          <el-input
+                            :model-value="shot.__editedVoiceover ?? shot.voiceover ?? shot.description"
+                            type="textarea"
+                            :autosize="{ minRows: 1, maxRows: 3 }"
+                            @update:model-value="updateCandidateLine(candidate, shotIndex, $event)"
+                          />
+                          <div class="script-line-asset">
+                            <el-tag size="small" :type="shot.selectedAssetIds?.length ? 'success' : 'warning'">
+                              {{ shot.selectedAssetIds?.length ? "已有素材" : "缺失素材" }}
+                            </el-tag>
+                            <small>{{ shot.materialMatchReason || shot.missingReason || shot.description }}</small>
+                          </div>
+                        </div>
                       </div>
                       <div v-if="taskVideoProjectDetail.productionStage === 'FACTORY_SCRIPT_READY'" class="preview-actions">
                         <el-button v-if="candidate.scriptPackage" @click="openScriptPackage(candidate)">查看完整脚本</el-button>
@@ -2983,10 +2976,10 @@ onMounted(() => void bootstrap());
                           v-if="candidate.generationSource === 'SYSTEM_AI'"
                           :loading="regeneratingSystemScriptProjectId === taskVideoProjectDetail.id"
                           @click="regenerateSystemScript(taskVideoProjectDetail)"
-                        >填写提示词重新生成</el-button>
-                        <el-button type="success" @click="reviewProjectScript(taskVideoProjectDetail, true, index)">通过脚本</el-button>
+                        >重新生成</el-button>
+                        <el-button type="success" @click="reviewProjectScript(taskVideoProjectDetail, true, index)">确认脚本与素材</el-button>
                         <el-button type="danger" plain @click="reviewProjectScript(taskVideoProjectDetail, false, index)">
-                          {{ candidate.generationSource === "REMOTE_CODEX" ? "退回 Codex 并填写修改要求" : "转交 Codex 并填写要求" }}
+                          {{ candidate.generationSource === "REMOTE_CODEX" ? "退回 Codex" : "转交 Codex" }}
                         </el-button>
                       </div>
                     </article>
@@ -3010,7 +3003,7 @@ onMounted(() => void bootstrap());
                   </template>
                 </section>
 
-                <section v-if="videoFlowStep(taskVideoProjectDetail) === 4" class="task-video-stage-panel">
+                <section v-if="videoFlowStep(taskVideoProjectDetail) === 3" class="task-video-stage-panel">
                   <h4>{{ taskVideoProjectDetail.productionStage === "READY_TO_EDIT" ? "素材齐全，可以生成视频" : "视频生成中" }}</h4>
                   <el-button
                     v-if="projectReadyToRender(taskVideoProjectDetail)"
@@ -3021,8 +3014,8 @@ onMounted(() => void bootstrap());
                   <p v-else>远程节点正在按已确认脚本、素材路径、有效时间段和画面事实剪辑，完成后会自动进入成片审核。</p>
                 </section>
 
-                <section v-if="videoFlowStep(taskVideoProjectDetail) >= 5" class="task-video-stage-panel">
-                  <h4>{{ videoFlowStep(taskVideoProjectDetail) === 5 ? "成片审核" : "封面标题、发布与回传" }}</h4>
+                <section v-if="videoFlowStep(taskVideoProjectDetail) >= 3" class="task-video-stage-panel">
+                  <h4>{{ videoFlowStep(taskVideoProjectDetail) === 3 ? "成片审核" : "封面标题、发布与回传" }}</h4>
                   <article v-for="job in taskVideoProjectDetail.videoRenderJobs || []" :key="job.id" class="task-finished-video-row">
                     <div>
                       <strong>{{ job.outputAsset?.displayName || "视频成片" }}</strong>
@@ -3403,6 +3396,7 @@ onMounted(() => void bootstrap());
                 <div><div class="task-meta"><span>{{ platformLabel(project.targetPlatforms?.[0]) }}</span><span>{{ project.productModel || "品牌通用" }}</span><span>{{ videoVoiceoverLabel(project) }}</span><span>{{ project.productionNo }}</span><span>生成于 {{ formatTime(project.createdAt) }}</span><span v-if="project.updatedAt !== project.createdAt">更新于 {{ formatTime(project.updatedAt) }}</span></div><h3>{{ project.topic }}</h3></div>
                 <div class="factory-project-head-actions">
                   <el-tag>{{ videoProjectStageLabel(project.productionStage) }}</el-tag>
+                  <el-button @click="refreshActiveVideoProject">刷新</el-button>
                   <el-button
                     v-if="canGenerateVideoScript"
                     type="danger"
@@ -3417,52 +3411,50 @@ onMounted(() => void bootstrap());
                 v-if="project.productionStage === 'SCRIPT_GENERATING' || projectWaitingForScripts(project)"
                 class="project-running-panel"
               >
-                <el-tag type="warning">双引擎脚本生成中</el-tag>
-                <h3>等待所选脚本引擎全部返回，再进入对比审核</h3>
-                <p>已经完成的候选会暂存，但不会提前推进到脚本审核，也不会隐藏另一个引擎的结果。</p>
+                <el-tag type="warning">脚本与素材匹配中</el-tag>
+                <h3>系统 AI 正在生成脚本并完成逐句素材预匹配</h3>
+                <p>如后续转交 Codex，远程结果会作为新版本保留，不会覆盖当前脚本。</p>
                 <div class="script-engine-progress">
-                  <span :class="{ done: projectScriptEngineStatus(project).REMOTE_CODEX === 'COMPLETED' }">
+                  <span
+                    v-if="requestedProjectScriptEngines(project).includes('REMOTE_CODEX')"
+                    :class="{ done: projectScriptEngineStatus(project).REMOTE_CODEX === 'COMPLETED' }"
+                  >
                     远程 Codex + 剪辑 Skill · {{ projectScriptEngineStatus(project).REMOTE_CODEX === "COMPLETED" ? "已完成" : "生成中" }}
                   </span>
-                  <span :class="{ done: projectScriptEngineStatus(project).SYSTEM_AI === 'COMPLETED' }">
+                  <span
+                    v-if="requestedProjectScriptEngines(project).includes('SYSTEM_AI')"
+                    :class="{ done: projectScriptEngineStatus(project).SYSTEM_AI === 'COMPLETED' }"
+                  >
                     系统 AI 脚本工厂 · {{ projectScriptEngineStatus(project).SYSTEM_AI === "COMPLETED" ? "已完成" : "生成中" }}
                   </span>
                 </div>
               </section>
               <div
-                v-if="projectCandidates(project).length && videoFlowStep(project) === 3"
+                v-if="projectCandidates(project).length && videoFlowStep(project) === 2 && !projectWaitingForScripts(project)"
                 class="candidate-grid"
-                :class="{ dual: projectCandidates(project).length > 1, 'script-review-workspace': true }"
+                :class="{ single: projectCandidates(project).length === 1, dual: projectCandidates(project).length > 1, 'script-review-workspace': true }"
               >
                 <article v-for="(candidate, index) in displayedProjectCandidates(project)" :key="`${project.id}-${index}`">
                   <small>{{ scriptEngineLabel(candidate) }} · {{ candidate.score || 0 }}分</small>
                   <p><b>方向：</b>{{ candidate.scriptPackage?.positioning?.coreTheme || project.topic }} · 预计{{ candidate.scriptPackage?.basicInfo?.estimatedDurationSeconds || 30 }}秒</p>
                   <p><b>素材：</b>{{ candidateCoverageSummary(candidate) }}</p>
-                  <el-form-item label="脚本标题">
-                    <el-input
-                      :model-value="candidate.__editedTitle ?? candidate.titleZh ?? candidate.title ?? candidate.topic"
-                      @update:model-value="candidate.__editedTitle = $event"
-                    />
-                  </el-form-item>
-                  <el-form-item label="黄金三秒钩子" required>
-                    <el-input
-                      :model-value="candidate.__editedHook ?? candidate.hook ?? candidate.scriptPackage?.goldenHook?.copy"
-                      @update:model-value="candidate.__editedHook = $event"
-                    />
-                  </el-form-item>
-                  <el-form-item label="完整口播" required>
-                    <el-input
-                      :model-value="candidate.__editedScript ?? candidateVoiceover(candidate)"
-                      type="textarea"
-                      :autosize="{ minRows: 5, maxRows: 10 }"
-                      @update:model-value="candidate.__editedScript = $event"
-                    />
-                  </el-form-item>
-                  <div v-if="candidate.shots?.length" class="script-material-summary">
-                    <strong>素材预匹配：{{ candidateCoverageSummary(candidate) }}</strong>
-                    <small v-for="(shot, shotIndex) in candidate.shots" :key="shot.lineId || shotIndex">
-                      {{ shotIndex + 1 }}. {{ shot.voiceover || shot.description }} · {{ shot.selectedAssetIds?.length ? "已有素材" : "需真人补拍或AI生成" }}
-                    </small>
+                  <div class="script-material-summary compact-script-materials">
+                    <strong>逐句脚本与素材：{{ candidateCoverageSummary(candidate) }}</strong>
+                    <div v-for="(shot, shotIndex) in editableCandidateLines(candidate)" :key="shot.lineId || shotIndex" class="script-material-line">
+                      <span>{{ shotIndex + 1 }}</span>
+                      <el-input
+                        :model-value="shot.__editedVoiceover ?? shot.voiceover ?? shot.description"
+                        type="textarea"
+                        :autosize="{ minRows: 1, maxRows: 3 }"
+                        @update:model-value="updateCandidateLine(candidate, shotIndex, $event)"
+                      />
+                      <div class="script-line-asset">
+                        <el-tag size="small" :type="shot.selectedAssetIds?.length ? 'success' : 'warning'">
+                          {{ shot.selectedAssetIds?.length ? "已有素材" : "缺失素材" }}
+                        </el-tag>
+                        <small>{{ shot.materialMatchReason || shot.missingReason || shot.description }}</small>
+                      </div>
+                    </div>
                   </div>
                   <el-button v-if="candidate.scriptPackage" @click="openScriptPackage(candidate)">查看完整脚本</el-button>
                   <template v-if="project.productionStage === 'FACTORY_SCRIPT_READY'">
@@ -3476,37 +3468,27 @@ onMounted(() => void bootstrap());
                       v-if="candidate.generationSource === 'SYSTEM_AI'"
                       :loading="regeneratingSystemScriptProjectId === project.id"
                       @click="regenerateSystemScript(project)"
-                    >填写提示词重新生成</el-button>
+                    >重新生成</el-button>
                     <el-button
                       type="success"
                       :loading="reviewingScriptProjectId === project.id"
                       @click="reviewProjectScript(project, true, index)"
-                    >脚本审核通过</el-button>
+                    >确认脚本与素材</el-button>
                     <el-button
                       type="danger"
                       plain
                       :loading="reviewingScriptProjectId === project.id"
                       @click="reviewProjectScript(project, false, index)"
-                    >{{ candidate.generationSource === "REMOTE_CODEX" ? "退回 Codex 并填写修改要求" : "转交 Codex 并填写要求" }}</el-button>
+                    >{{ candidate.generationSource === "REMOTE_CODEX" ? "退回 Codex" : "转交 Codex" }}</el-button>
                   </template>
                   <el-tag v-else-if="project.productionStage === 'SCRIPT_APPROVED'" type="success">脚本已审核通过</el-tag>
                 </article>
               </div>
-              <div v-if="project.videoShots?.length && videoFlowStep(project) === 4" class="shot-panel">
+              <div v-if="project.videoShots?.length && videoFlowStep(project) === 2" class="shot-panel">
                 <button type="button" class="shot-summary" @click="toggleVideoProjectShots(project.id)">
                   <span>已形成 {{ project.videoShots.length }} 个镜头任务 · {{ project.videoShots.filter((shot: Row) => !shot.selectedAssetId).length }} 个镜头待补拍或生成</span>
                   <b>{{ expandedVideoProjectIds.includes(project.id) ? "收起镜头任务" : "查看镜头任务" }}</b>
                 </button>
-                <div v-if="canGenerateVideoScript && projectMaterialsComplete(project) && ['MATERIAL_REVIEW','MATERIAL_RETURNED'].includes(project.productionStage)" class="preview-actions">
-                  <el-button type="success" @click="reviewProjectMaterials(project, true)">确认素材齐全</el-button>
-                  <el-button type="danger" plain @click="reviewProjectMaterials(project, false)">退回素材匹配</el-button>
-                </div>
-                <el-alert
-                  v-if="projectMaterialReview(project).status === 'RETURNED'"
-                  :title="`素材退回原因：${projectMaterialReview(project).note || '未填写'}`"
-                  type="warning"
-                  :closable="false"
-                />
                 <el-button
                   v-if="canGenerateVideoScript && projectReadyToRender(project) && !project.videoRenderJobs?.some((job: Row) => ['PENDING','RUNNING','RETRY'].includes(job.status))"
                   type="primary"
@@ -3557,7 +3539,7 @@ onMounted(() => void bootstrap());
                   <el-step title="素材清单已锁定" /><el-step title="配音字幕处理中" /><el-step title="剪辑包装与质检" /><el-step title="等待成片回传" />
                 </el-steps>
               </section>
-              <section v-if="videoFlowStep(project) >= 6" class="finished-video-panel">
+              <section v-if="videoFlowStep(project) >= 3" class="finished-video-panel">
                 <div class="finished-video-head">
                   <div>
                     <h4>成片与审核</h4>
@@ -4191,7 +4173,7 @@ onMounted(() => void bootstrap());
 
   <el-dialog v-model="newVideoProjectVisible" title="新建智能视频项目" width="min(980px, 96vw)" destroy-on-close>
     <div v-if="!createdVideoProjectDialogId" class="prototype-project-form">
-      <el-alert title="填写项目要求并创建后，系统会立即提交所选脚本引擎；两种引擎的候选脚本都返回后再进入对比审核。" type="info" :closable="false" />
+      <el-alert title="填写项目要求并创建后，系统 AI 会立即生成脚本并同步匹配素材；不满意时可重新生成或转交 Codex。" type="info" :closable="false" />
 
       <section class="prototype-form-section">
         <header><strong>必填信息</strong><span>视频类型、产品和关键词为必填项</span></header>
@@ -4272,7 +4254,7 @@ onMounted(() => void bootstrap());
     </div>
     <div v-else-if="taskVideoProjectDetail" class="task-video-stage-panel">
       <el-alert
-        :title="videoFlowStep(taskVideoProjectDetail) === 2 ? '项目已创建，系统 AI 正在生成脚本' : '项目已创建，脚本已生成，可直接查看、修改或确认'"
+        :title="projectWaitingForScripts(taskVideoProjectDetail) ? '项目已创建，系统 AI 正在生成脚本并匹配素材' : '脚本与素材已经准备好，可直接查看、修改或确认'"
         type="success"
         :closable="false"
       />
@@ -4283,41 +4265,33 @@ onMounted(() => void bootstrap());
           :class="{ active: videoFlowStep(taskVideoProjectDetail) === index + 1, done: videoFlowStep(taskVideoProjectDetail) > index + 1 }"
         >{{ index + 1 }} {{ step }}</span>
       </div>
-      <section v-if="videoFlowStep(taskVideoProjectDetail) === 2">
-        <h3>脚本生成中</h3>
+      <section v-if="videoFlowStep(taskVideoProjectDetail) === 2 && projectWaitingForScripts(taskVideoProjectDetail)">
+        <h3>脚本与素材匹配中</h3>
         <p>弹窗会保留在当前步骤，生成完成后即可继续查看和修改脚本。</p>
       </section>
-      <section v-else-if="videoFlowStep(taskVideoProjectDetail) === 3" class="task-script-candidates">
+      <section v-else-if="videoFlowStep(taskVideoProjectDetail) === 2" class="task-script-candidates" :class="{ single: displayedProjectCandidates(taskVideoProjectDetail).length === 1 }">
         <article
           v-for="(candidate, index) in displayedProjectCandidates(taskVideoProjectDetail)"
           :key="`${taskVideoProjectDetail.id}-dialog-${index}`"
         >
           <small>{{ scriptEngineLabel(candidate) }} · {{ candidate.score || 0 }}分</small>
-          <el-form-item label="脚本标题">
-            <el-input
-              :model-value="candidate.__editedTitle ?? candidate.titleZh ?? candidate.title ?? candidate.topic"
-              @update:model-value="candidate.__editedTitle = $event"
-            />
-          </el-form-item>
-          <el-form-item label="黄金三秒钩子" required>
-            <el-input
-              :model-value="candidate.__editedHook ?? candidate.hook ?? candidate.scriptPackage?.goldenHook?.copy"
-              @update:model-value="candidate.__editedHook = $event"
-            />
-          </el-form-item>
-          <el-form-item label="完整口播" required>
-            <el-input
-              :model-value="candidate.__editedScript ?? candidateVoiceover(candidate)"
-              type="textarea"
-              :autosize="{ minRows: 5, maxRows: 10 }"
-              @update:model-value="candidate.__editedScript = $event"
-            />
-          </el-form-item>
-          <div v-if="candidate.shots?.length" class="script-material-summary">
-            <strong>素材预匹配：{{ candidateCoverageSummary(candidate) }}</strong>
-            <small v-for="(shot, shotIndex) in candidate.shots" :key="shot.lineId || shotIndex">
-              {{ shotIndex + 1 }}. {{ shot.voiceover || shot.description }} · {{ shot.selectedAssetIds?.length ? "已有素材" : "需真人补拍或AI生成" }}
-            </small>
+          <div class="script-material-summary compact-script-materials">
+            <strong>逐句脚本与素材：{{ candidateCoverageSummary(candidate) }}</strong>
+            <div v-for="(shot, shotIndex) in editableCandidateLines(candidate)" :key="shot.lineId || shotIndex" class="script-material-line">
+              <span>{{ shotIndex + 1 }}</span>
+              <el-input
+                :model-value="shot.__editedVoiceover ?? shot.voiceover ?? shot.description"
+                type="textarea"
+                :autosize="{ minRows: 1, maxRows: 3 }"
+                @update:model-value="updateCandidateLine(candidate, shotIndex, $event)"
+              />
+              <div class="script-line-asset">
+                <el-tag size="small" :type="shot.selectedAssetIds?.length ? 'success' : 'warning'">
+                  {{ shot.selectedAssetIds?.length ? "已有素材" : "缺失素材" }}
+                </el-tag>
+                <small>{{ shot.materialMatchReason || shot.missingReason || shot.description }}</small>
+              </div>
+            </div>
           </div>
           <div class="preview-actions">
             <el-button v-if="candidate.scriptPackage" @click="openScriptPackage(candidate)">查看完整脚本</el-button>
@@ -4331,10 +4305,10 @@ onMounted(() => void bootstrap());
               v-if="candidate.generationSource === 'SYSTEM_AI'"
               :loading="regeneratingSystemScriptProjectId === taskVideoProjectDetail.id"
               @click="regenerateSystemScript(taskVideoProjectDetail)"
-            >填写提示词重新生成</el-button>
-            <el-button type="success" @click="reviewProjectScript(taskVideoProjectDetail, true, index)">通过脚本</el-button>
+            >重新生成</el-button>
+            <el-button type="success" @click="reviewProjectScript(taskVideoProjectDetail, true, index)">确认脚本与素材</el-button>
             <el-button type="danger" plain @click="reviewProjectScript(taskVideoProjectDetail, false, index)">
-              {{ candidate.generationSource === "REMOTE_CODEX" ? "退回 Codex 并填写修改要求" : "转交 Codex 并填写要求" }}
+              {{ candidate.generationSource === "REMOTE_CODEX" ? "退回 Codex" : "转交 Codex" }}
             </el-button>
           </div>
         </article>

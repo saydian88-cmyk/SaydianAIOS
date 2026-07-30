@@ -1847,22 +1847,22 @@ export class WorkbenchService {
       : {};
     const brief = object(factory.brief);
     const state: Record<string, [number, string, string]> = {
-      PROJECT_BRIEF: [2, "脚本与素材预匹配任务提交中", "等待系统提交所选脚本引擎"],
-      SCRIPT_GENERATING: [2, "脚本生成与素材预匹配中", "等待脚本和逐句素材匹配完成"],
-      FACTORY_SCRIPT_READY: [3, "脚本与素材待审核", "审核脚本并查看已有素材和缺失项"],
-      SCRIPT_RETURNED: [2, "脚本重写与素材重匹配中", "等待系统按退回原因重新生成并匹配素材"],
-      SCRIPT_APPROVED: [3, "缺失素材待处理", "真人补拍或调用AI生成缺失素材"],
-      FACTORY_GENERATING: [3, "缺失素材处理中", "完成AI生成或上传补拍素材"],
-      MATERIAL_REVIEW: [3, "素材待确认", "检查逐句素材绑定"],
-      MATERIAL_RETURNED: [3, "素材需调整", "替换不合格素材"],
-      READY_TO_EDIT: [4, "可生成视频", "提交视频生成任务"],
-      EDITING: [4, "视频生成中", "等待成片生成"],
-      VIDEO_REVIEW: [5, "成片待审核", "预览成片并审核或填写原因退回"],
-      PLATFORM_PACKAGING: [6, "封面标题生成中", "等待平台包装生成"],
-      PACKAGING_REVIEW: [6, "封面标题待审核", "审核封面与标题"],
-      READY_TO_PUBLISH: [6, "待发布", "下载发布或选择自动发布"],
-      PUBLISHING: [6, "发布中", "等待平台发布结果"],
-      TRACKING: [6, "数据跟踪中", "回传或查看发布链接和数据"],
+      PROJECT_BRIEF: [2, "脚本与素材准备中", "等待系统 AI 生成脚本并完成逐句素材匹配"],
+      SCRIPT_GENERATING: [2, "脚本与素材准备中", "等待脚本和逐句素材匹配完成"],
+      FACTORY_SCRIPT_READY: [2, "脚本与素材待确认", "修改脚本、处理缺失素材并确认"],
+      SCRIPT_RETURNED: [2, "脚本重写与素材重匹配中", "等待系统按修改要求重新生成并匹配素材"],
+      SCRIPT_APPROVED: [2, "缺失素材待处理", "上传真人补拍素材或调用 AI 生成"],
+      FACTORY_GENERATING: [2, "缺失素材处理中", "等待补拍上传或 AI 生成素材完成"],
+      MATERIAL_REVIEW: [2, "素材准备完成", "确认后直接进入视频生成"],
+      MATERIAL_RETURNED: [2, "素材需调整", "替换不合格素材"],
+      READY_TO_EDIT: [3, "可以生成视频", "提交视频生成任务"],
+      EDITING: [3, "视频生成中", "查看视频生成 AI 任务进度"],
+      VIDEO_REVIEW: [3, "成片待审核", "预览成片并审核或填写原因退回"],
+      PLATFORM_PACKAGING: [4, "封面标题生成中", "等待平台包装生成"],
+      PACKAGING_REVIEW: [4, "封面标题待审核", "审核封面与标题"],
+      READY_TO_PUBLISH: [4, "待发布", "下载发布或选择自动发布"],
+      PUBLISHING: [4, "发布中", "等待平台发布结果"],
+      TRACKING: [4, "发布与数据跟踪", "回传或查看发布链接和数据"],
     };
     const current = state[stage] || [2, "脚本处理中", "进入项目查看处理进度"];
     return {

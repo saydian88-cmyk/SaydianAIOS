@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { validateBailianVideoScriptResult } from "./bailian-video-script-policy";
 import { isCompleteVideoCandidate, type AiVideoCandidate } from "./ai-content.service";
 
 function candidate(overrides: Partial<AiVideoCandidate> = {}): AiVideoCandidate {
@@ -29,9 +30,9 @@ function candidate(overrides: Partial<AiVideoCandidate> = {}): AiVideoCandidate 
       positioning: { coreTheme: "真实体验", communicationGoal: "产品展示", userPainPoint: "不会操作", uniqueSellingPoint: "真实操作过程" },
       goldenHook: { copy: "真实体验到底怎么样", type: "问题", visual: "真实操作近景", retentionReason: "延迟结果", openingSound: "操作音效" },
       voiceoverLines: [
-        { text: "真实体验到底怎么样", tone: "直接", speed: "稍快", emotion: "好奇", durationSeconds: 3 },
-        { text: "先看完整操作过程", tone: "说明", speed: "正常", emotion: "可信", durationSeconds: 10 },
-        { text: "最后再看结果", tone: "自然", speed: "稍慢", emotion: "友好", durationSeconds: 7 },
+        { lineId: "line_01", text: "真实体验到底怎么样", tone: "直接", speed: "稍快", emotion: "好奇", durationSeconds: 3 },
+        { lineId: "line_02", text: "先看完整操作过程", tone: "说明", speed: "正常", emotion: "可信", durationSeconds: 10 },
+        { lineId: "line_03", text: "最后再看结果", tone: "自然", speed: "稍慢", emotion: "友好", durationSeconds: 7 },
       ],
       structure: [
         { stage: "HOOK", purpose: "留人", content: "提出问题" },
@@ -42,11 +43,21 @@ function candidate(overrides: Partial<AiVideoCandidate> = {}): AiVideoCandidate 
         { stage: "ENDING", purpose: "收束", content: "自然结尾" },
       ],
       shotRequirements: [
-        { line: "真实体验到底怎么样", visual: "操作近景", assetStatus: "COVERED", factualProof: "证明真实操作", audioVisualRequirement: "口播匹配操作" },
-        { line: "先看完整操作过程", visual: "连续过程", assetStatus: "COVERED", factualProof: "证明操作步骤", audioVisualRequirement: "过程对应口播" },
-        { line: "最后再看结果", visual: "结果画面", assetStatus: "COVERED", factualProof: "证明画面结果", audioVisualRequirement: "结果口播配结果界面" },
+        { lineId: "line_01", line: "真实体验到底怎么样", visual: "操作近景", matchedVideoAssetIds: ["video-1"], auxiliaryImageAssetIds: [], assetStatus: "COVERED", factualProof: "证明真实操作", audioVisualRequirement: "口播匹配操作" },
+        { lineId: "line_02", line: "先看完整操作过程", visual: "连续过程", matchedVideoAssetIds: ["video-1"], auxiliaryImageAssetIds: [], assetStatus: "COVERED", factualProof: "证明操作步骤", audioVisualRequirement: "过程对应口播" },
+        { lineId: "line_03", line: "最后再看结果", visual: "结果画面", matchedVideoAssetIds: ["video-1"], auxiliaryImageAssetIds: [], assetStatus: "COVERED", factualProof: "证明画面结果", audioVisualRequirement: "结果口播配结果界面" },
       ],
       retentionDesign: ["延迟结果"],
+      styleChecks: {
+        attitudeOpening: true,
+        shortSentenceRhythm: true,
+        lightContrast: true,
+        concreteActions: true,
+        memorablePhrase: true,
+        manualToneCheck: true,
+        templateQuestionCheck: true,
+        notes: ["问题开头", "动作短句", "中段轻反差"],
+      },
       subtitles: ["真实体验到底怎么样", "先看完整操作过程", "最后再看结果"],
       emphasisTexts: ["真实操作", "完整过程"],
       soundDesign: { voiceProfile: "成年配音", tone: "自然", emotion: "可信", speed: "正常", openingSfx: "操作音", keySfx: ["提示音"], ambientSound: "轻环境声" },
@@ -68,5 +79,41 @@ describe("video candidate completeness", () => {
       outline: ["开场"],
       scripts: { zh15: "只有一句Hook", en15: "", zh30: "只有一句Hook", en30: "" },
     }))).toBe(false);
+  });
+});
+
+describe("Bailian video-script material gate", () => {
+  it("accepts covered lines only when they bind real video assets", () => {
+    const value = candidate({ assetIds: ["video-1"] }) as unknown as Record<string, unknown>;
+    expect(validateBailianVideoScriptResult(value, {
+      assets: [{ id: "video-1", kind: "VIDEO" }, { id: "image-1", kind: "IMAGE" }],
+    })).toEqual([]);
+  });
+
+  it("rejects images used as primary timeline material", () => {
+    const value = candidate({ assetIds: ["image-1"] }) as unknown as Record<string, unknown>;
+    expect(validateBailianVideoScriptResult(value, {
+      assets: [{ id: "video-1", kind: "VIDEO" }, { id: "image-1", kind: "IMAGE" }],
+    })).toContain("主体素材assetIds只能引用VIDEO：image-1");
+  });
+
+  it("rejects covered lines without bound video evidence", () => {
+    const value = candidate() as unknown as Record<string, any>;
+    value.scriptPackage.shotRequirements[0].matchedVideoAssetIds = [];
+    expect(validateBailianVideoScriptResult(value, {
+      assets: [{ id: "video-1", kind: "VIDEO" }],
+    })).toContain("line_01标记COVERED但没有绑定真实VIDEO素材");
+  });
+
+  it("rejects weak hooks and missing internet-style checks", () => {
+    const value = candidate() as unknown as Record<string, any>;
+    value.scriptPackage.voiceoverLines[0].text = "今天介绍一款手表";
+    value.scriptPackage.shotRequirements[0].line = "今天介绍一款手表";
+    value.scriptPackage.styleChecks.lightContrast = false;
+    const errors = validateBailianVideoScriptResult(value, {
+      assets: [{ id: "video-1", kind: "VIDEO" }],
+    });
+    expect(errors).toContain("开头仍是介绍式或泛化弱钩子");
+    expect(errors).toContain("网感检查未通过：lightContrast");
   });
 });

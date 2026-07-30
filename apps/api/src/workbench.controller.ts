@@ -934,7 +934,7 @@ export class WorkbenchController {
     const brief = factory.brief && typeof factory.brief === "object" ? factory.brief : {};
     const scriptEngines = Array.isArray((brief as Record<string, unknown>).scriptEngines)
       ? ((brief as Record<string, unknown>).scriptEngines as unknown[]).map(String)
-      : ["REMOTE_CODEX", "SYSTEM_AI"];
+      : ["SYSTEM_AI"];
     const compiledPrompt = compileVideoScriptTaskPrompt(project, brief as Record<string, unknown>);
     let task: Record<string, any> | null = null;
     if (scriptEngines.includes("REMOTE_CODEX")) task = await this.aiTasks.createTask({
@@ -1085,6 +1085,7 @@ export class WorkbenchController {
       endingSummary: String(body.endingSummary || ""),
       endingInteraction: String(body.endingInteraction || ""),
       endingVisual: String(body.endingVisual || ""),
+      changedLineIds: Array.isArray(body.changedLineIds) ? body.changedLineIds.map(String) : [],
     }, employee.name);
   }
 

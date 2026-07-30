@@ -1395,7 +1395,7 @@ export class VideoFactoryService {
       audience: String(input.audience || "").trim(),
       scriptEngines: Array.from(new Set((input.scriptEngines?.length
         ? input.scriptEngines
-        : ["REMOTE_CODEX", "SYSTEM_AI"]).map((item) => String(item).toUpperCase())))
+        : ["SYSTEM_AI"]).map((item) => String(item).toUpperCase())))
         .filter((item) => ["REMOTE_CODEX", "SYSTEM_AI"].includes(item)),
       compliancePolicy: {
         source: "SYSTEM_RISK_TERM_AND_VISUAL_LIBRARY",
@@ -1424,7 +1424,7 @@ export class VideoFactoryService {
           sourceSignals: [{
             type: "VIDEO_FACTORY",
             workflowVersion: 4,
-            projectMode: "SINGLE_SCRIPT_DUAL_ENGINE",
+            projectMode: "SINGLE_SCRIPT_SYSTEM_FIRST",
             brief,
             scriptCandidates: [],
             selectedCandidateIndex: 0,
@@ -1432,7 +1432,7 @@ export class VideoFactoryService {
             keywordIds,
             externalVideoIds: input.externalVideoIds || [],
             externalReferencePolicy: "STRUCTURE_ONLY",
-            routingMode: "DUAL_ENGINE",
+            routingMode: "SYSTEM_FIRST",
             allowFallback: false,
           }] as unknown as Prisma.InputJsonValue,
           evidenceIds: [],
@@ -1460,7 +1460,7 @@ export class VideoFactoryService {
           action: "VIDEO_FACTORY_PROJECT_DRAFT_CREATE",
           entityType: "ContentPlan",
           entityId: created.id,
-          after: { productionNo, projectMode: "SINGLE_SCRIPT_DUAL_ENGINE", scriptEngines: brief.scriptEngines },
+          after: { productionNo, projectMode: "SINGLE_SCRIPT_SYSTEM_FIRST", scriptEngines: brief.scriptEngines },
         },
       });
       return created;
@@ -1620,7 +1620,7 @@ export class VideoFactoryService {
     const nextCandidates = [...current, candidate].slice(-6);
     const requestedEngines = Array.isArray(brief.scriptEngines)
       ? brief.scriptEngines.map(String)
-      : ["REMOTE_CODEX", "SYSTEM_AI"];
+      : ["SYSTEM_AI"];
     const scriptEngineStatus: Record<string, unknown> = {
       ...object(factory.scriptEngineStatus),
       SYSTEM_AI: "COMPLETED",
@@ -1678,7 +1678,7 @@ export class VideoFactoryService {
     const plan = await this.prisma.contentPlan.findUnique({ where: { id: contentPlanId } });
     if (!plan) throw new NotFoundException("智能视频项目不存在");
     if (plan.productionStage !== "FACTORY_SCRIPT_READY") {
-      throw new BadRequestException("所选脚本引擎全部完成后才能审核脚本");
+      throw new BadRequestException("当前脚本和素材匹配完成后才能确认");
     }
     if (!approved && !note.trim()) throw new BadRequestException("退回脚本时必须填写修改原因");
     if (!this.candidates(plan).length) throw new BadRequestException("当前项目还没有可审核的脚本");
@@ -1688,7 +1688,7 @@ export class VideoFactoryService {
     const brief = object(factory.brief);
     const requestedEngines = Array.isArray(brief.scriptEngines)
       ? brief.scriptEngines.map(String)
-      : ["REMOTE_CODEX", "SYSTEM_AI"];
+      : ["SYSTEM_AI"];
     const scriptEngineStatus = object(factory.scriptEngineStatus);
     if (requestedEngines.some((engine) => scriptEngineStatus[engine] !== "COMPLETED")) {
       throw new BadRequestException("所选脚本引擎尚未全部完成，暂不能进入审核");
@@ -1843,6 +1843,7 @@ export class VideoFactoryService {
     endingSummary: string;
     endingInteraction: string;
     endingVisual: string;
+    changedLineIds?: string[];
   }, actor: string) {
     const plan = await this.prisma.contentPlan.findUnique({ where: { id: contentPlanId } });
     if (!plan) throw new NotFoundException("智能视频项目不存在");
@@ -1956,8 +1957,13 @@ export class VideoFactoryService {
         },
       },
     };
+    const explicitlyChangedLineIds = new Set((input.changedLineIds || []).map(String).filter(Boolean));
+    const changedLineIds = new Set(nextShots
+      .filter((shot, index) => explicitlyChangedLineIds.has(String(shot.lineId))
+        || comparableScriptText(existingShots[index]?.voiceover) !== comparableScriptText(shot.voiceover))
+      .map((shot) => String(shot.lineId)));
     let rematchedCandidate = nextCandidate as unknown as AiVideoCandidate & Record<string, unknown>;
-    if (plan.targetPlatforms?.[0]) {
+    if (changedLineIds.size && plan.targetPlatforms?.[0]) {
       try {
         const rematchContext = await this.buildContext({
           platform: plan.targetPlatforms[0],
@@ -1968,7 +1974,42 @@ export class VideoFactoryService {
           keywordIds: Array.isArray(factory.keywordIds) ? factory.keywordIds.map(String) : [],
           externalVideoIds: Array.isArray(factory.externalVideoIds) ? factory.externalVideoIds.map(String) : [],
         });
-        rematchedCandidate = await this.preMatchScriptCandidate(nextCandidate as unknown as AiVideoCandidate, rematchContext.assets);
+        const fullyRematched = await this.preMatchScriptCandidate(nextCandidate as unknown as AiVideoCandidate, rematchContext.assets);
+        const rematchedShots = Array.isArray(fullyRematched.shots) ? fullyRematched.shots as Array<Record<string, any>> : [];
+        const mergedShots: Array<Record<string, any>> = nextShots.map((shot, index) => changedLineIds.has(String(shot.lineId))
+          ? rematchedShots.find((item) => String(item.lineId) === String(shot.lineId)) || rematchedShots[index] || shot
+          : shot) as Array<Record<string, any>>;
+        const mergedRequirements = nextRequirements.map((requirement, index) => {
+          if (!changedLineIds.has(String(requirement.lineId))) return requirement;
+          const shot = mergedShots[index] || {};
+          return {
+            ...requirement,
+            assetStatus: shot.selectedAssetIds?.length ? "COVERED" : "NEED_SHOOT",
+            materialMatchReason: shot.materialMatchReason || shot.missingReason || "",
+            matchedAssetIds: shot.selectedAssetIds || [],
+            auxiliaryImageAssetIds: shot.auxiliaryImageAssetIds || [],
+          };
+        });
+        rematchedCandidate = {
+          ...fullyRematched,
+          shots: mergedShots,
+          assetIds: Array.from(new Set(mergedShots.flatMap((shot) => [
+            ...strings(shot.selectedAssetIds),
+            ...strings(shot.auxiliaryImageAssetIds),
+          ]))),
+          missingAssets: mergedShots.filter((shot) => !strings(shot.selectedAssetIds).length).map((shot) => String(shot.description || shot.visual || "")),
+          materialPreMatch: {
+            status: "COMPLETED",
+            matchedAt: new Date().toISOString(),
+            total: mergedShots.length,
+            covered: mergedShots.filter((shot) => strings(shot.selectedAssetIds).length).length,
+            missing: mergedShots.filter((shot) => !strings(shot.selectedAssetIds).length).length,
+          },
+          scriptPackage: {
+            ...object(fullyRematched.scriptPackage),
+            shotRequirements: mergedRequirements,
+          },
+        } as unknown as AiVideoCandidate & Record<string, unknown>;
       } catch {
         // 保存脚本文本不能被素材索引的临时故障阻断；已变化的句子保留待重匹配标记。
       }
@@ -2005,7 +2046,7 @@ export class VideoFactoryService {
           action: "VIDEO_FACTORY_SCRIPT_UPDATE",
           entityType: "ContentPlan",
           entityId: contentPlanId,
-          after: { selectedIndex, title: input.title.trim(), hook: input.hook.trim() },
+          after: { selectedIndex, title: input.title.trim(), hook: input.hook.trim(), changedLineIds: Array.from(changedLineIds) },
         },
       }),
     ]);
@@ -2134,7 +2175,7 @@ export class VideoFactoryService {
     }));
     const requestedEngines = Array.isArray(brief.scriptEngines)
       ? brief.scriptEngines.map(String)
-      : ["REMOTE_CODEX", "SYSTEM_AI"];
+      : ["REMOTE_CODEX"];
     const scriptEngineStatus: Record<string, unknown> = {
       ...object(factory.scriptEngineStatus),
       REMOTE_CODEX: "COMPLETED",
@@ -3154,8 +3195,28 @@ export class VideoFactoryService {
           skipDuplicates: true,
         });
       }
+      const allMaterialsReady = requirements.every((item) => item.status === "DONE");
+      const automaticBindingFingerprint = coverage
+        .map((item, index) => [`factory-shot-${index + 1}`, item.matchedVideoAssetIds[0] || "", "", ""].join(":"))
+        .join("|");
       const nextSignals = signals.map((item) => item.type === "VIDEO_FACTORY"
-        ? { ...item, selectedCandidateIndex: candidateIndex, routingMode, requestedModelId, allowFallback }
+        ? {
+          ...item,
+          selectedCandidateIndex: candidateIndex,
+          routingMode,
+          requestedModelId,
+          allowFallback,
+          ...(allMaterialsReady ? {
+            materialReview: {
+              status: "APPROVED",
+              actor: "SYSTEM",
+              reviewedAt: new Date().toISOString(),
+              workflowVersion: plan.workflowVersion,
+              bindingFingerprint: automaticBindingFingerprint,
+              automatic: true,
+            },
+          } : {}),
+        }
         : item);
       await tx.contentPlan.update({
         where: { id },
@@ -3172,7 +3233,7 @@ export class VideoFactoryService {
           scoreBreakdown: selected.scoreBreakdown,
           sourceSignals: nextSignals as Prisma.InputJsonValue,
           shootRequirements: requirements as Prisma.InputJsonValue,
-          productionStage: requirements.every((item) => item.status === "DONE")
+          productionStage: allMaterialsReady
             ? "READY_TO_EDIT"
             : (input.prepareOnly ? "SCRIPT_APPROVED" : "FACTORY_GENERATING"),
           masterVideoStatus: "PENDING",
@@ -3783,11 +3844,27 @@ export class VideoFactoryService {
       };
     });
     const allDone = requirements.length > 0 && requirements.every((item) => item.status === "DONE");
+    const signals = sourceSignals(plan);
+    const bindingFingerprint = materialBindingFingerprint(plan.videoShots);
+    const nextSignals = signals.map((signal) => signal.type === "VIDEO_FACTORY" && allDone
+      ? {
+        ...signal,
+        materialReview: {
+          status: "APPROVED",
+          actor: "SYSTEM",
+          reviewedAt: new Date().toISOString(),
+          workflowVersion: plan.workflowVersion,
+          bindingFingerprint,
+          automatic: true,
+        },
+      }
+      : signal);
     await this.prisma.contentPlan.update({
       where: { id: contentPlanId },
       data: {
         shootRequirements: requirements as Prisma.InputJsonValue,
-        productionStage: allDone ? "MATERIAL_REVIEW" : "FACTORY_GENERATING",
+        sourceSignals: nextSignals as Prisma.InputJsonValue,
+        productionStage: allDone ? "READY_TO_EDIT" : "FACTORY_GENERATING",
       },
     });
   }

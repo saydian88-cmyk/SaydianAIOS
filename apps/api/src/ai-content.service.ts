@@ -1,5 +1,9 @@
 import { Injectable } from "@nestjs/common";
 import { opsConfig } from "./config";
+import {
+  BAILIAN_VIDEO_SCRIPT_SYSTEM_POLICY,
+  validateBailianVideoScriptResult,
+} from "./bailian-video-script-policy";
 
 export type AiVideoCandidate = {
   topic: string;
@@ -30,16 +34,29 @@ export type AiVideoCandidate = {
     };
     positioning: { coreTheme: string; communicationGoal: string; userPainPoint: string; uniqueSellingPoint: string };
     goldenHook: { copy: string; type: string; visual: string; retentionReason: string; openingSound: string };
-    voiceoverLines: Array<{ text: string; tone: string; speed: string; emotion: string; durationSeconds: number }>;
+    voiceoverLines: Array<{ lineId?: string; text: string; tone: string; speed: string; emotion: string; durationSeconds: number }>;
     structure: Array<{ stage: string; purpose: string; content: string }>;
     shotRequirements: Array<{
       line: string;
+      lineId?: string;
       visual: string;
+      matchedVideoAssetIds?: string[];
+      auxiliaryImageAssetIds?: string[];
       assetStatus: "COVERED" | "REWRITABLE" | "NEED_SHOOT" | "PROHIBITED";
       factualProof: string;
       audioVisualRequirement: string;
     }>;
     retentionDesign: string[];
+    styleChecks?: {
+      attitudeOpening: boolean;
+      shortSentenceRhythm: boolean;
+      lightContrast: boolean;
+      concreteActions: boolean;
+      memorablePhrase: boolean;
+      manualToneCheck: boolean;
+      templateQuestionCheck: boolean;
+      notes: string[];
+    };
     subtitles: string[];
     emphasisTexts: string[];
     soundDesign: { voiceProfile: string; tone: string; emotion: string; speed: string; openingSfx: string; keySfx: string[]; ambientSound: string };
@@ -196,15 +213,16 @@ scriptPackage必须包含：
 1.basicInfo：productModel、videoType、platform、accountType、targetAudience、estimatedDurationSeconds、healthContentAllowed。
 2.positioning：coreTheme、communicationGoal、userPainPoint、uniqueSellingPoint，且一条视频只能有一个uniqueSellingPoint。
 3.goldenHook：copy、type、visual、retentionReason、openingSound。
-4.voiceoverLines：逐句text、tone、speed、emotion、durationSeconds；无口播时text填写对应屏幕字幕。
+4.voiceoverLines：逐句lineId、text、tone、speed、emotion、durationSeconds；lineId必须稳定且唯一，无口播时text填写对应屏幕字幕。
 5.structure：至少含HOOK、BRIDGE、SELLING_POINT、PROOF、RETENTION、ENDING六段，每段提供purpose和content。
-6.shotRequirements：逐句提供line、具体visual、assetStatus（COVERED|REWRITABLE|NEED_SHOOT|PROHIBITED）、factualProof、audioVisualRequirement。不得只凭文件名推断功能；功能口播必须匹配对应操作、过程或结果画面。
+6.shotRequirements：与voiceoverLines逐项一一对应并使用相同lineId；提供line、具体visual、matchedVideoAssetIds、auxiliaryImageAssetIds、assetStatus（COVERED|REWRITABLE|NEED_SHOOT|PROHIBITED）、factualProof、audioVisualRequirement。COVERED必须至少绑定一个真实VIDEO素材；图片只能放入auxiliaryImageAssetIds。不得只凭文件名推断功能；功能口播必须匹配对应操作、过程或结果画面。
 7.retentionDesign、subtitles（无标点、自然语义断句，避免孤字）、emphasisTexts（只列关键词，不重复整句）。
-8.soundDesign：voiceProfile、tone、emotion、speed、openingSfx、keySfx、ambientSound。
-9.complianceChecks：检查禁止词、极限词、健康表达、资质画面和临时禁用内容，status只能PASS|REVIEW|BLOCK。
-10.ending：summary、interaction、visual、safeTailSeconds；结尾必须保留安全尾帧。
-11.materialGaps：product、action、shotSize、processOrResult、shootingMethod，只列真实缺口。
-返回JSON：{"candidates":[{"topic":"","audience":"","objective":"","hook":"","outline":[],"score":0,"scoreBreakdown":{},"assetIds":[],"referenceIds":[],"missingAssets":[],"titleZh":"","titleEn":"","coverTextZh":"","coverTextEn":"","hashtags":[],"scripts":{"zh15":"","en15":"","zh30":"","en30":""},"scriptPackage":{"basicInfo":{"productModel":"","videoType":"","platform":"","accountType":"","targetAudience":"","estimatedDurationSeconds":30,"healthContentAllowed":true},"positioning":{"coreTheme":"","communicationGoal":"","userPainPoint":"","uniqueSellingPoint":""},"goldenHook":{"copy":"","type":"","visual":"","retentionReason":"","openingSound":""},"voiceoverLines":[{"text":"","tone":"","speed":"","emotion":"","durationSeconds":0}],"structure":[{"stage":"HOOK|BRIDGE|SELLING_POINT|PROOF|RETENTION|ENDING","purpose":"","content":""}],"shotRequirements":[{"line":"","visual":"","assetStatus":"COVERED|REWRITABLE|NEED_SHOOT|PROHIBITED","factualProof":"","audioVisualRequirement":""}],"retentionDesign":[],"subtitles":[],"emphasisTexts":[],"soundDesign":{"voiceProfile":"","tone":"","emotion":"","speed":"","openingSfx":"","keySfx":[],"ambientSound":""},"complianceChecks":[{"category":"","status":"PASS|REVIEW|BLOCK","note":""}],"ending":{"summary":"","interaction":"","visual":"","safeTailSeconds":1},"materialGaps":[{"product":"","action":"","shotSize":"","processOrResult":"","shootingMethod":""}]}}]}。
+8.styleChecks：attitudeOpening、shortSentenceRhythm、lightContrast、concreteActions、memorablePhrase、manualToneCheck、templateQuestionCheck必须逐项如实返回布尔值，notes记录具体网感依据。
+9.soundDesign：voiceProfile、tone、emotion、speed、openingSfx、keySfx、ambientSound。
+10.complianceChecks：检查禁止词、极限词、健康表达、资质画面和临时禁用内容，status只能PASS|REVIEW|BLOCK。
+11.ending：summary、interaction、visual、safeTailSeconds；结尾必须保留安全尾帧。
+12.materialGaps：product、action、shotSize、processOrResult、shootingMethod，只列真实缺口。
+返回JSON：{"candidates":[{"topic":"","audience":"","objective":"","hook":"","outline":[],"score":0,"scoreBreakdown":{},"assetIds":[],"referenceIds":[],"missingAssets":[],"titleZh":"","titleEn":"","coverTextZh":"","coverTextEn":"","hashtags":[],"scripts":{"zh15":"","en15":"","zh30":"","en30":""},"scriptPackage":{"basicInfo":{"productModel":"","videoType":"","platform":"","accountType":"","targetAudience":"","estimatedDurationSeconds":30,"healthContentAllowed":true},"positioning":{"coreTheme":"","communicationGoal":"","userPainPoint":"","uniqueSellingPoint":""},"goldenHook":{"copy":"","type":"","visual":"","retentionReason":"","openingSound":""},"voiceoverLines":[{"lineId":"line_01","text":"","tone":"","speed":"","emotion":"","durationSeconds":0}],"structure":[{"stage":"HOOK|BRIDGE|SELLING_POINT|PROOF|RETENTION|ENDING","purpose":"","content":""}],"shotRequirements":[{"lineId":"line_01","line":"","visual":"","matchedVideoAssetIds":[],"auxiliaryImageAssetIds":[],"assetStatus":"COVERED|REWRITABLE|NEED_SHOOT|PROHIBITED","factualProof":"","audioVisualRequirement":""}],"retentionDesign":[],"subtitles":[],"emphasisTexts":[],"styleChecks":{"attitudeOpening":true,"shortSentenceRhythm":true,"lightContrast":true,"concreteActions":true,"memorablePhrase":true,"manualToneCheck":true,"templateQuestionCheck":true,"notes":[]},"soundDesign":{"voiceProfile":"","tone":"","emotion":"","speed":"","openingSfx":"","keySfx":[],"ambientSound":""},"complianceChecks":[{"category":"","status":"PASS|REVIEW|BLOCK","note":""}],"ending":{"summary":"","interaction":"","visual":"","safeTailSeconds":1},"materialGaps":[{"product":"","action":"","shotSize":"","processOrResult":"","shootingMethod":""}]}}]}。
 输入：${JSON.stringify(context)}`,
     );
     const rows = Array.isArray(result.candidates) ? result.candidates.slice(0, exactCount).map(object) : [];
@@ -262,7 +280,8 @@ scriptPackage必须包含：
             retentionReason: text(goldenHook.retentionReason),
             openingSound: text(goldenHook.openingSound),
           },
-          voiceoverLines: (Array.isArray(scriptPackage.voiceoverLines) ? scriptPackage.voiceoverLines : []).map(object).map((item) => ({
+          voiceoverLines: (Array.isArray(scriptPackage.voiceoverLines) ? scriptPackage.voiceoverLines : []).map(object).map((item, index) => ({
+            lineId: text(item.lineId) || `line_${String(index + 1).padStart(2, "0")}`,
             text: text(item.text),
             tone: text(item.tone),
             speed: text(item.speed),
@@ -274,9 +293,12 @@ scriptPackage必须包含：
             purpose: text(item.purpose),
             content: text(item.content),
           })),
-          shotRequirements: (Array.isArray(scriptPackage.shotRequirements) ? scriptPackage.shotRequirements : []).map(object).map((item) => ({
+          shotRequirements: (Array.isArray(scriptPackage.shotRequirements) ? scriptPackage.shotRequirements : []).map(object).map((item, index) => ({
+            lineId: text(item.lineId) || `line_${String(index + 1).padStart(2, "0")}`,
             line: text(item.line),
             visual: text(item.visual),
+            matchedVideoAssetIds: strings(item.matchedVideoAssetIds),
+            auxiliaryImageAssetIds: strings(item.auxiliaryImageAssetIds),
             assetStatus: (["COVERED", "REWRITABLE", "NEED_SHOOT", "PROHIBITED"].includes(text(item.assetStatus))
               ? text(item.assetStatus)
               : "NEED_SHOOT") as "COVERED" | "REWRITABLE" | "NEED_SHOOT" | "PROHIBITED",
@@ -284,6 +306,16 @@ scriptPackage必须包含：
             audioVisualRequirement: text(item.audioVisualRequirement),
           })),
           retentionDesign: strings(scriptPackage.retentionDesign),
+          styleChecks: {
+            attitudeOpening: object(scriptPackage.styleChecks).attitudeOpening === true,
+            shortSentenceRhythm: object(scriptPackage.styleChecks).shortSentenceRhythm === true,
+            lightContrast: object(scriptPackage.styleChecks).lightContrast === true,
+            concreteActions: object(scriptPackage.styleChecks).concreteActions === true,
+            memorablePhrase: object(scriptPackage.styleChecks).memorablePhrase === true,
+            manualToneCheck: object(scriptPackage.styleChecks).manualToneCheck === true,
+            templateQuestionCheck: object(scriptPackage.styleChecks).templateQuestionCheck === true,
+            notes: strings(object(scriptPackage.styleChecks).notes),
+          },
           subtitles: strings(scriptPackage.subtitles),
           emphasisTexts: strings(scriptPackage.emphasisTexts),
           soundDesign: {
@@ -318,6 +350,12 @@ scriptPackage必须包含：
     });
     if (candidates.some((candidate) => !isCompleteVideoCandidate(candidate))) {
       throw new Error("AI返回的视频方向缺少完整脚本");
+    }
+    const policyErrors = rows.flatMap((row, index) =>
+      validateBailianVideoScriptResult(row, context).map((error) => `候选${index + 1}：${error}`),
+    );
+    if (policyErrors.length) {
+      throw new Error(`AI返回的视频脚本未通过素材门禁：${policyErrors.join("；")}`);
     }
     return candidates;
   }
@@ -453,7 +491,7 @@ matchedAssetIds为视频主画面和图片辅助的合并列表。无法由视�
         messages: [
           {
             role: "system",
-            content: "你是赛电品牌内容生产引擎。只输出严格JSON。健康内容使用监测、提醒、参考、健康管理等已审核表达，不虚构产品参数、资质、效果或来源。",
+            content: `${BAILIAN_VIDEO_SCRIPT_SYSTEM_POLICY}\n只输出严格JSON。`,
           },
           { role: "user", content: prompt },
         ],

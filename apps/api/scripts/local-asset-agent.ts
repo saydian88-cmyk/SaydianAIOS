@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { readdir, stat } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import { extname, relative, resolve, sep } from "node:path";
 import { opsConfig } from "../src/config";
 import { OssStorageService } from "../src/oss-storage.service";
@@ -34,6 +34,22 @@ async function walk(root: string): Promise<string[]> {
   return files;
 }
 
+async function manifestPaths(path: string): Promise<Array<{ path: string; sha256?: string }>> {
+  const payload = JSON.parse(await readFile(resolve(path), "utf8")) as {
+    items?: Array<{ final_path?: unknown; finalPath?: unknown; sha256?: unknown }>;
+  };
+  if (!Array.isArray(payload.items) || !payload.items.length) throw new Error("云端上传清单为空");
+  const seen = new Set<string>();
+  return payload.items.map((item, index) => {
+    const finalPath = String(item.final_path || item.finalPath || "").trim();
+    if (!finalPath) throw new Error(`云端上传清单第${index + 1}项缺少final_path`);
+    const pathKey = resolve(finalPath).toLocaleLowerCase("zh-CN");
+    if (seen.has(pathKey)) throw new Error(`云端上传清单存在重复最终路径：${finalPath}`);
+    seen.add(pathKey);
+    return { path: resolve(finalPath), sha256: String(item.sha256 || "").trim().toLowerCase() || undefined };
+  });
+}
+
 function mediaType(extension: string) {
   if (images.has(extension)) return "IMAGE";
   if (videos.has(extension)) return "VIDEO";
@@ -51,15 +67,30 @@ function model(path: string): string | undefined {
 async function send(records: Array<Record<string, unknown>>, actor: string) {
   const baseUrl = String(process.env.OPS_CENTER_URL || opsConfig.publicBaseUrl).replace(/\/$/, "");
   const token = String(process.env.OPS_CENTER_TOKEN || opsConfig.adminToken);
+  const headers = { authorization: `Bearer ${token}`, "x-ops-actor": actor, "content-type": "application/json" };
   const response = await fetch(`${baseUrl}/api/v1/ledger/import-assets`, {
     method: "POST",
-    headers: { authorization: `Bearer ${token}`, "x-ops-actor": actor, "content-type": "application/json" },
+    headers,
     body: JSON.stringify({ records }),
     signal: AbortSignal.timeout(120_000),
   });
   const result = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(`中台素材清单接口返回${response.status}：${JSON.stringify(result)}`);
-  return result;
+  const assetIds = Array.isArray((result as { assetIds?: unknown }).assetIds)
+    ? (result as { assetIds: unknown[] }).assetIds.map(String).filter(Boolean)
+    : [];
+  const analysis: Array<{ assetId: string; ok: boolean; status: number; result: unknown }> = [];
+  for (const assetId of assetIds) {
+    const analyzeResponse = await fetch(`${baseUrl}/api/v1/brand-data/assets/${encodeURIComponent(assetId)}/reanalyze`, {
+      method: "POST",
+      headers,
+      signal: AbortSignal.timeout(120_000),
+    });
+    const analyzeResult = await analyzeResponse.json().catch(() => ({}));
+    analysis.push({ assetId, ok: analyzeResponse.ok, status: analyzeResponse.status, result: analyzeResult });
+    if (!analyzeResponse.ok) throw new Error(`素材 ${assetId} 提交百炼分析失败（HTTP ${analyzeResponse.status}）`);
+  }
+  return { ...result, analysis };
 }
 
 async function main() {
@@ -73,7 +104,10 @@ async function main() {
     { root: opsConfig.derivedOutputDir, type: "DERIVED_OUTPUT", category: "derived" as const },
   ];
   const requestedRoot = String(process.env.ASSET_AGENT_ROOT || "").trim();
-  const sources = requestedRoot
+  const uploadManifest = String(process.env.ASSET_UPLOAD_MANIFEST || "").trim();
+  const sources = uploadManifest
+    ? [{ root: "", type: "LOCAL_ASSET", category: "original" as const }]
+    : requestedRoot
     ? [{ root: resolve(requestedRoot), type: "LOCAL_ASSET", category: "original" as const }]
     : configuredSources;
   const maxFiles = Math.max(0, Number(process.env.ASSET_AGENT_MAX_FILES || 0));
@@ -82,8 +116,15 @@ async function main() {
   let scanned = 0;
   for (const source of sources) {
     let paths: string[] = [];
+    let declaredHashes = new Map<string, string>();
     try {
-      paths = await walk(source.root);
+      if (uploadManifest) {
+        const entries = await manifestPaths(uploadManifest);
+        paths = entries.map((entry) => entry.path);
+        declaredHashes = new Map(entries.filter((entry) => entry.sha256).map((entry) => [entry.path.toLocaleLowerCase("zh-CN"), entry.sha256!]));
+      } else {
+        paths = await walk(source.root);
+      }
       paths.sort((left, right) => left.localeCompare(right, "zh-CN"));
       paths = maxFiles ? paths.slice(offset, offset + maxFiles) : paths.slice(offset);
     } catch (error) {
@@ -94,11 +135,13 @@ async function main() {
     for (const path of paths) {
       const before = await stat(path);
       const sha256 = await hash(path);
+      const declaredHash = declaredHashes.get(path.toLocaleLowerCase("zh-CN"));
+      if (declaredHash && declaredHash !== sha256) throw new Error(`云端上传清单哈希不一致：${path}`);
       const after = await stat(path);
       if (before.size !== after.size || before.mtimeMs !== after.mtimeMs) continue;
       const extension = extname(path).toLowerCase();
       const stored = await storage.uploadOriginal({ path, sha256, extension, actor, sourceType: source.type, category: source.category });
-      const relativePath = relative(source.root, path);
+      const relativePath = uploadManifest ? relative(resolve(path, "..", "..", ".."), path) : relative(source.root, path);
       manifest.push({
         sourceKey: `${source.type}:${path.toLocaleLowerCase("zh-CN")}`,
         sourceType: source.type,
