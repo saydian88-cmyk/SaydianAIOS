@@ -8,6 +8,7 @@ import { decryptIntegrationValue, encryptIntegrationValue } from "./integration-
 import { OssStorageService } from "./oss-storage.service";
 import { PrismaService } from "./prisma.service";
 import { localDateKey } from "./utils";
+import { WecomNotificationService } from "./wecom-notification.service";
 import {
   DEFAULT_VIDEO_POLICY_CONFIG,
   normalizeTopicText,
@@ -388,7 +389,187 @@ export class VideoFactoryService {
     private readonly aiContent: AiContentService,
     private readonly guard: ContentGuardService,
     private readonly oss: OssStorageService,
+    private readonly wecom: WecomNotificationService,
   ) {}
+
+  private async notifyProjectMilestone(
+    contentPlanId: string,
+    milestone: string,
+    title: string,
+    content: string,
+  ) {
+    const task = await this.prisma.opsTask.findFirst({
+      where: {
+        sourceType: "VIDEO_PROJECT",
+        sourceId: contentPlanId,
+        deletedAt: null,
+      },
+      orderBy: { createdAt: "asc" },
+      select: { id: true, assigneeEmployeeId: true },
+    });
+    if (!task?.assigneeEmployeeId) return;
+    const plan = await this.prisma.contentPlan.findUnique({
+      where: { id: contentPlanId },
+      select: { workflowVersion: true },
+    });
+    const eventKey = `${contentPlanId}:${milestone}:v${plan?.workflowVersion || 1}`;
+    await this.prisma.taskNotification.upsert({
+      where: {
+        recipientEmployeeId_channel_eventKey: {
+          recipientEmployeeId: task.assigneeEmployeeId,
+          channel: "IN_APP",
+          eventKey,
+        },
+      },
+      create: {
+        taskId: task.id,
+        recipientEmployeeId: task.assigneeEmployeeId,
+        channel: "IN_APP",
+        eventKey,
+        targetType: "OPS_TASK",
+        targetId: task.id,
+        type: milestone,
+        title,
+        content,
+      },
+      update: { title, content, taskId: task.id, targetType: "OPS_TASK", targetId: task.id },
+    });
+    const workbenchUrl = new URL("/saidian-work/", opsConfig.publicBaseUrl);
+    workbenchUrl.searchParams.set("taskId", task.id);
+    const result = await this.wecom.send(task.assigneeEmployeeId, title, content, workbenchUrl.toString());
+    if (!result.configured) return;
+    await this.prisma.taskNotification.upsert({
+      where: {
+        recipientEmployeeId_channel_eventKey: {
+          recipientEmployeeId: task.assigneeEmployeeId,
+          channel: "WECOM",
+          eventKey,
+        },
+      },
+      create: {
+        taskId: task.id,
+        recipientEmployeeId: task.assigneeEmployeeId,
+        channel: "WECOM",
+        eventKey,
+        targetType: "OPS_TASK",
+        targetId: task.id,
+        type: milestone,
+        title,
+        content: result.sent ? content : `${content}｜${result.message || "发送失败"}`,
+        sentAt: result.sent ? new Date() : null,
+      },
+      update: {
+        title,
+        content: result.sent ? content : `${content}｜${result.message || "发送失败"}`,
+        sentAt: result.sent ? new Date() : null,
+      },
+    });
+  }
+
+  private async preMatchScriptCandidate(
+    candidate: AiVideoCandidate,
+    assets: Array<{
+      id: string;
+      kind: string | null;
+      displayName: string | null;
+      contentDescription: string | null;
+      tags: Array<{ tag: { label: string } }>;
+    }>,
+  ) {
+    const scriptPackage = object(candidate.scriptPackage) as Record<string, any>;
+    const voiceoverLines = Array.isArray(scriptPackage.voiceoverLines)
+      ? scriptPackage.voiceoverLines as Array<Record<string, any>>
+      : [];
+    const shotRequirements = Array.isArray(scriptPackage.shotRequirements)
+      ? scriptPackage.shotRequirements as Array<Record<string, any>>
+      : [];
+    const descriptions = (shotRequirements.length ? shotRequirements : candidate.outline.map((line) => ({ line, visual: line })))
+      .map((item, index) => String(item.visual || item.line || voiceoverLines[index]?.text || candidate.outline[index] || "").trim())
+      .filter(Boolean);
+    const analysisAssets = assets.map((asset) => ({
+      id: asset.id,
+      kind: String(asset.kind || ""),
+      displayName: asset.displayName,
+      description: asset.contentDescription,
+      tags: asset.tags.map((item) => item.tag.label),
+    }));
+    let coverage: Array<{
+      description: string;
+      matchedAssetIds: string[];
+      matchedVideoAssetIds: string[];
+      auxiliaryImageAssetIds: string[];
+      coverage: "EXISTING" | "MISSING";
+      reason: string;
+    }> = [];
+    try {
+      coverage = (await this.aiContent.analyzeVideoAssetCoverage({
+        productModel: scriptPackage.basicInfo?.productModel,
+        script: candidate,
+        assets: analysisAssets,
+      })).shots;
+    } catch {
+      coverage = descriptions.map((description) => ({
+        description,
+        matchedAssetIds: [],
+        matchedVideoAssetIds: [],
+        auxiliaryImageAssetIds: [],
+        coverage: "MISSING" as const,
+        reason: "素材索引暂未找到可直接证明该句内容的连续视频镜头",
+      }));
+    }
+    const shots = descriptions.map((description, index) => {
+      const matched = coverage[index] || coverage.find((item) => item.description === description);
+      const requirement = shotRequirements[index] || {};
+      const line = String(requirement.line || voiceoverLines[index]?.text || candidate.outline[index] || description);
+      const selectedAssetIds = matched?.matchedVideoAssetIds || [];
+      return {
+        lineId: String(requirement.lineId || `line_${String(index + 1).padStart(2, "0")}`),
+        sequence: index,
+        title: `镜头${index + 1}`,
+        description,
+        visual: description,
+        voiceover: line,
+        subtitle: line.replace(/[，。！？；：,.!?;:]/g, ""),
+        moduleType: index === 0 ? "HOOK" : index === descriptions.length - 1 ? "CTA" : "SCENE",
+        durationSeconds: Math.max(2, Math.round(Number(voiceoverLines[index]?.durationSeconds) || 4)),
+        sourcePreference: selectedAssetIds.length ? "REAL_ASSET" : "REAL_ASSET_FIRST",
+        selectedAssetIds,
+        auxiliaryImageAssetIds: matched?.auxiliaryImageAssetIds || [],
+        requiredAssetTags: [],
+        missingReason: selectedAssetIds.length ? "" : matched?.reason || "缺少直接匹配的视频素材",
+        alternativePlan: selectedAssetIds.length ? "" : "可由真人补拍或调用AI生成，并绑定到本句脚本",
+        materialMatchReason: matched?.reason || "",
+        materialMatchStatus: selectedAssetIds.length ? "COVERED" : "MISSING",
+      };
+    });
+    const matchedAssetIds = shots.flatMap((shot) => [...shot.selectedAssetIds, ...shot.auxiliaryImageAssetIds]);
+    return {
+      ...candidate,
+      assetIds: Array.from(new Set([...candidate.assetIds, ...matchedAssetIds])),
+      missingAssets: shots.filter((shot) => !shot.selectedAssetIds.length).map((shot) => shot.description),
+      shots,
+      materialPreMatch: {
+        status: "COMPLETED",
+        matchedAt: new Date().toISOString(),
+        total: shots.length,
+        covered: shots.filter((shot) => shot.selectedAssetIds.length).length,
+        missing: shots.filter((shot) => !shot.selectedAssetIds.length).length,
+      },
+      scriptPackage: {
+        ...scriptPackage,
+        shotRequirements: shots.map((shot, index) => ({
+          ...(shotRequirements[index] || {}),
+          lineId: shot.lineId,
+          line: shot.voiceover,
+          visual: shot.visual,
+          assetStatus: shots[index]?.selectedAssetIds.length ? "COVERED" : "NEED_SHOOT",
+          materialMatchReason: shots[index]?.materialMatchReason || "",
+          matchedAssetIds: shots[index]?.selectedAssetIds || [],
+          auxiliaryImageAssetIds: shots[index]?.auxiliaryImageAssetIds || [],
+        })),
+      },
+    } as unknown as AiVideoCandidate & Record<string, unknown>;
+  }
 
   async ensureCatalog() {
     for (const seed of PROVIDER_SEEDS) {
@@ -1429,12 +1610,12 @@ export class VideoFactoryService {
       return this.project(contentPlanId);
     }
     if (!generated[0]) throw new BadRequestException("系统 AI 未返回有效脚本");
-    const candidate = {
+    const candidate = await this.preMatchScriptCandidate({
       ...generated[0],
       generationSource: "SYSTEM_AI",
       generatedAt: new Date().toISOString(),
       regenerationPrompt: regenerationPrompt.trim() || undefined,
-    };
+    } as AiVideoCandidate, context.assets);
     const current = Array.isArray(factory.scriptCandidates) ? factory.scriptCandidates : [];
     const nextCandidates = [...current, candidate].slice(-6);
     const requestedEngines = Array.isArray(brief.scriptEngines)
@@ -1481,6 +1662,15 @@ export class VideoFactoryService {
         },
       }),
     ]);
+    if (allRequestedEnginesCompleted) {
+      const preMatch = object((candidate as unknown as Record<string, unknown>).materialPreMatch);
+      await this.notifyProjectMilestone(
+        contentPlanId,
+        "VIDEO_SCRIPT_AND_MATERIAL_MATCH_READY",
+        "视频脚本与素材预匹配已完成",
+        `脚本已生成，可直接审核；已匹配${Number(preMatch.covered || 0)}个镜头，缺失${Number(preMatch.missing || 0)}个镜头。`,
+      ).catch(() => undefined);
+    }
     return this.project(contentPlanId);
   }
 
@@ -1661,6 +1851,7 @@ export class VideoFactoryService {
     if (!candidates.length) throw new BadRequestException("当前项目没有可修改的脚本");
     const signals = sourceSignals(plan);
     const factory = signals.find((signal) => signal.type === "VIDEO_FACTORY") || {};
+    const brief = object(factory.brief);
     const selectedIndex = input.candidateIndex === undefined
       ? Math.max(0, Math.min(candidates.length - 1, Number(factory.selectedCandidateIndex || 0)))
       : Math.max(0, Math.min(candidates.length - 1, Math.round(input.candidateIndex)));
@@ -1765,7 +1956,24 @@ export class VideoFactoryService {
         },
       },
     };
-    const nextCandidates = candidates.map((candidate, index) => index === selectedIndex ? nextCandidate : candidate);
+    let rematchedCandidate = nextCandidate as unknown as AiVideoCandidate & Record<string, unknown>;
+    if (plan.targetPlatforms?.[0]) {
+      try {
+        const rematchContext = await this.buildContext({
+          platform: plan.targetPlatforms[0],
+          productModel: plan.productModel || undefined,
+          topic: String(brief.keywords || plan.topic),
+          audience: String(brief.audience || plan.audience),
+          objective: String(brief.videoType || plan.objective),
+          keywordIds: Array.isArray(factory.keywordIds) ? factory.keywordIds.map(String) : [],
+          externalVideoIds: Array.isArray(factory.externalVideoIds) ? factory.externalVideoIds.map(String) : [],
+        });
+        rematchedCandidate = await this.preMatchScriptCandidate(nextCandidate as unknown as AiVideoCandidate, rematchContext.assets);
+      } catch {
+        // 保存脚本文本不能被素材索引的临时故障阻断；已变化的句子保留待重匹配标记。
+      }
+    }
+    const nextCandidates = candidates.map((candidate, index) => index === selectedIndex ? rematchedCandidate : candidate);
     const nextSignals = signals.map((signal) => signal.type === "VIDEO_FACTORY"
       ? {
         ...signal,
@@ -2088,6 +2296,15 @@ export class VideoFactoryService {
         });
         await this.prisma.asset.update({ where: { id: assetId }, data: { useCount: { increment: 1 }, lastUsedAt: new Date() } });
       }
+    }
+    if (allRequestedEnginesCompleted) {
+      const covered = shots.filter((shot) => shot.selectedAssetIds.length).length;
+      await this.notifyProjectMilestone(
+        plan.id,
+        "VIDEO_SCRIPT_AND_MATERIAL_MATCH_READY",
+        "视频脚本与素材预匹配已完成",
+        `脚本已生成，可直接审核；已匹配${covered}个镜头，缺失${shots.length - covered}个镜头。`,
+      ).catch(() => undefined);
     }
     return this.project(plan.id);
   }
@@ -2816,29 +3033,45 @@ export class VideoFactoryService {
       },
       include: { tags: { include: { tag: true } } },
     }) : [];
-    let coverage: Array<{ description: string; matchedAssetIds: string[]; matchedVideoAssetIds: string[]; auxiliaryImageAssetIds: string[]; coverage: "EXISTING" | "MISSING"; reason: string }> = [];
-    try {
-      coverage = (await this.aiContent.analyzeVideoAssetCoverage({
-        productModel: plan.productModel,
-        script: selected,
-        assets: assets.map((asset) => ({
-          id: asset.id,
-          kind: asset.kind,
-          displayName: asset.displayName,
-          description: asset.contentDescription,
-          tags: asset.tags.map((item) => item.tag.label),
-        })),
-      })).shots;
-    } catch {
-      const videoIds = assets.filter((asset) => asset.kind === "VIDEO").map((asset) => asset.id);
-      coverage = selected.outline.map((description, index) => ({
-        description,
-        matchedAssetIds: videoIds[index] ? [videoIds[index]] : [],
-        matchedVideoAssetIds: videoIds[index] ? [videoIds[index]] : [],
-        auxiliaryImageAssetIds: [],
-        coverage: videoIds[index] ? "EXISTING" : "MISSING",
-        reason: videoIds[index] ? "使用已审核真实视频素材" : "缺少匹配的连续视频镜头",
-      }));
+    const preMatchedShots = Array.isArray((selected as unknown as Record<string, unknown>).shots)
+      ? (selected as unknown as Record<string, unknown>).shots as Array<Record<string, unknown>>
+      : [];
+    let coverage: Array<{ description: string; matchedAssetIds: string[]; matchedVideoAssetIds: string[]; auxiliaryImageAssetIds: string[]; coverage: "EXISTING" | "MISSING"; reason: string }> = preMatchedShots.map((shot) => {
+      const matchedVideoAssetIds = strings(shot.selectedAssetIds);
+      const auxiliaryImageAssetIds = strings(shot.auxiliaryImageAssetIds);
+      return {
+        description: String(shot.visual || shot.description || shot.voiceover || ""),
+        matchedAssetIds: Array.from(new Set([...matchedVideoAssetIds, ...auxiliaryImageAssetIds])),
+        matchedVideoAssetIds,
+        auxiliaryImageAssetIds,
+        coverage: matchedVideoAssetIds.length ? "EXISTING" : "MISSING",
+        reason: String(shot.materialMatchReason || shot.missingReason || (matchedVideoAssetIds.length ? "脚本生成阶段已完成素材预匹配" : "缺少匹配的连续视频镜头")),
+      };
+    });
+    if (!coverage.length) {
+      try {
+        coverage = (await this.aiContent.analyzeVideoAssetCoverage({
+          productModel: plan.productModel,
+          script: selected,
+          assets: assets.map((asset) => ({
+            id: asset.id,
+            kind: asset.kind,
+            displayName: asset.displayName,
+            description: asset.contentDescription,
+            tags: asset.tags.map((item) => item.tag.label),
+          })),
+        })).shots;
+      } catch {
+        const videoIds = assets.filter((asset) => asset.kind === "VIDEO").map((asset) => asset.id);
+        coverage = selected.outline.map((description, index) => ({
+          description,
+          matchedAssetIds: videoIds[index] ? [videoIds[index]] : [],
+          matchedVideoAssetIds: videoIds[index] ? [videoIds[index]] : [],
+          auxiliaryImageAssetIds: [],
+          coverage: videoIds[index] ? "EXISTING" : "MISSING",
+          reason: videoIds[index] ? "使用已审核真实视频素材" : "缺少匹配的连续视频镜头",
+        }));
+      }
     }
     if (!coverage.length) throw new BadRequestException("未能生成分镜素材清单");
 
@@ -2940,7 +3173,7 @@ export class VideoFactoryService {
           sourceSignals: nextSignals as Prisma.InputJsonValue,
           shootRequirements: requirements as Prisma.InputJsonValue,
           productionStage: requirements.every((item) => item.status === "DONE")
-            ? "MATERIAL_REVIEW"
+            ? "READY_TO_EDIT"
             : (input.prepareOnly ? "SCRIPT_APPROVED" : "FACTORY_GENERATING"),
           masterVideoStatus: "PENDING",
         },
@@ -2949,6 +3182,15 @@ export class VideoFactoryService {
         data: { actor, action: "VIDEO_FACTORY_PROJECT_GENERATE", entityType: "ContentPlan", entityId: id, after: { candidateIndex, shotCount: coverage.length, routingMode, requestedModelId } },
       });
     });
+    const missingCount = coverage.filter((item) => item.coverage === "MISSING").length;
+    await this.notifyProjectMilestone(
+      id,
+      missingCount ? "VIDEO_MATERIAL_ACTION_REQUIRED" : "VIDEO_READY_TO_GENERATE",
+      missingCount ? "脚本已通过，请处理缺失素材" : "脚本已通过，可直接生成视频",
+      missingCount
+        ? `脚本审核已通过，仍有${missingCount}个镜头需要真人补拍或调用AI生成。`
+        : "脚本审核已通过，素材已经齐全，可以直接提交视频生成任务。",
+    ).catch(() => undefined);
     return this.project(id);
   }
 

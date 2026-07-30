@@ -33,8 +33,8 @@ describe("WorkbenchService operation team", () => {
       },
     );
 
-    expect(projection.displayStatus).toBe("脚本待审核");
-    expect(projection.nextAction).toBe("审核、修改或退回当前脚本");
+    expect(projection.displayStatus).toBe("脚本与素材待审核");
+    expect(projection.nextAction).toBe("审核脚本并查看已有素材和缺失项");
     expect(projection.aiTask.status).toBe("RUNNING");
     expect(projection.project).toMatchObject({
       productionNo: "VF-1",

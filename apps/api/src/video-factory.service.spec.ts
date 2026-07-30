@@ -79,7 +79,7 @@ describe("VideoFactoryService model routing", () => {
       },
       $transaction: vi.fn().mockResolvedValue([]),
     };
-    service = new VideoFactoryService(prisma as never, {} as never, {} as never, {} as never);
+    service = new VideoFactoryService(prisma as never, {} as never, {} as never, {} as never, {} as never);
     vi.spyOn(service, "ensureCatalog").mockResolvedValue();
   });
 
