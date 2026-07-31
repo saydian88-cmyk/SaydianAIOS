@@ -78,6 +78,9 @@ const createForm = reactive({
   productModel: "",
   topic: "",
   audience: "",
+  pain: "",
+  scene: "",
+  hook: "",
   objective: "内容种草与商品点击",
   keywordIds: [] as string[],
   externalVideoIds: [] as string[],
@@ -353,6 +356,7 @@ async function archiveTopicCard(row: Row) {
 function resetCreate() {
   Object.assign(createForm, {
     platform: props.platformScope || "DOUYIN", productModel: "", topic: "", audience: "", objective: "内容种草与商品点击",
+    pain: "", scene: "", hook: "",
     keywordIds: [], externalVideoIds: [], requestedModelId: "", allowFallback: true,
     executionMode: "FULL_VIDEO", allowExternalGeneration: false,
     assetGapTaskId: "",
@@ -417,12 +421,21 @@ async function createAndGenerate() {
             ? "VIRAL_RESEARCH"
             : "VIDEO_FACTORY",
       sourceId: createForm.assetGapTaskId || createForm.keywordIds[0] || createForm.externalVideoIds[0] || undefined,
-      instructions: `${createForm.objective}；目标人群：${createForm.audience || "目标用户"}`,
+      instructions: [
+        createForm.objective,
+        `目标人群：${createForm.audience || "目标用户"}`,
+        createForm.pain ? `核心痛点：${createForm.pain}` : "",
+        createForm.scene ? `推荐场景：${createForm.scene}` : "",
+        createForm.hook ? `Hook方向：${createForm.hook}` : "",
+      ].filter(Boolean).join("；"),
       input: {
         executionMode: createForm.executionMode,
         factoryModule: factoryModule.value,
         topic: createForm.topic,
         audience: createForm.audience,
+        pain: createForm.pain,
+        scene: createForm.scene,
+        hook: createForm.hook,
         objective: createForm.objective,
         keywordIds: createForm.keywordIds,
         externalVideoIds: createForm.externalVideoIds,
@@ -925,6 +938,9 @@ onBeforeUnmount(() => {
         <el-form-item label="主题/主关键词" class="full" required><el-input v-model="createForm.topic" maxlength="150" /></el-form-item>
         <el-form-item label="目标人群"><el-input v-model="createForm.audience" /></el-form-item>
         <el-form-item label="内容目标"><el-input v-model="createForm.objective" /></el-form-item>
+        <el-form-item label="核心痛点"><el-input v-model="createForm.pain" placeholder="用户为什么需要看完这条视频" /></el-form-item>
+        <el-form-item label="推荐场景"><el-input v-model="createForm.scene" placeholder="如家庭早餐、通勤、正确佩戴" /></el-form-item>
+        <el-form-item label="Hook方向" class="full"><el-input v-model="createForm.hook" placeholder="可选；留空由Codex结合关键词与爆款结构生成" /></el-form-item>
         <el-form-item label="生成模型" class="full"><el-select v-model="createForm.requestedModelId" clearable placeholder="Codex智能推荐（默认）" @change="onCreateModelChange"><el-option v-for="item in taskModels" :key="item.id" :label="`${item.provider.displayName} · ${item.displayName}`" :value="item.id" /></el-select><small class="form-tip">默认使用Codex本地工具；指定模型表示允许该任务调用外部视觉能力。</small></el-form-item>
         <el-form-item label="外部视觉能力" class="full"><el-switch v-model="createForm.allowExternalGeneration" active-text="本地素材不足时允许调用已配置模型" /></el-form-item>
         <el-form-item label="失败策略" class="full"><el-switch v-model="createForm.allowFallback" active-text="允许失败后自动切换模型" /></el-form-item>
