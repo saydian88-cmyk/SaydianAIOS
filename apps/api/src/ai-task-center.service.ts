@@ -2165,10 +2165,12 @@ export class AiTaskCenterService implements OnModuleInit {
 
       const modelPolicy = object(task.modelPolicy);
       if (modelPolicy.allowExternalGeneration === true) {
+        const requestedModelId = text(modelPolicy.requestedModelId) || undefined;
         await this.videoFactory.generateProject(project.id, {
           candidateIndex: Math.max(0, scriptCandidates.findIndex((item) => item.selected === true)),
-          routingMode: "AUTO",
-          allowFallback: true,
+          requestedModelId,
+          routingMode: requestedModelId ? "FIXED" : "AUTO",
+          allowFallback: modelPolicy.allowFallback !== false,
         }, actor);
         return { status: "RUNNING" as AiTaskStatus, message: "本地素材不足，已按任务许可进入外部视觉能力补齐" };
       }
@@ -2357,7 +2359,7 @@ export class AiTaskCenterService implements OnModuleInit {
     if (type === "VIDEO" && executionMode === "TOPIC_CARD_BATCH") {
       const platform = enumValue(baseInput.platform || body.platform, ["DOUYIN", "TIKTOK"] as const, "DOUYIN");
       const market = platform === "TIKTOK" ? "US" : "CN";
-      const [products, keywords, knowledge, faqs, externalVideos, assets, historicalContent] = await Promise.all([
+      const [products, keywords, knowledge, faqs, externalVideos, assets, historicalContent, comments] = await Promise.all([
         this.prisma.product.findMany({
           where: { status: "READY" },
           select: {
@@ -2470,6 +2472,20 @@ export class AiTaskCenterService implements OnModuleInit {
           orderBy: { updatedAt: "desc" },
           take: 40,
         }),
+        this.prisma.commentRecord.findMany({
+          where: { integration: { kind: platform } },
+          select: {
+            id: true,
+            remoteContentId: true,
+            text: true,
+            category: true,
+            confidence: true,
+            riskReasons: true,
+            createdAtRemote: true,
+          },
+          orderBy: { createdAtRemote: "desc" },
+          take: 80,
+        }),
       ]);
       const usableReferences = externalVideos.filter((item) => {
         const modules = Array.isArray(item.moduleSummary) ? item.moduleSummary : [];
@@ -2559,6 +2575,15 @@ export class AiTaskCenterService implements OnModuleInit {
         products: item.products.map((relation) => relation.product),
         tags: item.tags.slice(0, 12).map((relation) => relation.tag.label),
       }));
+      const topicComments = comments.map((item) => ({
+        id: item.id,
+        remoteContentId: item.remoteContentId,
+        text: clippedText(item.text, 360),
+        category: item.category,
+        confidence: item.confidence,
+        riskReasons: item.riskReasons,
+        createdAt: item.createdAtRemote,
+      }));
       const missingFields: string[] = [];
       if (!products.length) missingFields.push("已审核产品资料");
       if (!keywords.length) missingFields.push("可用于选题的智能关键词");
@@ -2572,6 +2597,7 @@ export class AiTaskCenterService implements OnModuleInit {
           keywords: topicKeywords,
           knowledge,
           faqs: topicFaqs,
+          comments: topicComments,
           externalVideos: topicReferences,
           assets: topicAssets,
           historicalContent,

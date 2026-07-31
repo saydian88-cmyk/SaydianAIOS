@@ -158,17 +158,21 @@ export class VideoFactoryWorkerService {
     const input = object(job.input);
     const capability = strings(input.auxiliaryImageAssetIds).length ? "IMAGE_TO_VIDEO" : "TEXT_TO_VIDEO";
     const fixed = job.routingMode === "FIXED";
+    const scenario = String(
+      input.modelScenario
+      || (String(input.factoryModule || "").toUpperCase() === "DOUYIN_VIRAL" ? "DOUYIN_VIRAL" : "SCENE"),
+    ).toUpperCase();
     const resolved = await this.factory.resolveModel({
       requestedModelId: fixed ? job.requestedModelId : undefined,
       platform: String(input.platform || ""),
-      scenario: "SCENE",
+      scenario,
       capability,
     });
     let models = [resolved.primary, ...resolved.fallbacks];
     if (fixed && job.allowFallback) {
       const automatic = await this.factory.resolveModel({
         platform: String(input.platform || ""),
-        scenario: "SCENE",
+        scenario,
         capability,
       });
       models = [

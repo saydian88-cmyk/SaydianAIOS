@@ -68,6 +68,9 @@ const approvalForm = reactive({
   executionMode: "FULL_VIDEO",
   ownerId: "",
   reviewerId: "",
+  requestedModelId: "",
+  allowExternalGeneration: true,
+  allowFallback: true,
 });
 
 const createForm = reactive({
@@ -297,6 +300,9 @@ function openApproval(row: Row, executionMode: "SCRIPT_ONLY" | "FULL_VIDEO") {
     executionMode,
     ownerId: row.topicCard?.ownerEmployeeId || row.assignedEmployeeId || "",
     reviewerId: row.topicCard?.reviewerEmployeeId || "",
+    requestedModelId: "",
+    allowExternalGeneration: executionMode === "FULL_VIDEO",
+    allowFallback: true,
   });
   approvalDialog.value = true;
 }
@@ -880,7 +886,12 @@ onBeforeUnmount(() => {
         <el-form-item label="执行方式"><el-radio-group v-model="approvalForm.executionMode"><el-radio-button value="SCRIPT_ONLY">仅生成脚本</el-radio-button><el-radio-button value="FULL_VIDEO">生成完整视频</el-radio-button></el-radio-group></el-form-item>
         <el-form-item label="负责人" required><el-select v-model="approvalForm.ownerId" filterable><el-option v-for="employee in employees" :key="employee.id" :label="`${employee.name} · ${employee.role}`" :value="employee.id" /></el-select></el-form-item>
         <el-form-item label="审核人" required><el-select v-model="approvalForm.reviewerId" filterable><el-option v-for="employee in employees" :key="employee.id" :label="`${employee.name} · ${employee.role}`" :value="employee.id" /></el-select></el-form-item>
-        <el-alert type="info" :closable="false" title="确认后进入AI任务中心；完整视频优先复用已审核真实素材，再使用本地工具补齐。" />
+        <template v-if="approvalForm.executionMode === 'FULL_VIDEO'">
+          <el-form-item label="外部补镜头"><el-switch v-model="approvalForm.allowExternalGeneration" active-text="本地素材不足时允许使用Seedance或Kling" /></el-form-item>
+          <el-form-item v-if="approvalForm.allowExternalGeneration" label="生成模型"><el-select v-model="approvalForm.requestedModelId" clearable placeholder="智能推荐：Seedance主生成、Kling动作增强"><el-option v-for="item in enabledModels" :key="item.id" :label="`${item.provider.displayName} · ${item.displayName}`" :value="item.id" /></el-select></el-form-item>
+          <el-form-item v-if="approvalForm.allowExternalGeneration" label="失败策略"><el-switch v-model="approvalForm.allowFallback" active-text="当前模型失败时按专用路由切换" /></el-form-item>
+        </template>
+        <el-alert type="info" :closable="false" title="确认后进入AI任务中心；先用已审核真实素材和本地工具，只有明确允许时才调用外部模型。" />
       </el-form>
       <template #footer><el-button @click="approvalDialog = false">取消</el-button><el-button type="primary" @click="approveTopicCard">确认并创建任务</el-button></template>
     </el-dialog>
@@ -903,11 +914,11 @@ onBeforeUnmount(() => {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="createDialog" title="提交抖音视频任务" width="820px" destroy-on-close>
+    <el-dialog v-model="createDialog" :title="isDouyinViralSystem ? '提交抖音视频任务' : '提交视频任务'" width="820px" destroy-on-close>
       <el-form label-position="top" class="form-grid">
         <el-form-item label="目标平台"><el-select v-model="createForm.platform" :disabled="Boolean(props.platformScope)"><el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" /></el-select></el-form-item>
         <el-form-item label="产品型号"><el-select v-model="createForm.productModel" clearable filterable><el-option v-for="item in props.products" :key="item.id" :label="`${item.modelCode} · ${item.name}`" :value="item.modelCode" /></el-select></el-form-item>
-        <el-form-item label="任务模式" class="full"><el-radio-group v-model="createForm.executionMode"><el-radio-button value="SCRIPT_ONLY">仅生成脚本</el-radio-button><el-radio-button value="FULL_VIDEO">生成完整视频</el-radio-button></el-radio-group><small class="form-tip">完整视频优先复用已审核素材，由本地Codex完成合成和质检。</small></el-form-item>
+        <el-form-item label="任务模式" class="full"><el-radio-group v-model="createForm.executionMode"><el-radio-button value="SCRIPT_ONLY">仅生成脚本</el-radio-button><el-radio-button value="FULL_VIDEO">生成完整视频</el-radio-button></el-radio-group><small class="form-tip">脚本模式输出1套最终脚本与逐镜头计划；完整视频优先复用已审核素材，再按需调用Seedance或Kling补镜头。</small></el-form-item>
         <el-form-item label="主题/主关键词" class="full" required><el-input v-model="createForm.topic" maxlength="150" /></el-form-item>
         <el-form-item label="目标人群"><el-input v-model="createForm.audience" /></el-form-item>
         <el-form-item label="内容目标"><el-input v-model="createForm.objective" /></el-form-item>
@@ -915,7 +926,7 @@ onBeforeUnmount(() => {
         <el-form-item label="外部视觉能力" class="full"><el-switch v-model="createForm.allowExternalGeneration" active-text="本地素材不足时允许调用已配置模型" /></el-form-item>
         <el-form-item label="失败策略" class="full"><el-switch v-model="createForm.allowFallback" active-text="允许失败后自动切换模型" /></el-form-item>
       </el-form>
-      <template #footer><el-button @click="createDialog = false">取消</el-button><el-button type="primary" @click="createAndGenerate">{{ createForm.executionMode === 'SCRIPT_ONLY' ? '提交并生成3套脚本' : '提交任务并执行主方案' }}</el-button></template>
+      <template #footer><el-button @click="createDialog = false">取消</el-button><el-button type="primary" @click="createAndGenerate">{{ createForm.executionMode === 'SCRIPT_ONLY' ? '提交脚本任务' : '提交完整视频任务' }}</el-button></template>
     </el-dialog>
 
     <el-dialog v-model="providerDialog" :title="editingProviderId ? '设置视频服务商' : '新增视频服务商'" width="760px" destroy-on-close>

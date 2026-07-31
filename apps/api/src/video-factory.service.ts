@@ -353,6 +353,13 @@ function materialBindingFingerprint(shots: Array<{
     .join("|");
 }
 
+function douyinViralModelScenario(description: unknown) {
+  const text = String(description || "");
+  return /(佩戴|抬腕|手势|手部动作|腕部动作|人物动作|真人动作|走路|跑步|运动动作)/u.test(text)
+    ? "DOUYIN_VIRAL_ACTION"
+    : "DOUYIN_VIRAL";
+}
+
 export function materialReviewApproved(plan: { sourceSignals: unknown; workflowVersion: number }, fingerprint?: string) {
   const factory = sourceSignals(plan).find((item) => item.type === "VIDEO_FACTORY") || {};
   const review = object(factory.materialReview);
@@ -713,6 +720,29 @@ export class VideoFactoryService {
         primaryModelId: seedanceModel?.id,
         fallbackModelIds: [klingModel?.id, bailianImageModel?.id].filter(Boolean) as string[],
         rules: { capability: "IMAGE_TO_VIDEO", preferRealAssets: true, externalGenerationOptIn: true },
+        priority: 1,
+        active: true,
+      },
+    });
+    await this.prisma.videoRoutingPolicy.upsert({
+      where: { policyKey: "DOUYIN_VIRAL_ACTION" },
+      create: {
+        policyKey: "DOUYIN_VIRAL_ACTION",
+        name: "抖音爆款人物动作增强路由",
+        platform: "DOUYIN",
+        scenario: "DOUYIN_VIRAL_ACTION",
+        primaryModelId: klingModel?.id,
+        fallbackModelIds: [seedanceModel?.id].filter(Boolean) as string[],
+        rules: { capability: "TEXT_TO_VIDEO", preferRealAssets: true, externalGenerationOptIn: true },
+        priority: 1,
+      },
+      update: {
+        name: "抖音爆款人物动作增强路由",
+        platform: "DOUYIN",
+        scenario: "DOUYIN_VIRAL_ACTION",
+        primaryModelId: klingModel?.id,
+        fallbackModelIds: [seedanceModel?.id].filter(Boolean) as string[],
+        rules: { capability: "TEXT_TO_VIDEO", preferRealAssets: true, externalGenerationOptIn: true },
         priority: 1,
         active: true,
       },
@@ -3294,12 +3324,18 @@ export class VideoFactoryService {
 
     const signals = sourceSignals(plan);
     const factorySignal = signals.find((item) => item.type === "VIDEO_FACTORY") || {};
+    const factoryModule = topicCardPayload(plan)?.factoryModule || "GENERAL_VIDEO_FACTORY";
     const routingMode = String(input.routingMode || factorySignal.routingMode || "AUTO").toUpperCase();
     const requestedModelId = String(input.requestedModelId || factorySignal.requestedModelId || "").trim() || undefined;
     const allowFallback = input.allowFallback ?? factorySignal.allowFallback !== false;
     if (!input.prepareOnly && coverage.some((shot) => shot.coverage === "MISSING")) {
-      await this.resolveModel({ requestedModelId, platform: plan.targetPlatforms[0], scenario: "SCENE", capability: "IMAGE_TO_VIDEO" })
-        .catch(async () => this.resolveModel({ requestedModelId, platform: plan.targetPlatforms[0], scenario: "SCENE", capability: "TEXT_TO_VIDEO" }));
+      const scenarios = Array.from(new Set(coverage
+        .filter((shot) => shot.coverage === "MISSING")
+        .map((shot) => factoryModule === "DOUYIN_VIRAL" ? douyinViralModelScenario(shot.description) : "SCENE")));
+      await Promise.all(scenarios.map(async (scenario) => {
+        await this.resolveModel({ requestedModelId, platform: plan.targetPlatforms[0], scenario, capability: "IMAGE_TO_VIDEO" })
+          .catch(async () => this.resolveModel({ requestedModelId, platform: plan.targetPlatforms[0], scenario, capability: "TEXT_TO_VIDEO" }));
+      }));
     }
 
     await this.prisma.$transaction(async (tx) => {
@@ -3335,6 +3371,9 @@ export class VideoFactoryService {
           },
         });
         if (!selectedAssetId && !input.prepareOnly) {
+          const modelScenario = factoryModule === "DOUYIN_VIRAL"
+            ? douyinViralModelScenario(item.description)
+            : "SCENE";
           await tx.videoGenerationJob.create({
             data: {
               idempotencyKey: `video-shot:${id}:${shot.id}:${candidateIndex}`,
@@ -3347,6 +3386,8 @@ export class VideoFactoryService {
               input: {
                 platform: plan.targetPlatforms[0],
                 productModel: plan.productModel,
+                factoryModule,
+                modelScenario,
                 duration: 5,
                 ratio: "9:16",
                 resolution: "1080P",

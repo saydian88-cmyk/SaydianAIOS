@@ -181,6 +181,9 @@ export class VideoFactoryController {
     const ownerId = String(body.ownerId || "");
     const reviewerId = String(body.reviewerId || "");
     const requestedFactoryModule = String(body.factoryModule || "").toUpperCase();
+    const requestedModelId = String(body.requestedModelId || "").trim();
+    const allowExternalGeneration = executionMode === "FULL_VIDEO" && body.allowExternalGeneration === true;
+    const allowFallback = allowExternalGeneration && body.allowFallback !== false;
     const prepared = await this.factory.prepareTopicCardApproval(id, {
       executionMode: executionMode as "SCRIPT_ONLY" | "FULL_VIDEO",
       ownerId,
@@ -211,8 +214,9 @@ export class VideoFactoryController {
       },
       modelPolicy: {
         strategy: "CODEX_FIRST",
-        allowExternalGeneration: false,
-        allowFallback: false,
+        ...(requestedModelId ? { requestedModelId } : {}),
+        allowExternalGeneration,
+        allowFallback,
       },
     }, actor);
     const card = await this.factory.markTopicCardApproved(id, {

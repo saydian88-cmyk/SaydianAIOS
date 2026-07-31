@@ -182,3 +182,33 @@ describe("VideoFactoryWorkerService Kling adapter", () => {
     });
   });
 });
+
+describe("VideoFactoryWorkerService model routing", () => {
+  it("uses the dedicated Douyin action route for action shots", async () => {
+    const resolveModel = vi.fn().mockResolvedValue({
+      primary: { id: "kling-model" },
+      fallbacks: [{ id: "seedance-model" }],
+    });
+    const worker = new VideoFactoryWorkerService({} as never, { resolveModel } as never, {} as never);
+
+    const selected = await (worker as any).selectModel({
+      input: {
+        platform: "DOUYIN",
+        factoryModule: "DOUYIN_VIRAL",
+        modelScenario: "DOUYIN_VIRAL_ACTION",
+        auxiliaryImageAssetIds: [],
+      },
+      routingMode: "AUTO",
+      requestedModelId: null,
+      allowFallback: true,
+      attemptCount: 0,
+    });
+
+    expect(selected).toMatchObject({ id: "kling-model" });
+    expect(resolveModel).toHaveBeenCalledWith(expect.objectContaining({
+      platform: "DOUYIN",
+      scenario: "DOUYIN_VIRAL_ACTION",
+      capability: "TEXT_TO_VIDEO",
+    }));
+  });
+});

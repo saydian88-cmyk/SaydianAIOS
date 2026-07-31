@@ -32,6 +32,7 @@ function serviceWith(overrides: Record<string, unknown> = {}) {
     contentPlan: { findUnique: vi.fn().mockResolvedValue(null) },
     smartKeyword: { findMany: vi.fn().mockResolvedValue([]) },
     knowledgeEntry: { findMany: vi.fn().mockResolvedValue([]) },
+    commentRecord: { findMany: vi.fn().mockResolvedValue([]) },
     asset: { findMany: vi.fn().mockResolvedValue([]) },
     operationAnalysisRun: { findFirst: vi.fn().mockResolvedValue(null) },
     storeMetricSnapshot: { findMany: vi.fn().mockResolvedValue([]) },
