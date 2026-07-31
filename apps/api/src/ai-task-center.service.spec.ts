@@ -194,11 +194,12 @@ describe("AiTaskCenterService", () => {
     expect(createTask.mock.calls.map(([body]) => ({
       platform: body.platform,
       mode: (body.input as Record<string, unknown>).executionMode,
+      factoryModule: (body.input as Record<string, unknown>).factoryModule,
       count: (body.input as Record<string, unknown>).cardCount,
       estimatedCost: body.estimatedCost,
     }))).toEqual([
-      { platform: "DOUYIN", mode: "TOPIC_CARD_BATCH", count: 10, estimatedCost: 0 },
-      { platform: "TIKTOK", mode: "TOPIC_CARD_BATCH", count: 10, estimatedCost: 0 },
+      { platform: "DOUYIN", mode: "TOPIC_CARD_BATCH", factoryModule: "DOUYIN_VIRAL", count: 10, estimatedCost: 0 },
+      { platform: "TIKTOK", mode: "TOPIC_CARD_BATCH", factoryModule: "GENERAL_VIDEO_FACTORY", count: 10, estimatedCost: 0 },
     ]);
   });
 

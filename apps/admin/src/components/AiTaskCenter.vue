@@ -579,7 +579,8 @@ onMounted(load);
         <el-table-column label="操作" width="290" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="showDetail(row)">详情</el-button>
-            <el-button v-if="['PENDING','WAITING_CONFIRMATION','RETURNED'].includes(row.status)" link type="primary" @click="action(row, 'start')">运行</el-button>
+            <span v-if="row.status === 'PENDING'" class="muted">已排队</span>
+            <el-button v-if="['WAITING_CONFIRMATION','RETURNED'].includes(row.status)" link type="primary" @click="action(row, 'start')">运行</el-button>
             <el-button v-if="runningStatuses.includes(row.status)" link type="danger" @click="action(row, 'cancel')">取消</el-button>
             <el-button v-if="['FAILED','CANCELLED'].includes(row.status)" link type="warning" @click="action(row, 'retry')">重试</el-button>
             <el-button v-if="row.status === 'PENDING_REVIEW'" link type="success" @click="openReview(row, 'APPROVE')">通过</el-button>

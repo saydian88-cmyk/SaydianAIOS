@@ -1768,6 +1768,9 @@ export class AiTaskCenterService implements OnModuleInit {
     const policyVersion = text(config.topicCardPolicyVersion) || DEFAULT_VIDEO_POLICY_CONFIG.topicCardPolicyVersion;
     const results: Record<string, unknown> = {};
     for (const platform of platforms) {
+      const resolvedFactoryModule = factoryModule === "DOUYIN_VIRAL" || (!factoryModule && platform === "DOUYIN")
+        ? "DOUYIN_VIRAL"
+        : "GENERAL_VIDEO_FACTORY";
       const cardCount = Math.max(1, Math.min(30, Math.round(number(counts[platform]) || DEFAULT_VIDEO_POLICY_CONFIG.dailyTopicCards[platform])));
       const task = await this.createTask({
         type: "VIDEO",
@@ -1775,12 +1778,12 @@ export class AiTaskCenterService implements OnModuleInit {
         platform,
         sourceType: "DAILY_VIDEO_TOPIC_CARDS",
         sourceId: `${key}:${platform}`,
-        idempotencyKey: `ai-task:topic-card:${factoryModule === "DOUYIN_VIRAL" ? "douyin-viral:" : ""}${platform}:${key}:${policyVersion}`,
+        idempotencyKey: `ai-task:topic-card:${resolvedFactoryModule === "DOUYIN_VIRAL" ? "douyin-viral:" : ""}${platform}:${key}:${policyVersion}`,
         estimatedCost: 0,
         skipPaidBudget: true,
         input: {
           executionMode: "TOPIC_CARD_BATCH",
-          factoryModule: factoryModule === "DOUYIN_VIRAL" ? "DOUYIN_VIRAL" : "GENERAL_VIDEO_FACTORY",
+          factoryModule: resolvedFactoryModule,
           cardCount,
           policyVersion,
           manualApprovalRequired: true,
