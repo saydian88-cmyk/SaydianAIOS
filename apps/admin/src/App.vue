@@ -11,6 +11,7 @@ import OperationAnalysis from "./components/OperationAnalysis.vue";
 import AdminTaskCenter from "./components/AdminTaskCenter.vue";
 import AiTaskCenter from "./components/AiTaskCenter.vue";
 import SystemConfigCenter from "./components/SystemConfigCenter.vue";
+import VideoFactory from "./components/VideoFactory.vue";
 import type { ContentPlan, Dashboard, Integration } from "./types";
 
 type AnyRow = Record<string, any>;
@@ -23,6 +24,7 @@ const navItems = [
   { key: "mall", label: "赛电商城", icon: Shop },
   { key: "content", label: "内容审核", icon: DocumentChecked },
   { key: "assets", label: "品牌数据中心", icon: Files },
+  { key: "douyinVideo", label: "抖音爆款视频生成系统", icon: VideoCamera },
   { key: "ledger", label: "经营责任台账", icon: Monitor },
   { key: "operationAnalysis", label: "运营分析", icon: DataAnalysis },
   { key: "engagement", label: "评论与直播", icon: VideoCamera },
@@ -57,6 +59,7 @@ const operationAnalysis = ref<{ reload: () => Promise<void> }>();
 const adminTaskCenter = ref<{ reload: () => Promise<void> }>();
 const aiTaskCenter = ref<{ reload: () => Promise<void> }>();
 const systemConfigCenter = ref<{ reload: () => Promise<void> }>();
+const douyinVideoSystem = ref<{ reload: () => Promise<void> }>();
 const comments = ref<AnyRow[]>([]);
 const live = ref<AnyRow[]>([]);
 const shopItems = ref<AnyRow[]>([]);
@@ -247,6 +250,10 @@ async function loadActive() {
   if (active.value === "aiTasks") return aiTaskCenter.value?.reload();
   if (active.value === "content") [content.value, ledger.value] = await Promise.all([api<ContentPlan[]>("/api/v1/content"), api<Ledger>("/api/v1/ledger")]);
   if (active.value === "assets") await brandDataCenter.value?.reload();
+  if (active.value === "douyinVideo") {
+    ledger.value = await api("/api/v1/ledger");
+    await douyinVideoSystem.value?.reload();
+  }
   if (active.value === "operationAnalysis") await operationAnalysis.value?.reload();
   if (active.value === "ledger") ledger.value = await api("/api/v1/ledger");
   if (active.value === "operations") {
@@ -956,6 +963,16 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
 
       <section v-else-if="active === 'assets'" class="page">
         <BrandDataCenter ref="brandDataCenter" @open-content="openGeneratedContent" @open-system-config="switchPage('integrations')" />
+      </section>
+
+      <section v-else-if="active === 'douyinVideo'" class="page">
+        <VideoFactory
+          ref="douyinVideoSystem"
+          :products="ledger.products"
+          platform-scope="DOUYIN"
+          mode="douyin-viral"
+          @open-system-config="switchPage('integrations')"
+        />
       </section>
 
       <section v-else-if="active === 'ledger'" class="page">

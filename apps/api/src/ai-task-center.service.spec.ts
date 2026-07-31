@@ -201,6 +201,39 @@ describe("AiTaskCenterService", () => {
     ]);
   });
 
+  it("can create only the requested Douyin topic-card batch", async () => {
+    const prisma = {
+      aiTaskPolicy: {
+        upsert: vi.fn().mockResolvedValue({
+          type: "VIDEO",
+          config: {
+            topicCardPolicyVersion: "v2.1",
+            dailyTopicCards: { DOUYIN: 10, TIKTOK: 10 },
+          },
+        }),
+      },
+    };
+    const service = new AiTaskCenterService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+    const createTask = vi.spyOn(service, "createTask").mockImplementation(async (body) => body as never);
+
+    await service.createDailyTopicCardTasks(
+      new Date("2026-07-28T00:00:00.000Z"),
+      "测试管理员",
+      ["DOUYIN"],
+    );
+
+    expect(createTask).toHaveBeenCalledTimes(1);
+    expect(createTask.mock.calls[0][0].platform).toBe("DOUYIN");
+    expect((createTask.mock.calls[0][0].input as Record<string, unknown>).executionMode).toBe("TOPIC_CARD_BATCH");
+  });
+
   it("keeps store analysis in WAITING_INPUT when no operating snapshot exists", async () => {
     const { service, create } = serviceWith({
       aiTaskPolicy: {

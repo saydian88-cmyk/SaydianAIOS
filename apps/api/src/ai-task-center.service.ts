@@ -1717,14 +1717,18 @@ export class AiTaskCenterService implements OnModuleInit {
     throw new NotFoundException("任务输出没有可下载文件");
   }
 
-  async createDailyTopicCardTasks(now = new Date(), actor = "系统自动化") {
+  async createDailyTopicCardTasks(
+    now = new Date(),
+    actor = "系统自动化",
+    platforms: Array<"DOUYIN" | "TIKTOK"> = ["DOUYIN", "TIKTOK"],
+  ) {
     const key = dateKey(now);
     const policy = await this.policy("VIDEO");
     const config = object(policy.config);
     const counts = object(config.dailyTopicCards);
     const policyVersion = text(config.topicCardPolicyVersion) || DEFAULT_VIDEO_POLICY_CONFIG.topicCardPolicyVersion;
     const results: Record<string, unknown> = {};
-    for (const platform of ["DOUYIN", "TIKTOK"] as const) {
+    for (const platform of platforms) {
       const cardCount = Math.max(1, Math.min(30, Math.round(number(counts[platform]) || DEFAULT_VIDEO_POLICY_CONFIG.dailyTopicCards[platform])));
       const task = await this.createTask({
         type: "VIDEO",

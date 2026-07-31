@@ -129,8 +129,14 @@ export class VideoFactoryController {
   generateDailyTopicCards(
     @Headers("authorization") authorization: string | undefined,
     @Headers("x-ops-actor") requestedActor: string | undefined,
+    @Body() body: Record<string, unknown>,
   ) {
-    return this.aiTasks.createDailyTopicCardTasks(new Date(), this.actor(authorization, requestedActor));
+    const platform = String(body.platform || "").toUpperCase();
+    return this.aiTasks.createDailyTopicCardTasks(
+      new Date(),
+      this.actor(authorization, requestedActor),
+      platform === "DOUYIN" || platform === "TIKTOK" ? [platform] : undefined,
+    );
   }
 
   @Patch("topic-cards/:id")

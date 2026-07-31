@@ -6,7 +6,14 @@ import { api, patch, post } from "../api";
 
 type Row = Record<string, any>;
 
-const props = defineProps<{ products: Row[] }>();
+const props = withDefaults(defineProps<{
+  products: Row[];
+  platformScope?: "" | "DOUYIN" | "TIKTOK";
+  mode?: "factory" | "douyin-viral";
+}>(), {
+  platformScope: "",
+  mode: "factory",
+});
 const emit = defineEmits<{ (event: "open-system-config"): void }>();
 const loading = ref(false);
 const view = ref("topicCards");
@@ -39,7 +46,7 @@ const editingModelId = ref("");
 let pollTimer: number | undefined;
 
 const topicFilters = reactive({
-  platform: "",
+  platform: props.platformScope,
   productModel: "",
   sourceType: "",
   status: "",
@@ -64,7 +71,7 @@ const approvalForm = reactive({
 });
 
 const createForm = reactive({
-  platform: "DOUYIN",
+  platform: props.platformScope || "DOUYIN",
   productModel: "",
   topic: "",
   audience: "",
@@ -107,6 +114,12 @@ const modelForm = reactive({
   enabled: false,
 });
 const routeForm = reactive({ DOUYIN: "", TIKTOK: "" });
+const isDouyinViralSystem = computed(() => props.mode === "douyin-viral");
+const heroKicker = computed(() => isDouyinViralSystem.value ? "DOUYIN VIRAL VIDEO SYSTEM · V1.0" : "SMART VIDEO FACTORY · V2.0");
+const heroTitle = computed(() => isDouyinViralSystem.value ? "抖音爆款视频生成系统" : "视频工厂");
+const heroDescription = computed(() => isDouyinViralSystem.value
+  ? "从抖音关键词和爆款结构发现机会，结合产品知识与真实素材生成选题卡；人工确认后进入Codex制作。"
+  : "先把关键词、爆款结构、FAQ、产品知识和真实素材整理成选题卡；人工确认后再进入Codex生产。");
 
 const enabledModels = computed(() => models.value.filter((item) =>
   item.enabled
@@ -183,15 +196,19 @@ async function run(task: () => Promise<void>, success?: string) {
 
 async function reload() {
   await run(async () => {
+    const platformQuery = props.platformScope ? `?platform=${props.platformScope}` : "";
+    const referenceQuery = props.platformScope ? `?platform=${props.platformScope}&take=20` : "?take=20";
     const [cardRows, projectRows, providerRows, modelRows, routeRows, douyinKeywords, tiktokKeywords, referenceRows, workspace] = await Promise.all([
-      api<Row[]>("/api/v1/video-factory/topic-cards"),
-      api<Row[]>("/api/v1/video-factory/projects"),
+      api<Row[]>(`/api/v1/video-factory/topic-cards${platformQuery}`),
+      api<Row[]>(`/api/v1/video-factory/projects${platformQuery}`),
       api<Row[]>("/api/v1/video-factory/providers"),
       api<Row[]>("/api/v1/video-factory/models"),
       api<Row[]>("/api/v1/video-factory/routing"),
       api<Row[]>("/api/v1/brand-data/smart-keywords/active?platform=DOUYIN&consumer=SMART_VIDEO"),
-      api<Row[]>("/api/v1/brand-data/smart-keywords/active?platform=TIKTOK&consumer=SMART_VIDEO"),
-      api<Row[]>("/api/v1/brand-data/external-videos?take=20"),
+      props.platformScope === "DOUYIN"
+        ? Promise.resolve([] as Row[])
+        : api<Row[]>("/api/v1/brand-data/smart-keywords/active?platform=TIKTOK&consumer=SMART_VIDEO"),
+      api<Row[]>(`/api/v1/brand-data/external-videos${referenceQuery}`),
       api<Row>("/api/v1/admin/workspace"),
     ]);
     topicCards.value = cardRows;
@@ -296,9 +313,9 @@ async function approveTopicCard() {
 
 async function generateDailyTopicCards() {
   await run(async () => {
-    await post("/api/v1/video-factory/topic-cards/generate-daily", {});
+    await post("/api/v1/video-factory/topic-cards/generate-daily", props.platformScope ? { platform: props.platformScope } : {});
     await reload();
-  }, "抖音和TikTok选题卡任务已创建");
+  }, props.platformScope === "DOUYIN" ? "今日抖音选题卡任务已创建" : "抖音和TikTok选题卡任务已创建");
 }
 
 async function rematchTopicCard(row: Row) {
@@ -319,7 +336,7 @@ async function archiveTopicCard(row: Row) {
 
 function resetCreate() {
   Object.assign(createForm, {
-    platform: "DOUYIN", productModel: "", topic: "", audience: "", objective: "内容种草与商品点击",
+    platform: props.platformScope || "DOUYIN", productModel: "", topic: "", audience: "", objective: "内容种草与商品点击",
     keywordIds: [], externalVideoIds: [], requestedModelId: "", allowFallback: true,
     executionMode: "FULL_VIDEO", allowExternalGeneration: false,
     assetGapTaskId: "",
@@ -607,16 +624,28 @@ onBeforeUnmount(() => {
   <section class="video-factory" v-loading="loading">
     <div class="factory-hero">
       <div>
-        <span>SMART VIDEO FACTORY · V2.0</span>
-        <h3>视频工厂</h3>
-        <p>先把关键词、爆款结构、FAQ、产品知识和真实素材整理成选题卡；人工确认后再进入Codex生产。</p>
+        <span>{{ heroKicker }}</span>
+        <h3>{{ heroTitle }}</h3>
+        <p>{{ heroDescription }}</p>
       </div>
       <div>
         <el-button :icon="Refresh" @click="reload">刷新</el-button>
         <el-button @click="emit('open-system-config')">前往系统配置</el-button>
         <el-button @click="openCreate">人工创建视频</el-button>
-        <el-button type="primary" :icon="Plus" @click="generateDailyTopicCards">生成今日选题卡</el-button>
+        <el-button type="primary" :icon="Plus" @click="generateDailyTopicCards">{{ isDouyinViralSystem ? '生成今日抖音选题卡' : '生成今日选题卡' }}</el-button>
       </div>
+    </div>
+
+    <div v-if="isDouyinViralSystem" class="viral-pipeline" aria-label="抖音爆款视频生产流程">
+      <article><b>01</b><span>爆款与关键词</span><small>发现抖音内容机会</small></article>
+      <i>→</i>
+      <article><b>02</b><span>结构拆解</span><small>提取Hook、节奏与CTA</small></article>
+      <i>→</i>
+      <article><b>03</b><span>选题卡确认</span><small>人工确认产品与人群</small></article>
+      <i>→</i>
+      <article><b>04</b><span>Codex制作</span><small>脚本、分镜与真实素材</small></article>
+      <i>→</i>
+      <article><b>05</b><span>审核与复盘</span><small>成片审核、发布和回流</small></article>
     </div>
 
     <div class="factory-summary">
@@ -637,7 +666,8 @@ onBeforeUnmount(() => {
 
     <div v-if="view === 'topicCards'" class="data-card topic-card-panel">
       <div class="topic-filters">
-        <el-select v-model="topicFilters.platform" clearable placeholder="全部平台"><el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" /></el-select>
+        <el-select v-if="!props.platformScope" v-model="topicFilters.platform" clearable placeholder="全部平台"><el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" /></el-select>
+        <el-tag v-else type="danger" effect="plain">抖音</el-tag>
         <el-select v-model="topicFilters.productModel" clearable filterable placeholder="全部产品"><el-option v-for="product in props.products" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" /></el-select>
         <el-select v-model="topicFilters.sourceType" clearable placeholder="全部来源"><el-option label="智能关键词" value="SMART_KEYWORD" /><el-option label="爆款研究" value="VIRAL_RESEARCH" /><el-option label="FAQ" value="FAQ" /></el-select>
         <el-select v-model="topicFilters.status" clearable placeholder="全部状态"><el-option label="待确认" value="TOPIC_CARD_RECOMMENDED" /><el-option label="已确认" value="TOPIC_CARD_APPROVED" /></el-select>
@@ -651,7 +681,7 @@ onBeforeUnmount(() => {
           <small>{{ row.topicCard?.audience }}｜{{ row.topicCard?.pain }}</small>
         </article>
       </div>
-      <div class="card-title"><h4>可执行选题</h4><small>每天抖音10张、TikTok 10张；管理员确认前不创建脚本或成片任务</small></div>
+      <div class="card-title"><h4>可执行选题</h4><small>{{ isDouyinViralSystem ? '每日生成10张抖音选题卡；管理员确认前不创建脚本或成片任务' : '每天抖音10张、TikTok 10张；管理员确认前不创建脚本或成片任务' }}</small></div>
       <el-table ref="topicTable" :data="filteredTopicCards" stripe height="510" @selection-change="topicSelection">
         <el-table-column type="selection" width="46" />
         <el-table-column label="选题卡" min-width="270"><template #default="scope"><strong>{{ scope.row.topic }}</strong><small>{{ scope.row.productionNo }} · {{ scope.row.productModel || '缺产品事实' }}</small></template></el-table-column>
@@ -866,7 +896,7 @@ onBeforeUnmount(() => {
 
     <el-dialog v-model="createDialog" title="一键生成智能视频" width="820px" destroy-on-close>
       <el-form label-position="top" class="form-grid">
-        <el-form-item label="目标平台"><el-select v-model="createForm.platform"><el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" /></el-select></el-form-item>
+        <el-form-item label="目标平台"><el-select v-model="createForm.platform" :disabled="Boolean(props.platformScope)"><el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" /></el-select></el-form-item>
         <el-form-item label="产品型号"><el-select v-model="createForm.productModel" clearable filterable><el-option v-for="item in props.products" :key="item.id" :label="`${item.modelCode} · ${item.name}`" :value="item.modelCode" /></el-select></el-form-item>
         <el-form-item label="任务模式" class="full"><el-radio-group v-model="createForm.executionMode"><el-radio-button value="SCRIPT_ONLY">仅生成脚本</el-radio-button><el-radio-button value="FULL_VIDEO">生成完整视频</el-radio-button></el-radio-group><small class="form-tip">完整视频优先复用已审核素材，由本地Codex完成合成和质检。</small></el-form-item>
         <el-form-item label="主题/主关键词" class="full" required><el-input v-model="createForm.topic" maxlength="150" /></el-form-item>
@@ -945,6 +975,7 @@ onBeforeUnmount(() => {
 .factory-hero, .factory-summary, .model-route, .two-cards, .opportunity-grid { display: grid; gap: 14px; }
 .factory-hero { grid-template-columns: 1fr auto; align-items: start; padding: 20px 22px; color: #fff; border-radius: 16px; background: linear-gradient(135deg, #16253f, #304e79); }
 .factory-hero span { font-size: 12px; letter-spacing: .12em; opacity: .76; }.factory-hero h3 { margin: 5px 0; font-size: 25px; }.factory-hero p { margin: 0; color: #dce7f6; }.factory-hero > div:last-child { display: flex; gap: 9px; }
+.viral-pipeline { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr) auto) minmax(0, 1fr); align-items: center; gap: 10px; padding: 14px 16px; border: 1px solid #eadfe0; border-radius: 14px; background: linear-gradient(90deg, #fff, #fff7f5); }.viral-pipeline article { display: grid; grid-template-columns: auto 1fr; column-gap: 9px; align-items: center; }.viral-pipeline b { grid-row: 1 / 3; color: #b4232d; font-size: 20px; }.viral-pipeline span, .viral-pipeline small { display: block; }.viral-pipeline span { color: #202b3c; font-weight: 700; }.viral-pipeline small { margin-top: 2px; color: #8791a0; }.viral-pipeline i { color: #c8ced8; font-style: normal; }
 .factory-summary { grid-template-columns: repeat(4, minmax(0, 1fr)); }.factory-summary article, .opportunity-grid article, .model-route article { padding: 17px 19px; border: 1px solid #e4e9f1; border-radius: 14px; background: #fff; }.factory-summary span, .factory-summary small { display: block; color: #7d8797; }.factory-summary strong { display: block; margin: 5px 0; color: #18263e; font-size: 27px; }
 .opportunity-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }.opportunity-grid h4 { margin: 9px 0 5px; }.opportunity-grid p { min-height: 62px; color: #6f7a8c; line-height: 1.6; }.opportunity-grid .el-icon { color: #a2202b; font-size: 26px; }
 .data-card { overflow: hidden; border: 1px solid #e4e9f1; border-radius: 14px; background: #fff; }.data-card strong, .data-card small { display: block; }.data-card small { margin-top: 3px; color: #8a94a5; }
@@ -958,5 +989,5 @@ onBeforeUnmount(() => {
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 18px; }.form-grid .full { grid-column: 1 / -1; }.form-tip { display: block; margin-top: 6px; color: #8a94a5; }
 .detail-head { display: flex; align-items: center; justify-content: space-between; padding-bottom: 14px; border-bottom: 1px solid #edf0f5; }.detail-head strong, .detail-head span { display: block; }.detail-head strong { font-size: 22px; }.detail-head span { margin-top: 4px; color: #7c8797; }
 .candidate-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 20px; }.candidate-grid article { padding: 14px; border: 1px solid #e3e8f0; border-radius: 12px; }.candidate-grid strong { display: block; margin: 8px 0; }.candidate-grid p { min-height: 48px; color: #657187; }.candidate-grid small { display: block; margin-bottom: 9px; color: #8a94a5; }.detail-actions { display: flex; justify-content: flex-end; padding-top: 16px; }
-@media (max-width: 1100px) { .factory-summary, .opportunity-grid, .candidate-grid, .topic-card-kpis, .topic-detail-grid { grid-template-columns: 1fr 1fr; }.two-cards, .model-route, .topic-filters { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 1100px) { .factory-summary, .opportunity-grid, .candidate-grid, .topic-card-kpis, .topic-detail-grid { grid-template-columns: 1fr 1fr; }.two-cards, .model-route, .topic-filters { grid-template-columns: 1fr 1fr; }.viral-pipeline { grid-template-columns: 1fr 1fr; }.viral-pipeline i { display: none; } }
 </style>
