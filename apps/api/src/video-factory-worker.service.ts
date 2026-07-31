@@ -399,6 +399,11 @@ export class VideoFactoryWorkerService {
       error: String(payload.message || object(payload.error).message || payload.error || `模型请求失败（${response.status}）`),
       response: payload,
     };
+    if (provider.code === "KLING" && Number(payload.code ?? 0) !== 0) return {
+      state: "FAILED",
+      error: String(payload.message || "可灵任务创建失败"),
+      response: payload,
+    };
     const externalJobId = String(
       object(payload.output).task_id
       || payload.id
@@ -448,6 +453,12 @@ export class VideoFactoryWorkerService {
       state: "FAILED",
       externalJobId,
       error: String(payload.message || object(payload.error).message || payload.error || `进度查询失败（${response.status}）`),
+      response: payload,
+    };
+    if (provider.code === "KLING" && Number(payload.code ?? 0) !== 0) return {
+      state: "FAILED",
+      externalJobId,
+      error: String(payload.message || "可灵进度查询失败"),
       response: payload,
     };
     const output = object(payload.output);

@@ -2585,10 +2585,12 @@ export class VideoFactoryService {
     }
     if (provider.code === "KLING") {
       const apiKey = String(secret.apiKey || "");
-      const url = `${String(provider.baseUrl || "").replace(/\/$/u, "")}/tasks?task_ids=__saydian_connection_check__`;
+      const url = `${String(provider.baseUrl || "").replace(/\/$/u, "")}/tasks`;
       try {
         const response = await fetch(url, {
+          method: "POST",
           headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ limit: 1 }),
           signal: AbortSignal.timeout(15_000),
         });
         const payload = await response.json().catch(() => ({})) as JsonRow;
