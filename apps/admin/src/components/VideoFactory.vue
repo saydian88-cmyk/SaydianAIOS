@@ -640,7 +640,7 @@ onBeforeUnmount(() => {
       <div>
         <el-button :icon="Refresh" @click="reload">刷新</el-button>
         <el-button @click="emit('open-system-config')">前往系统配置</el-button>
-        <el-button @click="openCreate">人工创建视频</el-button>
+        <el-button @click="openCreate">提交视频任务</el-button>
         <el-button type="primary" :icon="Plus" @click="generateDailyTopicCards">{{ isDouyinViralSystem ? '生成今日抖音选题卡' : '生成今日选题卡' }}</el-button>
       </div>
     </div>
@@ -903,7 +903,7 @@ onBeforeUnmount(() => {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="createDialog" title="一键生成智能视频" width="820px" destroy-on-close>
+    <el-dialog v-model="createDialog" title="提交抖音视频任务" width="820px" destroy-on-close>
       <el-form label-position="top" class="form-grid">
         <el-form-item label="目标平台"><el-select v-model="createForm.platform" :disabled="Boolean(props.platformScope)"><el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" /></el-select></el-form-item>
         <el-form-item label="产品型号"><el-select v-model="createForm.productModel" clearable filterable><el-option v-for="item in props.products" :key="item.id" :label="`${item.modelCode} · ${item.name}`" :value="item.modelCode" /></el-select></el-form-item>
@@ -915,7 +915,7 @@ onBeforeUnmount(() => {
         <el-form-item label="外部视觉能力" class="full"><el-switch v-model="createForm.allowExternalGeneration" active-text="本地素材不足时允许调用已配置模型" /></el-form-item>
         <el-form-item label="失败策略" class="full"><el-switch v-model="createForm.allowFallback" active-text="允许失败后自动切换模型" /></el-form-item>
       </el-form>
-      <template #footer><el-button @click="createDialog = false">取消</el-button><el-button type="primary" @click="createAndGenerate">{{ createForm.executionMode === 'SCRIPT_ONLY' ? '生成3套脚本' : '生成3套脚本并执行主方案' }}</el-button></template>
+      <template #footer><el-button @click="createDialog = false">取消</el-button><el-button type="primary" @click="createAndGenerate">{{ createForm.executionMode === 'SCRIPT_ONLY' ? '提交并生成3套脚本' : '提交任务并执行主方案' }}</el-button></template>
     </el-dialog>
 
     <el-dialog v-model="providerDialog" :title="editingProviderId ? '设置视频服务商' : '新增视频服务商'" width="760px" destroy-on-close>
