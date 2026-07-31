@@ -319,6 +319,29 @@ export class VideoFactoryWorkerService {
         generate_audio: config.generateAudio !== false,
         watermark: config.watermark === true,
       };
+    } else if (provider.code === "KLING") {
+      const config = { ...object(provider.publicConfig), ...object(model.modelConfig) };
+      const endpointModel = String(config.endpointModel || "kling-3.0-turbo");
+      const settings: JsonRow = {
+        resolution: String(input.resolution || config.resolution || "720p").toLowerCase(),
+        duration: Math.max(3, Math.min(15, Math.round(duration))),
+      };
+      if (!reference) settings.aspect_ratio = String(input.ratio || config.ratio || "9:16");
+      url = `${baseUrl}/${reference ? "image-to-video" : "text-to-video"}/${encodeURIComponent(endpointModel)}`;
+      body = reference
+        ? {
+          contents: [
+            { type: "prompt", text: job.prompt },
+            { type: "first_frame", url: reference.url },
+          ],
+          settings,
+          options: { external_task_id: job.id, watermark_info: { enabled: config.watermark === true } },
+        }
+        : {
+          prompt: job.prompt,
+          settings,
+          options: { external_task_id: job.id, watermark_info: { enabled: config.watermark === true } },
+        };
     } else if (provider.code === "BAILIAN_WAN") {
       url = opsConfig.bailian.videoGenerationUrl;
       body = {
@@ -381,6 +404,7 @@ export class VideoFactoryWorkerService {
       || payload.id
       || object(payload.data).video_id
       || object(payload.data).task_id
+      || object(payload.data).id
       || "",
     );
     const immediateUrl = String(
@@ -403,6 +427,7 @@ export class VideoFactoryWorkerService {
     const baseUrl = String(provider.baseUrl || "").replace(/\/$/u, "");
     let url = "";
     if (provider.code === "VOLCENGINE_SEEDANCE") url = `${baseUrl}/contents/generations/tasks/${encodeURIComponent(externalJobId)}`;
+    else if (provider.code === "KLING") url = `${baseUrl}/tasks?task_ids=${encodeURIComponent(externalJobId)}`;
     else if (provider.code === "BAILIAN_WAN") url = `${opsConfig.bailian.taskUrl.replace(/\/$/u, "")}/${encodeURIComponent(externalJobId)}`;
     else if (provider.code === "RUNWAY") url = `${baseUrl}/v1/tasks/${encodeURIComponent(externalJobId)}`;
     else if (provider.code === "HEYGEN") url = `${baseUrl}/v1/video_status.get?video_id=${encodeURIComponent(externalJobId)}`;
@@ -426,14 +451,18 @@ export class VideoFactoryWorkerService {
       response: payload,
     };
     const output = object(payload.output);
-    const data = object(payload.data);
+    const klingData = provider.code === "KLING" && Array.isArray(payload.data) ? object(payload.data[0]) : {};
+    const data = provider.code === "KLING" ? klingData : object(payload.data);
     const content = object(payload.content);
     const status = statusValue(output.task_status || payload.status || data.status || payload.state);
     const outputArray = Array.isArray(payload.output) ? payload.output : [];
+    const klingOutputs = Array.isArray(data.outputs) ? data.outputs.map(object) : [];
+    const klingVideo = klingOutputs.find((item) => String(item.type || "") === "video") || {};
     const outputUrl = String(
       output.video_url
       || data.video_url
       || data.video_url_caption
+      || klingVideo.url
       || content.video_url
       || payload.video_url
       || outputArray[0]
@@ -444,7 +473,15 @@ export class VideoFactoryWorkerService {
         return { state: "SUCCEEDED", externalJobId, contentUrl: `${baseUrl}/videos/${encodeURIComponent(externalJobId)}/content`, response: payload };
       }
       if (!outputUrl) return { state: "FAILED", externalJobId, error: "任务完成但未返回视频地址", response: payload };
-      return { state: "SUCCEEDED", externalJobId, outputUrl, response: payload };
+      const klingBilling = Array.isArray(data.billing) ? data.billing.map(object) : [];
+      const cashCharge = klingBilling.find((item) => String(item.charge_type || "") === "cash");
+      return {
+        state: "SUCCEEDED",
+        externalJobId,
+        outputUrl,
+        response: payload,
+        ...(cashCharge ? { cost: Number(cashCharge.amount || 0) } : {}),
+      };
     }
     if (["FAILED", "FAILURE", "CANCELED", "CANCELLED", "ERROR"].includes(status)) {
       return { state: "FAILED", externalJobId, error: String(output.message || data.error || payload.error || payload.message || "视频生成失败"), response: payload };

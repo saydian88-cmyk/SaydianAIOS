@@ -115,3 +115,70 @@ describe("VideoFactoryWorkerService Seedance adapter", () => {
     });
   });
 });
+
+describe("VideoFactoryWorkerService Kling adapter", () => {
+  function worker() {
+    return new VideoFactoryWorkerService({
+      contentPlan: { findUnique: vi.fn().mockResolvedValue({ productModel: null }) },
+    } as never, {} as never, {} as never);
+  }
+
+  it("submits the official Kling 3.0 Turbo task format", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockResolvedValue({ code: 0, data: { id: "kling-task-1", status: "submitted" } }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await (worker() as any).submitProvider(
+      {
+        code: "KLING",
+        baseUrl: "https://api-beijing.klingai.com",
+        publicConfig: { endpointModel: "kling-3.0-turbo", watermark: false },
+      },
+      { code: "kling-video", modelConfig: {} },
+      { apiKey: "kling-key" },
+      { id: "job-1", prompt: "真实人物佩戴智能手表", input: { duration: 5, ratio: "9:16" }, contentPlanId: "plan-1" },
+    );
+
+    expect(result).toMatchObject({ state: "RUNNING", externalJobId: "kling-task-1" });
+    const [url, options] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://api-beijing.klingai.com/text-to-video/kling-3.0-turbo");
+    expect(JSON.parse(options.body)).toMatchObject({
+      prompt: "真实人物佩戴智能手表",
+      settings: { resolution: "720p", aspect_ratio: "9:16", duration: 5 },
+      options: { external_task_id: "job-1", watermark_info: { enabled: false } },
+    });
+  });
+
+  it("reads a finished Kling video from the unified tasks response", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockResolvedValue({
+        code: 0,
+        data: [{
+          id: "kling-task-1",
+          status: "succeeded",
+          outputs: [{ type: "video", url: "https://example.test/kling.mp4" }],
+          billing: [{ charge_type: "cash", amount: "1.25" }],
+        }],
+      }),
+    }));
+
+    const result = await (worker() as any).pollProvider(
+      { code: "KLING", baseUrl: "https://api-beijing.klingai.com", publicConfig: {} },
+      { modelConfig: {} },
+      { apiKey: "kling-key" },
+      "kling-task-1",
+    );
+
+    expect(result).toMatchObject({
+      state: "SUCCEEDED",
+      externalJobId: "kling-task-1",
+      outputUrl: "https://example.test/kling.mp4",
+      cost: 1.25,
+    });
+  });
+});

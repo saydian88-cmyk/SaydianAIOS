@@ -150,10 +150,10 @@ const PROVIDER_SEEDS = [
     code: "KLING",
     displayName: "可灵",
     region: "CN",
-    baseUrl: "https://api.klingai.com",
+    baseUrl: "https://api-beijing.klingai.com",
     capabilities: ["TEXT_TO_VIDEO", "IMAGE_TO_VIDEO", "VIDEO_EDIT"],
     priority: 60,
-    publicConfig: { adapter: "KLING_ACCOUNT_SPECIFIC" },
+    publicConfig: { adapter: "KLING_API_2", endpointModel: "kling-3.0-turbo", watermark: false },
   },
   {
     code: "CUSTOM_HTTP",
@@ -175,7 +175,7 @@ const MODEL_SEEDS = [
   { provider: "HEYGEN", code: "avatar-v3", name: "HeyGen Avatar", capabilities: ["AVATAR", "NATIVE_AUDIO"], durations: [15, 30], resolutions: ["1080P"], tags: ["FAQ", "TUTORIAL", "GLOBAL"] },
   { provider: "OPENAI_VIDEOS", code: "sora-2", name: "OpenAI Sora 2", capabilities: ["TEXT_TO_VIDEO", "IMAGE_TO_VIDEO"], durations: [4, 8, 12], resolutions: ["720P"], tags: ["CREATIVE", "GLOBAL"] },
   { provider: "GOOGLE_VEO", code: "veo-3.1-fast-generate-001", name: "Google Veo 3.1 Fast", capabilities: ["TEXT_TO_VIDEO", "IMAGE_TO_VIDEO"], durations: [8], resolutions: ["720P", "1080P"], tags: ["BRAND", "GLOBAL"] },
-  { provider: "KLING", code: "kling-video", name: "可灵视频", capabilities: ["TEXT_TO_VIDEO", "IMAGE_TO_VIDEO"], durations: [5, 10], resolutions: ["720P"], tags: ["CN"] },
+  { provider: "KLING", code: "kling-video", name: "可灵 3.0 Turbo", capabilities: ["TEXT_TO_VIDEO", "IMAGE_TO_VIDEO"], durations: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], resolutions: ["720P", "1080P"], tags: ["DOUYIN", "UGC", "HUMAN_ACTION", "CN"] },
 ] as const;
 
 function strings(value: unknown): string[] {
@@ -2567,6 +2567,40 @@ export class VideoFactoryService {
           data: {
             state: "HEALTHY",
             message: "连接正常，模型权限将在首次生成时确认",
+            lastCheckedAt: new Date(),
+            lastSuccessAt: new Date(),
+          },
+        });
+        await this.prisma.auditLog.create({
+          data: { actor, action: "VIDEO_PROVIDER_CHECK", entityType: "VideoModelProvider", entityId: id, after: { state: "HEALTHY" } },
+        });
+        return this.providerView(updated);
+      } catch (error) {
+        const updated = await this.prisma.videoModelProvider.update({
+          where: { id },
+          data: { state: "ERROR", message: error instanceof Error ? error.message : "连接失败", lastCheckedAt: new Date() },
+        });
+        return this.providerView(updated);
+      }
+    }
+    if (provider.code === "KLING") {
+      const apiKey = String(secret.apiKey || "");
+      const url = `${String(provider.baseUrl || "").replace(/\/$/u, "")}/tasks?task_ids=__saydian_connection_check__`;
+      try {
+        const response = await fetch(url, {
+          headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+          signal: AbortSignal.timeout(15_000),
+        });
+        const payload = await response.json().catch(() => ({})) as JsonRow;
+        if ([401, 403].includes(response.status)) throw new Error("API密钥无效");
+        if (!response.ok || Number(payload.code ?? 0) !== 0) {
+          throw new Error(String(payload.message || `可灵服务返回${response.status}`));
+        }
+        const updated = await this.prisma.videoModelProvider.update({
+          where: { id },
+          data: {
+            state: "HEALTHY",
+            message: "连接正常，可灵 3.0 Turbo 已启用",
             lastCheckedAt: new Date(),
             lastSuccessAt: new Date(),
           },

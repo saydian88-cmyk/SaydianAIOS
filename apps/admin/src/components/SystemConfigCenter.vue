@@ -484,9 +484,9 @@ defineExpose({ reload });
       />
       <el-alert
         v-else-if="providerForm.code === 'KLING'"
-        type="warning"
+        type="info"
         :closable="false"
-        title="可灵不同账号的开放接口可能不同；当前仅保存账号配置，需完成接口协议验证后才能作为自动生成后备。"
+        title="填写可灵开发者平台创建的 API Key；系统使用官方可灵 3.0 Turbo，支持文生视频和图生视频。"
       />
       <el-form label-position="top" class="form-grid">
         <el-form-item label="代码"><el-input v-model="providerForm.code" :disabled="Boolean(providerForm.id)" /></el-form-item>
