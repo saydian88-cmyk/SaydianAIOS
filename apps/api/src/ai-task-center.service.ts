@@ -2031,6 +2031,8 @@ export class AiTaskCenterService implements OnModuleInit {
         return { status: "WAITING_INPUT" as AiTaskStatus, message: "Codex未返回符合V3结构的脚本和分镜" };
       }
       const existingContentPlanId = text(taskInput.existingContentPlanId);
+      const taskModelPolicy = object(task.modelPolicy);
+      const requestedModelId = text(taskModelPolicy.requestedModelId) || undefined;
       const existingProject = existingContentPlanId
         ? await this.prisma.contentPlan.findUnique({ where: { id: existingContentPlanId } })
         : null;
@@ -2047,6 +2049,10 @@ export class AiTaskCenterService implements OnModuleInit {
         keywordIds: strings(projectInput.keywordIds),
         externalVideoIds: strings(projectInput.externalVideoIds),
         aiTaskId: task.id,
+        factoryModule: text(taskInput.factoryModule).toUpperCase(),
+        routingMode: requestedModelId ? "FIXED" : "AUTO",
+        requestedModelId,
+        allowFallback: taskModelPolicy.allowFallback !== false,
       }, actor);
       await this.videoFactory.applyCodexProjectResult({
         contentPlanId: project.id,
@@ -2166,7 +2172,7 @@ export class AiTaskCenterService implements OnModuleInit {
         return { status: "PENDING_REVIEW" as AiTaskStatus, message: "Codex本地成片已上传，等待审核" };
       }
 
-      const modelPolicy = object(task.modelPolicy);
+      const modelPolicy = taskModelPolicy;
       if (modelPolicy.allowExternalGeneration === true) {
         const requestedModelId = text(modelPolicy.requestedModelId) || undefined;
         await this.videoFactory.generateProject(project.id, {

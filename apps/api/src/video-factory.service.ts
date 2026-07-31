@@ -1392,6 +1392,10 @@ export class VideoFactoryService {
     keywordIds?: string[];
     externalVideoIds?: string[];
     aiTaskId: string;
+    factoryModule?: string;
+    routingMode?: string;
+    requestedModelId?: string;
+    allowFallback?: boolean;
   }, actor: string) {
     const platform = integrationKind(input.platform);
     const productionNo = `VF-${localDateKey(new Date()).replaceAll("-", "")}-${randomUUID().slice(0, 6).toUpperCase()}`;
@@ -1422,8 +1426,10 @@ export class VideoFactoryService {
             keywordIds: input.keywordIds || [],
             externalVideoIds: input.externalVideoIds || [],
             externalReferencePolicy: "STRUCTURE_ONLY",
-            routingMode: "AUTO",
-            allowFallback: false,
+            factoryModule: input.factoryModule === "DOUYIN_VIRAL" ? "DOUYIN_VIRAL" : "GENERAL_VIDEO_FACTORY",
+            routingMode: input.routingMode === "FIXED" ? "FIXED" : "AUTO",
+            requestedModelId: input.requestedModelId || undefined,
+            allowFallback: input.allowFallback !== false,
           }] as unknown as Prisma.InputJsonValue,
           evidenceIds: [],
           status: ContentStatus.DRAFT,
