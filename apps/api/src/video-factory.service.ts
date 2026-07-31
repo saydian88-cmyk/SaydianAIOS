@@ -821,6 +821,7 @@ export class VideoFactoryService {
     platform: string;
     cards: unknown[];
     policyVersion?: string;
+    factoryModule?: string;
   }, actor: string) {
     const platform = integrationKind(input.platform);
     const cardPlatform: "DOUYIN" | "TIKTOK" = platform === IntegrationKind.TIKTOK ? "TIKTOK" : "DOUYIN";
@@ -922,6 +923,7 @@ export class VideoFactoryService {
       const title = this.safeTopicTitle(raw, validReferences);
       const card: VideoTopicCardPayload = {
         cardNo,
+        factoryModule: input.factoryModule === "DOUYIN_VIRAL" ? "DOUYIN_VIRAL" : "GENERAL_VIDEO_FACTORY",
         platform: cardPlatform,
         market: String(raw.market || (cardPlatform === "TIKTOK" ? "US" : "CN")),
         productModel: product?.modelCode,

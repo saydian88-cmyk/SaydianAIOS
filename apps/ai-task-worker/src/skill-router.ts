@@ -7,6 +7,7 @@ export type JsonRecord = Record<string, unknown>;
 export type SkillKey =
   | "imagegen"
   | "build-health-brand-trust-content"
+  | "saydian-douyin-viral-video-generator"
   | "saidian-ai-task-dispatcher"
   | "legacy-codex";
 
@@ -58,6 +59,10 @@ export function skillRegistry(env: NodeJS.ProcessEnv = process.env): Record<Excl
     "build-health-brand-trust-content": resolve(String(
       env.AI_TASK_ARTICLE_SKILL_PATH
       || join(home, "skills", "build-health-brand-trust-content", "SKILL.md"),
+    )),
+    "saydian-douyin-viral-video-generator": resolve(String(
+      env.AI_TASK_DOUYIN_VIRAL_VIDEO_SKILL_PATH
+      || join(home, "skills", "saydian-douyin-viral-video-generator", "SKILL.md"),
     )),
     "saidian-ai-task-dispatcher": resolve(String(
       env.AI_TASK_DISPATCHER_SKILL_PATH
@@ -112,6 +117,7 @@ export function routeTask(taskPackage: JsonRecord, env: NodeJS.ProcessEnv = proc
   const executionMode = String(
     execution.mode || taskInput.executionMode || (type === "VIDEO" ? "FULL_VIDEO" : "DEFAULT"),
   ).trim().toUpperCase();
+  const isDouyinViralModule = String(taskInput.factoryModule || "").trim().toUpperCase() === "DOUYIN_VIRAL";
   const registry = () => skillRegistry(env);
 
   if (type === "IMAGE") {
@@ -137,6 +143,35 @@ export function routeTask(taskPackage: JsonRecord, env: NodeJS.ProcessEnv = proc
       reason: "AiTask.type=ARTICLE 固定使用健康品牌信任内容 Skill",
       fallbackOrder: ["CODEX_TRUST_CONTENT"],
       skillPath: registry()["build-health-brand-trust-content"],
+    };
+  }
+
+  if (type === "VIDEO"
+    && isDouyinViralModule
+    && ["TOPIC_CARD_BATCH", "FULL_VIDEO", "SCRIPT_ONLY"].includes(executionMode)) {
+    assertPackageRoute(
+      execution,
+      "saydian-douyin-viral-video-generator",
+      ["CODEX_SKILL", "CODEX_FIRST", "CODEX_TOPIC_CARD"],
+    );
+    return {
+      key: "saydian-douyin-viral-video-generator",
+      taskType: type,
+      executionMode,
+      strategy: "CODEX_SKILL",
+      reason: `抖音爆款生成模块 ${executionMode} 使用独立专用 Skill`,
+      fallbackOrder: executionMode === "TOPIC_CARD_BATCH"
+        ? ["STRUCTURED_TOPIC_CARD_ONLY"]
+        : executionMode === "SCRIPT_ONLY"
+          ? ["SCRIPT_AND_STORYBOARD_ONLY"]
+          : [
+            "APPROVED_REAL_VIDEO",
+            "PRODUCT_IMAGE_AUXILIARY_OVERLAY",
+            "LOCAL_MEDIA_TOOLS",
+            "EXTERNAL_VISUAL_IF_EXPLICITLY_ALLOWED",
+            "RESHOOT_OPS_TASK",
+          ],
+      skillPath: registry()["saydian-douyin-viral-video-generator"],
     };
   }
 

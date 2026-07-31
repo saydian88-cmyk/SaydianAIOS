@@ -234,6 +234,42 @@ describe("AiTaskCenterService", () => {
     expect((createTask.mock.calls[0][0].input as Record<string, unknown>).executionMode).toBe("TOPIC_CARD_BATCH");
   });
 
+  it("marks Douyin viral topic-card batches for the dedicated Skill route", async () => {
+    const prisma = {
+      aiTaskPolicy: {
+        upsert: vi.fn().mockResolvedValue({
+          type: "VIDEO",
+          config: {
+            topicCardPolicyVersion: "v2.1",
+            dailyTopicCards: { DOUYIN: 10, TIKTOK: 10 },
+          },
+        }),
+      },
+    };
+    const service = new AiTaskCenterService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+    const createTask = vi.spyOn(service, "createTask").mockImplementation(async (body) => body as never);
+
+    await service.createDailyTopicCardTasks(
+      new Date("2026-07-28T00:00:00.000Z"),
+      "测试管理员",
+      ["DOUYIN"],
+      "DOUYIN_VIRAL",
+    );
+
+    expect(createTask.mock.calls[0][0].idempotencyKey).toContain("douyin-viral");
+    expect(createTask.mock.calls[0][0].input).toMatchObject({
+      executionMode: "TOPIC_CARD_BATCH",
+      factoryModule: "DOUYIN_VIRAL",
+    });
+  });
+
   it("keeps store analysis in WAITING_INPUT when no operating snapshot exists", async () => {
     const { service, create } = serviceWith({
       aiTaskPolicy: {
@@ -399,6 +435,32 @@ describe("AiTaskCenterService", () => {
       strategy: "CODEX_SKILL",
       allowExternalGeneration: false,
       requiredSkill: "build-health-brand-trust-content",
+    });
+
+    task.type = "VIDEO";
+    task.input = { executionMode: "FULL_VIDEO", factoryModule: "DOUYIN_VIRAL" };
+    task.modelPolicy = { strategy: "CODEX_FIRST", allowExternalGeneration: false };
+    const douyinResult = await service.runnerPackage(token, task.id, { nodeCode: "windows-codex-01" });
+    expect(douyinResult.execution).toMatchObject({
+      strategy: "CODEX_SKILL",
+      requiredSkill: "saydian-douyin-viral-video-generator",
+      videoModelRouting: {
+        localFirst: true,
+        externalShotAllocation: {
+          SEEDANCE_2: 70,
+          KLING: 30,
+        },
+        recipeRoutes: {
+          GIFT_EMOTION: "SEEDANCE_2",
+          UGC: "KLING",
+          FAQ: "APPROVED_REAL_ASSET",
+        },
+        shotRoutes: {
+          FAMILY_STORY: "SEEDANCE_2",
+          HUMAN_ACTION: "KLING",
+          PRODUCT_CLOSEUP: "APPROVED_REAL_ASSET",
+        },
+      },
     });
   });
 

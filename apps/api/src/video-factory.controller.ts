@@ -132,10 +132,12 @@ export class VideoFactoryController {
     @Body() body: Record<string, unknown>,
   ) {
     const platform = String(body.platform || "").toUpperCase();
+    const factoryModule = String(body.factoryModule || "").toUpperCase();
     return this.aiTasks.createDailyTopicCardTasks(
       new Date(),
       this.actor(authorization, requestedActor),
       platform === "DOUYIN" || platform === "TIKTOK" ? [platform] : undefined,
+      factoryModule === "DOUYIN_VIRAL" ? "DOUYIN_VIRAL" : "",
     );
   }
 
@@ -178,6 +180,7 @@ export class VideoFactoryController {
     const executionMode = String(body.executionMode || "").toUpperCase();
     const ownerId = String(body.ownerId || "");
     const reviewerId = String(body.reviewerId || "");
+    const requestedFactoryModule = String(body.factoryModule || "").toUpperCase();
     const prepared = await this.factory.prepareTopicCardApproval(id, {
       executionMode: executionMode as "SCRIPT_ONLY" | "FULL_VIDEO",
       ownerId,
@@ -192,12 +195,16 @@ export class VideoFactoryController {
       reviewerEmployeeId: reviewerId,
       sourceType: "VIDEO_TOPIC_CARD",
       sourceId: id,
-      idempotencyKey: `ai-task:video-topic-card:${id}:${executionMode}:v${prepared.plan.workflowVersion}`,
+      idempotencyKey: `ai-task:video-topic-card:${id}:${executionMode}:${requestedFactoryModule === "DOUYIN_VIRAL" ? "douyin-viral" : "general"}:v${prepared.plan.workflowVersion}`,
       estimatedCost: 0,
       skipPaidBudget: true,
       instructions: `${prepared.card.objective}；目标人群：${prepared.card.audience}；主配方：${prepared.card.primaryRecipe}`,
       input: {
         executionMode,
+        factoryModule: requestedFactoryModule === "DOUYIN_VIRAL"
+          || prepared.card.factoryModule === "DOUYIN_VIRAL"
+          ? "DOUYIN_VIRAL"
+          : "GENERAL_VIDEO_FACTORY",
         existingContentPlanId: id,
         topicCardId: id,
         candidateIndex: 0,

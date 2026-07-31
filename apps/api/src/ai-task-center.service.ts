@@ -1054,6 +1054,8 @@ export class AiTaskCenterService implements OnModuleInit {
     const libraryState = await this.systemMaterialIndexStatus();
     const input = object(task.input);
     const modelPolicy = object(task.modelPolicy);
+    const dedicatedDouyin = text(input.factoryModule).toUpperCase() === "DOUYIN_VIRAL";
+    const executionMode = text(input.executionMode).toUpperCase() || (task.type === "VIDEO" ? "FULL_VIDEO" : "DEFAULT");
     return {
       task: {
         id: task.id,
@@ -1098,23 +1100,27 @@ export class AiTaskCenterService implements OnModuleInit {
         };
       }),
       execution: {
-        mode: text(input.executionMode).toUpperCase() || (task.type === "VIDEO" ? "FULL_VIDEO" : "DEFAULT"),
-        strategy: ["IMAGE", "ARTICLE"].includes(task.type)
+        mode: executionMode,
+        strategy: ["IMAGE", "ARTICLE"].includes(task.type) || dedicatedDouyin
           ? "CODEX_SKILL"
           : text(modelPolicy.strategy).toUpperCase() || "CODEX_FIRST",
         allowExternalGeneration: ["IMAGE", "ARTICLE"].includes(task.type)
           ? false
           : modelPolicy.allowExternalGeneration === true,
         requiredSkill: task.type === "VIDEO"
-          && ["FULL_VIDEO", "SCRIPT_ONLY", "SIMILAR_VIDEO", "NO_VOICE_VIDEO", "COVER_TITLE"].includes(text(input.executionMode).toUpperCase() || "FULL_VIDEO")
-          ? "saidian-ai-task-dispatcher"
+          && dedicatedDouyin
+          && ["TOPIC_CARD_BATCH", "FULL_VIDEO", "SCRIPT_ONLY"].includes(executionMode)
+          ? "saydian-douyin-viral-video-generator"
+          : task.type === "VIDEO"
+            && ["FULL_VIDEO", "SCRIPT_ONLY", "SIMILAR_VIDEO", "NO_VOICE_VIDEO", "COVER_TITLE"].includes(executionMode)
+            ? "saidian-ai-task-dispatcher"
           : task.type === "IMAGE"
             ? "imagegen"
             : task.type === "ARTICLE"
               ? "build-health-brand-trust-content"
             : undefined,
         fallbackOrder: task.type === "VIDEO"
-          && (text(input.executionMode).toUpperCase() || "FULL_VIDEO") === "FULL_VIDEO"
+          && executionMode === "FULL_VIDEO"
           ? [
             "APPROVED_REAL_VIDEO",
             "PRODUCT_IMAGE_AUXILIARY_OVERLAY",
@@ -1122,6 +1128,38 @@ export class AiTaskCenterService implements OnModuleInit {
             "EXTERNAL_VISUAL_IF_EXPLICITLY_ALLOWED",
             "RESHOOT_OPS_TASK",
           ]
+          : undefined,
+        videoModelRouting: dedicatedDouyin
+          ? {
+            policyVersion: "douyin-viral-v1",
+            localFirst: true,
+            requiresConfiguredProvider: true,
+            externalShotAllocation: {
+              SEEDANCE_2: 70,
+              KLING: 30,
+            },
+            recipeRoutes: {
+              PAIN_SOLVE: "SEEDANCE_2",
+              GIFT_EMOTION: "SEEDANCE_2",
+              CONTRARIAN: "SEEDANCE_2",
+              FAQ: "APPROVED_REAL_ASSET",
+              REVIEW: "APPROVED_REAL_ASSET",
+              COMPARISON: "APPROVED_REAL_ASSET",
+              UGC: "KLING",
+              VISUAL_AD: "SEEDANCE_2",
+            },
+            shotRoutes: {
+              FAMILY_STORY: "SEEDANCE_2",
+              PRODUCT_ATMOSPHERE: "SEEDANCE_2",
+              MULTI_SHOT: "SEEDANCE_2",
+              IMAGE_TO_VIDEO: "SEEDANCE_2",
+              HUMAN_ACTION: "KLING",
+              ELDER_GESTURE: "KLING",
+              SPORTS_ACTION: "KLING",
+              PRODUCT_CLOSEUP: "APPROVED_REAL_ASSET",
+              FUNCTION_PROOF: "APPROVED_REAL_ASSET",
+            },
+          }
           : undefined,
         healthContentAllowed: input.healthContentAllowed !== false,
         output: task.type === "VIDEO"
@@ -1721,6 +1759,7 @@ export class AiTaskCenterService implements OnModuleInit {
     now = new Date(),
     actor = "系统自动化",
     platforms: Array<"DOUYIN" | "TIKTOK"> = ["DOUYIN", "TIKTOK"],
+    factoryModule = "",
   ) {
     const key = dateKey(now);
     const policy = await this.policy("VIDEO");
@@ -1736,11 +1775,12 @@ export class AiTaskCenterService implements OnModuleInit {
         platform,
         sourceType: "DAILY_VIDEO_TOPIC_CARDS",
         sourceId: `${key}:${platform}`,
-        idempotencyKey: `ai-task:topic-card:${platform}:${key}:${policyVersion}`,
+        idempotencyKey: `ai-task:topic-card:${factoryModule === "DOUYIN_VIRAL" ? "douyin-viral:" : ""}${platform}:${key}:${policyVersion}`,
         estimatedCost: 0,
         skipPaidBudget: true,
         input: {
           executionMode: "TOPIC_CARD_BATCH",
+          factoryModule: factoryModule === "DOUYIN_VIRAL" ? "DOUYIN_VIRAL" : "GENERAL_VIDEO_FACTORY",
           cardCount,
           policyVersion,
           manualApprovalRequired: true,
@@ -1888,6 +1928,7 @@ export class AiTaskCenterService implements OnModuleInit {
           platform: text(taskInput.platform || task.platform) || "DOUYIN",
           cards: Array.isArray(result.topicCards) ? result.topicCards : [],
           policyVersion: text(taskInput.policyVersion) || DEFAULT_VIDEO_POLICY_CONFIG.topicCardPolicyVersion,
+          factoryModule: text(taskInput.factoryModule).toUpperCase(),
         }, actor);
         for (const raw of persisted.created) {
           const card = object(raw);

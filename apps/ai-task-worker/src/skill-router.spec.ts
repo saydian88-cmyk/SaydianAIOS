@@ -32,6 +32,28 @@ describe("skill task router", () => {
     });
   });
 
+  it.each(["TOPIC_CARD_BATCH", "SCRIPT_ONLY", "FULL_VIDEO"])(
+    "routes the dedicated Douyin viral module %s task to its own Skill",
+    (mode) => {
+      const route = routeTask({
+        task: {
+          type: "VIDEO",
+          input: { executionMode: mode, factoryModule: "DOUYIN_VIRAL" },
+        },
+        execution: {
+          mode,
+          strategy: "CODEX_SKILL",
+          requiredSkill: "saydian-douyin-viral-video-generator",
+        },
+      }, { ...process.env, CODEX_HOME: routeOnlyCodexHome });
+      expect(route).toMatchObject({
+        key: "saydian-douyin-viral-video-generator",
+      });
+      expect(route).not.toHaveProperty("downstreamSkillName");
+      expect(route).not.toHaveProperty("downstreamSkillPath");
+    },
+  );
+
   it("uses the configured share-edition video Skill for colleague nodes", () => {
     const shareSkillPath = join(routeOnlyCodexHome, "skills", "video-editing-from-media-library-share", "SKILL.md");
     expect(routeTask({

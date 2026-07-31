@@ -115,10 +115,11 @@ const modelForm = reactive({
 });
 const routeForm = reactive({ DOUYIN: "", TIKTOK: "" });
 const isDouyinViralSystem = computed(() => props.mode === "douyin-viral");
+const factoryModule = computed(() => isDouyinViralSystem.value ? "DOUYIN_VIRAL" : "GENERAL_VIDEO_FACTORY");
 const heroKicker = computed(() => isDouyinViralSystem.value ? "DOUYIN VIRAL VIDEO SYSTEM · V1.0" : "SMART VIDEO FACTORY · V2.0");
 const heroTitle = computed(() => isDouyinViralSystem.value ? "抖音爆款视频生成系统" : "视频工厂");
 const heroDescription = computed(() => isDouyinViralSystem.value
-  ? "从抖音关键词和爆款结构发现机会，结合产品知识与真实素材生成选题卡；人工确认后进入Codex制作。"
+  ? "从抖音关键词和爆款结构发现机会，结合产品知识与真实素材生成选题卡；人工确认后由独立Codex Skill按镜头选择本地合成、Seedance或Kling。"
   : "先把关键词、爆款结构、FAQ、产品知识和真实素材整理成选题卡；人工确认后再进入Codex生产。");
 
 const enabledModels = computed(() => models.value.filter((item) =>
@@ -304,7 +305,10 @@ async function approveTopicCard() {
   if (!selectedTopicCard.value) return;
   if (!approvalForm.ownerId || !approvalForm.reviewerId) return ElMessage.warning("请选择负责人和审核人");
   await run(async () => {
-    await post(`/api/v1/video-factory/topic-cards/${selectedTopicCard.value!.id}/approve`, approvalForm);
+    await post(`/api/v1/video-factory/topic-cards/${selectedTopicCard.value!.id}/approve`, {
+      ...approvalForm,
+      factoryModule: factoryModule.value,
+    });
     approvalDialog.value = false;
     topicCardDrawer.value = false;
     await reload();
@@ -313,7 +317,10 @@ async function approveTopicCard() {
 
 async function generateDailyTopicCards() {
   await run(async () => {
-    await post("/api/v1/video-factory/topic-cards/generate-daily", props.platformScope ? { platform: props.platformScope } : {});
+    await post("/api/v1/video-factory/topic-cards/generate-daily", {
+      ...(props.platformScope ? { platform: props.platformScope } : {}),
+      factoryModule: factoryModule.value,
+    });
     await reload();
   }, props.platformScope === "DOUYIN" ? "今日抖音选题卡任务已创建" : "抖音和TikTok选题卡任务已创建");
 }
@@ -404,6 +411,7 @@ async function createAndGenerate() {
       instructions: `${createForm.objective}；目标人群：${createForm.audience || "目标用户"}`,
       input: {
         executionMode: createForm.executionMode,
+        factoryModule: factoryModule.value,
         topic: createForm.topic,
         audience: createForm.audience,
         objective: createForm.objective,
@@ -440,6 +448,7 @@ async function generateProject(row: Row, candidateIndex = 0) {
       instructions: `执行视频工厂第${candidateIndex + 1}套方案`,
       input: {
         executionMode: "FULL_VIDEO",
+        factoryModule: factoryModule.value,
         existingContentPlanId: row.id,
         candidateIndex,
       },
@@ -643,7 +652,7 @@ onBeforeUnmount(() => {
       <i>→</i>
       <article><b>03</b><span>选题卡确认</span><small>人工确认产品与人群</small></article>
       <i>→</i>
-      <article><b>04</b><span>Codex制作</span><small>脚本、分镜与真实素材</small></article>
+      <article><b>04</b><span>智能模型制作</span><small>真实素材优先 · Seedance主生成 · Kling动作增强</small></article>
       <i>→</i>
       <article><b>05</b><span>审核与复盘</span><small>成片审核、发布和回流</small></article>
     </div>
