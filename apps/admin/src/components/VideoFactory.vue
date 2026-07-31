@@ -130,6 +130,9 @@ const enabledModels = computed(() => models.value.filter((item) =>
   && item.provider?.enabled
   && ["CONFIGURED", "HEALTHY"].includes(item.provider?.state),
 ));
+const taskModels = computed(() => isDouyinViralSystem.value
+  ? enabledModels.value.filter((item) => ["VOLCENGINE_SEEDANCE", "KLING"].includes(item.provider?.code))
+  : enabledModels.value);
 const runningCount = computed(() => projects.value.reduce((total, project) =>
   total
   + (project.videoGenerationJobs || []).filter((job: Row) => ["PENDING", "RUNNING", "RETRY"].includes(job.status)).length
@@ -368,7 +371,7 @@ function onCreateModelChange(value: string) {
 
 function shotModels(shot: Row) {
   const capability = shot.metadata?.imageAssetIds?.length ? "IMAGE_TO_VIDEO" : "TEXT_TO_VIDEO";
-  return enabledModels.value.filter((model) => model.capabilities?.includes(capability));
+  return taskModels.value.filter((model) => model.capabilities?.includes(capability));
 }
 
 function createFromKeyword(keyword: Row) {
@@ -888,7 +891,7 @@ onBeforeUnmount(() => {
         <el-form-item label="审核人" required><el-select v-model="approvalForm.reviewerId" filterable><el-option v-for="employee in employees" :key="employee.id" :label="`${employee.name} · ${employee.role}`" :value="employee.id" /></el-select></el-form-item>
         <template v-if="approvalForm.executionMode === 'FULL_VIDEO'">
           <el-form-item label="外部补镜头"><el-switch v-model="approvalForm.allowExternalGeneration" active-text="本地素材不足时允许使用Seedance或Kling" /></el-form-item>
-          <el-form-item v-if="approvalForm.allowExternalGeneration" label="生成模型"><el-select v-model="approvalForm.requestedModelId" clearable placeholder="智能推荐：Seedance主生成、Kling动作增强"><el-option v-for="item in enabledModels" :key="item.id" :label="`${item.provider.displayName} · ${item.displayName}`" :value="item.id" /></el-select></el-form-item>
+          <el-form-item v-if="approvalForm.allowExternalGeneration" label="生成模型"><el-select v-model="approvalForm.requestedModelId" clearable placeholder="智能推荐：Seedance主生成、Kling动作增强"><el-option v-for="item in taskModels" :key="item.id" :label="`${item.provider.displayName} · ${item.displayName}`" :value="item.id" /></el-select></el-form-item>
           <el-form-item v-if="approvalForm.allowExternalGeneration" label="失败策略"><el-switch v-model="approvalForm.allowFallback" active-text="当前模型失败时按专用路由切换" /></el-form-item>
         </template>
         <el-alert type="info" :closable="false" title="确认后进入AI任务中心；先用已审核真实素材和本地工具，只有明确允许时才调用外部模型。" />
@@ -922,7 +925,7 @@ onBeforeUnmount(() => {
         <el-form-item label="主题/主关键词" class="full" required><el-input v-model="createForm.topic" maxlength="150" /></el-form-item>
         <el-form-item label="目标人群"><el-input v-model="createForm.audience" /></el-form-item>
         <el-form-item label="内容目标"><el-input v-model="createForm.objective" /></el-form-item>
-        <el-form-item label="生成模型" class="full"><el-select v-model="createForm.requestedModelId" clearable placeholder="Codex智能推荐（默认）" @change="onCreateModelChange"><el-option v-for="item in enabledModels" :key="item.id" :label="`${item.provider.displayName} · ${item.displayName}`" :value="item.id" /></el-select><small class="form-tip">默认使用Codex本地工具；指定模型表示允许该任务调用外部视觉能力。</small></el-form-item>
+        <el-form-item label="生成模型" class="full"><el-select v-model="createForm.requestedModelId" clearable placeholder="Codex智能推荐（默认）" @change="onCreateModelChange"><el-option v-for="item in taskModels" :key="item.id" :label="`${item.provider.displayName} · ${item.displayName}`" :value="item.id" /></el-select><small class="form-tip">默认使用Codex本地工具；指定模型表示允许该任务调用外部视觉能力。</small></el-form-item>
         <el-form-item label="外部视觉能力" class="full"><el-switch v-model="createForm.allowExternalGeneration" active-text="本地素材不足时允许调用已配置模型" /></el-form-item>
         <el-form-item label="失败策略" class="full"><el-switch v-model="createForm.allowFallback" active-text="允许失败后自动切换模型" /></el-form-item>
       </el-form>
