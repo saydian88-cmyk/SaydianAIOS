@@ -300,7 +300,26 @@ export class VideoFactoryWorkerService {
     let url = "";
     let body: JsonRow = {};
 
-    if (provider.code === "BAILIAN_WAN") {
+    if (provider.code === "VOLCENGINE_SEEDANCE") {
+      const config = { ...object(provider.publicConfig), ...object(model.modelConfig) };
+      url = `${baseUrl}/contents/generations/tasks`;
+      body = {
+        model: model.code,
+        content: [
+          { type: "text", text: job.prompt },
+          ...(reference ? [{
+            type: "image_url",
+            image_url: { url: reference.url },
+            role: String(config.imageRole || "reference_image"),
+          }] : []),
+        ],
+        resolution: String(input.resolution || config.resolution || "720p").toLowerCase(),
+        ratio: String(input.ratio || config.ratio || "9:16"),
+        duration: Math.max(4, Math.min(15, duration)),
+        generate_audio: config.generateAudio !== false,
+        watermark: config.watermark === true,
+      };
+    } else if (provider.code === "BAILIAN_WAN") {
       url = opsConfig.bailian.videoGenerationUrl;
       body = {
         model: model.code,
@@ -352,7 +371,11 @@ export class VideoFactoryWorkerService {
       signal: AbortSignal.timeout(60_000),
     });
     const payload = await response.json().catch(() => ({})) as JsonRow;
-    if (!response.ok) return { state: "FAILED", error: String(payload.message || payload.error || `模型请求失败（${response.status}）`), response: payload };
+    if (!response.ok) return {
+      state: "FAILED",
+      error: String(payload.message || object(payload.error).message || payload.error || `模型请求失败（${response.status}）`),
+      response: payload,
+    };
     const externalJobId = String(
       object(payload.output).task_id
       || payload.id
@@ -379,7 +402,8 @@ export class VideoFactoryWorkerService {
   ): Promise<ProviderResult> {
     const baseUrl = String(provider.baseUrl || "").replace(/\/$/u, "");
     let url = "";
-    if (provider.code === "BAILIAN_WAN") url = `${opsConfig.bailian.taskUrl.replace(/\/$/u, "")}/${encodeURIComponent(externalJobId)}`;
+    if (provider.code === "VOLCENGINE_SEEDANCE") url = `${baseUrl}/contents/generations/tasks/${encodeURIComponent(externalJobId)}`;
+    else if (provider.code === "BAILIAN_WAN") url = `${opsConfig.bailian.taskUrl.replace(/\/$/u, "")}/${encodeURIComponent(externalJobId)}`;
     else if (provider.code === "RUNWAY") url = `${baseUrl}/v1/tasks/${encodeURIComponent(externalJobId)}`;
     else if (provider.code === "HEYGEN") url = `${baseUrl}/v1/video_status.get?video_id=${encodeURIComponent(externalJobId)}`;
     else if (provider.code === "OPENAI_VIDEOS") url = `${baseUrl}/videos/${encodeURIComponent(externalJobId)}`;
@@ -395,15 +419,22 @@ export class VideoFactoryWorkerService {
       signal: AbortSignal.timeout(30_000),
     });
     const payload = await response.json().catch(() => ({})) as JsonRow;
-    if (!response.ok) return { state: "FAILED", externalJobId, error: String(payload.message || payload.error || `进度查询失败（${response.status}）`), response: payload };
+    if (!response.ok) return {
+      state: "FAILED",
+      externalJobId,
+      error: String(payload.message || object(payload.error).message || payload.error || `进度查询失败（${response.status}）`),
+      response: payload,
+    };
     const output = object(payload.output);
     const data = object(payload.data);
+    const content = object(payload.content);
     const status = statusValue(output.task_status || payload.status || data.status || payload.state);
     const outputArray = Array.isArray(payload.output) ? payload.output : [];
     const outputUrl = String(
       output.video_url
       || data.video_url
       || data.video_url_caption
+      || content.video_url
       || payload.video_url
       || outputArray[0]
       || "",

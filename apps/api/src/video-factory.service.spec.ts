@@ -1,6 +1,9 @@
 import { BadRequestException } from "@nestjs/common";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { encryptIntegrationValue } from "./integration-secret";
 import { materialReviewApproved, VideoFactoryService } from "./video-factory.service";
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe("material review gate", () => {
   it("accepts only the approved current workflow and binding fingerprint", () => {
@@ -35,7 +38,9 @@ describe("VideoFactoryService model routing", () => {
         findFirst: vi.fn(),
       },
       videoModelProvider: {
+        findUnique: vi.fn(),
         findMany: vi.fn(),
+        update: vi.fn(),
       },
       contentPlan: {
         count: vi.fn(),
@@ -126,6 +131,31 @@ describe("VideoFactoryService model routing", () => {
 
     expect(result[0]).toMatchObject({ code: "RUNWAY", secretConfigured: true });
     expect(result[0]).not.toHaveProperty("secretRef");
+  });
+
+  it("checks Seedance credentials without creating a paid generation task", async () => {
+    prisma.videoModelProvider.findUnique.mockResolvedValue({
+      id: "seedance-provider",
+      code: "VOLCENGINE_SEEDANCE",
+      baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+      publicConfig: {},
+      secretRef: encryptIntegrationValue(JSON.stringify({ apiKey: "ark-key" })),
+    });
+    prisma.videoModelProvider.update.mockImplementation(({ data }: any) => Promise.resolve({
+      id: "seedance-provider",
+      code: "VOLCENGINE_SEEDANCE",
+      secretRef: "encrypted",
+      ...data,
+    }));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 404 }));
+
+    const result = await service.checkProvider("seedance-provider", "admin");
+
+    expect(result).toMatchObject({ state: "HEALTHY", secretConfigured: true });
+    expect(fetch).toHaveBeenCalledWith(
+      "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks/__saydian_connection_check__",
+      expect.objectContaining({ headers: { Authorization: "Bearer ark-key" } }),
+    );
   });
 
   it("serializes nested asset BigInt fields in project lists", async () => {

@@ -93,12 +93,22 @@ type TopicCardApprovalInput = {
 
 const PROVIDER_SEEDS = [
   {
+    code: "VOLCENGINE_SEEDANCE",
+    displayName: "火山方舟 · Seedance 2.0",
+    region: "CN",
+    baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+    capabilities: ["TEXT_TO_VIDEO", "IMAGE_TO_VIDEO", "REFERENCE_TO_VIDEO", "NATIVE_AUDIO"],
+    priority: 5,
+    publicConfig: { adapter: "SEEDANCE_2", generateAudio: true, watermark: false },
+  },
+  {
     code: "BAILIAN_WAN",
     displayName: "阿里百炼 · Wan",
     region: "CN",
     baseUrl: "https://dashscope.aliyuncs.com",
     capabilities: ["TEXT_TO_VIDEO", "IMAGE_TO_VIDEO", "REFERENCE_TO_VIDEO"],
     priority: 10,
+    publicConfig: {},
   },
   {
     code: "RUNWAY",
@@ -107,6 +117,7 @@ const PROVIDER_SEEDS = [
     baseUrl: "https://api.dev.runwayml.com",
     capabilities: ["TEXT_TO_VIDEO", "IMAGE_TO_VIDEO", "VIDEO_EDIT"],
     priority: 20,
+    publicConfig: {},
   },
   {
     code: "HEYGEN",
@@ -115,6 +126,7 @@ const PROVIDER_SEEDS = [
     baseUrl: "https://api.heygen.com",
     capabilities: ["AVATAR", "TEXT_TO_VIDEO", "NATIVE_AUDIO"],
     priority: 30,
+    publicConfig: {},
   },
   {
     code: "OPENAI_VIDEOS",
@@ -123,6 +135,7 @@ const PROVIDER_SEEDS = [
     baseUrl: "https://api.openai.com/v1",
     capabilities: ["TEXT_TO_VIDEO", "IMAGE_TO_VIDEO", "VIDEO_EDIT"],
     priority: 40,
+    publicConfig: {},
   },
   {
     code: "GOOGLE_VEO",
@@ -131,6 +144,7 @@ const PROVIDER_SEEDS = [
     baseUrl: "https://generativelanguage.googleapis.com",
     capabilities: ["TEXT_TO_VIDEO", "IMAGE_TO_VIDEO", "REFERENCE_TO_VIDEO"],
     priority: 50,
+    publicConfig: {},
   },
   {
     code: "KLING",
@@ -139,6 +153,7 @@ const PROVIDER_SEEDS = [
     baseUrl: "https://api.klingai.com",
     capabilities: ["TEXT_TO_VIDEO", "IMAGE_TO_VIDEO", "VIDEO_EDIT"],
     priority: 60,
+    publicConfig: { adapter: "KLING_ACCOUNT_SPECIFIC" },
   },
   {
     code: "CUSTOM_HTTP",
@@ -147,10 +162,12 @@ const PROVIDER_SEEDS = [
     baseUrl: null,
     capabilities: ["TEXT_TO_VIDEO", "IMAGE_TO_VIDEO"],
     priority: 100,
+    publicConfig: {},
   },
 ] as const;
 
 const MODEL_SEEDS = [
+  { provider: "VOLCENGINE_SEEDANCE", code: "doubao-seedance-2-0-260128", name: "Seedance 2.0", capabilities: ["TEXT_TO_VIDEO", "IMAGE_TO_VIDEO", "REFERENCE_TO_VIDEO", "NATIVE_AUDIO"], durations: [4, 5, 8, 10, 12, 15], resolutions: ["480P", "720P", "1080P"], tags: ["DOUYIN", "FAMILY", "PRODUCT", "BRAND", "CN"] },
   { provider: "BAILIAN_WAN", code: "wan2.5-t2v-preview", name: "Wan 文生视频", capabilities: ["TEXT_TO_VIDEO"], durations: [5, 10], resolutions: ["480P"], tags: ["DOUYIN", "CN"] },
   { provider: "BAILIAN_WAN", code: "wan2.5-i2v-preview", name: "Wan 图生视频", capabilities: ["IMAGE_TO_VIDEO"], durations: [5, 10], resolutions: ["480P"], tags: ["DOUYIN", "PRODUCT", "CN"] },
   { provider: "RUNWAY", code: "gen4_turbo", name: "Runway Gen-4 Turbo", capabilities: ["IMAGE_TO_VIDEO"], durations: [5, 10], resolutions: ["720P"], tags: ["TIKTOK", "UGC", "GLOBAL"] },
@@ -614,6 +631,7 @@ export class VideoFactoryService {
             region: seed.region,
             baseUrl: seed.baseUrl,
             capabilities: [...seed.capabilities],
+            publicConfig: seed.publicConfig,
             priority: seed.priority,
             enabled: bailianConfigured,
             state: bailianConfigured ? "CONFIGURED" : "UNCONFIGURED",
@@ -667,8 +685,37 @@ export class VideoFactoryService {
     const bailianImageModel = await this.prisma.videoModelConfig.findFirst({
       where: { provider: { code: "BAILIAN_WAN" }, code: opsConfig.bailian.imageToVideoModel },
     });
+    const seedanceModel = await this.prisma.videoModelConfig.findFirst({
+      where: { provider: { code: "VOLCENGINE_SEEDANCE" }, code: "doubao-seedance-2-0-260128" },
+    });
+    const klingModel = await this.prisma.videoModelConfig.findFirst({
+      where: { provider: { code: "KLING" }, code: "kling-video" },
+    });
     const runwayModel = await this.prisma.videoModelConfig.findFirst({
       where: { provider: { code: "RUNWAY" }, code: "gen4_turbo" },
+    });
+    await this.prisma.videoRoutingPolicy.upsert({
+      where: { policyKey: "DOUYIN_VIRAL_EXTERNAL" },
+      create: {
+        policyKey: "DOUYIN_VIRAL_EXTERNAL",
+        name: "抖音爆款外部视频路由",
+        platform: "DOUYIN",
+        scenario: "DOUYIN_VIRAL",
+        primaryModelId: seedanceModel?.id,
+        fallbackModelIds: [klingModel?.id, bailianImageModel?.id].filter(Boolean) as string[],
+        rules: { capability: "IMAGE_TO_VIDEO", preferRealAssets: true, externalGenerationOptIn: true },
+        priority: 1,
+      },
+      update: {
+        name: "抖音爆款外部视频路由",
+        platform: "DOUYIN",
+        scenario: "DOUYIN_VIRAL",
+        primaryModelId: seedanceModel?.id,
+        fallbackModelIds: [klingModel?.id, bailianImageModel?.id].filter(Boolean) as string[],
+        rules: { capability: "IMAGE_TO_VIDEO", preferRealAssets: true, externalGenerationOptIn: true },
+        priority: 1,
+        active: true,
+      },
     });
     await this.prisma.videoRoutingPolicy.upsert({
       where: { policyKey: "DEFAULT_DOUYIN" },
@@ -2505,6 +2552,37 @@ export class VideoFactoryService {
     const secret = object(JSON.parse(decryptIntegrationValue(provider.secretRef) || "{}"));
     const publicConfig = object(provider.publicConfig);
     const healthPath = String(publicConfig.healthPath || "").trim();
+    if (provider.code === "VOLCENGINE_SEEDANCE") {
+      const apiKey = String(secret.apiKey || "");
+      const url = `${String(provider.baseUrl || "").replace(/\/$/u, "")}/contents/generations/tasks/__saydian_connection_check__`;
+      try {
+        const response = await fetch(url, {
+          headers: { Authorization: `Bearer ${apiKey}` },
+          signal: AbortSignal.timeout(15_000),
+        });
+        if ([401, 403].includes(response.status)) throw new Error("API密钥无效或未开通Seedance权限");
+        if (response.status >= 500) throw new Error(`火山方舟服务返回${response.status}`);
+        const updated = await this.prisma.videoModelProvider.update({
+          where: { id },
+          data: {
+            state: "HEALTHY",
+            message: "连接正常，模型权限将在首次生成时确认",
+            lastCheckedAt: new Date(),
+            lastSuccessAt: new Date(),
+          },
+        });
+        await this.prisma.auditLog.create({
+          data: { actor, action: "VIDEO_PROVIDER_CHECK", entityType: "VideoModelProvider", entityId: id, after: { state: "HEALTHY" } },
+        });
+        return this.providerView(updated);
+      } catch (error) {
+        const updated = await this.prisma.videoModelProvider.update({
+          where: { id },
+          data: { state: "ERROR", message: error instanceof Error ? error.message : "连接失败", lastCheckedAt: new Date() },
+        });
+        return this.providerView(updated);
+      }
+    }
     if (!healthPath) {
       return this.providerView(await this.prisma.videoModelProvider.update({
         where: { id },

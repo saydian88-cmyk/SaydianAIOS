@@ -31,7 +31,7 @@ const integrationForm = reactive({
 const providerForm = reactive<Row>({
   id: "", code: "", displayName: "", region: "GLOBAL", baseUrl: "", apiKey: "",
   webhookSecret: "", maxConcurrency: 2, dailyBudget: "", priority: 100, enabled: false,
-  capabilities: [],
+  capabilities: [], publicConfig: {},
 });
 const runnerForm = reactive<Row>({
   nodeCode: "windows-codex-01",
@@ -53,7 +53,8 @@ const tabs = [
 const codexSkills = [
   { title: "图片生成", skill: "imagegen", description: "由Codex内置图片能力生成，不需要配置第三方模型。" },
   { title: "软文生成", skill: "build-health-brand-trust-content", description: "按赛电健康品牌内容规范生成，不需要配置第三方模型。" },
-  { title: "完整视频", skill: "video-editing-from-media-library-share", description: "优先使用素材库真实素材，由本地Codex完成剪辑。" },
+  { title: "通用完整视频", skill: "video-editing-from-media-library-share", description: "用于通用视频任务，优先使用素材库真实素材。" },
+  { title: "抖音爆款视频", skill: "saydian-douyin-viral-video-generator", description: "抖音爆款生成独立执行，不使用通用视频Skill。" },
 ];
 
 const storageIntegrations = computed(() =>
@@ -101,6 +102,10 @@ function connectionAction(item: Row) {
 
 function time(value?: string) {
   return value ? new Date(value).toLocaleString("zh-CN", { hour12: false }) : "—";
+}
+
+function modelCodes(item: Row) {
+  return (item.models || []).map((model: Row) => model.code).join("、") || "未配置";
 }
 
 async function reload() {
@@ -193,6 +198,7 @@ function openProvider(item?: Row) {
     priority: item?.priority || 100,
     enabled: Boolean(item?.enabled),
     capabilities: item?.capabilities || [],
+    publicConfig: item?.publicConfig || {},
   });
   providerVisible.value = true;
 }
@@ -205,7 +211,7 @@ async function saveProvider() {
         ...(providerForm.apiKey ? { apiKey: providerForm.apiKey } : {}),
         ...(providerForm.webhookSecret ? { webhookSecret: providerForm.webhookSecret } : {}),
       },
-      publicConfig: {},
+      publicConfig: providerForm.publicConfig || {},
     };
     if (providerForm.id) await patch(`/api/v1/video-factory/providers/${providerForm.id}`, body);
     else await post("/api/v1/video-factory/providers", body);
@@ -214,6 +220,17 @@ async function saveProvider() {
     ElMessage.success("AI服务商已保存");
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : "AI服务商保存失败");
+  }
+}
+
+async function checkProvider(item: Row) {
+  try {
+    const result = await post<Row>(`/api/v1/video-factory/providers/${item.id}/check`, {});
+    await reload();
+    if (result.state === "ERROR") ElMessage.error(result.message || "连接检查失败");
+    else ElMessage.success(result.message || "连接检查已完成");
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "连接检查失败");
   }
 }
 
@@ -381,12 +398,13 @@ defineExpose({ reload });
       <div class="section-head provider-head"><div><h3>视频外部能力（可选）</h3><p>仅在本地素材无法完成、且任务明确允许时使用。</p></div><el-button :icon="Plus" @click="openProvider()">新增视频服务</el-button></div>
       <el-table :data="groups.providers || []" stripe>
         <el-table-column prop="displayName" label="服务商" min-width="180" />
+        <el-table-column label="默认模型" min-width="230"><template #default="{ row }">{{ modelCodes(row) }}</template></el-table-column>
         <el-table-column prop="region" label="地区" width="90" />
         <el-table-column label="状态" width="110"><template #default="{ row }"><el-tag :type="stateType(row.state)">{{ stateLabel(row.state) }}</el-tag></template></el-table-column>
         <el-table-column label="密钥" width="100"><template #default="{ row }">{{ row.secretConfigured ? "已配置" : "未配置" }}</template></el-table-column>
         <el-table-column prop="maxConcurrency" label="并发" width="80" />
         <el-table-column label="预算" width="120"><template #default="{ row }">{{ row.dailyBudget ?? "未限制" }}</template></el-table-column>
-        <el-table-column label="操作" width="120"><template #default="{ row }"><el-button link type="primary" @click="openProvider(row)">配置</el-button></template></el-table-column>
+        <el-table-column label="操作" width="180" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openProvider(row)">配置</el-button><el-button v-if="row.secretConfigured" link @click="checkProvider(row)">检查连接</el-button></template></el-table-column>
       </el-table>
       <h3>模型目录</h3>
       <el-table :data="groups.models || []" stripe>
@@ -458,6 +476,18 @@ defineExpose({ reload });
     </el-dialog>
 
     <el-dialog v-model="providerVisible" title="AI与媒体服务商" width="720px">
+      <el-alert
+        v-if="providerForm.code === 'VOLCENGINE_SEEDANCE'"
+        type="info"
+        :closable="false"
+        title="填写火山方舟 API Key；系统固定使用 Seedance 2.0 官方模型 doubao-seedance-2-0-260128。"
+      />
+      <el-alert
+        v-else-if="providerForm.code === 'KLING'"
+        type="warning"
+        :closable="false"
+        title="可灵不同账号的开放接口可能不同；当前仅保存账号配置，需完成接口协议验证后才能作为自动生成后备。"
+      />
       <el-form label-position="top" class="form-grid">
         <el-form-item label="代码"><el-input v-model="providerForm.code" :disabled="Boolean(providerForm.id)" /></el-form-item>
         <el-form-item label="名称"><el-input v-model="providerForm.displayName" /></el-form-item>
