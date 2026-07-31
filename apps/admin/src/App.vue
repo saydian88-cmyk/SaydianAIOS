@@ -24,7 +24,7 @@ const navItems = [
   { key: "mall", label: "赛电商城", icon: Shop },
   { key: "content", label: "内容审核", icon: DocumentChecked },
   { key: "assets", label: "品牌数据中心", icon: Files },
-  { key: "douyinVideo", label: "抖音爆款视频生成系统", icon: VideoCamera },
+  { key: "douyinVideo", label: "抖音爆款生成", icon: VideoCamera },
   { key: "ledger", label: "经营责任台账", icon: Monitor },
   { key: "operationAnalysis", label: "运营分析", icon: DataAnalysis },
   { key: "engagement", label: "评论与直播", icon: VideoCamera },
