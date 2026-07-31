@@ -368,6 +368,20 @@ export function materialReviewApproved(plan: { sourceSignals: unknown; workflowV
     && (!fingerprint || String(review.bindingFingerprint || "") === fingerprint);
 }
 
+export function partitionVideoShotAssetIds(
+  selectedAssetIds: string[],
+  auxiliaryImageAssetIds: string[],
+  assets: Array<{ id: string; kind: string | null }>,
+) {
+  const kindById = new Map(assets.map((asset) => [asset.id, asset.kind]));
+  const matchedVideoAssetIds = selectedAssetIds.filter((id) => kindById.get(id) === "VIDEO");
+  const imageAssetIds = selectedAssetIds.filter((id) => kindById.get(id) === "IMAGE");
+  return {
+    matchedVideoAssetIds,
+    auxiliaryImageAssetIds: Array.from(new Set([...auxiliaryImageAssetIds, ...imageAssetIds])),
+  };
+}
+
 function number(value: unknown, fallback = 0) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -3290,11 +3304,15 @@ export class VideoFactoryService {
       ? (selected as unknown as Record<string, unknown>).shots as Array<Record<string, unknown>>
       : [];
     let coverage: Array<{ description: string; matchedAssetIds: string[]; matchedVideoAssetIds: string[]; auxiliaryImageAssetIds: string[]; coverage: "EXISTING" | "MISSING"; reason: string }> = preMatchedShots.map((shot) => {
-      const matchedVideoAssetIds = strings(shot.selectedAssetIds);
-      const auxiliaryImageAssetIds = strings(shot.auxiliaryImageAssetIds);
+      const selectedAssetIds = strings(shot.selectedAssetIds);
+      const { matchedVideoAssetIds, auxiliaryImageAssetIds } = partitionVideoShotAssetIds(
+        selectedAssetIds,
+        strings(shot.auxiliaryImageAssetIds),
+        assets,
+      );
       return {
         description: String(shot.visual || shot.description || shot.voiceover || ""),
-        matchedAssetIds: Array.from(new Set([...matchedVideoAssetIds, ...auxiliaryImageAssetIds])),
+        matchedAssetIds: Array.from(new Set([...selectedAssetIds, ...auxiliaryImageAssetIds])),
         matchedVideoAssetIds,
         auxiliaryImageAssetIds,
         coverage: matchedVideoAssetIds.length ? "EXISTING" : "MISSING",

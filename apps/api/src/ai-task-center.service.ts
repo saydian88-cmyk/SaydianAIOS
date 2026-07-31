@@ -2735,7 +2735,8 @@ export class AiTaskCenterService implements OnModuleInit {
           missingFields,
         };
       }
-      const [product, keywords, knowledge, assets] = await Promise.all([
+      const requestedModelId = text(object(body.modelPolicy).requestedModelId);
+      const [product, keywords, knowledge, assets, requestedModel] = await Promise.all([
         productId
           ? this.prisma.product.findUnique({ where: { id: productId } })
           : productModel
@@ -2767,8 +2768,39 @@ export class AiTaskCenterService implements OnModuleInit {
           orderBy: [{ qualityScore: "desc" }, { useCount: "desc" }],
           take: 30,
         }),
+        requestedModelId
+          ? this.prisma.videoModelConfig.findUnique({
+            where: { id: requestedModelId },
+            select: {
+              id: true,
+              code: true,
+              displayName: true,
+              enabled: true,
+              capabilities: true,
+              provider: { select: { code: true, displayName: true, enabled: true, state: true } },
+            },
+          })
+          : Promise.resolve(null),
       ]);
-      return { payload: { ...baseInput, product, keywords, knowledge, assets }, missingFields: [] as string[] };
+      return {
+        payload: {
+          ...baseInput,
+          product,
+          keywords,
+          knowledge,
+          assets,
+          externalVisualModelsAllowed: object(body.modelPolicy).allowExternalGeneration === true,
+          requestedVisualModel: requestedModel
+            ? {
+              ...requestedModel,
+              configured: requestedModel.enabled
+                && requestedModel.provider.enabled
+                && ["CONFIGURED", "HEALTHY"].includes(requestedModel.provider.state),
+            }
+            : null,
+        },
+        missingFields: [] as string[],
+      };
     }
     if (type === "STORE_ANALYSIS") {
       const run = await this.prisma.operationAnalysisRun.findFirst({ where: { status: "SUCCEEDED" }, orderBy: { periodEnd: "desc" } });

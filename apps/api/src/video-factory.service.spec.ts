@@ -1,7 +1,7 @@
 import { BadRequestException } from "@nestjs/common";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { encryptIntegrationValue } from "./integration-secret";
-import { materialReviewApproved, VideoFactoryService } from "./video-factory.service";
+import { materialReviewApproved, partitionVideoShotAssetIds, VideoFactoryService } from "./video-factory.service";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -21,6 +21,23 @@ describe("material review gate", () => {
     expect(materialReviewApproved(plan, "shot-1:asset-1:0:3")).toBe(true);
     expect(materialReviewApproved(plan, "shot-1:asset-2:0:3")).toBe(false);
     expect(materialReviewApproved({ ...plan, workflowVersion: 5 }, "shot-1:asset-1:0:3")).toBe(false);
+  });
+});
+
+describe("video shot asset classification", () => {
+  it("keeps product images auxiliary instead of treating them as completed video shots", () => {
+    expect(partitionVideoShotAssetIds(
+      ["image-1", "video-1"],
+      ["image-2"],
+      [
+        { id: "image-1", kind: "IMAGE" },
+        { id: "image-2", kind: "IMAGE" },
+        { id: "video-1", kind: "VIDEO" },
+      ],
+    )).toEqual({
+      matchedVideoAssetIds: ["video-1"],
+      auxiliaryImageAssetIds: ["image-2", "image-1"],
+    });
   });
 });
 
