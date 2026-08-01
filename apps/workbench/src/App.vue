@@ -1751,14 +1751,25 @@ function checkNewVideoProjectBrief() {
 async function reviewProjectScript(project: Row, approved: boolean, candidateIndex?: number) {
   let note = "";
   if (!approved) {
-    const result = await ElMessageBox.prompt(
-      "请说明脚本哪里需要修改，远程Codex会根据原因重写",
-      "退回脚本",
-      { confirmButtonText: "确认退回", cancelButtonText: "取消", inputType: "textarea" },
-    ).catch(() => null);
-    if (!result) return;
-    note = result.value.trim();
-    if (!note) return ElMessage.warning("退回脚本时必须填写修改原因");
+    const candidate = (project.candidates || [])[candidateIndex ?? 0] || {};
+    const isInitialCodexTransfer = candidate.generationSource !== "REMOTE_CODEX";
+    if (isInitialCodexTransfer) {
+      const confirmed = await ElMessageBox.confirm(
+        "Codex 将沿用创建项目时的全部需求、素材策略和当前百炼脚本生成新版本，无需重复填写要求。",
+        "转交 Codex 生成",
+        { confirmButtonText: "确认转交", cancelButtonText: "取消", type: "info" },
+      ).then(() => true).catch(() => false);
+      if (!confirmed) return;
+    } else {
+      const result = await ElMessageBox.prompt(
+        "请说明当前 Codex 脚本哪里需要修改，Codex 会根据原因重写",
+        "退回 Codex 重写",
+        { confirmButtonText: "确认退回", cancelButtonText: "取消", inputType: "textarea" },
+      ).catch(() => null);
+      if (!result) return;
+      note = result.value.trim();
+      if (!note) return ElMessage.warning("退回脚本时必须填写修改原因");
+    }
   }
   reviewingScriptProjectId.value = project.id;
   try {
@@ -1767,7 +1778,12 @@ async function reviewProjectScript(project: Row, approved: boolean, candidateInd
       note,
       candidateIndex,
     });
-    ElMessage.success(approved ? "脚本审核通过，可以补齐缺失素材" : "脚本已退回，系统已根据退回原因提交重写任务");
+    const selectedCandidate = (project.candidates || [])[candidateIndex ?? 0] || {};
+    ElMessage.success(approved
+      ? "脚本审核通过，可以补齐缺失素材"
+      : selectedCandidate.generationSource === "REMOTE_CODEX"
+        ? "Codex 脚本已退回，系统已按修改原因提交重写任务"
+        : "已转交 Codex 生成，当前百炼脚本会保留用于对照");
     await invalidateDataCenterSection("videoFactory");
     await loadDataCenter(true);
     await refreshTaskVideoProject();

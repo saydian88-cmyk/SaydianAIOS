@@ -1057,20 +1057,26 @@ export class WorkbenchController {
     const action = String(body.action || "").trim().toUpperCase();
     const note = String(body.note || "").trim();
     if (!["APPROVE", "RETURN"].includes(action)) throw new ForbiddenException("审核动作不正确");
-    if (action === "RETURN" && !note) throw new ForbiddenException("退回脚本时必须填写修改原因");
+    const candidateIndex = body.candidateIndex === undefined ? 0 : Number(body.candidateIndex);
+    const candidates = Array.isArray(project.candidates) ? project.candidates : [];
+    const selectedCandidate = candidates[Math.max(0, Math.min(candidates.length - 1, Number.isFinite(candidateIndex) ? candidateIndex : 0))] || {};
+    const isInitialCodexTransfer = action === "RETURN" && selectedCandidate.generationSource !== "REMOTE_CODEX";
+    if (action === "RETURN" && !isInitialCodexTransfer && !note) {
+      throw new ForbiddenException("退回 Codex 脚本时必须填写修改原因");
+    }
+    const reviewNote = note || (isInitialCodexTransfer ? "转交 Codex 生成，沿用当前项目需求、素材策略和百炼脚本" : "");
     const factory = Array.isArray(project.sourceSignals)
       ? project.sourceSignals.find((item: Record<string, unknown>) => item?.type === "VIDEO_FACTORY") || {}
       : {};
     if (factory.aiTaskId) {
-      await this.aiTasks.review(String(factory.aiTaskId), { action, note }, employee.name);
+      await this.aiTasks.review(String(factory.aiTaskId), { action, note: reviewNote }, employee.name);
     }
-    const candidateIndex = body.candidateIndex === undefined ? undefined : Number(body.candidateIndex);
     const reviewed = await this.videoFactory.reviewScript(
       id,
       action === "APPROVE",
-      note,
+      reviewNote,
       employee.name,
-      Number.isFinite(candidateIndex) ? candidateIndex : undefined,
+      body.candidateIndex === undefined ? undefined : Number.isFinite(candidateIndex) ? candidateIndex : undefined,
     );
     if (action === "RETURN") {
       const scriptSubmission = await this.submitVideoScriptTask(authorization, id);
