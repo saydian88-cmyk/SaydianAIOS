@@ -53,6 +53,7 @@ const systemMaterialStatePath = join(systemMaterialRoot, "sync-state.json");
 const localMediaLibraryRoot = resolve(String(process.env.AI_TASK_LOCAL_MEDIA_LIBRARY || "F:\\赛电品牌素材库"));
 const localSystemMaterialMapPath = join(localMediaLibraryRoot, ".saidian-system-index", "system-asset-map.json");
 let lastMaterialSyncAt = 0;
+let materialSyncInFlight: Promise<void> | undefined;
 
 if (!runnerToken) {
   throw new Error("AI_TASK_RUNNER_TOKEN 未配置");
@@ -814,6 +815,17 @@ async function syncSystemMaterialIndex(force = false) {
   lastMaterialSyncAt = now;
 }
 
+function syncSystemMaterialIndexInBackground(force = false) {
+  if (materialSyncInFlight) return;
+  materialSyncInFlight = syncSystemMaterialIndex(force)
+    .catch((error) => {
+      process.stderr.write(`${new Date().toISOString()} system-material-index ${error instanceof Error ? error.message : String(error)}\n`);
+    })
+    .finally(() => {
+      materialSyncInFlight = undefined;
+    });
+}
+
 async function verifyVideoSkillRuntime(taskPackageValue: JsonRecord, detectedSkill: DetectedSkill) {
   const task = record(taskPackageValue.task);
   const execution = record(taskPackageValue.execution);
@@ -1524,18 +1536,20 @@ async function execute(claimed: JsonRecord) {
 
 async function main() {
   await mkdir(workRoot, { recursive: true });
-  await syncSystemMaterialIndex(true).catch((error) => {
-    process.stderr.write(`${new Date().toISOString()} system-material-index ${error instanceof Error ? error.message : String(error)}\n`);
-  });
+  // Material indexing must never delay task claiming. This is especially
+  // important for Codex direct-output jobs, which do not consume assets.
+  syncSystemMaterialIndexInBackground(true);
   for (;;) {
     try {
-      await syncSystemMaterialIndex();
       const claimed = await api<JsonRecord>("/api/v1/ai-tasks/runner/claim", {
         method: "POST",
         body: JSON.stringify({ nodeCode, version: runnerVersion }),
       });
       if (claimed.task) await execute(claimed);
-      else await new Promise((resolvePromise) => setTimeout(resolvePromise, pollMs));
+      else {
+        syncSystemMaterialIndexInBackground();
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, pollMs));
+      }
     } catch (error) {
       process.stderr.write(`${new Date().toISOString()} ${error instanceof Error ? error.message : String(error)}\n`);
       await new Promise((resolvePromise) => setTimeout(resolvePromise, pollMs));
