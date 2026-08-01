@@ -41,6 +41,12 @@ function ffmpegFilterPath(path: string) {
   return path.replaceAll("\\", "/").replaceAll(":", "\\:").replaceAll("'", "\\'");
 }
 
+function providerFailureMessage(message: string) {
+  if (/account balance not enough/i.test(message)) return "视频模型账户余额不足，请充值或切换备用模型";
+  if (/quota|rate limit/i.test(message)) return "视频模型额度或调用频率已达上限，请稍后重试或切换备用模型";
+  return message;
+}
+
 type ProviderResult =
   | { state: "RUNNING"; externalJobId: string; response: JsonRow }
   | { state: "SUCCEEDED"; externalJobId?: string; outputUrl?: string; contentUrl?: string; response: JsonRow; cost?: number }
@@ -514,18 +520,19 @@ export class VideoFactoryWorkerService {
       return;
     }
     if (result.state === "FAILED") {
+      const failureReason = providerFailureMessage(result.error);
       const job = await this.prisma.videoGenerationJob.findUnique({ where: { id: jobId } });
       await this.prisma.videoGenerationAttempt.update({
         where: { id: attemptId },
-        data: { status: "FAILED", externalJobId: result.externalJobId, response: result.response as Prisma.InputJsonValue, failureReason: result.error, finishedAt: new Date() },
+        data: { status: "FAILED", externalJobId: result.externalJobId, response: result.response as Prisma.InputJsonValue, failureReason, finishedAt: new Date() },
       });
       if (job && job.allowFallback && job.attemptCount < job.maxAttempts) {
         await this.prisma.videoGenerationJob.update({
           where: { id: jobId },
-          data: { status: "RETRY", failureReason: result.error, nextAttemptAt: new Date(Date.now() + 5_000) },
+          data: { status: "RETRY", failureReason, nextAttemptAt: new Date(Date.now() + 5_000) },
         });
       } else {
-        await this.prisma.videoGenerationJob.update({ where: { id: jobId }, data: { status: "FAILED", failureReason: result.error, finishedAt: new Date() } });
+        await this.prisma.videoGenerationJob.update({ where: { id: jobId }, data: { status: "FAILED", failureReason, finishedAt: new Date() } });
       }
       if (job?.shotId) await this.prisma.videoShot.update({ where: { id: job.shotId }, data: { status: "OPEN" } });
       if (job?.contentPlanId) await this.factory.syncCompatibility(job.contentPlanId);
@@ -709,7 +716,7 @@ export class VideoFactoryWorkerService {
   }
 
   private async failGeneration(id: string, error: unknown) {
-    const message = error instanceof Error ? error.message : "视频生成失败";
+    const message = providerFailureMessage(error instanceof Error ? error.message : "视频生成失败");
     this.logger.error(`Generation ${id}: ${message}`);
     const job = await this.prisma.videoGenerationJob.findUnique({ where: { id } });
     if (!job) return;
