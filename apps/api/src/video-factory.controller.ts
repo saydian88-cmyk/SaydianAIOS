@@ -266,6 +266,15 @@ export class VideoFactoryController {
     return this.factory.project(id);
   }
 
+  @Post("projects/:id/archive")
+  archiveProject(
+    @Headers("authorization") authorization: string | undefined,
+    @Headers("x-ops-actor") requestedActor: string | undefined,
+    @Param("id") id: string,
+  ) {
+    return this.factory.archiveProject(id, this.actor(authorization, requestedActor));
+  }
+
   @Post("projects/:id/generate")
   generateProject(
     @Headers("authorization") authorization: string | undefined,
