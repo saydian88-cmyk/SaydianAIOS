@@ -145,6 +145,7 @@ async function main() {
   let downloaded = 0;
   let disabled = 0;
   const failures: Row[] = [];
+  const activeGroups = new Map<string, Row[]>();
   for (const asset of changes) {
     const id = String(asset.id || "");
     if (!id) continue;
@@ -153,39 +154,53 @@ async function main() {
       disabled += 1;
       continue;
     }
-    let localPath = byHash.get(String(asset.sha256));
-    if (!localPath) {
-      const extension = String(asset.extension || extname(String(asset.displayName || "")) || ".bin");
-      const folder = destinationOf(asset);
-      const filename = `${cleanName(String(asset.displayName || asset.assetNo || id))}__${cleanName(String(asset.assetNo || id))}${extension.startsWith(".") ? extension : `.${extension}`}`;
-      localPath = join(folder, filename);
-      try {
-        const url = urls.get(id);
-        if (!url) throw new Error("系统未返回下载地址");
-        await download(asset, url, localPath);
-        byHash.set(String(asset.sha256), localPath);
-        downloaded += 1;
-      } catch (error) {
-        failures.push({ id, message: error instanceof Error ? error.message : String(error) });
-        continue;
+    const sha = String(asset.sha256 || "");
+    activeGroups.set(sha, [...(activeGroups.get(sha) || []), asset]);
+  }
+
+  const groups = [...activeGroups.values()];
+  for (let start = 0; start < groups.length; start += 8) {
+    await Promise.all(groups.slice(start, start + 8).map(async (group) => {
+      const asset = group[0];
+      const id = String(asset.id || "");
+      const sha = String(asset.sha256 || "");
+      let localPath = byHash.get(sha);
+      if (!localPath) {
+        const extension = String(asset.extension || extname(String(asset.displayName || "")) || ".bin");
+        const folder = destinationOf(asset);
+        const filename = `${cleanName(String(asset.displayName || asset.assetNo || id))}__${cleanName(String(asset.assetNo || id))}${extension.startsWith(".") ? extension : `.${extension}`}`;
+        localPath = join(folder, filename);
+        try {
+          const url = urls.get(id);
+          if (!url) throw new Error("系统未返回下载地址");
+          await download(asset, url, localPath);
+          byHash.set(sha, localPath);
+          downloaded += 1;
+        } catch (error) {
+          failures.push({ id, message: error instanceof Error ? error.message : String(error) });
+          return;
+        }
+      } else linked += group.length;
+      for (const item of group) {
+        const itemId = String(item.id || "");
+        mapping[itemId] = {
+          systemAssetId: itemId,
+          assetNo: item.assetNo,
+          sha256: item.sha256,
+          localPath,
+          relativePath: relative(libraryRoot, localPath).replaceAll("\\", "/"),
+          displayName: item.displayName,
+          kind: item.kind,
+          model: modelOf(item),
+          aiIndex: item.aiIndex || {},
+          searchText: item.searchText || "",
+          indexVersion: item.indexVersion || 0,
+          indexConfidence: item.indexConfidence || 0,
+          active: true,
+          syncedAt: new Date().toISOString(),
+        };
       }
-    } else linked += 1;
-    mapping[id] = {
-      systemAssetId: id,
-      assetNo: asset.assetNo,
-      sha256: asset.sha256,
-      localPath,
-      relativePath: relative(libraryRoot, localPath).replaceAll("\\", "/"),
-      displayName: asset.displayName,
-      kind: asset.kind,
-      model: modelOf(asset),
-      aiIndex: asset.aiIndex || {},
-      searchText: asset.searchText || "",
-      indexVersion: asset.indexVersion || 0,
-      indexConfidence: asset.indexConfidence || 0,
-      active: true,
-      syncedAt: new Date().toISOString(),
-    };
+    }));
   }
   const report = { syncedAt: new Date().toISOString(), libraryRoot, changed: changes.length, linked, downloaded, disabled, failed: failures.length, failures };
   await writeJsonAtomic(mapPath, mapping);
