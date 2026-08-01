@@ -113,8 +113,30 @@ function assertCodexDirectMasterOutput(result: JsonRecord, taskPackage: JsonReco
   }
 }
 
-function outputSchema(type: string, executionMode = "", requestedCardCount = 10) {
+function outputSchema(type: string, executionMode = "", requestedCardCount = 10, codexDirectFullVideo = false) {
   if (type === "VIDEO") {
+    // Direct-output work does not return a project script or a material-binding payload.
+    // It has an intentionally empty system task package and must only hand back its master.
+    if (codexDirectFullVideo) {
+      return {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          ...baseProperties,
+          delivery: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              productModel: { type: "string" },
+              taskMode: { type: "string", enum: ["CODEX_DIRECT_FULL_VIDEO"] },
+              finalReviewOnly: { type: "boolean" },
+            },
+            required: ["productModel", "taskMode", "finalReviewOnly"],
+          },
+        },
+        required: ["summary", "outputFiles", "delivery"],
+      };
+    }
     if (executionMode === "COVER_TITLE") {
       return {
         type: "object",
@@ -645,7 +667,16 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
     && taskInput.codexDirectFullVideo === true;
   if (isCodexDirectFullVideo) {
     const directInput = record(taskInput.codexDirectInput);
+    const directModeContract = [
+      "DIRECT_MODE_CONTRACT: This is a local-library direct-render job.",
+      "The empty assets, snapshots, and materialBindings arrays are intentional. They do not make this a system AI task and must never cause a system-material whitelist request.",
+      "Do not use or invoke saidian-ai-task-dispatcher. Use only the local_library route in video-editing-from-media-library-share.",
+      "Read the active local-library configuration and reuse its learned material and packaging indexes. Do not download, request, or return any system task assets.",
+      "If the local library is not initialized or not ready, fail explicitly with the missing local configuration or index. Do not return a system-task WAITING_INPUT result.",
+      "Return no intermediate script, shot plan, material binding, or review state. Return exactly one real 1080x1920 MP4 VIDEO_MASTER and delivery={taskMode:CODEX_DIRECT_FULL_VIDEO, finalReviewOnly:true}.",
+    ];
     return [
+      ...directModeContract,
       "你是赛电 Codex 直出视频执行器。",
       `必须先完整读取并严格执行 ${detectedSkill.skillPath}（video-editing-from-media-library-share）。`,
       "这是本地素材库直出模式：不要使用系统任务包中的 assets、snapshots、materialBindings，也不要下载或请求系统素材。",
@@ -1227,6 +1258,7 @@ async function runCodex(
     String(task.type || ""),
     String(execution.mode || ""),
     Number(requirements.exactCount || 10),
+    isCodexDirectFullVideoTask(taskPackage),
   )), null, 2), "utf8");
   await writeFile(join(workspace, "task.json"), JSON.stringify(task, null, 2), "utf8");
   const args = [
@@ -1419,6 +1451,7 @@ async function execute(claimed: JsonRecord) {
       String(packagedTask.type || ""),
       String(execution.mode || ""),
       Number(requirements.exactCount || 10),
+      isCodexDirectFullVideoTask(packaged),
     );
     const startedAt = new Date();
     let result: JsonRecord | undefined;
