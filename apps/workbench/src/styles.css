@@ -804,13 +804,15 @@ main { grid-column: 2; width: min(1240px, calc(100% - 48px)); margin: 24px auto;
 
 .prototype-required-grid,
 .prototype-default-grid,
-.prototype-optional-grid {
+.prototype-optional-grid,
+.prototype-reference-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
 
-.prototype-optional-grid {
+.prototype-optional-grid,
+.prototype-reference-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   padding: 4px 2px;
 }
@@ -820,7 +822,37 @@ main { grid-column: 2; width: min(1240px, calc(100% - 48px)); margin: 24px auto;
 }
 
 .prototype-project-form .el-form-item {
+  align-items: center;
   margin-bottom: 0;
+  min-width: 0;
+}
+
+.prototype-project-form .el-form-item__label {
+  box-sizing: border-box;
+  flex: 0 0 84px;
+  justify-content: flex-end;
+  line-height: 32px;
+  padding-right: 10px;
+  text-align: right;
+}
+
+.prototype-project-form .el-form-item__content {
+  flex: 1;
+  margin-left: 0 !important;
+  min-width: 0;
+}
+
+.prototype-project-form .el-form-item__content > .el-select,
+.prototype-project-form .el-form-item__content > .el-input {
+  width: 100%;
+}
+
+.prototype-project-form .prototype-optional-grid .wide {
+  align-items: flex-start;
+}
+
+.prototype-project-form .prototype-optional-grid .wide .el-form-item__label {
+  padding-top: 4px;
 }
 
 .prototype-collapses {
@@ -859,6 +891,7 @@ main { grid-column: 2; width: min(1240px, calc(100% - 48px)); margin: 24px auto;
   .prototype-required-grid,
   .prototype-default-grid,
   .prototype-optional-grid,
+  .prototype-reference-grid,
   .script-engine-grid {
     grid-template-columns: 1fr;
   }

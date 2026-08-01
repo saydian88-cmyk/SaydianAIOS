@@ -82,6 +82,14 @@ describe("video candidate completeness", () => {
   });
 });
 
+function candidateWithDistinctVideoBindings() {
+  const value = candidate({ assetIds: ["video-1", "video-2", "video-3"] });
+  value.scriptPackage.shotRequirements.forEach((requirement, index) => {
+    requirement.matchedVideoAssetIds = [`video-${index + 1}`];
+  });
+  return value;
+}
+
 describe("Bailian video-script material gate", () => {
   it("sends only editing-footage videos to Bailian", () => {
     const context = buildBailianEditingVideoContext({
@@ -111,10 +119,18 @@ describe("Bailian video-script material gate", () => {
   });
 
   it("accepts covered lines only when they bind real video assets", () => {
-    const value = candidate({ assetIds: ["video-1"] }) as unknown as Record<string, unknown>;
+    const value = candidateWithDistinctVideoBindings() as unknown as Record<string, unknown>;
     expect(validateBailianVideoScriptResult(value, {
-      assets: [{ id: "video-1", kind: "VIDEO" }, { id: "image-1", kind: "IMAGE" }],
+      assets: [{ id: "video-1", kind: "VIDEO" }, { id: "video-2", kind: "VIDEO" }, { id: "video-3", kind: "VIDEO" }, { id: "image-1", kind: "IMAGE" }],
     })).toEqual([]);
+  });
+
+  it("rejects one video asset reused across multiple script lines", () => {
+    const value = candidate({ assetIds: ["video-1"] }) as unknown as Record<string, any>;
+    const errors = validateBailianVideoScriptResult(value, {
+      assets: [{ id: "video-1", kind: "VIDEO" }],
+    });
+    expect(errors).toContain("同一VIDEO素材不得重复绑定多句口播：video-1已用于line_01，不能再用于line_02");
   });
 
   it("rejects images used as primary timeline material", () => {

@@ -610,6 +610,7 @@ export class VideoFactoryService {
         }));
       }
     }
+    const usedVideoAssetIds = new Set<string>();
     const shots = descriptions.map((description, index) => {
       const matched = coverage[index] || coverage.find((item) => item.description === description);
       const requirement = shotRequirements[index] || {};
@@ -621,13 +622,21 @@ export class VideoFactoryService {
         .filter((assetId) => assetKinds.get(assetId) === "VIDEO");
       const generatedImageAssetIds = strings(requirement.auxiliaryImageAssetIds)
         .filter((assetId) => assetKinds.get(assetId) === "IMAGE");
-      const selectedAssetIds = generatedVideoAssetIds.length
+      const preferredVideoAssetIds = generatedVideoAssetIds.length
         ? generatedVideoAssetIds
         : strings(matched?.matchedVideoAssetIds).filter((assetId) => assetKinds.get(assetId) === "VIDEO");
+      const duplicatedVideoAssetIds = preferredVideoAssetIds.filter((assetId) => usedVideoAssetIds.has(assetId));
+      const selectedAssetIds = preferredVideoAssetIds.filter((assetId) => {
+        if (usedVideoAssetIds.has(assetId)) return false;
+        usedVideoAssetIds.add(assetId);
+        return true;
+      });
       const auxiliaryImageAssetIds = generatedImageAssetIds.length
         ? generatedImageAssetIds
         : strings(matched?.auxiliaryImageAssetIds).filter((assetId) => assetKinds.get(assetId) === "IMAGE");
-      const materialMatchReason = generatedVideoAssetIds.length
+      const materialMatchReason = duplicatedVideoAssetIds.length && !selectedAssetIds.length
+        ? "该视频素材已绑定到前一句口播；为避免重复画面，本句改为待补齐"
+        : generatedVideoAssetIds.length
         ? String(requirement.factualProof || requirement.audioVisualRequirement || "脚本生成阶段已按素材索引返回并绑定真实视频素材ID")
         : String(matched?.reason || "");
       return {
@@ -644,7 +653,11 @@ export class VideoFactoryService {
         selectedAssetIds,
         auxiliaryImageAssetIds,
         requiredAssetTags: [],
-        missingReason: selectedAssetIds.length ? "" : matched?.reason || "缺少直接匹配的视频素材",
+        missingReason: selectedAssetIds.length
+          ? ""
+          : duplicatedVideoAssetIds.length
+            ? "该视频素材已用于前一句口播，需要不同的直接画面"
+            : matched?.reason || "缺少直接匹配的视频素材",
         alternativePlan: selectedAssetIds.length ? "" : "可由真人补拍或调用AI生成，并绑定到本句脚本",
         materialMatchReason,
         materialMatchStatus: selectedAssetIds.length ? "COVERED" : "MISSING",
@@ -2516,7 +2529,9 @@ export class VideoFactoryService {
     // The system draft is historical context after a handoff.  Only show the
     // Codex result in the active review workspace.
     const candidates = remoteCandidates.slice(0, plan.workflowVersion >= 4 ? 1 : 3) as VideoScriptCandidateV3[];
-    const selected = remoteCandidates.find((item) => item.selected) || remoteCandidates[0] || candidates[0];
+    let selected: VideoScriptCandidateV3 & Record<string, unknown> = (
+      remoteCandidates.find((item) => item.selected) || remoteCandidates[0] || candidates[0]
+    ) as VideoScriptCandidateV3 & Record<string, unknown>;
     if (!selected) throw new BadRequestException("Codex未返回有效脚本候选");
     const allAssetIds = Array.from(new Set(candidates.flatMap((candidate) => candidate.shots.flatMap((shot) => shot.selectedAssetIds))));
     const validAssets = allAssetIds.length
@@ -2532,12 +2547,47 @@ export class VideoFactoryService {
       })
       : [];
     const validAssetIds = new Set(validAssets.map((item) => item.id));
-    const shots = selected.shots.map((shot, index): VideoShotPlanV3 => ({
-      ...shot,
-      sequence: index,
-      durationSeconds: Math.max(2, Math.min(12, Math.round(number(shot.durationSeconds, 4)))),
-      selectedAssetIds: shot.selectedAssetIds.filter((id) => validAssetIds.has(id)),
-    }));
+    const usedVideoAssetIds = new Set<string>();
+    const shots = selected.shots.map((shot, index): VideoShotPlanV3 => {
+      const validShotAssetIds = shot.selectedAssetIds.filter((id) => validAssetIds.has(id));
+      const duplicatedAssetIds = validShotAssetIds.filter((id) => usedVideoAssetIds.has(id));
+      const selectedAssetIds = validShotAssetIds.filter((id) => {
+        if (usedVideoAssetIds.has(id)) return false;
+        usedVideoAssetIds.add(id);
+        return true;
+      });
+      return {
+        ...shot,
+        sequence: index,
+        durationSeconds: Math.max(2, Math.min(12, Math.round(number(shot.durationSeconds, 4)))),
+        selectedAssetIds,
+        missingReason: selectedAssetIds.length
+          ? shot.missingReason
+          : duplicatedAssetIds.length
+            ? "该视频素材已用于前一句口播，需要不同的直接画面"
+            : shot.missingReason,
+        alternativePlan: selectedAssetIds.length
+          ? shot.alternativePlan
+          : duplicatedAssetIds.length
+            ? "上传补拍素材或调用AI生成，并绑定到本句脚本"
+            : shot.alternativePlan,
+      };
+    });
+    const normalizedSelected = {
+      ...selected,
+      shots,
+      missingAssets: shots
+        .filter((shot) => !shot.selectedAssetIds.length)
+        .map((shot) => ({
+          moduleType: shot.moduleType,
+          description: shot.description,
+          reason: shot.missingReason,
+          alternative: shot.alternativePlan,
+        })),
+    } as VideoScriptCandidateV3;
+    const selectedIndex = candidates.indexOf(selected);
+    if (selectedIndex >= 0) candidates[selectedIndex] = normalizedSelected;
+    selected = normalizedSelected;
     const requestedEngines = Array.isArray(brief.scriptEngines)
       ? brief.scriptEngines.map(String)
       : ["REMOTE_CODEX"];

@@ -692,7 +692,7 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
       "系统任务包是型号、功能、素材、审核状态和合规边界的事实来源，但任务要求、项目描述、方向、关键词、Hook 或推荐场景只作为辅助提示词；不得覆盖视频 Skill 的脚本结构、账号口吻、短句节奏、网感、素材证明和合规规则。",
       "禁止机械复述系统要求，禁止把任务包长句直接拼入口播，禁止为了逐项响应系统字段把脚本写成产品说明书或功能菜单。",
       executionMode === "SCRIPT_ONLY"
-        ? "单脚本必须保持亲切导购型口吻：有态度或生活处境开头，短句推进，先讲用户利益再讲功能，用具体动作代替“支持、具备、可以”等说明书句式；中段至少一次轻反差或价值发现，结尾使用与本条核心内容相关的自然选择建议。写脚本前必须先检索任务包assets中的已学习素材索引，优先围绕高置信度真实VIDEO素材反向设计口播和镜头；不得先写完脚本再泛化找素材。scriptPackage是系统编辑器的统一数据源，必须完整填写；voiceoverLines与shotRequirements使用相同稳定lineId。每条shotRequirement都必须返回matchedVideoAssetIds和auxiliaryImageAssetIds；有直接对应真实视频时assetStatus必须为COVERED且matchedVideoAssetIds至少包含一个任务包内真实素材ID。只有逐项检索后确实没有直接视频证据时才能返回空数组并标记REWRITABLE或NEED_SHOOT，materialGaps也只能包含这些真实缺口。candidate.script只能由voiceoverLines.text按换行拼接，只含干净口播，禁止混入lineId、预计时长、账号说明、素材缺口或健康提示。健康提示只写入scriptPackage.overlayNotice，不写入口播。"
+        ? "单脚本必须保持亲切导购型口吻：有态度或生活处境开头，短句推进，先讲用户利益再讲功能，用具体动作代替“支持、具备、可以”等说明书句式；中段至少一次轻反差或价值发现，结尾使用与本条核心内容相关的自然选择建议。写脚本前必须先检索任务包assets中的已学习素材索引，优先围绕高置信度真实VIDEO素材反向设计口播和镜头；不得先写完脚本再泛化找素材。scriptPackage是系统编辑器的统一数据源，必须完整填写；voiceoverLines与shotRequirements使用相同稳定lineId。每条shotRequirement都必须返回matchedVideoAssetIds和auxiliaryImageAssetIds；有直接对应真实视频时assetStatus必须为COVERED且matchedVideoAssetIds至少包含一个任务包内真实素材ID。默认一条VIDEO素材只能绑定一条口播行；当前任务结果不支持可核验的不同起止片段，严禁用同一assetId重复覆盖多句，缺少不同直接画面时必须标记REWRITABLE或NEED_SHOOT。只有逐项检索后确实没有直接视频证据时才能返回空数组并标记REWRITABLE或NEED_SHOOT，materialGaps也只能包含这些真实缺口。candidate.script只能由voiceoverLines.text按换行拼接，只含干净口播，禁止混入lineId、预计时长、账号说明、素材缺口或健康提示。健康提示只写入scriptPackage.overlayNotice，不写入口播。"
         : "脚本、画面、配音、包装和质检均以视频 Skill 的硬性规则为准；系统提示只能在不冲突时补充方向。",
     ].join("\n")
     : "";

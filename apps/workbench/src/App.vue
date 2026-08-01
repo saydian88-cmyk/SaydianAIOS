@@ -4577,14 +4577,16 @@ onBeforeUnmount(() => {
 
       <section v-else class="prototype-form-section">
         <header><strong>参考视频</strong><span>此模式仅需产品型号和参考视频链接</span></header>
-        <el-form-item label="产品型号" required>
-          <el-select v-model="videoFactoryForm.productModel" filterable placeholder="搜索或选择产品型号" class="wide-select">
-            <el-option v-for="product in productOptions" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="参考视频链接" required>
-          <el-input v-model="videoFactoryForm.referenceVideoUrl" placeholder="粘贴可访问的参考视频链接" />
-        </el-form-item>
+        <div class="prototype-reference-grid">
+          <el-form-item label="产品型号" required>
+            <el-select v-model="videoFactoryForm.productModel" filterable placeholder="搜索或选择产品型号">
+              <el-option v-for="product in productOptions" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="参考视频链接" required>
+            <el-input v-model="videoFactoryForm.referenceVideoUrl" placeholder="粘贴可访问的参考视频链接" />
+          </el-form-item>
+        </div>
       </section>
 
       <el-collapse v-if="videoProjectMode === 'STANDARD'" v-model="videoProjectCollapseNames" class="prototype-collapses">

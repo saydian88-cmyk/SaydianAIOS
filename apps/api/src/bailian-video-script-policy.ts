@@ -55,6 +55,7 @@ export function buildBailianEditingVideoContext(context: JsonRecord): JsonRecord
         "assetIds and matchedVideoAssetIds must only use availableVideoAssetIds",
         "auxiliaryImageAssetIds must always be an empty array",
         "when no supplied video matches, return NEED_SHOOT with no invented asset id",
+        "a VIDEO asset may cover only one script line; if no distinct direct footage remains, return NEED_SHOOT instead of reusing the same asset",
       ],
     },
   };
@@ -79,6 +80,7 @@ export const BAILIAN_VIDEO_SCRIPT_SYSTEM_POLICY = `
 - 只能引用输入中真实存在、已审核且可用的assetId。不得凭文件名猜测，不得虚构素材ID、时间段、功能或用户体验。
 - 只使用indexNeedsReview=false的素材；当前阶段不以indexConfidence数值作为素材准入条件。
 - 素材不足时列出具体补拍：产品、动作、功能、景别、过程或结果、建议拍法。禁止使用无关素材、重复片段、图片、慢放或空镜掩盖缺口。
+- 同一条VIDEO素材默认只能绑定一条口播/字幕行。当前返回格式不支持填写可核验的不同起止片段，因此不得用同一个assetId覆盖多句；没有不同的直接视频证据时必须标记NEED_SHOOT。
 
 脚本规则：
 - 先给结构，再写正文；自然短句，每句一个主要信息。
@@ -115,6 +117,7 @@ export function validateBailianVideoScriptResult(candidate: JsonRecord, context:
     : {};
   const declaredAssetIds = strings(candidate.assetIds);
   const matchedAssetIds = new Set<string>();
+  const assetLineIds = new Map<string, string>();
 
   for (const id of strings(candidate.assetIds)) {
     if (!knownAssetIds.has(id)) errors.push(`引用了输入中不存在的素材ID：${id}`);
@@ -169,6 +172,14 @@ export function validateBailianVideoScriptResult(candidate: JsonRecord, context:
     for (const id of primaryIds) {
       if (!knownAssetIds.has(id)) errors.push(`${lineId}引用了不存在的视频素材：${id}`);
       else if (assetKinds.get(id) !== "VIDEO") errors.push(`${lineId}主镜头引用了非VIDEO素材：${id}`);
+    }
+    for (const id of primaryIds) {
+      const previousLineId = assetLineIds.get(id);
+      if (previousLineId && previousLineId !== lineId) {
+        errors.push(`同一VIDEO素材不得重复绑定多句口播：${id}已用于${previousLineId}，不能再用于${lineId}`);
+      } else {
+        assetLineIds.set(id, lineId);
+      }
     }
     for (const id of auxiliaryIds) {
       if (!knownAssetIds.has(id)) errors.push(`${lineId}引用了不存在的辅助图片：${id}`);
