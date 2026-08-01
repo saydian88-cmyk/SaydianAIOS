@@ -1178,7 +1178,15 @@ export class AiTaskCenterService implements OnModuleInit {
         indexVersion: true,
         indexConfidence: true,
         indexNeedsReview: true,
-        products: { select: { productId: true, scope: true, confidence: true, confirmed: true } },
+        products: {
+          select: {
+            productId: true,
+            scope: true,
+            confidence: true,
+            confirmed: true,
+            product: { select: { modelCode: true, category: true, name: true } },
+          },
+        },
         tags: { select: { confidence: true, source: true, tag: { select: { code: true, label: true, namespace: true } } } },
         segments: {
           orderBy: { startSeconds: "asc" },
@@ -1219,6 +1227,35 @@ export class AiTaskCenterService implements OnModuleInit {
           deletedAt: asset.deletedAt?.toISOString() || null,
           usable,
         };
+      }),
+    };
+  }
+
+  async runnerMaterialDownloads(token: string, body: JsonRecord) {
+    await this.runner(token, text(body.nodeCode));
+    const ids = Array.from(new Set(
+      (Array.isArray(body.assetIds) ? body.assetIds : []).map((item) => text(item)).filter(Boolean),
+    )).slice(0, 100);
+    if (!ids.length) return { downloads: [] };
+    const assets = await this.prisma.asset.findMany({
+      where: {
+        id: { in: ids },
+        deletedAt: null,
+        reviewStatus: "APPROVED",
+        availabilityStatus: "ACTIVE",
+        rightsStatus: { in: ["COMMERCIAL", "EDIT_ONLY"] },
+      },
+      select: { id: true, sha256: true, objectKey: true, storageUrl: true },
+    });
+    return {
+      downloads: assets.map((asset) => {
+        let downloadUrl: string | null = null;
+        if (asset.objectKey) {
+          try { downloadUrl = this.oss.signedDownloadUrl(asset.objectKey, 7_200); } catch { downloadUrl = null; }
+        } else if (/^https?:\/\//iu.test(asset.storageUrl || "")) {
+          downloadUrl = asset.storageUrl;
+        }
+        return { id: asset.id, sha256: asset.sha256, downloadUrl };
       }),
     };
   }

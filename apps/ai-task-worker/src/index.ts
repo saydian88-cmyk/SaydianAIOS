@@ -50,6 +50,8 @@ const systemMaterialRoot = join(workRoot, "system-material-library");
 const systemMaterialAssetsRoot = join(systemMaterialRoot, "assets");
 const systemMaterialIndexPath = join(systemMaterialRoot, "material-index.json");
 const systemMaterialStatePath = join(systemMaterialRoot, "sync-state.json");
+const localMediaLibraryRoot = resolve(String(process.env.AI_TASK_LOCAL_MEDIA_LIBRARY || "F:\\赛电品牌素材库"));
+const localSystemMaterialMapPath = join(localMediaLibraryRoot, ".saidian-system-index", "system-asset-map.json");
 let lastMaterialSyncAt = 0;
 
 if (!runnerToken) {
@@ -786,6 +788,7 @@ async function downloadInputs(taskPackageValue: JsonRecord, workspace: string): 
   const inputsDir = join(workspace, "inputs");
   await mkdir(inputsDir, { recursive: true });
   const assets = Array.isArray(taskPackageValue.assets) ? taskPackageValue.assets.map(record) : [];
+  const localMaterialMap = (await readJson<JsonRecord>(localSystemMaterialMapPath).catch(() => undefined)) || {};
   const downloaded: JsonRecord[] = [];
   for (const asset of assets.slice(0, 30)) {
     const id = String(asset.id || `asset-${downloaded.length + 1}`);
@@ -797,11 +800,25 @@ async function downloadInputs(taskPackageValue: JsonRecord, workspace: string): 
     let buffer: Buffer | undefined;
     const downloadUrl = String(asset.downloadUrl || "");
     const localPath = String(asset.localPath || "");
+    const mapped = record(localMaterialMap[id]);
+    const mappedLocalPath = mapped.active === true && String(mapped.sha256 || "").toLowerCase() === expectedHash
+      ? String(mapped.localPath || "")
+      : "";
     try {
       const existing = await readFile(target);
       if (expectedHash && verifySha256(existing, expectedHash)) buffer = existing;
     } catch {
       buffer = undefined;
+    }
+    if (!buffer) {
+      if (mappedLocalPath) {
+        try {
+          const local = await readFile(mappedLocalPath);
+          if (!expectedHash || verifySha256(local, expectedHash)) buffer = local;
+        } catch {
+          buffer = undefined;
+        }
+      }
     }
     if (!buffer) {
       try {
@@ -849,6 +866,12 @@ async function downloadInputs(taskPackageValue: JsonRecord, workspace: string): 
   const packaged: JsonRecord = {
     ...taskPackageValue,
     assets: downloaded,
+    localMaterialLibrary: {
+      root: localMediaLibraryRoot,
+      systemAssetMapPath: localSystemMaterialMapPath,
+      primaryForEditing: true,
+      identityRule: "systemAssetId + sha256",
+    },
   };
   await writeJsonAtomic(join(workspace, "snapshot.json"), taskPackageValue.snapshots || []);
   await writeJsonAtomic(join(workspace, "manifest.json"), downloaded);

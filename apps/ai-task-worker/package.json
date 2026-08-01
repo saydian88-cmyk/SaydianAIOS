@@ -10,7 +10,8 @@
     "diagnostics": "powershell -ExecutionPolicy Bypass -File scripts/diagnostics.ps1",
     "install:windows": "powershell -ExecutionPolicy Bypass -File scripts/install-windows-task.ps1",
     "upgrade:windows": "powershell -ExecutionPolicy Bypass -File scripts/update-windows-task.ps1",
-    "repair:video-metadata": "tsx scripts/repair-video-output-metadata.ts"
+    "repair:video-metadata": "tsx scripts/repair-video-output-metadata.ts",
+    "sync:system-materials": "tsx scripts/sync-system-material-library.ts"
   },
   "dependencies": {
     "ajv": "^8.17.1",

@@ -136,6 +136,14 @@ export class AiTaskCenterController {
     return this.tasks.runnerMaterialIndex(this.runnerToken(authorization), { nodeCode, cursor });
   }
 
+  @Post("runner/material-downloads")
+  materialDownloads(
+    @Headers("authorization") authorization: string | undefined,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.tasks.runnerMaterialDownloads(this.runnerToken(authorization), body);
+  }
+
   @Get("runner/tasks/:id/package")
   taskPackage(
     @Headers("authorization") authorization: string | undefined,
