@@ -985,7 +985,7 @@ export class WorkbenchController {
     }, employee.name) as Record<string, any>;
     if (task) await this.videoFactory.attachRemoteTask(id, task.id, "SCRIPT_ONLY", employee.name);
     if (scriptEngines.includes("SYSTEM_AI")) {
-      await this.videoFactory.generateSystemScriptCandidate(id, employee.name);
+      await this.videoFactory.enqueueSystemScriptCandidate(id, employee.name);
     }
     return { project: await this.videoFactory.project(id), task, scriptEngines };
   }
@@ -1007,7 +1007,7 @@ export class WorkbenchController {
     if (!["FACTORY_SCRIPT_READY", "SCRIPT_GENERATING"].includes(String(project.productionStage))) {
       throw new ForbiddenException("当前项目阶段不能重新生成系统 AI 脚本");
     }
-    return this.videoFactory.generateSystemScriptCandidate(id, employee.name, String(body.prompt || "").trim());
+    return this.videoFactory.enqueueSystemScriptCandidate(id, employee.name, String(body.prompt || "").trim());
   }
 
   @Get("data-center/video-projects/:id")

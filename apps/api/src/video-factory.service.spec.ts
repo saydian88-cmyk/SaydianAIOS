@@ -333,6 +333,38 @@ describe("VideoFactoryService model routing", () => {
     expect(prisma.contentPlan.update).not.toHaveBeenCalled();
   });
 
+  it("queues Bailian script generation without blocking the project response", async () => {
+    prisma.contentPlan.findUnique.mockResolvedValue({
+      id: "system-ai-project",
+      productionStage: "PROJECT_BRIEF",
+      sourceSignals: [{
+        type: "VIDEO_FACTORY",
+        scriptEngineStatus: { SYSTEM_AI: "PENDING" },
+        scriptEngineErrors: { SYSTEM_AI: "previous error" },
+      }],
+    });
+    prisma.contentPlan.update.mockResolvedValue({});
+    let releaseGeneration: ((value: any) => void) | undefined;
+    vi.spyOn(service, "generateSystemScriptCandidate").mockImplementation(() => new Promise((resolve) => {
+      releaseGeneration = resolve;
+    }));
+    vi.spyOn(service, "project").mockResolvedValue({ id: "system-ai-project", productionStage: "SCRIPT_GENERATING" } as never);
+
+    const result = await service.enqueueSystemScriptCandidate("system-ai-project", "operator");
+
+    expect(result).toMatchObject({ id: "system-ai-project", productionStage: "SCRIPT_GENERATING" });
+    expect(prisma.contentPlan.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ productionStage: "SCRIPT_GENERATING" }),
+    }));
+    const writtenSignals = prisma.contentPlan.update.mock.calls[0][0].data.sourceSignals;
+    expect(writtenSignals[0].scriptEngineStatus.SYSTEM_AI).toBe("RUNNING");
+    expect(writtenSignals[0].scriptEngineErrors.SYSTEM_AI).toBe("");
+    expect(service.generateSystemScriptCandidate).toHaveBeenCalledWith("system-ai-project", "operator", "");
+
+    releaseGeneration?.({ id: "system-ai-project" });
+    await Promise.resolve();
+  });
+
   it("keeps line ids and material bindings for punctuation-only script edits", async () => {
     prisma.contentPlan.findUnique.mockResolvedValue({
       id: "project-script",

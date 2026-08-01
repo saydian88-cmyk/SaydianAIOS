@@ -663,6 +663,21 @@ function projectScriptEngineStatus(project: Row) {
   return status;
 }
 
+function projectScriptEngineErrors(project: Row) {
+  const factory = Array.isArray(project.sourceSignals)
+    ? project.sourceSignals.find((item: Row) => item.type === "VIDEO_FACTORY")
+    : undefined;
+  return { ...(factory?.scriptEngineErrors || {}) };
+}
+
+function scriptEngineStatusText(project: Row, engine: string) {
+  const status = String(projectScriptEngineStatus(project)[engine] || "PENDING");
+  if (status === "COMPLETED") return "已完成";
+  if (status === "FAILED") return "生成失败";
+  if (status === "RUNNING") return "生成中";
+  return "等待生成";
+}
+
 function requestedProjectScriptEngines(project: Row) {
   const factory = Array.isArray(project.sourceSignals)
     ? project.sourceSignals.find((item: Row) => item.type === "VIDEO_FACTORY")
@@ -1015,7 +1030,7 @@ async function regenerateSystemScript(project: Row) {
     await post(`/api/v1/workbench/data-center/video-projects/${project.id}/system-script-regenerate`, {
       prompt: result.value.trim(),
     });
-    ElMessage.success("系统 AI 已重新生成脚本，原版本已保留");
+    ElMessage.success("已提交后台重新生成；原版本继续保留");
     await invalidateDataCenterSection("videoFactory");
     if (expandedTaskVideoProjectId.value === project.id) await refreshTaskVideoProject();
     else await loadDataCenter(true);
@@ -2963,9 +2978,12 @@ onMounted(() => void bootstrap());
                   <div class="script-engine-progress">
                     <span
                       v-if="requestedProjectScriptEngines(taskVideoProjectDetail).includes('SYSTEM_AI')"
-                      :class="{ done: projectScriptEngineStatus(taskVideoProjectDetail).SYSTEM_AI === 'COMPLETED' }"
+                      :class="{
+                        done: projectScriptEngineStatus(taskVideoProjectDetail).SYSTEM_AI === 'COMPLETED',
+                        failed: projectScriptEngineStatus(taskVideoProjectDetail).SYSTEM_AI === 'FAILED',
+                      }"
                     >
-                      系统 AI 脚本工厂 · {{ projectScriptEngineStatus(taskVideoProjectDetail).SYSTEM_AI === "COMPLETED" ? "已完成" : "生成中" }}
+                      系统 AI 脚本工厂 · {{ scriptEngineStatusText(taskVideoProjectDetail, "SYSTEM_AI") }}
                     </span>
                     <span
                       v-if="requestedProjectScriptEngines(taskVideoProjectDetail).includes('REMOTE_CODEX')"
@@ -2974,6 +2992,19 @@ onMounted(() => void bootstrap());
                       远程 Codex + 剪辑 Skill · {{ projectScriptEngineStatus(taskVideoProjectDetail).REMOTE_CODEX === "COMPLETED" ? "已完成" : "生成中" }}
                     </span>
                   </div>
+                  <el-alert
+                    v-if="projectScriptEngineStatus(taskVideoProjectDetail).SYSTEM_AI === 'FAILED'"
+                    :title="String(projectScriptEngineErrors(taskVideoProjectDetail).SYSTEM_AI || '系统 AI 脚本生成失败')"
+                    type="error"
+                    :closable="false"
+                    show-icon
+                  />
+                  <el-button
+                    v-if="projectScriptEngineStatus(taskVideoProjectDetail).SYSTEM_AI === 'FAILED'"
+                    type="primary"
+                    :loading="regeneratingSystemScriptProjectId === taskVideoProjectDetail.id"
+                    @click="regenerateSystemScript(taskVideoProjectDetail)"
+                  >重新生成</el-button>
                 </section>
 
                 <section v-if="videoFlowStep(taskVideoProjectDetail) === 2 && !projectWaitingForScripts(taskVideoProjectDetail)" class="task-video-stage-panel">
@@ -3473,11 +3504,27 @@ onMounted(() => void bootstrap());
                   </span>
                   <span
                     v-if="requestedProjectScriptEngines(project).includes('SYSTEM_AI')"
-                    :class="{ done: projectScriptEngineStatus(project).SYSTEM_AI === 'COMPLETED' }"
+                    :class="{
+                      done: projectScriptEngineStatus(project).SYSTEM_AI === 'COMPLETED',
+                      failed: projectScriptEngineStatus(project).SYSTEM_AI === 'FAILED',
+                    }"
                   >
-                    系统 AI 脚本工厂 · {{ projectScriptEngineStatus(project).SYSTEM_AI === "COMPLETED" ? "已完成" : "生成中" }}
+                    系统 AI 脚本工厂 · {{ scriptEngineStatusText(project, "SYSTEM_AI") }}
                   </span>
                 </div>
+                <el-alert
+                  v-if="projectScriptEngineStatus(project).SYSTEM_AI === 'FAILED'"
+                  :title="String(projectScriptEngineErrors(project).SYSTEM_AI || '系统 AI 脚本生成失败')"
+                  type="error"
+                  :closable="false"
+                  show-icon
+                />
+                <el-button
+                  v-if="projectScriptEngineStatus(project).SYSTEM_AI === 'FAILED'"
+                  type="primary"
+                  :loading="regeneratingSystemScriptProjectId === project.id"
+                  @click="regenerateSystemScript(project)"
+                >重新生成</el-button>
               </section>
               <div
                 v-if="projectCandidates(project).length && videoFlowStep(project) === 2 && !projectWaitingForScripts(project)"

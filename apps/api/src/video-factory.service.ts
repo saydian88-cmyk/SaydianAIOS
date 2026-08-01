@@ -468,6 +468,7 @@ function topicCardPayload(plan: { sourceSignals: unknown }): VideoTopicCardPaylo
 
 @Injectable()
 export class VideoFactoryService {
+  private readonly systemScriptJobs = new Set<string>();
   constructor(
     private readonly prisma: PrismaService,
     private readonly aiContent: AiContentService,
@@ -1760,7 +1761,9 @@ export class VideoFactoryService {
         this.prisma.contentPlan.update({
           where: { id: contentPlanId },
           data: {
-            productionStage: "SCRIPT_GENERATING",
+            productionStage: Array.isArray(factory.scriptCandidates) && factory.scriptCandidates.length
+              ? "FACTORY_SCRIPT_READY"
+              : "SCRIPT_GENERATING",
             sourceSignals: nextSignals as unknown as Prisma.InputJsonValue,
           },
         }),
@@ -1838,6 +1841,33 @@ export class VideoFactoryService {
         `脚本已生成，可直接审核；已匹配${Number(preMatch.covered || 0)}个镜头，缺失${Number(preMatch.missing || 0)}个镜头。`,
       ).catch(() => undefined);
     }
+    return this.project(contentPlanId);
+  }
+
+  async enqueueSystemScriptCandidate(contentPlanId: string, actor: string, regenerationPrompt = "") {
+    if (this.systemScriptJobs.has(contentPlanId)) return this.project(contentPlanId);
+    const plan = await this.prisma.contentPlan.findUnique({ where: { id: contentPlanId } });
+    if (!plan) throw new NotFoundException("智能视频项目不存在");
+    const signals = sourceSignals(plan);
+    const nextSignals = signals.map((signal) => signal.type === "VIDEO_FACTORY"
+      ? {
+        ...signal,
+        scriptEngineStatus: { ...object(signal.scriptEngineStatus), SYSTEM_AI: "RUNNING" },
+        scriptEngineErrors: { ...object(signal.scriptEngineErrors), SYSTEM_AI: "" },
+        systemScriptStartedAt: new Date().toISOString(),
+      }
+      : signal);
+    await this.prisma.contentPlan.update({
+      where: { id: contentPlanId },
+      data: {
+        productionStage: "SCRIPT_GENERATING",
+        sourceSignals: nextSignals as unknown as Prisma.InputJsonValue,
+      },
+    });
+    this.systemScriptJobs.add(contentPlanId);
+    void this.generateSystemScriptCandidate(contentPlanId, actor, regenerationPrompt)
+      .catch(() => undefined)
+      .finally(() => this.systemScriptJobs.delete(contentPlanId));
     return this.project(contentPlanId);
   }
 
