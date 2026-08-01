@@ -51,6 +51,47 @@ export function usesConfiguredVideoRenderer(plan: { sourceSignals: unknown }) {
   return videoFactoryModule(plan) !== "DOUYIN_VIRAL";
 }
 
+export function wrapVideoSubtitle(value: unknown, maxCharsPerLine = 14) {
+  const text = String(value || "").replace(/\s+/gu, " ").trim();
+  if (!text) return "";
+  const maximum = Math.max(8, maxCharsPerLine) * 2;
+  const characters = Array.from(text);
+  const limited = characters.length > maximum
+    ? [...characters.slice(0, maximum - 1), "…"]
+    : characters;
+  if (limited.length <= maxCharsPerLine) return limited.join("");
+  const splitAt = Math.min(maxCharsPerLine, Math.ceil(limited.length / 2));
+  return `${limited.slice(0, splitAt).join("")}\n${limited.slice(splitAt).join("")}`;
+}
+
+export function videoRenderCaptionTexts(plan: {
+  sourceSignals: unknown;
+  hook: unknown;
+  objective: unknown;
+  outline: unknown;
+  videoShots: Array<{ description: unknown }>;
+}) {
+  const signals = Array.isArray(plan.sourceSignals) ? plan.sourceSignals.map(object) : [];
+  const factory = signals.find((item) => item.type === "VIDEO_FACTORY") || {};
+  const candidates = Array.isArray(factory.scriptCandidates) ? factory.scriptCandidates.map(object) : [];
+  const selectedIndex = Math.max(0, Math.min(candidates.length - 1, Number(factory.selectedCandidateIndex || 0)));
+  const selected = candidates[selectedIndex] || {};
+  const candidateShots = Array.isArray(selected.shots) ? selected.shots.map(object) : [];
+  const packageSubtitles = strings(object(selected.scriptPackage).subtitles);
+  const outline = Array.isArray(plan.outline) ? plan.outline.map(String) : [];
+
+  return plan.videoShots.map((shot, index) => {
+    const candidateShot = candidateShots[index] || {};
+    const concise = String(candidateShot.subtitle || packageSubtitles[index] || candidateShot.voiceover || "").trim();
+    const fallback = index === 0
+      ? plan.hook
+      : index === plan.videoShots.length - 1
+        ? plan.objective
+        : outline[index] || shot.description;
+    return wrapVideoSubtitle(concise || fallback || shot.description);
+  });
+}
+
 type ProviderResult =
   | { state: "RUNNING"; externalJobId: string; response: JsonRow }
   | { state: "SUCCEEDED"; externalJobId?: string; outputUrl?: string; contentUrl?: string; response: JsonRow; cost?: number }
@@ -776,17 +817,12 @@ export class VideoFactoryWorkerService {
       normalized.push(normalizedPath);
     }
     let elapsed = 0;
+    const captionTexts = videoRenderCaptionTexts(job.contentPlan);
     const captions = job.contentPlan.videoShots.map((shot, index) => {
       const duration = Math.max(1, Number(shot.durationSeconds || 5));
       const start = elapsed;
       elapsed += duration;
-      const outline = Array.isArray(job.contentPlan.outline) ? job.contentPlan.outline.map(String) : [];
-      const text = index === 0
-        ? job.contentPlan.hook
-        : index === job.contentPlan.videoShots.length - 1
-          ? job.contentPlan.objective
-          : outline[index] || shot.description;
-      return `${index + 1}\n${srtTime(start)} --> ${srtTime(elapsed)}\n${String(text || shot.description).replaceAll("\n", " ")}\n`;
+      return `${index + 1}\n${srtTime(start)} --> ${srtTime(elapsed)}\n${captionTexts[index]}\n`;
     });
     const subtitlePath = join(workDir, "captions.srt");
     await writeFile(subtitlePath, captions.join("\n"), "utf8");
@@ -821,7 +857,7 @@ export class VideoFactoryWorkerService {
     if (actualRenderer !== "HYPERFRAMES") {
       await execFileAsync("ffmpeg", [
         "-y", "-f", "concat", "-safe", "0", "-i", concatList,
-        "-vf", `subtitles='${ffmpegFilterPath(subtitlePath)}':force_style='FontName=Noto Sans CJK SC,FontSize=14,PrimaryColour=&H00FFFFFF,OutlineColour=&H80000000,BorderStyle=3,Outline=1,Shadow=0,MarginV=110,Alignment=2'`,
+        "-vf", `subtitles='${ffmpegFilterPath(subtitlePath)}':force_style='FontName=Noto Sans CJK SC,FontSize=14,PrimaryColour=&H00FFFFFF,OutlineColour=&H80000000,BorderStyle=3,Outline=1,Shadow=0,MarginL=80,MarginR=80,MarginV=110,Alignment=2'`,
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
         outputPath,

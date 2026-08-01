@@ -1,7 +1,12 @@
 import { UnauthorizedException } from "@nestjs/common";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { encryptIntegrationValue } from "./integration-secret";
-import { usesConfiguredVideoRenderer, VideoFactoryWorkerService } from "./video-factory-worker.service";
+import {
+  usesConfiguredVideoRenderer,
+  videoRenderCaptionTexts,
+  VideoFactoryWorkerService,
+  wrapVideoSubtitle,
+} from "./video-factory-worker.service";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -13,6 +18,27 @@ describe("Douyin viral render isolation", () => {
     expect(usesConfiguredVideoRenderer({
       sourceSignals: [{ type: "VIDEO_FACTORY", factoryModule: "GENERAL_VIDEO_FACTORY" }],
     })).toBe(true);
+  });
+
+  it("uses concise script subtitles and wraps them inside the safe area", () => {
+    expect(wrapVideoSubtitle("这是一条明显超过单行安全区域的抖音成片字幕，需要自动换行显示"))
+      .toBe("这是一条明显超过单行安全区域\n的抖音成片字幕，需要自动换…");
+    expect(videoRenderCaptionTexts({
+      sourceSignals: [{
+        type: "VIDEO_FACTORY",
+        selectedCandidateIndex: 0,
+        scriptCandidates: [{
+          shots: [
+            { subtitle: "一块圆表｜三种风格", voiceover: "一段更长的口播" },
+            { subtitle: "通勤｜黑色更利落" },
+          ],
+        }],
+      }],
+      hook: "不应使用的长Hook",
+      objective: "不应使用的长目标",
+      outline: ["不应使用的画面说明"],
+      videoShots: [{ description: "镜头一" }, { description: "镜头二" }],
+    })).toEqual(["一块圆表｜三种风格", "通勤｜黑色更利落"]);
   });
 });
 
