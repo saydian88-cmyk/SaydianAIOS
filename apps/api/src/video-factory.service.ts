@@ -2499,9 +2499,6 @@ export class VideoFactoryService {
     if (!plan) throw new NotFoundException("智能视频项目不存在");
     const signals = sourceSignals(plan);
     const factory = signals.find((signal) => signal.type === "VIDEO_FACTORY") || {};
-    const existingSystemCandidates = Array.isArray(factory.scriptCandidates)
-      ? factory.scriptCandidates.filter((item) => object(item).generationSource === "SYSTEM_AI")
-      : [];
     const brief = object(factory.brief);
     const remoteCandidates = input.scriptCandidates.slice(0, plan.workflowVersion >= 4 ? 1 : 3).map((item) => ({
       ...packageCodexCandidate(item, {
@@ -2516,7 +2513,9 @@ export class VideoFactoryService {
       generationSource: "REMOTE_CODEX",
       generatedAt: new Date().toISOString(),
     }));
-    const candidates = [...remoteCandidates, ...existingSystemCandidates].slice(0, plan.workflowVersion >= 4 ? 2 : 3) as VideoScriptCandidateV3[];
+    // The system draft is historical context after a handoff.  Only show the
+    // Codex result in the active review workspace.
+    const candidates = remoteCandidates.slice(0, plan.workflowVersion >= 4 ? 1 : 3) as VideoScriptCandidateV3[];
     const selected = remoteCandidates.find((item) => item.selected) || remoteCandidates[0] || candidates[0];
     if (!selected) throw new BadRequestException("Codex未返回有效脚本候选");
     const allAssetIds = Array.from(new Set(candidates.flatMap((candidate) => candidate.shots.flatMap((shot) => shot.selectedAssetIds))));
@@ -2563,6 +2562,9 @@ export class VideoFactoryService {
     ];
     const platform = plan.targetPlatforms[0] || IntegrationKind.DOUYIN;
     await this.prisma.$transaction(async (tx) => {
+      await tx.videoShot.deleteMany({
+        where: { contentPlanId: plan.id, requirementKey: { startsWith: "system-v4-" } },
+      });
       await tx.contentPlan.update({
         where: { id: plan.id },
         data: {
@@ -2714,6 +2716,62 @@ export class VideoFactoryService {
       ).catch(() => undefined);
     }
     return this.project(plan.id);
+  }
+
+  /** Make a script line actionable when an older system-AI result has no VideoShot row yet. */
+  async ensureScriptLineShot(contentPlanId: string, candidateIndex: number, lineIndex: number) {
+    const plan = await this.prisma.contentPlan.findUnique({ where: { id: contentPlanId } });
+    if (!plan) throw new NotFoundException("智能视频项目不存在");
+    const candidates = this.candidates(plan);
+    const candidate = object(candidates[Math.max(0, Math.min(candidates.length - 1, Math.round(candidateIndex)))]);
+    const rows = Array.isArray(candidate.shots) ? candidate.shots.map(object) : [];
+    const shot = rows[Math.max(0, Math.min(rows.length - 1, Math.round(lineIndex)))];
+    if (!shot) throw new BadRequestException("当前脚本行不存在");
+    const sequence = Math.max(0, Math.round(number(shot.sequence, lineIndex)));
+    const lineId = String(shot.lineId || `line_${String(sequence + 1).padStart(2, "0")}`);
+    const requestedAssetIds = strings(shot.selectedAssetIds);
+    const approvedAssets = requestedAssetIds.length
+      ? await this.prisma.asset.findMany({
+        where: { id: { in: requestedAssetIds }, kind: "VIDEO", reviewStatus: "APPROVED", availabilityStatus: "ACTIVE", rightsStatus: { in: ["COMMERCIAL", "EDIT_ONLY"] }, deletedAt: null },
+        select: { id: true },
+      })
+      : [];
+    const approvedIds = new Set(approvedAssets.map((asset) => asset.id));
+    const selectedAssetIds = requestedAssetIds.filter((assetId) => approvedIds.has(assetId));
+    await this.prisma.videoShot.upsert({
+      where: { contentPlanId_requirementKey: { contentPlanId, requirementKey: `system-v4-${lineId}` } },
+      create: {
+        contentPlanId,
+        requirementKey: `system-v4-${lineId}`,
+        sequence,
+        title: String(shot.title || shot.description || lineId),
+        description: String(shot.description || shot.visual || shot.voiceover || ""),
+        moduleType: String(shot.moduleType || "SCRIPT_LINE"),
+        status: selectedAssetIds.length ? "DONE" : "OPEN",
+        sourcePreference: String(shot.sourcePreference || "REAL_ASSET_FIRST"),
+        durationSeconds: Math.max(2, Math.min(12, Math.round(number(shot.durationSeconds, 4)))),
+        prompt: String(shot.visual || ""),
+        voiceover: String(shot.voiceover || ""),
+        subtitle: String(shot.subtitle || ""),
+        assetIds: selectedAssetIds,
+        selectedAssetId: selectedAssetIds[0] || null,
+        metadata: { lineId, missingReason: String(shot.missingReason || shot.materialMatchReason || ""), alternativePlan: String(shot.alternativePlan || "") },
+      },
+      update: {
+        sequence,
+        title: String(shot.title || shot.description || lineId),
+        description: String(shot.description || shot.visual || shot.voiceover || ""),
+        moduleType: String(shot.moduleType || "SCRIPT_LINE"),
+        status: selectedAssetIds.length ? "DONE" : "OPEN",
+        durationSeconds: Math.max(2, Math.min(12, Math.round(number(shot.durationSeconds, 4)))),
+        prompt: String(shot.visual || ""),
+        voiceover: String(shot.voiceover || ""),
+        subtitle: String(shot.subtitle || ""),
+        assetIds: selectedAssetIds,
+        selectedAssetId: selectedAssetIds[0] || null,
+      },
+    });
+    return this.project(contentPlanId);
   }
 
   async syncProjectTaskState(contentPlanId: string, taskStatus: string) {

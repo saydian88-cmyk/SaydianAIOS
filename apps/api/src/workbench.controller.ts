@@ -1490,6 +1490,16 @@ export class WorkbenchController {
     }, employee.name);
   }
 
+  @Post("data-center/video-projects/:id/ensure-script-line-shot")
+  ensureScriptLineShot(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    this.requirePermission(authorization, "CONTENT_SUBMIT");
+    return this.videoFactory.ensureScriptLineShot(id, Number(body.candidateIndex || 0), Number(body.lineIndex || 0));
+  }
+
   @Post("data-center/video-projects/:id/render")
   renderVideoProject(
     @Headers("authorization") authorization: string | undefined,

@@ -647,7 +647,19 @@ function isSingleScriptProject(project: Row) {
 }
 
 function displayedProjectCandidates(project: Row) {
-  return projectCandidates(project);
+  const candidates = projectCandidates(project);
+  const factory = Array.isArray(project.sourceSignals)
+    ? project.sourceSignals.find((item: Row) => item.type === "VIDEO_FACTORY")
+    : undefined;
+  const requestedEngines = Array.isArray(factory?.brief?.scriptEngines)
+    ? factory.brief.scriptEngines.map(String)
+    : [];
+  // A transfer to Codex replaces the active review version.  The previous
+  // system-AI draft remains in history but must not appear beside Codex.
+  if (requestedEngines.length === 1 && requestedEngines[0] === "REMOTE_CODEX") {
+    return candidates.filter((candidate: Row) => candidate.generationSource === "REMOTE_CODEX");
+  }
+  return candidates;
 }
 
 function scriptEngineLabel(candidate: Row) {
@@ -2044,6 +2056,37 @@ function projectShotForScriptLine(project: Row, scriptLine: Row, index: number) 
     || shots[index];
 }
 
+function candidateIndexFor(project: Row, candidate: Row) {
+  const index = projectCandidates(project).indexOf(candidate);
+  return index >= 0 ? index : 0;
+}
+
+async function ensureScriptLineShot(project: Row, candidate: Row, scriptLine: Row, lineIndex: number) {
+  const existing = projectShotForScriptLine(project, scriptLine, lineIndex);
+  if (existing?.id) return existing;
+  const refreshed = await post<Row>(`/api/v1/workbench/data-center/video-projects/${project.id}/ensure-script-line-shot`, {
+    candidateIndex: candidateIndexFor(project, candidate),
+    lineIndex,
+  });
+  applyRefreshedVideoProject(refreshed);
+  const lineId = String(scriptLine?.lineId || "");
+  return (Array.isArray(refreshed.videoShots) ? refreshed.videoShots : [])
+    .find((shot: Row) => String(shot?.metadata?.lineId || "") === lineId)
+    || projectShotForScriptLine(refreshed, scriptLine, lineIndex);
+}
+
+async function uploadScriptLineShot(project: Row, candidate: Row, scriptLine: Row, lineIndex: number) {
+  const shot = await ensureScriptLineShot(project, candidate, scriptLine, lineIndex);
+  if (!shot?.id) return ElMessage.error("未能创建对应的补拍项，请刷新项目后重试");
+  await openShotUpload(project, shot);
+}
+
+async function generateScriptLineShot(project: Row, candidate: Row, scriptLine: Row, lineIndex: number) {
+  const shot = await ensureScriptLineShot(project, candidate, scriptLine, lineIndex);
+  if (!shot?.id) return ElMessage.error("未能创建对应的补拍项，请刷新项目后重试");
+  await generateWorkbenchShot(project, shot);
+}
+
 function scriptLineVideoAssetId(project: Row, scriptLine: Row, index: number) {
   const persistedShot = projectShotForScriptLine(project, scriptLine, index);
   return String(persistedShot?.selectedAssetId || scriptLine?.selectedAssetIds?.[0] || "");
@@ -3219,23 +3262,22 @@ onBeforeUnmount(() => {
                             </el-tag>
                             <small>{{ scriptLineMaterialDescription(taskVideoProjectDetail, shot, shotIndex) }}</small>
                             <div class="script-line-material-actions">
-                              <el-button
-                                v-if="scriptLineVideoAssetId(taskVideoProjectDetail, shot, shotIndex)"
-                                size="small"
-                                @click="previewScriptLineAsset(taskVideoProjectDetail, shot, shotIndex)"
-                              >预览</el-button>
-                              <template v-else-if="projectShotForScriptLine(taskVideoProjectDetail, shot, shotIndex)">
+                              <template v-if="scriptLineVideoAssetId(taskVideoProjectDetail, shot, shotIndex)">
+                                <el-button size="small" @click="previewScriptLineAsset(taskVideoProjectDetail, shot, shotIndex)">预览</el-button>
+                                <el-button v-if="can('ASSET_UPLOAD')" size="small" @click="uploadScriptLineShot(taskVideoProjectDetail, candidate, shot, shotIndex)">替换素材</el-button>
+                              </template>
+                              <template v-else>
                                 <el-button
                                   v-if="can('ASSET_UPLOAD')"
                                   size="small"
-                                  @click="openShotUpload(taskVideoProjectDetail, projectShotForScriptLine(taskVideoProjectDetail, shot, shotIndex))"
+                                  @click="uploadScriptLineShot(taskVideoProjectDetail, candidate, shot, shotIndex)"
                                 >上传补拍</el-button>
                                 <el-button
                                   size="small"
                                   type="primary"
                                   plain
                                   :loading="generatingShotId === projectShotForScriptLine(taskVideoProjectDetail, shot, shotIndex)?.id"
-                                  @click="generateWorkbenchShot(taskVideoProjectDetail, projectShotForScriptLine(taskVideoProjectDetail, shot, shotIndex))"
+                                  @click="generateScriptLineShot(taskVideoProjectDetail, candidate, shot, shotIndex)"
                                 >AI 生成</el-button>
                               </template>
                             </div>
@@ -3748,23 +3790,22 @@ onBeforeUnmount(() => {
                         </el-tag>
                         <small>{{ scriptLineMaterialDescription(project, shot, shotIndex) }}</small>
                         <div class="script-line-material-actions">
-                          <el-button
-                            v-if="scriptLineVideoAssetId(project, shot, shotIndex)"
-                            size="small"
-                            @click="previewScriptLineAsset(project, shot, shotIndex)"
-                          >预览</el-button>
-                          <template v-else-if="projectShotForScriptLine(project, shot, shotIndex)">
+                          <template v-if="scriptLineVideoAssetId(project, shot, shotIndex)">
+                            <el-button size="small" @click="previewScriptLineAsset(project, shot, shotIndex)">预览</el-button>
+                            <el-button v-if="can('ASSET_UPLOAD')" size="small" @click="uploadScriptLineShot(project, candidate, shot, shotIndex)">替换素材</el-button>
+                          </template>
+                          <template v-else>
                             <el-button
                               v-if="can('ASSET_UPLOAD')"
                               size="small"
-                              @click="openShotUpload(project, projectShotForScriptLine(project, shot, shotIndex))"
+                              @click="uploadScriptLineShot(project, candidate, shot, shotIndex)"
                             >上传补拍</el-button>
                             <el-button
                               size="small"
                               type="primary"
                               plain
                               :loading="generatingShotId === projectShotForScriptLine(project, shot, shotIndex)?.id"
-                              @click="generateWorkbenchShot(project, projectShotForScriptLine(project, shot, shotIndex))"
+                              @click="generateScriptLineShot(project, candidate, shot, shotIndex)"
                             >AI 生成</el-button>
                           </template>
                         </div>
@@ -4627,23 +4668,22 @@ onBeforeUnmount(() => {
                 </el-tag>
                 <small>{{ scriptLineMaterialDescription(taskVideoProjectDetail, shot, shotIndex) }}</small>
                 <div class="script-line-material-actions">
-                  <el-button
-                    v-if="scriptLineVideoAssetId(taskVideoProjectDetail, shot, shotIndex)"
-                    size="small"
-                    @click="previewScriptLineAsset(taskVideoProjectDetail, shot, shotIndex)"
-                  >预览</el-button>
-                  <template v-else-if="projectShotForScriptLine(taskVideoProjectDetail, shot, shotIndex)">
+                  <template v-if="scriptLineVideoAssetId(taskVideoProjectDetail, shot, shotIndex)">
+                    <el-button size="small" @click="previewScriptLineAsset(taskVideoProjectDetail, shot, shotIndex)">预览</el-button>
+                    <el-button v-if="can('ASSET_UPLOAD')" size="small" @click="uploadScriptLineShot(taskVideoProjectDetail, candidate, shot, shotIndex)">替换素材</el-button>
+                  </template>
+                  <template v-else>
                     <el-button
                       v-if="can('ASSET_UPLOAD')"
                       size="small"
-                      @click="openShotUpload(taskVideoProjectDetail, projectShotForScriptLine(taskVideoProjectDetail, shot, shotIndex))"
+                      @click="uploadScriptLineShot(taskVideoProjectDetail, candidate, shot, shotIndex)"
                     >上传补拍</el-button>
                     <el-button
                       size="small"
                       type="primary"
                       plain
                       :loading="generatingShotId === projectShotForScriptLine(taskVideoProjectDetail, shot, shotIndex)?.id"
-                      @click="generateWorkbenchShot(taskVideoProjectDetail, projectShotForScriptLine(taskVideoProjectDetail, shot, shotIndex))"
+                      @click="generateScriptLineShot(taskVideoProjectDetail, candidate, shot, shotIndex)"
                     >AI 生成</el-button>
                   </template>
                 </div>
