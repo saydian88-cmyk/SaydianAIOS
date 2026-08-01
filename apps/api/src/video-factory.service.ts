@@ -3280,15 +3280,30 @@ export class VideoFactoryService {
     const candidateIndex = Math.max(0, Math.min(candidates.length - 1, Number(input.candidateIndex || 0)));
     const selected = candidates[candidateIndex];
     if (!selected) throw new BadRequestException("项目没有可执行脚本");
+    const selectedRecord = selected as unknown as Record<string, unknown>;
+    const selectedShots = Array.isArray(selectedRecord.shots)
+      ? selectedRecord.shots as Array<Record<string, unknown>>
+      : [];
+    const selectedOutline = Array.isArray(selectedRecord.outline)
+      ? strings(selectedRecord.outline)
+      : selectedShots.map((shot) => String(shot.visual || shot.description || shot.voiceover || "")).filter(Boolean);
+    const selectedScripts = object(selectedRecord.scripts);
+    const selectedScript = String(selectedRecord.script || selectedScripts.zh15 || selectedScripts.zh30 || "").trim();
+    const selectedTitle = String(selectedRecord.topic || selectedRecord.title || plan.topic || "").trim();
+    const selectedAudience = String(selectedRecord.audience || plan.audience || "").trim();
+    const selectedObjective = String(selectedRecord.objective || plan.objective || "").trim();
     const check = await this.guard.evaluate({
-      title: selected.topic,
-      body: `${selected.hook}\n${selected.outline.join("\n")}\n${selected.scripts.zh15}\n${selected.scripts.en15}`,
+      title: selectedTitle,
+      body: `${String(selectedRecord.hook || "").trim()}\n${selectedOutline.join("\n")}\n${selectedScript}\n${String(selectedScripts.en15 || "").trim()}`,
       productModel: plan.productModel || undefined,
       evidenceIds: plan.evidenceIds,
     });
     if (!check.allowed) throw new BadRequestException(`脚本审核未通过：${check.reasons.join("；")}`);
 
-    const assetIds = Array.from(new Set(selected.assetIds));
+    const assetIds = Array.from(new Set([
+      ...strings(selectedRecord.assetIds),
+      ...selectedShots.flatMap((shot) => [...strings(shot.selectedAssetIds), ...strings(shot.auxiliaryImageAssetIds)]),
+    ]));
     const assets = assetIds.length ? await this.prisma.asset.findMany({
       where: {
         id: { in: assetIds },
@@ -3300,9 +3315,7 @@ export class VideoFactoryService {
       },
       include: { tags: { include: { tag: true } } },
     }) : [];
-    const preMatchedShots = Array.isArray((selected as unknown as Record<string, unknown>).shots)
-      ? (selected as unknown as Record<string, unknown>).shots as Array<Record<string, unknown>>
-      : [];
+    const preMatchedShots = selectedShots;
     let coverage: Array<{ description: string; matchedAssetIds: string[]; matchedVideoAssetIds: string[]; auxiliaryImageAssetIds: string[]; coverage: "EXISTING" | "MISSING"; reason: string }> = preMatchedShots.map((shot) => {
       const selectedAssetIds = strings(shot.selectedAssetIds);
       const { matchedVideoAssetIds, auxiliaryImageAssetIds } = partitionVideoShotAssetIds(
@@ -3334,7 +3347,7 @@ export class VideoFactoryService {
         })).shots;
       } catch {
         const videoIds = assets.filter((asset) => asset.kind === "VIDEO").map((asset) => asset.id);
-        coverage = selected.outline.map((description, index) => ({
+        coverage = selectedOutline.map((description, index) => ({
           description,
           matchedAssetIds: videoIds[index] ? [videoIds[index]] : [],
           matchedVideoAssetIds: videoIds[index] ? [videoIds[index]] : [],
@@ -3471,13 +3484,13 @@ export class VideoFactoryService {
           status: "APPROVED",
           approvedBy: actor,
           approvedAt: new Date(),
-          topic: selected.topic,
-          audience: selected.audience,
-          objective: selected.objective,
-          hook: selected.hook,
-          outline: selected.outline,
-          score: selected.score,
-          scoreBreakdown: selected.scoreBreakdown,
+          topic: selectedTitle,
+          audience: selectedAudience,
+          objective: selectedObjective,
+          hook: String(selectedRecord.hook || "").trim(),
+          outline: selectedOutline,
+          score: Number(selectedRecord.score || 0),
+          scoreBreakdown: object(selectedRecord.scoreBreakdown) as Prisma.InputJsonValue,
           sourceSignals: nextSignals as Prisma.InputJsonValue,
           shootRequirements: requirements as Prisma.InputJsonValue,
           productionStage: allMaterialsReady
