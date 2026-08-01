@@ -280,6 +280,7 @@ main { grid-column: 2; width: min(1240px, calc(100% - 48px)); margin: 24px auto;
 .script-engine-progress { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .script-engine-progress span { padding: 12px 14px; border: 1px solid #eadfce; border-radius: 10px; background: #fff7e8; color: #8b5d18; }
 .script-engine-progress span.done { border-color: #cce7d1; background: #eff9f1; color: #2e7d3f; }
+.script-engine-progress span.failed { border-color: #f4b8b8; background: #fff1f1; color: #c73535; }
 .factory-capabilities { display: grid; gap: 16px; }
 .factory-capability-form { display: grid; grid-template-columns: 1.2fr .7fr 1.2fr 1fr auto; gap: 10px; }
 .factory-script-list, .gap-result-list { display: grid; gap: 8px; }

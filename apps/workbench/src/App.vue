@@ -284,6 +284,9 @@ const scriptPackageVisible = ref(false);
 const scriptPackageCandidate = ref<Row>();
 const savingInlineScriptKey = ref("");
 const regeneratingSystemScriptProjectId = ref("");
+const transferringFailedScriptProjectId = ref("");
+const systemScriptConversationVisible = ref(false);
+const systemScriptConversationProject = ref<Row>();
 const newVideoProjectVisible = ref(false);
 const videoProjectOptionsLoading = ref(false);
 const creatingVideoProject = ref(false);
@@ -663,6 +666,21 @@ function projectScriptEngineStatus(project: Row) {
   return status;
 }
 
+function projectScriptEngineErrors(project: Row) {
+  const factory = Array.isArray(project.sourceSignals)
+    ? project.sourceSignals.find((item: Row) => item.type === "VIDEO_FACTORY")
+    : undefined;
+  return { ...(factory?.scriptEngineErrors || {}) };
+}
+
+function scriptEngineStatusText(project: Row, engine: string) {
+  const status = String(projectScriptEngineStatus(project)[engine] || "PENDING");
+  if (status === "COMPLETED") return "已完成";
+  if (status === "FAILED") return "生成失败";
+  if (status === "RUNNING") return "生成中";
+  return "等待生成";
+}
+
 function requestedProjectScriptEngines(project: Row) {
   const factory = Array.isArray(project.sourceSignals)
     ? project.sourceSignals.find((item: Row) => item.type === "VIDEO_FACTORY")
@@ -695,12 +713,18 @@ function closeVideoProject() {
   activeVideoProjectId.value = "";
 }
 
+function applyRefreshedVideoProject(refreshed: Row) {
+  const current = Array.isArray(dataCenter.videoProjects) ? dataCenter.videoProjects : [];
+  dataCenter.videoProjects = current.map((project: Row) => project.id === refreshed.id ? refreshed : project);
+  if (expandedTaskVideoProjectId.value === refreshed.id) taskVideoProjectDetail.value = refreshed;
+  if (systemScriptConversationProject.value?.id === refreshed.id) systemScriptConversationProject.value = refreshed;
+}
+
 async function refreshActiveVideoProject() {
   const projectId = activeVideoProjectId.value;
   if (!projectId) return;
   const refreshed = await api<Row>(`/api/v1/workbench/data-center/video-projects/${projectId}`);
-  const current = Array.isArray(dataCenter.videoProjects) ? dataCenter.videoProjects : [];
-  dataCenter.videoProjects = current.map((project: Row) => project.id === projectId ? refreshed : project);
+  applyRefreshedVideoProject(refreshed);
   ElMessage.success("项目状态已刷新");
 }
 
@@ -931,7 +955,7 @@ async function refreshTaskVideoProject() {
   const projectId = expandedTaskVideoProjectId.value;
   if (!projectId) return;
   taskVideoProjectDetail.value = await api<Row>(`/api/v1/workbench/data-center/video-projects/${projectId}`);
-  await loadTasks();
+  ElMessage.success("当前项目已刷新");
 }
 
 async function quickCreateProject(command: string) {
@@ -1012,15 +1036,52 @@ async function regenerateSystemScript(project: Row) {
   if (!result) return;
   regeneratingSystemScriptProjectId.value = project.id;
   try {
-    await post(`/api/v1/workbench/data-center/video-projects/${project.id}/system-script-regenerate`, {
+    const refreshed = await post<Row>(`/api/v1/workbench/data-center/video-projects/${project.id}/system-script-regenerate`, {
       prompt: result.value.trim(),
     });
-    ElMessage.success("系统 AI 已重新生成脚本，原版本已保留");
+    ElMessage.success("已提交后台重新生成；原版本继续保留");
     await invalidateDataCenterSection("videoFactory");
     if (expandedTaskVideoProjectId.value === project.id) await refreshTaskVideoProject();
     else await loadDataCenter(true);
   } finally {
     regeneratingSystemScriptProjectId.value = "";
+  }
+}
+
+function openSystemScriptConversation(project: Row) {
+  systemScriptConversationProject.value = project;
+  systemScriptConversationVisible.value = true;
+}
+
+function systemScriptConversation(project?: Row) {
+  const signal = project && Array.isArray(project.sourceSignals)
+    ? project.sourceSignals.find((item: Row) => item.type === "VIDEO_FACTORY")
+    : undefined;
+  return Array.isArray(signal?.systemScriptConversation) ? signal.systemScriptConversation : [];
+}
+
+async function refreshSystemScriptConversationProject() {
+  const projectId = systemScriptConversationProject.value?.id;
+  if (!projectId) return;
+  const refreshed = await api<Row>(`/api/v1/workbench/data-center/video-projects/${projectId}`);
+  applyRefreshedVideoProject(refreshed);
+  ElMessage.success("当前项目已刷新");
+}
+
+async function transferFailedSystemScriptToCodex(project: Row) {
+  const confirmed = await ElMessageBox.confirm(
+    "将保留当前项目的全部需求、素材上下文和百炼失败原因，直接交给远程 Codex 生成脚本，不会重复创建项目。",
+    "转交 Codex",
+    { confirmButtonText: "确认转交", cancelButtonText: "取消", type: "warning" },
+  ).catch(() => false);
+  if (!confirmed) return;
+  transferringFailedScriptProjectId.value = project.id;
+  try {
+    const refreshed = await post<Row>(`/api/v1/workbench/data-center/video-projects/${project.id}/system-script-transfer-to-codex`, {});
+    ElMessage.success("已转交 Codex，原项目需求和素材上下文已保留");
+    applyRefreshedVideoProject(refreshed);
+  } finally {
+    transferringFailedScriptProjectId.value = "";
   }
 }
 
@@ -2963,9 +3024,12 @@ onMounted(() => void bootstrap());
                   <div class="script-engine-progress">
                     <span
                       v-if="requestedProjectScriptEngines(taskVideoProjectDetail).includes('SYSTEM_AI')"
-                      :class="{ done: projectScriptEngineStatus(taskVideoProjectDetail).SYSTEM_AI === 'COMPLETED' }"
+                      :class="{
+                        done: projectScriptEngineStatus(taskVideoProjectDetail).SYSTEM_AI === 'COMPLETED',
+                        failed: projectScriptEngineStatus(taskVideoProjectDetail).SYSTEM_AI === 'FAILED',
+                      }"
                     >
-                      系统 AI 脚本工厂 · {{ projectScriptEngineStatus(taskVideoProjectDetail).SYSTEM_AI === "COMPLETED" ? "已完成" : "生成中" }}
+                      系统 AI 脚本工厂 · {{ scriptEngineStatusText(taskVideoProjectDetail, "SYSTEM_AI") }}
                     </span>
                     <span
                       v-if="requestedProjectScriptEngines(taskVideoProjectDetail).includes('REMOTE_CODEX')"
@@ -2974,6 +3038,25 @@ onMounted(() => void bootstrap());
                       远程 Codex + 剪辑 Skill · {{ projectScriptEngineStatus(taskVideoProjectDetail).REMOTE_CODEX === "COMPLETED" ? "已完成" : "生成中" }}
                     </span>
                   </div>
+                  <el-button @click="openSystemScriptConversation(taskVideoProjectDetail)">查看生成对话</el-button>
+                  <el-alert
+                    v-if="projectScriptEngineStatus(taskVideoProjectDetail).SYSTEM_AI === 'FAILED'"
+                    :title="String(projectScriptEngineErrors(taskVideoProjectDetail).SYSTEM_AI || '系统 AI 脚本生成失败')"
+                    type="error"
+                    :closable="false"
+                    show-icon
+                  />
+                  <el-button
+                    v-if="projectScriptEngineStatus(taskVideoProjectDetail).SYSTEM_AI === 'FAILED'"
+                    type="primary"
+                    :loading="regeneratingSystemScriptProjectId === taskVideoProjectDetail.id"
+                    @click="regenerateSystemScript(taskVideoProjectDetail)"
+                  >重新生成</el-button>
+                  <el-button
+                    v-if="projectScriptEngineStatus(taskVideoProjectDetail).SYSTEM_AI === 'FAILED'"
+                    :loading="transferringFailedScriptProjectId === taskVideoProjectDetail.id"
+                    @click="transferFailedSystemScriptToCodex(taskVideoProjectDetail)"
+                  >转交 Codex</el-button>
                 </section>
 
                 <section v-if="videoFlowStep(taskVideoProjectDetail) === 2 && !projectWaitingForScripts(taskVideoProjectDetail)" class="task-video-stage-panel">
@@ -3473,11 +3556,33 @@ onMounted(() => void bootstrap());
                   </span>
                   <span
                     v-if="requestedProjectScriptEngines(project).includes('SYSTEM_AI')"
-                    :class="{ done: projectScriptEngineStatus(project).SYSTEM_AI === 'COMPLETED' }"
+                    :class="{
+                      done: projectScriptEngineStatus(project).SYSTEM_AI === 'COMPLETED',
+                      failed: projectScriptEngineStatus(project).SYSTEM_AI === 'FAILED',
+                    }"
                   >
-                    系统 AI 脚本工厂 · {{ projectScriptEngineStatus(project).SYSTEM_AI === "COMPLETED" ? "已完成" : "生成中" }}
+                    系统 AI 脚本工厂 · {{ scriptEngineStatusText(project, "SYSTEM_AI") }}
                   </span>
                 </div>
+                <el-button @click="openSystemScriptConversation(project)">查看生成对话</el-button>
+                <el-alert
+                  v-if="projectScriptEngineStatus(project).SYSTEM_AI === 'FAILED'"
+                  :title="String(projectScriptEngineErrors(project).SYSTEM_AI || '系统 AI 脚本生成失败')"
+                  type="error"
+                  :closable="false"
+                  show-icon
+                />
+                <el-button
+                  v-if="projectScriptEngineStatus(project).SYSTEM_AI === 'FAILED'"
+                  type="primary"
+                  :loading="regeneratingSystemScriptProjectId === project.id"
+                  @click="regenerateSystemScript(project)"
+                >重新生成</el-button>
+                <el-button
+                  v-if="projectScriptEngineStatus(project).SYSTEM_AI === 'FAILED'"
+                  :loading="transferringFailedScriptProjectId === project.id"
+                  @click="transferFailedSystemScriptToCodex(project)"
+                >转交 Codex</el-button>
               </section>
               <div
                 v-if="projectCandidates(project).length && videoFlowStep(project) === 2 && !projectWaitingForScripts(project)"
@@ -4755,5 +4860,34 @@ onMounted(() => void bootstrap());
       <el-form-item label="完整正文"><el-input v-model="knowledgeForm.body" type="textarea" :rows="5" /></el-form-item>
     </el-form>
     <template #footer><el-button @click="knowledgeVisible = false">取消</el-button><el-button type="primary" @click="submitKnowledge">提交审核</el-button></template>
+  </el-dialog>
+  <el-dialog v-model="systemScriptConversationVisible" title="系统与百炼生成记录" width="min(760px, 94vw)">
+    <div class="system-script-conversation">
+      <el-alert
+        title="百炼接口完成后一次性返回结果；生成期间这里只展示真实的任务提交和处理状态。"
+        type="info"
+        :closable="false"
+      />
+      <div
+        v-for="(message, index) in systemScriptConversation(systemScriptConversationProject)"
+        :key="`${message.at || index}-${index}`"
+        class="system-script-message"
+        :class="String(message.role || '').toLowerCase()"
+      >
+        <header>
+          <strong>{{ message.role === "SYSTEM" ? "系统 → 百炼" : "百炼 → 系统" }}</strong>
+          <el-tag size="small" :type="message.status === 'FAILED' ? 'danger' : message.status === 'COMPLETED' ? 'success' : 'warning'">
+            {{ message.status === "FAILED" ? "失败" : message.status === "COMPLETED" ? "已返回" : message.status === "RUNNING" ? "生成中" : "已提交" }}
+          </el-tag>
+          <small>{{ message.at ? formatTime(message.at) : "" }}</small>
+        </header>
+        <p>{{ message.content }}</p>
+      </div>
+      <el-empty v-if="!systemScriptConversation(systemScriptConversationProject).length" description="暂无生成记录；旧项目会从下一次重试开始记录" />
+    </div>
+    <template #footer>
+      <el-button v-if="systemScriptConversationProject" @click="refreshSystemScriptConversationProject">只刷新当前项目</el-button>
+      <el-button type="primary" @click="systemScriptConversationVisible = false">关闭</el-button>
+    </template>
   </el-dialog>
 </template>

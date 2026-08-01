@@ -478,26 +478,35 @@ matchedAssetIds为视频主画面和图片辅助的合并列表。无法由视�
 
   private async callJson(prompt: string): Promise<JsonRecord> {
     if (!opsConfig.bailian.apiKey) throw new Error("百炼文本生成未配置");
-    const response = await fetch(`${opsConfig.bailian.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${opsConfig.bailian.apiKey}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model: opsConfig.bailian.textModel,
-        temperature: 0.35,
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "system",
-            content: `${BAILIAN_VIDEO_SCRIPT_SYSTEM_POLICY}\n只输出严格JSON。`,
-          },
-          { role: "user", content: prompt },
-        ],
-      }),
-      signal: AbortSignal.timeout(90_000),
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${opsConfig.bailian.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${opsConfig.bailian.apiKey}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: opsConfig.bailian.textModel,
+          temperature: 0.35,
+          response_format: { type: "json_object" },
+          messages: [
+            {
+              role: "system",
+              content: `${BAILIAN_VIDEO_SCRIPT_SYSTEM_POLICY}\n只输出严格JSON。`,
+            },
+            { role: "user", content: prompt },
+          ],
+        }),
+        // 完整脚本还包含逐句素材绑定，90 秒不足以覆盖百炼在素材较多时的响应时间。
+        signal: AbortSignal.timeout(240_000),
+      });
+    } catch (error) {
+      if (error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError")) {
+        throw new Error("百炼生成超过240秒，任务已超时；请重新生成或转交Codex");
+      }
+      throw error;
+    }
     const payload = object(await response.json().catch(() => ({})));
     if (!response.ok) throw new Error(`百炼文本生成失败：${response.status} ${text(object(payload.error).message || payload.message)}`);
     const choices = Array.isArray(payload.choices) ? payload.choices : [];
