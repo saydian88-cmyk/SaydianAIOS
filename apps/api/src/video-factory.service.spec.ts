@@ -6,6 +6,7 @@ import {
   materialReviewApproved,
   partitionVideoShotAssetIds,
   videoFactoryModule,
+  videoRenderJobIsStale,
   VideoFactoryService,
 } from "./video-factory.service";
 
@@ -70,6 +71,21 @@ describe("video shot asset classification", () => {
     expect(videoFactoryModule({
       sourceSignals: [{ type: "VIDEO_FACTORY", factoryModule: "DOUYIN_VIRAL" }],
     })).toBe("DOUYIN_VIRAL");
+  });
+
+  it("requeues only an interrupted viral render after its shorter local-render timeout", () => {
+    const startedAt = new Date("2026-08-01T00:00:00.000Z");
+    const now = new Date("2026-08-01T00:11:00.000Z");
+    expect(videoRenderJobIsStale(
+      { sourceSignals: [{ type: "VIDEO_FACTORY", factoryModule: "DOUYIN_VIRAL" }] },
+      { status: "RUNNING", startedAt },
+      now,
+    )).toBe(true);
+    expect(videoRenderJobIsStale(
+      { sourceSignals: [{ type: "VIDEO_FACTORY", factoryModule: "GENERAL_VIDEO_FACTORY" }] },
+      { status: "RUNNING", startedAt },
+      now,
+    )).toBe(false);
   });
 });
 

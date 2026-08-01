@@ -410,6 +410,16 @@ export function videoFactoryModule(plan: { sourceSignals: unknown }) {
     : "GENERAL_VIDEO_FACTORY";
 }
 
+export function videoRenderJobIsStale(
+  plan: { sourceSignals: unknown },
+  job: { status: string; startedAt: Date | null },
+  now = new Date(),
+) {
+  if (job.status !== "RUNNING" || !job.startedAt) return false;
+  const timeoutMs = videoFactoryModule(plan) === "DOUYIN_VIRAL" ? 10 * 60_000 : 35 * 60_000;
+  return now.getTime() - job.startedAt.getTime() >= timeoutMs;
+}
+
 function number(value: unknown, fallback = 0) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -3631,6 +3641,17 @@ export class VideoFactoryService {
       || !["COMMERCIAL", "EDIT_ONLY"].includes(shot.selectedAsset.rightsStatus),
     );
     if (invalid.length) throw new BadRequestException(`有${invalid.length}个镜头素材尚未满足审核和使用条件`);
+    const activeRender = await this.prisma.videoRenderJob.findFirst({
+      where: { contentPlanId: id, status: { in: ["PENDING", "RUNNING", "RETRY"] } },
+      orderBy: { createdAt: "desc" },
+    });
+    if (activeRender && !videoRenderJobIsStale(plan, activeRender)) return activeRender;
+    if (activeRender) {
+      await this.prisma.videoRenderJob.update({
+        where: { id: activeRender.id },
+        data: { status: "FAILED", failureReason: "渲染进程中断，已重新排队", finishedAt: new Date() },
+      });
+    }
     const latestReturnedReview = await this.prisma.videoQualityCheck.findFirst({
       where: { contentPlanId: id, checkType: "FINAL_REVIEW", status: "REJECTED" },
       orderBy: [{ reviewedAt: "desc" }, { createdAt: "desc" }],
