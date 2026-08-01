@@ -2999,8 +2999,9 @@ export class VideoFactoryService {
     });
     const assets = await this.prisma.asset.findMany({
       where: {
-        kind: { in: ["VIDEO", "IMAGE"] },
+        kind: "VIDEO",
         purpose: "EDITING_FOOTAGE",
+        indexNeedsReview: false,
         reviewStatus: "APPROVED",
         availabilityStatus: "ACTIVE",
         rightsStatus: { in: ["COMMERCIAL", "EDIT_ONLY"] },
@@ -3070,8 +3071,8 @@ export class VideoFactoryService {
       assets,
       assetKnowledgePolicy: {
         source: "PERSISTENT_STRUCTURED_ASSET_INDEX",
-        instruction: "写脚本前先按产品、功能、动作、场景、景别和有效时段检索assets中的持久化索引；优先围绕高置信度已有VIDEO素材设计逐句镜头。不得凭文件名推断功能，不得把图片当主镜头。只有索引无法提供直接视频证据时才列为缺失素材。",
-        minimumPreferredIndexConfidence: 0.75,
+        instruction: "写脚本前先按产品、功能、动作、场景、景别和有效时段检索assets中的持久化索引；围绕无需复核的已有VIDEO素材设计逐句镜头。当前阶段不以indexConfidence数值作为准入条件。不得凭文件名推断功能，不得使用图片。只有索引无法提供直接视频证据时才列为缺失素材。",
+        minimumPreferredIndexConfidence: null,
         learnedAssetCount: assets.filter((asset) => asset.indexVersion >= 4).length,
         reviewRequiredAssetCount: assets.filter((asset) => asset.indexNeedsReview).length,
       },

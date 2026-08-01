@@ -24,10 +24,12 @@ export function buildBailianEditingVideoContext(context: JsonRecord): JsonRecord
       || resourceType.includes("STICKER")
       || resourceType.includes("TRANSITION")
       || resourceType.includes("TEMPLATE");
+    const indexNeedsReview = asset.indexNeedsReview !== false;
 
     return kind === "VIDEO"
       && (!purpose || purpose === "EDITING_FOOTAGE")
-      && !isPackagingResource;
+      && !isPackagingResource
+      && !indexNeedsReview;
   });
   const availableVideoAssetIds = Array.from(new Set(editingVideos.map((asset) => text(asset.id)).filter(Boolean)));
   const sanitizedContext: JsonRecord = { ...context };
@@ -75,7 +77,7 @@ export const BAILIAN_VIDEO_SCRIPT_SYSTEM_POLICY = `
 - auxiliaryImageAssetIds必须始终返回空数组；图片、封面、字幕模板、贴纸、转场及其他包装资源留给后续视频制作阶段处理。
 - 外观、包装、佩戴空镜不能证明具体功能；具体功能必须有对应操作、过程或结果视频。
 - 只能引用输入中真实存在、已审核且可用的assetId。不得凭文件名猜测，不得虚构素材ID、时间段、功能或用户体验。
-- 优先使用indexNeedsReview=false且indexConfidence较高的素材。低置信度或待复核素材不能作为确定事实的唯一证据。
+- 只使用indexNeedsReview=false的素材；当前阶段不以indexConfidence数值作为素材准入条件。
 - 素材不足时列出具体补拍：产品、动作、功能、景别、过程或结果、建议拍法。禁止使用无关素材、重复片段、图片、慢放或空镜掩盖缺口。
 
 脚本规则：
