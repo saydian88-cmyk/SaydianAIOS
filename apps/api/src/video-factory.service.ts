@@ -26,7 +26,7 @@ import {
 type JsonRow = Record<string, unknown>;
 
 type ProjectCreateInput = {
-  projectMode?: "STANDARD" | "REFERENCE_DIRECT_FULL_VIDEO";
+  projectMode?: "STANDARD" | "REFERENCE_DIRECT_FULL_VIDEO" | "CODEX_DIRECT_FULL_VIDEO";
   referenceVideoUrl?: string;
   platform?: string;
   voiceoverMode?: string;
@@ -1527,7 +1527,10 @@ export class VideoFactoryService {
     const productModel = String(input.productModel || "").trim();
     const videoType = String(input.videoType || "").trim();
     const referenceDirect = input.projectMode === "REFERENCE_DIRECT_FULL_VIDEO";
+    const codexDirect = input.projectMode === "CODEX_DIRECT_FULL_VIDEO";
+    const directFullVideo = referenceDirect || codexDirect;
     const referenceVideoUrl = String(input.referenceVideoUrl || input.reference || "").trim();
+    const codexDirectPrompt = String(input.additionalPrompt || "").trim();
     const requestedKeywordIds = Array.from(new Set((input.keywordIds || []).map(String).filter(Boolean)));
     const [selectedSmartKeywords, selectedViralKeywords] = requestedKeywordIds.length
       ? await Promise.all([
@@ -1550,17 +1553,22 @@ export class VideoFactoryService {
       ...selectedViralKeywords.map((item) => item.keyword),
     ].filter(Boolean))).join("、");
     const keywords = String(input.keywords || input.topic || selectedKeywordText).trim();
-    if (referenceDirect && !productModel) throw new BadRequestException("请选择产品型号");
+    if (directFullVideo && !productModel) throw new BadRequestException("请选择产品型号");
     if (referenceDirect && !referenceVideoUrl) throw new BadRequestException("请填写参考视频链接");
-    if (!referenceDirect && !productModel) throw new BadRequestException("请选择产品型号");
-    if (!referenceDirect && !videoType) throw new BadRequestException("请选择或填写视频类型");
-    if (!referenceDirect && !keywords && !input.keywordIds?.length) throw new BadRequestException("请填写或选择关键词");
+    if (codexDirect && !codexDirectPrompt) throw new BadRequestException("请填写 AI 提示词");
+    if (!directFullVideo && !productModel) throw new BadRequestException("请选择产品型号");
+    if (!directFullVideo && !videoType) throw new BadRequestException("请选择或填写视频类型");
+    if (!directFullVideo && !keywords && !input.keywordIds?.length) throw new BadRequestException("请填写或选择关键词");
     const platform = integrationKind(input.platform);
     const productionNo = `VF-${localDateKey(new Date()).replaceAll("-", "")}-${randomUUID().slice(0, 6).toUpperCase()}`;
     const normalizedProductModel = productModel || "REFERENCE_VIDEO";
-    const normalizedVideoType = videoType || "参考视频直出";
-    const normalizedKeywords = keywords || "参考视频直出";
-    const topic = conciseVideoTopic(String(input.topic || (referenceDirect ? "参考视频直出项目" : `${normalizedProductModel} 智能视频项目`)));
+    const normalizedVideoType = videoType || (codexDirect ? "Codex 直出视频" : "参考视频直出");
+    const normalizedKeywords = keywords || (codexDirect ? "Codex 直出" : "参考视频直出");
+    const topic = conciseVideoTopic(String(input.topic || (referenceDirect
+      ? "参考视频直出项目"
+      : codexDirect
+        ? `${normalizedProductModel} Codex 直出视频`
+        : `${normalizedProductModel} 智能视频项目`)));
     const brief = {
       ...(input.platform ? { platform } : {}),
       ...(input.voiceoverMode ? { voiceoverMode: String(input.voiceoverMode).toUpperCase() } : {}),
@@ -1576,13 +1584,14 @@ export class VideoFactoryService {
       soundPrompt: String(input.soundPrompt || "").trim(),
       mustShowFacts: String(input.mustShowFacts || "").trim(),
       additionalPrompt: String(input.additionalPrompt || "").trim(),
-      ...(referenceDirect ? {} : { videoType: normalizedVideoType, keywords: normalizedKeywords }),
-      reference: referenceVideoUrl,
+      ...(directFullVideo ? {} : { videoType: normalizedVideoType, keywords: normalizedKeywords }),
+      ...(referenceDirect ? { reference: referenceVideoUrl } : {}),
+      ...(codexDirect ? { codexDirectFullVideo: true, directOutputOnly: true } : {}),
       hook: String(input.hook || "").trim(),
       scene: String(input.scene || "").trim(),
       painPoint: String(input.painPoint || "").trim(),
       audience: String(input.audience || "").trim(),
-      scriptEngines: referenceDirect ? ["REMOTE_CODEX"] : Array.from(new Set((input.scriptEngines?.length
+      scriptEngines: directFullVideo ? ["REMOTE_CODEX"] : Array.from(new Set((input.scriptEngines?.length
         ? input.scriptEngines
         : ["SYSTEM_AI"]).map((item) => String(item).toUpperCase())))
         .filter((item) => ["REMOTE_CODEX", "SYSTEM_AI"].includes(item)),
@@ -1613,15 +1622,15 @@ export class VideoFactoryService {
           sourceSignals: [{
             type: "VIDEO_FACTORY",
             workflowVersion: 4,
-            projectMode: referenceDirect ? "REFERENCE_DIRECT_FULL_VIDEO" : "SINGLE_SCRIPT_SYSTEM_FIRST",
+            projectMode: referenceDirect ? "REFERENCE_DIRECT_FULL_VIDEO" : codexDirect ? "CODEX_DIRECT_FULL_VIDEO" : "SINGLE_SCRIPT_SYSTEM_FIRST",
             brief,
             scriptCandidates: [],
             selectedCandidateIndex: 0,
             scriptEngineStatus: Object.fromEntries(brief.scriptEngines.map((engine) => [engine, "PENDING"])),
             keywordIds,
             externalVideoIds: input.externalVideoIds || [],
-            externalReferencePolicy: referenceDirect ? "REFERENCE_STYLE_AND_BGM" : "STRUCTURE_ONLY",
-            routingMode: referenceDirect ? "CODEX_DIRECT" : "SYSTEM_FIRST",
+            externalReferencePolicy: referenceDirect ? "REFERENCE_STYLE_AND_BGM" : codexDirect ? "NONE" : "STRUCTURE_ONLY",
+            routingMode: directFullVideo ? "CODEX_DIRECT" : "SYSTEM_FIRST",
             allowFallback: false,
           }] as unknown as Prisma.InputJsonValue,
           evidenceIds: [],
@@ -1649,7 +1658,7 @@ export class VideoFactoryService {
           action: "VIDEO_FACTORY_PROJECT_DRAFT_CREATE",
           entityType: "ContentPlan",
           entityId: created.id,
-          after: { productionNo, projectMode: referenceDirect ? "REFERENCE_DIRECT_FULL_VIDEO" : "SINGLE_SCRIPT_SYSTEM_FIRST", scriptEngines: brief.scriptEngines },
+          after: { productionNo, projectMode: referenceDirect ? "REFERENCE_DIRECT_FULL_VIDEO" : codexDirect ? "CODEX_DIRECT_FULL_VIDEO" : "SINGLE_SCRIPT_SYSTEM_FIRST", scriptEngines: brief.scriptEngines },
         },
       });
       return created;
@@ -1829,6 +1838,7 @@ export class VideoFactoryService {
           ...signal,
           scriptEngineStatus,
           scriptEngineErrors: { ...object(signal.scriptEngineErrors), SYSTEM_AI: failureReason },
+          systemScriptRegenerationPending: false,
           systemScriptConversation: [
             ...(Array.isArray(signal.systemScriptConversation) ? signal.systemScriptConversation : []),
             { role: "BAILIAN", status: "FAILED", at: failedAt, content: failureReason },
@@ -1864,7 +1874,17 @@ export class VideoFactoryService {
       regenerationPrompt: regenerationPrompt.trim() || undefined,
     } as AiVideoCandidate, context.assets);
     const current = Array.isArray(factory.scriptCandidates) ? factory.scriptCandidates : [];
-    const nextCandidates = [...current, candidate].slice(-6);
+    const replacingSystemCandidate = factory.systemScriptRegenerationPending === true;
+    const replacedSystemCandidates = replacingSystemCandidate
+      ? current.filter((item) => object(item).generationSource === "SYSTEM_AI")
+      : [];
+    // Regeneration creates a new active version, it does not create a second
+    // active system-AI candidate.  Keep any Codex candidate for a deliberate
+    // cross-engine comparison, while moving the prior system draft to history.
+    const nextCandidates = [
+      ...current.filter((item) => !replacingSystemCandidate || object(item).generationSource !== "SYSTEM_AI"),
+      candidate,
+    ].slice(-6);
     const requestedEngines = Array.isArray(brief.scriptEngines)
       ? brief.scriptEngines.map(String)
       : ["SYSTEM_AI"];
@@ -1877,6 +1897,7 @@ export class VideoFactoryService {
       ? {
         ...signal,
         scriptCandidates: nextCandidates,
+        systemScriptRegenerationPending: false,
         scriptEngineStatus,
         systemScriptConversation: [
           ...(Array.isArray(signal.systemScriptConversation) ? signal.systemScriptConversation : []),
@@ -1892,6 +1913,8 @@ export class VideoFactoryService {
           {
             generatedAt: candidate.generatedAt,
             prompt: regenerationPrompt.trim(),
+            replacedSystemCandidateCount: replacedSystemCandidates.length,
+            replacedSystemCandidates,
           },
         ].slice(-20),
       }
@@ -1949,6 +1972,8 @@ export class VideoFactoryService {
         ...signal,
         scriptEngineStatus: { ...object(signal.scriptEngineStatus), SYSTEM_AI: "RUNNING" },
         scriptEngineErrors: { ...object(signal.scriptEngineErrors), SYSTEM_AI: "" },
+        systemScriptRegenerationPending: Array.isArray(signal.scriptCandidates)
+          && signal.scriptCandidates.some((item) => object(item).generationSource === "SYSTEM_AI"),
         systemScriptStartedAt: submittedAt,
         systemScriptConversation: [
           ...(Array.isArray(signal.systemScriptConversation) ? signal.systemScriptConversation : []),

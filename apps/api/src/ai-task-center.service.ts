@@ -2123,13 +2123,64 @@ export class AiTaskCenterService implements OnModuleInit {
         await this.prisma.$transaction(updates);
         return { status: "PENDING_REVIEW" as AiTaskStatus, message: "封面和标题已回传，等待用户审核" };
       }
+      const existingContentPlanId = text(taskInput.existingContentPlanId);
+      const directCodexFullVideo = executionMode === "FULL_VIDEO" && taskInput.codexDirectFullVideo === true;
+      if (directCodexFullVideo) {
+        if (!existingContentPlanId) {
+          return { status: "WAITING_INPUT" as AiTaskStatus, message: "Codex 直出任务缺少关联视频项目" };
+        }
+        const masterOutput = await this.prisma.aiTaskOutput.findFirst({
+          where: {
+            aiTaskId: task.id,
+            assetId: { not: null },
+            OR: [{ kind: "VIDEO_MASTER" }, { mimeType: { startsWith: "video/" } }],
+          },
+          orderBy: { createdAt: "desc" },
+        });
+        if (!masterOutput?.assetId) {
+          return { status: "RUNNING" as AiTaskStatus, message: "Codex 直出处理中，等待最终成片回传" };
+        }
+        const project = await this.prisma.contentPlan.findUnique({ where: { id: existingContentPlanId } });
+        if (!project) return { status: "WAITING_INPUT" as AiTaskStatus, message: "关联视频项目不存在" };
+        const renderJob = await this.videoFactory.registerLocalMaster(project.id, masterOutput.assetId, task.id, actor);
+        await this.prisma.$transaction([
+          this.prisma.contentAsset.upsert({
+            where: { contentPlanId_assetId_role: { contentPlanId: project.id, assetId: masterOutput.assetId, role: "VIDEO_FACTORY_MASTER" } },
+            create: { contentPlanId: project.id, assetId: masterOutput.assetId, role: "VIDEO_FACTORY_MASTER" },
+            update: {},
+          }),
+          this.prisma.contentPlan.update({
+            where: { id: project.id },
+            data: { masterVideoStatus: "READY_FOR_REVIEW", productionStage: "VIDEO_REVIEW" },
+          }),
+          this.prisma.aiTaskOutput.update({
+            where: { id: masterOutput.id },
+            data: { kind: "VIDEO_MASTER", contentPlanId: project.id, reviewStatus: "PENDING" },
+          }),
+          this.prisma.videoQualityCheck.create({
+            data: {
+              contentPlanId: project.id,
+              assetId: masterOutput.assetId,
+              renderJobId: renderJob.id,
+              checkType: "FINAL_REVIEW",
+              status: "REVIEW_REQUIRED",
+              score: 0,
+              findings: json([{ message: "Codex 直出成片已回传，请审核最终成片" }]),
+            },
+          }),
+        ]);
+        await this.prisma.opsTask.updateMany({
+          where: { sourceType: "AI_TASK", sourceId: task.id, category: "CONTENT_PRODUCTION", status: { not: "COMPLETED" } },
+          data: { status: "COMPLETED", completedAt: new Date(), completedBy: actor, result: "Codex 直出成片已回传，等待最终审核" },
+        });
+        return { status: "PENDING_REVIEW" as AiTaskStatus, message: "Codex 直出成片已回传，等待最终审核" };
+      }
       let scriptCandidates = normalizeVideoScriptCandidates(
         Array.isArray(projectInput.scriptCandidates) ? projectInput.scriptCandidates : result.scriptCandidates,
       );
       if (!scriptCandidates.length) {
         return { status: "WAITING_INPUT" as AiTaskStatus, message: "Codex未返回符合V3结构的脚本和分镜" };
       }
-      const existingContentPlanId = text(taskInput.existingContentPlanId);
       const taskModelPolicy = object(task.modelPolicy);
       const requestedModelId = text(taskModelPolicy.requestedModelId) || undefined;
       const linkedProjectOutput = existingContentPlanId

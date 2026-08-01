@@ -268,7 +268,7 @@ const videoFactoryForm = reactive({
   keywordIds: [] as string[],
   externalVideoIds: [] as string[],
 });
-const videoProjectMode = ref<"STANDARD" | "REFERENCE_DIRECT_FULL_VIDEO">("STANDARD");
+const videoProjectMode = ref<"STANDARD" | "REFERENCE_DIRECT_FULL_VIDEO" | "CODEX_DIRECT_FULL_VIDEO">("STANDARD");
 const videoOptionalOpen = ref(false);
 const videoDefaultsOpen = ref(false);
 const videoProjectCollapseNames = ref<string[]>([]);
@@ -659,6 +659,18 @@ function displayedProjectCandidates(project: Row) {
   if (requestedEngines.length === 1 && requestedEngines[0] === "REMOTE_CODEX") {
     return candidates.filter((candidate: Row) => candidate.generationSource === "REMOTE_CODEX");
   }
+  // A system-AI regeneration replaces the active system draft.  Old system
+  // drafts remain in backend version history, rather than appearing as a
+  // second side-by-side script in the current project workspace.
+  if (isSingleScriptProject(project)) {
+    const lastSystemCandidateIndex = candidates.reduce(
+      (last: number, candidate: Row, index: number) => candidate.generationSource === "SYSTEM_AI" ? index : last,
+      -1,
+    );
+    return candidates.filter((candidate: Row, index: number) =>
+      candidate.generationSource !== "SYSTEM_AI" || index === lastSystemCandidateIndex,
+    );
+  }
   return candidates;
 }
 
@@ -673,7 +685,10 @@ function projectScriptEngineStatus(project: Row) {
   const status = { ...(factory?.scriptEngineStatus || {}) };
   for (const candidate of projectCandidates(project)) {
     const source = String(candidate.generationSource || "");
-    if (source === "REMOTE_CODEX" || source === "SYSTEM_AI") status[source] = "COMPLETED";
+    // The persisted engine status is authoritative during a regeneration.
+    // A previous candidate must not turn a newly queued/running request back
+    // into "completed" in the employee UI.
+    if ((source === "REMOTE_CODEX" || source === "SYSTEM_AI") && !status[source]) status[source] = "COMPLETED";
   }
   const remoteOutputCompleted = (project.aiTaskOutputs || []).some((output: Row) =>
     output.kind === "VIDEO_PROJECT"
@@ -712,7 +727,7 @@ function projectWaitingForScripts(project: Row) {
   const factory = Array.isArray(project.sourceSignals)
     ? project.sourceSignals.find((item: Row) => item.type === "VIDEO_FACTORY")
     : undefined;
-  if (factory?.projectMode === "REFERENCE_DIRECT_FULL_VIDEO") return false;
+  if (["REFERENCE_DIRECT_FULL_VIDEO", "CODEX_DIRECT_FULL_VIDEO"].includes(String(factory?.projectMode || ""))) return false;
   const requestedEngines = Array.isArray(factory?.brief?.scriptEngines)
     ? factory.brief.scriptEngines.map((engine: unknown) => String(engine))
     : [];
@@ -1075,10 +1090,8 @@ async function regenerateSystemScript(project: Row) {
     const refreshed = await post<Row>(`/api/v1/workbench/data-center/video-projects/${project.id}/system-script-regenerate`, {
       prompt: result.value.trim(),
     });
-    ElMessage.success("已提交后台重新生成；原版本继续保留");
-    await invalidateDataCenterSection("videoFactory");
-    if (expandedTaskVideoProjectId.value === project.id) await refreshTaskVideoProject();
-    else await loadDataCenter(true);
+    applyRefreshedVideoProject(refreshed);
+    ElMessage.success("已提交重新生成；当前项目正在生成新版脚本与素材匹配");
   } finally {
     regeneratingSystemScriptProjectId.value = "";
   }
@@ -1093,6 +1106,17 @@ async function openSystemScriptConversation(project: Row) {
   } catch {
     // Keep the information already shown on the card if a one-project refresh fails.
   }
+}
+
+function projectMode(project: Row) {
+  const factory = Array.isArray(project.sourceSignals)
+    ? project.sourceSignals.find((item: Row) => item.type === "VIDEO_FACTORY")
+    : undefined;
+  return String(factory?.projectMode || "");
+}
+
+function isCodexDirectVideoProject(project: Row) {
+  return projectMode(project) === "CODEX_DIRECT_FULL_VIDEO";
 }
 
 function systemScriptConversation(project?: Row) {
@@ -1807,12 +1831,15 @@ async function createVideoFactoryProject() {
   if (videoProjectMode.value === "REFERENCE_DIRECT_FULL_VIDEO") {
     if (!videoFactoryForm.productModel) return ElMessage.warning("请选择产品型号");
     if (!videoFactoryForm.referenceVideoUrl.trim()) return ElMessage.warning("请填写参考视频链接");
+  } else if (videoProjectMode.value === "CODEX_DIRECT_FULL_VIDEO") {
+    if (!videoFactoryForm.productModel) return ElMessage.warning("请选择产品型号");
+    if (!videoFactoryForm.additionalPrompt.trim()) return ElMessage.warning("请填写 AI 提示词");
   } else {
   if (!videoFactoryForm.productModel) return ElMessage.warning("请选择产品型号");
   if (!videoFactoryForm.videoType.trim()) return ElMessage.warning("请选择或填写视频类型");
   if (!videoFactoryForm.keywords.trim() && !videoFactoryForm.keywordIds.length) return ElMessage.warning("请填写或选择关键词");
   }
-  videoFactoryForm.scriptEngines = ["SYSTEM_AI"];
+  videoFactoryForm.scriptEngines = videoProjectMode.value === "STANDARD" ? ["SYSTEM_AI"] : ["REMOTE_CODEX"];
   creatingVideoProject.value = true;
   try {
     const createdProject = await post<Row>("/api/v1/workbench/data-center/video-projects", {
@@ -1847,6 +1874,11 @@ function checkNewVideoProjectBrief() {
     if (!videoFactoryForm.productModel) return ElMessage.warning("请先选择产品型号");
     if (!videoFactoryForm.referenceVideoUrl.trim()) return ElMessage.warning("请填写参考视频链接");
     return ElMessage.success("参考视频链接可用，可以提交 Codex 全流程任务");
+  }
+  if (videoProjectMode.value === "CODEX_DIRECT_FULL_VIDEO") {
+    if (!videoFactoryForm.productModel) return ElMessage.warning("请先选择产品型号");
+    if (!videoFactoryForm.additionalPrompt.trim()) return ElMessage.warning("请填写 AI 提示词");
+    return ElMessage.success("项目会直接交给 Codex 完成，系统仅在成片完成后通知你审核");
   }
   if (!videoFactoryForm.productModel) return ElMessage.warning("请先选择产品型号");
   if (!videoFactoryForm.videoType.trim()) return ElMessage.warning("请选择或填写视频类型");
@@ -3289,16 +3321,16 @@ onBeforeUnmount(() => {
                         <el-button
                           type="primary"
                           plain
-                          :loading="savingInlineScriptKey === `${taskVideoProjectDetail.id}:${index}`"
-                          @click="saveInlineProjectScript(taskVideoProjectDetail, candidate, index)"
+                          :loading="savingInlineScriptKey === `${taskVideoProjectDetail.id}:${candidateIndexFor(taskVideoProjectDetail, candidate)}`"
+                          @click="saveInlineProjectScript(taskVideoProjectDetail, candidate, candidateIndexFor(taskVideoProjectDetail, candidate))"
                         >保存修改</el-button>
                         <el-button
                           v-if="candidate.generationSource === 'SYSTEM_AI'"
                           :loading="regeneratingSystemScriptProjectId === taskVideoProjectDetail.id"
                           @click="regenerateSystemScript(taskVideoProjectDetail)"
                         >重新生成</el-button>
-                        <el-button type="success" @click="reviewProjectScript(taskVideoProjectDetail, true, index)">确认脚本与素材</el-button>
-                        <el-button type="danger" plain @click="candidate.generationSource === 'REMOTE_CODEX' ? reviewProjectScript(taskVideoProjectDetail, false, index) : transferProjectScriptToCodex(taskVideoProjectDetail, index)">
+                        <el-button type="success" @click="reviewProjectScript(taskVideoProjectDetail, true, candidateIndexFor(taskVideoProjectDetail, candidate))">确认脚本与素材</el-button>
+                        <el-button type="danger" plain @click="candidate.generationSource === 'REMOTE_CODEX' ? reviewProjectScript(taskVideoProjectDetail, false, candidateIndexFor(taskVideoProjectDetail, candidate)) : transferProjectScriptToCodex(taskVideoProjectDetail, candidateIndexFor(taskVideoProjectDetail, candidate))">
                           {{ candidate.generationSource === "REMOTE_CODEX" ? "退回 Codex" : "转交 Codex" }}
                         </el-button>
                       </div>
@@ -3307,14 +3339,20 @@ onBeforeUnmount(() => {
                 </section>
 
                 <section v-if="videoFlowStep(taskVideoProjectDetail) === 3" class="task-video-stage-panel">
-                  <h4>{{ taskVideoProjectDetail.productionStage === "READY_TO_EDIT" ? "素材齐全，可以生成视频" : "视频生成中" }}</h4>
-                  <el-button
-                    v-if="projectReadyToRender(taskVideoProjectDetail)"
-                    type="primary"
-                    :loading="renderingProjectId === taskVideoProjectDetail.id"
-                    @click="renderWorkbenchProject(taskVideoProjectDetail)"
-                  >素材齐全，提交视频生成任务</el-button>
-                  <p v-else>远程节点正在按已确认脚本、素材路径、有效时间段和画面事实剪辑，完成后会自动进入成片审核。</p>
+                  <template v-if="isCodexDirectVideoProject(taskVideoProjectDetail)">
+                    <h4>Codex 直出成片中</h4>
+                    <p>中间脚本、素材匹配和剪辑过程不会回传系统；完成后会自动进入最终成片审核。</p>
+                  </template>
+                  <template v-else>
+                    <h4>{{ taskVideoProjectDetail.productionStage === "READY_TO_EDIT" ? "素材齐全，可以生成视频" : "视频生成中" }}</h4>
+                    <el-button
+                      v-if="projectReadyToRender(taskVideoProjectDetail)"
+                      type="primary"
+                      :loading="renderingProjectId === taskVideoProjectDetail.id"
+                      @click="renderWorkbenchProject(taskVideoProjectDetail)"
+                    >素材齐全，提交视频生成任务</el-button>
+                    <p v-else>远程节点正在按已确认脚本、素材路径、有效时间段和画面事实剪辑，完成后会自动进入成片审核。</p>
+                  </template>
                 </section>
 
                 <section v-if="videoFlowStep(taskVideoProjectDetail) >= 3" class="task-video-stage-panel">
@@ -3768,7 +3806,7 @@ onBeforeUnmount(() => {
               <div
                 v-if="projectCandidates(project).length && videoFlowStep(project) === 2 && !projectWaitingForScripts(project)"
                 class="candidate-grid"
-                :class="{ single: projectCandidates(project).length === 1, dual: projectCandidates(project).length > 1, 'script-review-workspace': true }"
+                :class="{ single: displayedProjectCandidates(project).length === 1, dual: displayedProjectCandidates(project).length > 1, 'script-review-workspace': true }"
               >
                 <article v-for="(candidate, index) in displayedProjectCandidates(project)" :key="`${project.id}-${index}`">
                   <small>{{ scriptEngineLabel(candidate) }} · {{ candidate.score || 0 }}分</small>
@@ -3817,8 +3855,8 @@ onBeforeUnmount(() => {
                     <el-button
                       type="primary"
                       plain
-                      :loading="savingInlineScriptKey === `${project.id}:${index}`"
-                      @click="saveInlineProjectScript(project, candidate, index)"
+                      :loading="savingInlineScriptKey === `${project.id}:${candidateIndexFor(project, candidate)}`"
+                      @click="saveInlineProjectScript(project, candidate, candidateIndexFor(project, candidate))"
                     >保存修改</el-button>
                     <el-button
                       v-if="candidate.generationSource === 'SYSTEM_AI'"
@@ -3828,13 +3866,13 @@ onBeforeUnmount(() => {
                     <el-button
                       type="success"
                       :loading="reviewingScriptProjectId === project.id"
-                      @click="reviewProjectScript(project, true, index)"
+                      @click="reviewProjectScript(project, true, candidateIndexFor(project, candidate))"
                     >确认脚本与素材</el-button>
                     <el-button
                       type="danger"
                       plain
                       :loading="reviewingScriptProjectId === project.id"
-                      @click="candidate.generationSource === 'REMOTE_CODEX' ? reviewProjectScript(project, false, index) : transferProjectScriptToCodex(project, index)"
+                      @click="candidate.generationSource === 'REMOTE_CODEX' ? reviewProjectScript(project, false, candidateIndexFor(project, candidate)) : transferProjectScriptToCodex(project, candidateIndexFor(project, candidate))"
                     >{{ candidate.generationSource === "REMOTE_CODEX" ? "退回 Codex" : "转交 Codex" }}</el-button>
                   </template>
                   <el-tag v-else-if="project.productionStage === 'SCRIPT_APPROVED'" type="success">脚本已审核通过</el-tag>
@@ -3889,11 +3927,17 @@ onBeforeUnmount(() => {
               </div>
               <section v-if="project.productionStage === 'EDITING'" class="project-running-panel">
                 <el-tag type="warning">视频生成中</el-tag>
-                <h3>远程 Codex 正在使用已确认脚本和绑定素材剪辑</h3>
-                <p>系统已向远程节点提供每个脚本位置对应的素材路径、有效时间段、画面事实和使用限制。成片完成后自动进入审核。</p>
-                <el-steps :active="3" finish-status="success" simple>
-                  <el-step title="素材清单已锁定" /><el-step title="配音字幕处理中" /><el-step title="剪辑包装与质检" /><el-step title="等待成片回传" />
-                </el-steps>
+                <template v-if="isCodexDirectVideoProject(project)">
+                  <h3>远程 Codex 正在直出成片</h3>
+                  <p>此模式不会回传脚本、素材匹配或剪辑过程；成片完成后会自动进入最终审核。</p>
+                </template>
+                <template v-else>
+                  <h3>远程 Codex 正在使用已确认脚本和绑定素材剪辑</h3>
+                  <p>系统已向远程节点提供每个脚本位置对应的素材路径、有效时间段、画面事实和使用限制。成片完成后自动进入审核。</p>
+                  <el-steps :active="3" finish-status="success" simple>
+                    <el-step title="素材清单已锁定" /><el-step title="配音字幕处理中" /><el-step title="剪辑包装与质检" /><el-step title="等待成片回传" />
+                  </el-steps>
+                </template>
               </section>
               <section v-if="videoFlowStep(project) >= 3" class="finished-video-panel">
                 <div class="finished-video-head">
@@ -4534,9 +4578,13 @@ onBeforeUnmount(() => {
       <el-radio-group v-model="videoProjectMode" class="project-mode-switch">
         <el-radio-button label="STANDARD">标准智能项目</el-radio-button>
         <el-radio-button label="REFERENCE_DIRECT_FULL_VIDEO">参考视频直出</el-radio-button>
+        <el-radio-button label="CODEX_DIRECT_FULL_VIDEO">Codex 直出视频</el-radio-button>
       </el-radio-group>
       <p v-if="videoProjectMode === 'REFERENCE_DIRECT_FULL_VIDEO'" class="project-mode-help">
         只需提供参考视频链接。项目会直接交给远程 Codex 完成脚本、素材匹配、剪辑和成片，默认参考其节奏与可访问的 BGM；员工只需审核最终成片。
+      </p>
+      <p v-else-if="videoProjectMode === 'CODEX_DIRECT_FULL_VIDEO'" class="project-mode-help">
+        只需选择产品型号并填写 AI 提示词。项目会直接交给远程 Codex 完成脚本、素材匹配、剪辑和成片；中间过程不回传，员工只审核最终成片。
       </p>
 
       <section v-if="videoProjectMode === 'STANDARD'" class="prototype-form-section">
@@ -4575,7 +4623,7 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <section v-else class="prototype-form-section">
+      <section v-else-if="videoProjectMode === 'REFERENCE_DIRECT_FULL_VIDEO'" class="prototype-form-section">
         <header><strong>参考视频</strong><span>此模式仅需产品型号和参考视频链接</span></header>
         <div class="prototype-reference-grid">
           <el-form-item label="产品型号" required>
@@ -4585,6 +4633,20 @@ onBeforeUnmount(() => {
           </el-form-item>
           <el-form-item label="参考视频链接" required>
             <el-input v-model="videoFactoryForm.referenceVideoUrl" placeholder="粘贴可访问的参考视频链接" />
+          </el-form-item>
+        </div>
+      </section>
+
+      <section v-else class="prototype-form-section">
+        <header><strong>Codex 直出视频</strong><span>仅需产品型号和 AI 提示词</span></header>
+        <div class="prototype-reference-grid">
+          <el-form-item label="产品型号" required>
+            <el-select v-model="videoFactoryForm.productModel" filterable placeholder="搜索或选择产品型号">
+              <el-option v-for="product in productOptions" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="AI 提示词" required>
+            <el-input v-model="videoFactoryForm.additionalPrompt" placeholder="说明这条视频想表现什么、风格或临时要求" />
           </el-form-item>
         </div>
       </section>
@@ -4633,7 +4695,9 @@ onBeforeUnmount(() => {
     </div>
     <div v-else-if="taskVideoProjectDetail" class="task-video-stage-panel">
       <el-alert
-        :title="projectWaitingForScripts(taskVideoProjectDetail) ? '项目已创建，系统 AI 正在生成脚本并匹配素材' : '脚本与素材已经准备好，可直接查看、修改或确认'"
+        :title="isCodexDirectVideoProject(taskVideoProjectDetail)
+          ? 'Codex 正在直出最终成片，中间脚本、素材匹配和剪辑过程不会回传系统'
+          : projectWaitingForScripts(taskVideoProjectDetail) ? '项目已创建，系统 AI 正在生成脚本并匹配素材' : '脚本与素材已经准备好，可直接查看、修改或确认'"
         type="success"
         :closable="false"
       />
@@ -4644,7 +4708,11 @@ onBeforeUnmount(() => {
           :class="{ active: videoFlowStep(taskVideoProjectDetail) === index + 1, done: videoFlowStep(taskVideoProjectDetail) > index + 1 }"
         >{{ index + 1 }} {{ step }}</span>
       </div>
-      <section v-if="videoFlowStep(taskVideoProjectDetail) === 2 && projectWaitingForScripts(taskVideoProjectDetail)">
+      <section v-if="isCodexDirectVideoProject(taskVideoProjectDetail)">
+        <h3>Codex 直出成片中</h3>
+        <p>项目已提交。仅最终成片或失败原因会回传到此项目，完成后自动进入成片审核。</p>
+      </section>
+      <section v-else-if="videoFlowStep(taskVideoProjectDetail) === 2 && projectWaitingForScripts(taskVideoProjectDetail)">
         <h3>脚本与素材匹配中</h3>
         <p>弹窗会保留在当前步骤，生成完成后即可继续查看和修改脚本。</p>
       </section>
@@ -4697,16 +4765,16 @@ onBeforeUnmount(() => {
             <el-button
               type="primary"
               plain
-              :loading="savingInlineScriptKey === `${taskVideoProjectDetail.id}:${index}`"
-              @click="saveInlineProjectScript(taskVideoProjectDetail, candidate, index)"
+              :loading="savingInlineScriptKey === `${taskVideoProjectDetail.id}:${candidateIndexFor(taskVideoProjectDetail, candidate)}`"
+              @click="saveInlineProjectScript(taskVideoProjectDetail, candidate, candidateIndexFor(taskVideoProjectDetail, candidate))"
             >保存修改</el-button>
             <el-button
               v-if="candidate.generationSource === 'SYSTEM_AI'"
               :loading="regeneratingSystemScriptProjectId === taskVideoProjectDetail.id"
               @click="regenerateSystemScript(taskVideoProjectDetail)"
             >重新生成</el-button>
-            <el-button type="success" @click="reviewProjectScript(taskVideoProjectDetail, true, index)">确认脚本与素材</el-button>
-            <el-button type="danger" plain @click="candidate.generationSource === 'REMOTE_CODEX' ? reviewProjectScript(taskVideoProjectDetail, false, index) : transferProjectScriptToCodex(taskVideoProjectDetail, index)">
+            <el-button type="success" @click="reviewProjectScript(taskVideoProjectDetail, true, candidateIndexFor(taskVideoProjectDetail, candidate))">确认脚本与素材</el-button>
+            <el-button type="danger" plain @click="candidate.generationSource === 'REMOTE_CODEX' ? reviewProjectScript(taskVideoProjectDetail, false, candidateIndexFor(taskVideoProjectDetail, candidate)) : transferProjectScriptToCodex(taskVideoProjectDetail, candidateIndexFor(taskVideoProjectDetail, candidate))">
               {{ candidate.generationSource === "REMOTE_CODEX" ? "退回 Codex" : "转交 Codex" }}
             </el-button>
           </div>
@@ -4718,7 +4786,7 @@ onBeforeUnmount(() => {
       <template v-if="!createdVideoProjectDialogId">
         <el-button @click="newVideoProjectVisible = false">取消</el-button>
         <el-button @click="checkNewVideoProjectBrief">AI检查任务信息</el-button>
-        <el-button type="primary" :loading="creatingVideoProject" @click="createVideoFactoryProject">{{ videoProjectMode === 'REFERENCE_DIRECT_FULL_VIDEO' ? '提交 Codex 全流程任务' : '创建项目并生成脚本' }}</el-button>
+        <el-button type="primary" :loading="creatingVideoProject" @click="createVideoFactoryProject">{{ videoProjectMode === 'STANDARD' ? '创建项目并生成脚本' : videoProjectMode === 'REFERENCE_DIRECT_FULL_VIDEO' ? '提交 Codex 全流程任务' : '提交 Codex 直出任务' }}</el-button>
       </template>
       <el-button v-else @click="newVideoProjectVisible = false">关闭，稍后继续</el-button>
     </template>

@@ -197,6 +197,21 @@ function compileReferenceDirectFullVideoPrompt(project: Record<string, any>, bri
   ].join("\n");
 }
 
+function compileCodexDirectFullVideoPrompt(project: Record<string, any>, brief: Record<string, unknown>) {
+  const prompt = String(brief.additionalPrompt || "").trim();
+  return [
+    "【任务类型】Codex 直出视频（只回传最终成片）",
+    `项目编号：${project.productionNo || project.id}`,
+    `产品型号：${project.productModel || "未提供"}`,
+    `用户 AI 提示词：${prompt}`,
+    "请直接完成：脚本 → 素材匹配 → 剪辑 → 9:16 成片。中间脚本、镜头、素材匹配、剪辑进度均不回传系统；仅在最终成片完成或任务失败时回传。",
+    "无需脚本审核、无需素材补全确认，员工只审核最终成片。",
+    "优先使用系统中已审核、可剪辑的 VIDEO 主画面素材；包装资源仅可用于包装，不得作为主画面。",
+    "素材不足时可在本地合理改写或生成必要画面，但不得伪造产品功能、医疗效果或不存在的素材事实。",
+    "完成时回传主成片路径、成片元数据、使用素材绑定摘要和审核说明；失败时返回 FAILED 及明确原因。",
+  ].join("\n");
+}
+
 @Controller("api/v1/workbench")
 export class WorkbenchController {
   constructor(
@@ -952,7 +967,11 @@ export class WorkbenchController {
       throw new ForbiddenException("只有运营和视频专员可以创建视频项目");
     }
     const project = await this.videoFactory.createProject({
-      projectMode: body.projectMode === "REFERENCE_DIRECT_FULL_VIDEO" ? "REFERENCE_DIRECT_FULL_VIDEO" : "STANDARD",
+      projectMode: body.projectMode === "REFERENCE_DIRECT_FULL_VIDEO"
+        ? "REFERENCE_DIRECT_FULL_VIDEO"
+        : body.projectMode === "CODEX_DIRECT_FULL_VIDEO"
+          ? "CODEX_DIRECT_FULL_VIDEO"
+          : "STANDARD",
       referenceVideoUrl: body.referenceVideoUrl ? String(body.referenceVideoUrl) : undefined,
       platform: body.platform && body.platform !== "AUTO" ? String(body.platform) : undefined,
       voiceoverMode: body.voiceoverMode && body.voiceoverMode !== "AUTO" ? String(body.voiceoverMode) : undefined,
@@ -988,8 +1007,10 @@ export class WorkbenchController {
       painPoint: body.painPoint ? String(body.painPoint) : undefined,
       scriptEngines: Array.isArray(body.scriptEngines) ? body.scriptEngines.map(String) : undefined,
     }, employee.name) as Record<string, any>;
-    if (body.projectMode === "REFERENCE_DIRECT_FULL_VIDEO") {
-      const directSubmission = await this.submitReferenceDirectFullVideoTask(authorization, String(project.id));
+    if (["REFERENCE_DIRECT_FULL_VIDEO", "CODEX_DIRECT_FULL_VIDEO"].includes(String(body.projectMode || ""))) {
+      const directSubmission = body.projectMode === "CODEX_DIRECT_FULL_VIDEO"
+        ? await this.submitCodexDirectFullVideoTask(authorization, String(project.id))
+        : await this.submitReferenceDirectFullVideoTask(authorization, String(project.id));
       const submittedProject = directSubmission.project as Record<string, any>;
       const task = await this.workbench.ensureVideoProjectTask({ employeeId: employee.employeeId!, name: employee.name }, {
         id: String(submittedProject.id),
@@ -1234,6 +1255,52 @@ export class WorkbenchController {
         workflowGuard: { projectId: project.id, workflowVersion: project.workflowVersion, stage: "FULL_VIDEO", allowedProjectStages: ["PROJECT_BRIEF", "EDITING"] },
         projectBrief: brief,
         requiredOutputs: ["master_video", "master_video_path", "source_asset_bindings", "reference_access_report", "review_summary"],
+      },
+      modelPolicy: { strategy: "CODEX_FIRST", allowExternalGeneration: false, allowFallback: false },
+      estimatedCost: 0,
+      skipPaidBudget: true,
+    }, employee.name) as Record<string, any>;
+    await this.videoFactory.attachRemoteTask(id, task.id, "FULL_VIDEO", employee.name);
+    return { project: await this.videoFactory.project(id), task };
+  }
+
+  private async submitCodexDirectFullVideoTask(authorization: string | undefined, id: string) {
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    if (!employee.employeeId) throw new ForbiddenException("当前账号未关联员工档案");
+    const project = await this.videoFactory.project(id) as Record<string, any>;
+    if (project.createdBy !== employee.name) throw new ForbiddenException("只能提交自己创建的视频项目");
+    const factory = Array.isArray(project.sourceSignals)
+      ? project.sourceSignals.find((item: Record<string, unknown>) => item?.type === "VIDEO_FACTORY") || {}
+      : {};
+    const brief = factory.brief && typeof factory.brief === "object" ? factory.brief as Record<string, unknown> : {};
+    if (String(factory.projectMode || "") !== "CODEX_DIRECT_FULL_VIDEO") {
+      throw new ForbiddenException("当前项目不是 Codex 直出视频模式");
+    }
+    if (!String(project.productModel || "").trim()) throw new ForbiddenException("请选择产品型号");
+    if (!String(brief.additionalPrompt || "").trim()) throw new ForbiddenException("请填写 AI 提示词");
+    const task = await this.aiTasks.createTask({
+      type: "VIDEO",
+      title: `${project.topic} · Codex 直出成片`,
+      platform: project.targetPlatforms?.[0] || "DOUYIN",
+      productModel: project.productModel,
+      ownerEmployeeId: employee.employeeId,
+      reviewerEmployeeId: employee.employeeId,
+      sourceType: "VIDEO_FACTORY_PROJECT",
+      sourceId: project.id,
+      idempotencyKey: `ai-task:video-project:${project.id}:codex-direct:v${project.workflowVersion}`,
+      instructions: compileCodexDirectFullVideoPrompt(project, brief),
+      input: {
+        executionMode: "FULL_VIDEO",
+        codexDirectFullVideo: true,
+        skipScriptReview: true,
+        suppressIntermediateProjectUpdates: true,
+        finalReviewOnly: true,
+        existingContentPlanId: project.id,
+        workflowVersion: project.workflowVersion,
+        skillName: "video-editing-from-media-library-share",
+        workflowGuard: { projectId: project.id, workflowVersion: project.workflowVersion, stage: "FULL_VIDEO", allowedProjectStages: ["PROJECT_BRIEF", "EDITING"] },
+        projectBrief: brief,
+        requiredOutputs: ["master_video", "master_video_path", "source_asset_bindings", "review_summary"],
       },
       modelPolicy: { strategy: "CODEX_FIRST", allowExternalGeneration: false, allowFallback: false },
       estimatedCost: 0,

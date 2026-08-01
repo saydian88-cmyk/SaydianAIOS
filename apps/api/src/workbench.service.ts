@@ -1846,6 +1846,7 @@ export class WorkbenchService {
       ? project.sourceSignals.map(object).find((signal: Record<string, unknown>) => signal.type === "VIDEO_FACTORY") || {}
       : {};
     const brief = object(factory.brief);
+    const codexDirectFullVideo = value(factory.projectMode) === "CODEX_DIRECT_FULL_VIDEO";
     const state: Record<string, [number, string, string]> = {
       PROJECT_BRIEF: [2, "脚本与素材准备中", "等待系统 AI 生成脚本并完成逐句素材匹配"],
       SCRIPT_GENERATING: [2, "脚本与素材准备中", "等待脚本和逐句素材匹配完成"],
@@ -1864,7 +1865,9 @@ export class WorkbenchService {
       PUBLISHING: [4, "发布中", "等待平台发布结果"],
       TRACKING: [4, "发布与数据跟踪", "回传或查看发布链接和数据"],
     };
-    const current = state[stage] || [2, "脚本处理中", "进入项目查看处理进度"];
+    const current = codexDirectFullVideo && stage === "EDITING"
+      ? [3, "Codex 直出成片中", "等待 Codex 回传最终成片，完成后审核"]
+      : state[stage] || [2, "脚本处理中", "进入项目查看处理进度"];
     return {
       id: project.id,
       productionNo: project.productionNo,
