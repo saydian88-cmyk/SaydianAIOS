@@ -110,11 +110,84 @@ function compileVideoScriptTaskPrompt(project: Record<string, any>, brief: Recor
   ].join("\n");
 }
 
+/**
+ * Only include the three required values and fields the employee explicitly supplied.
+ * Defaults such as "unrestricted" must not become fake instructions for an AI task.
+ */
+function compileScopedVideoScriptTaskPrompt(project: Record<string, any>, brief: Record<string, unknown>) {
+  const text = (value: unknown) => String(value ?? "").trim();
+  const isUnrestricted = (value: unknown) => {
+    const normalized = text(value).toUpperCase();
+    return !normalized || ["AUTO", "DEFAULT", "UNLIMITED", "NONE", "不限", "无限制", "不限制", "默认"].includes(normalized);
+  };
+  const optional = (label: string, value: unknown) => isUnrestricted(value) ? "" : `${label}：${text(value)}`;
+  const projectLines = [
+    `项目编号：${text(project.productionNo) || text(project.id)}`,
+    `产品型号：${text(project.productModel)}`,
+    `视频类型：${text(brief.videoType)}`,
+    optional("发布平台", brief.platform),
+    optional("账号类型", brief.accountType),
+    optional("预计时长", brief.estimatedDurationSeconds ? `${brief.estimatedDurationSeconds}秒` : ""),
+    optional("口播模式", brief.voiceoverMode),
+    brief.healthContentAllowed === false ? "健康内容限制：禁止健康相关内容，必须避开风险词、风险画面及相关素材。" : "",
+    optional("素材策略", brief.materialPolicy),
+  ].filter(Boolean);
+  const contentLines = [
+    `核心关键词：${text(brief.keywords) || text(project.topic)}`,
+    optional("模仿参考", brief.reference),
+    optional("指定钩子", brief.hook),
+    optional("使用场景", brief.scene),
+    optional("目标用户", brief.audience),
+    optional("用户痛点", brief.painPoint),
+    optional("声音要求", brief.soundPrompt),
+    optional("必须展示的事实或动作", brief.mustShowFacts),
+    optional("补充 AI 提示词", brief.additionalPrompt),
+  ].filter(Boolean);
+
+  return [
+    "【任务类型】当前视频项目候选脚本生成（只生成一份完整候选脚本，不生成成片）",
+    "",
+    "【项目基础信息】",
+    ...projectLines,
+    "",
+    "【内容需求】",
+    ...contentLines,
+    "",
+    "【素材约束】",
+    "先读取系统中已审核、可用、用途为剪辑主画面的 VIDEO 素材索引和风险规则；包装资源、图片、音频及其他非剪辑主画面素材不参与脚本素材匹配。",
+    "具体功能口播必须绑定能够直接证明该功能的操作、过程或结果视频；外观、包装、佩戴空镜和静态图片不能替代。",
+    "每个已有素材必须返回素材 ID、远程可访问路径、有效入点/出点、画面事实和匹配原因；缺失素材逐项标明真人补拍或 AI 生成方案，并保留脚本行 ID。",
+    "",
+    "【完整脚本输出】",
+    "返回基础任务信息、内容定位、黄金三秒钩子、完整口播/无口播文案、脚本结构、逐句镜头需求、素材覆盖状态、画面事实、音画匹配、留人设计、字幕稿、重点文字、声音设计、合规检查、结尾设计和素材缺口清单。",
+    "返回结构化结果时，每句必须具有稳定 lineId，素材绑定必须可被系统直接保存并再次提供给远程剪辑节点。",
+  ].join("\n");
+}
+
+function scopedVideoScriptBrief(project: Record<string, any>, brief: Record<string, unknown>) {
+  const text = (value: unknown) => String(value ?? "").trim();
+  const isUnrestricted = (value: unknown) => {
+    const normalized = text(value).toUpperCase();
+    return !normalized || ["AUTO", "DEFAULT", "UNLIMITED", "NONE", "不限", "无限制", "不限制", "默认"].includes(normalized);
+  };
+  const result: Record<string, unknown> = {
+    productModel: text(project.productModel),
+    videoType: text(brief.videoType),
+    keywords: text(brief.keywords) || text(project.topic),
+  };
+  for (const key of ["platform", "accountType", "estimatedDurationSeconds", "voiceoverMode", "materialPolicy", "reference", "hook", "scene", "audience", "painPoint", "soundPrompt", "mustShowFacts", "additionalPrompt"]) {
+    if (!isUnrestricted(brief[key])) result[key] = brief[key];
+  }
+  if (brief.healthContentAllowed === false) result.healthContentAllowed = false;
+  return result;
+}
+
 function compileReferenceDirectFullVideoPrompt(project: Record<string, any>, brief: Record<string, unknown>) {
   const referenceVideoUrl = String(brief.reference || "").trim();
   return [
     "【任务类型】参考视频直出（完整视频）",
     `项目编号：${project.productionNo || project.id}`,
+    `产品型号：${project.productModel || "未提供"}`,
     `参考视频链接：${referenceVideoUrl}`,
     "请直接完成：参考分析 → 脚本 → 素材匹配 → 剪辑 → 9:16 成片。不要提交脚本审核，员工只审核最终成片。",
     "默认沿用参考视频可访问的 BGM；画面仅参考其节奏、镜头结构和氛围，不复制原视频的素材、文案、人物、品牌或受版权保护的内容。",
@@ -966,7 +1039,8 @@ export class WorkbenchController {
     const scriptEngines = Array.isArray((brief as Record<string, unknown>).scriptEngines)
       ? ((brief as Record<string, unknown>).scriptEngines as unknown[]).map(String)
       : ["SYSTEM_AI"];
-    const compiledPrompt = compileVideoScriptTaskPrompt(project, brief as Record<string, unknown>);
+    const compiledPrompt = compileScopedVideoScriptTaskPrompt(project, brief as Record<string, unknown>);
+    const taskBrief = scopedVideoScriptBrief(project, brief as Record<string, unknown>);
     let task: Record<string, any> | null = null;
     if (scriptEngines.includes("REMOTE_CODEX")) task = await this.aiTasks.createTask({
       type: "VIDEO",
@@ -992,8 +1066,8 @@ export class WorkbenchController {
         singleScript: true,
         skillName: "video-editing-from-media-library-share",
         compiledPrompt,
-        projectBrief: brief,
-        healthContentAllowed: brief.healthContentAllowed !== false,
+        projectBrief: taskBrief,
+        ...(taskBrief.healthContentAllowed === false ? { healthContentAllowed: false } : {}),
         requiredOutputs: [
           "complete_script",
           "line_material_coverage",

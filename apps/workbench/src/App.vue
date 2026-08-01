@@ -1072,9 +1072,15 @@ async function regenerateSystemScript(project: Row) {
   }
 }
 
-function openSystemScriptConversation(project: Row) {
+async function openSystemScriptConversation(project: Row) {
   systemScriptConversationProject.value = project;
   systemScriptConversationVisible.value = true;
+  try {
+    const refreshed = await api<Row>(`/api/v1/workbench/data-center/video-projects/${project.id}`);
+    applyRefreshedVideoProject(refreshed);
+  } catch {
+    // Keep the information already shown on the card if a one-project refresh fails.
+  }
 }
 
 function systemScriptConversation(project?: Row) {
@@ -1082,6 +1088,57 @@ function systemScriptConversation(project?: Row) {
     ? project.sourceSignals.find((item: Row) => item.type === "VIDEO_FACTORY")
     : undefined;
   return Array.isArray(signal?.systemScriptConversation) ? signal.systemScriptConversation : [];
+}
+
+function activeRemoteScriptTask(project?: Row) {
+  const signal = project && Array.isArray(project.sourceSignals)
+    ? project.sourceSignals.find((item: Row) => item.type === "VIDEO_FACTORY")
+    : undefined;
+  const taskId = String(signal?.aiTaskId || "");
+  if (!taskId) return undefined;
+  return (Array.isArray(project?.activeAiTasks) ? project?.activeAiTasks : [])
+    .find((task: Row) => String(task.id) === taskId);
+}
+
+function scriptGenerationMessages(project?: Row) {
+  const task = activeRemoteScriptTask(project);
+  if (!task) return systemScriptConversation(project);
+  const progress = Math.max(0, Math.min(100, Number(task.progress || 0)));
+  const status = String(task.status || "PENDING");
+  const progressText = String(task.progressMessage || task.failureReason || "等待远程 Codex 领取任务");
+  return [
+    { role: "SYSTEM", provider: "CODEX", status: "SUBMITTED", at: task.createdAt, content: `已提交远程 Codex 脚本任务 ${task.taskNo || ""}`.trim() },
+    { role: "CODEX", provider: "CODEX", status, at: task.updatedAt || task.startedAt || task.finishedAt, content: `${progressText}${["COMPLETED", "FAILED", "CANCELLED"].includes(status) ? "" : `（${progress}%）`}` },
+  ];
+}
+
+function scriptGenerationDialogTitle(project?: Row) {
+  return activeRemoteScriptTask(project) ? "Codex 脚本任务进度" : "系统与百炼生成记录";
+}
+
+function scriptGenerationDialogHint(project?: Row) {
+  return activeRemoteScriptTask(project)
+    ? "这里展示当前远程 Codex AI 任务的真实状态、进度与失败原因；点击“只刷新当前项目”只会更新本项目。"
+    : "百炼接口完成后一次性返回结果；生成期间这里只展示真实的任务提交和处理状态。";
+}
+
+function scriptGenerationMessageLabel(message: Row, project?: Row) {
+  if (activeRemoteScriptTask(project)) return message.role === "SYSTEM" ? "系统 ⇒ Codex" : "Codex ⇒ 系统";
+  return message.role === "SYSTEM" ? "系统 ⇒ 百炼" : "百炼 ⇒ 系统";
+}
+
+function scriptTaskStatusLabel(status: string) {
+  return ({
+    PENDING: "等待领取",
+    CLAIMED: "已领取",
+    RUNNING: "生成中",
+    UPLOADING: "上传成果中",
+    QUALITY_CHECK: "质量检查中",
+    PENDING_REVIEW: "等待审核",
+    COMPLETED: "已完成",
+    FAILED: "失败",
+    CANCELLED: "已取消",
+  } as Record<string, string>)[status] || "已提交";
 }
 
 async function refreshSystemScriptConversationProject() {
@@ -1736,6 +1793,7 @@ async function useViralVideoInFactory(video: Row) {
 
 async function createVideoFactoryProject() {
   if (videoProjectMode.value === "REFERENCE_DIRECT_FULL_VIDEO") {
+    if (!videoFactoryForm.productModel) return ElMessage.warning("请选择产品型号");
     if (!videoFactoryForm.referenceVideoUrl.trim()) return ElMessage.warning("请填写参考视频链接");
   } else {
   if (!videoFactoryForm.productModel) return ElMessage.warning("请选择产品型号");
@@ -1774,6 +1832,7 @@ async function createVideoFactoryProject() {
 
 function checkNewVideoProjectBrief() {
   if (videoProjectMode.value === "REFERENCE_DIRECT_FULL_VIDEO") {
+    if (!videoFactoryForm.productModel) return ElMessage.warning("请先选择产品型号");
     if (!videoFactoryForm.referenceVideoUrl.trim()) return ElMessage.warning("请填写参考视频链接");
     return ElMessage.success("参考视频链接可用，可以提交 Codex 全流程任务");
   }
@@ -4476,7 +4535,12 @@ onBeforeUnmount(() => {
       </section>
 
       <section v-else class="prototype-form-section">
-        <header><strong>参考视频</strong><span>此模式无需填写产品、视频类型和关键词</span></header>
+        <header><strong>参考视频</strong><span>此模式仅需产品型号和参考视频链接</span></header>
+        <el-form-item label="产品型号" required>
+          <el-select v-model="videoFactoryForm.productModel" filterable placeholder="搜索或选择产品型号" class="wide-select">
+            <el-option v-for="product in productOptions" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="参考视频链接" required>
           <el-input v-model="videoFactoryForm.referenceVideoUrl" placeholder="粘贴可访问的参考视频链接" />
         </el-form-item>
@@ -4957,29 +5021,29 @@ onBeforeUnmount(() => {
     </el-form>
     <template #footer><el-button @click="knowledgeVisible = false">取消</el-button><el-button type="primary" @click="submitKnowledge">提交审核</el-button></template>
   </el-dialog>
-  <el-dialog v-model="systemScriptConversationVisible" title="系统与百炼生成记录" width="min(760px, 94vw)">
+  <el-dialog v-model="systemScriptConversationVisible" :title="scriptGenerationDialogTitle(systemScriptConversationProject)" width="min(760px, 94vw)">
     <div class="system-script-conversation">
       <el-alert
-        title="百炼接口完成后一次性返回结果；生成期间这里只展示真实的任务提交和处理状态。"
+        :title="scriptGenerationDialogHint(systemScriptConversationProject)"
         type="info"
         :closable="false"
       />
       <div
-        v-for="(message, index) in systemScriptConversation(systemScriptConversationProject)"
+        v-for="(message, index) in scriptGenerationMessages(systemScriptConversationProject)"
         :key="`${message.at || index}-${index}`"
         class="system-script-message"
         :class="String(message.role || '').toLowerCase()"
       >
         <header>
-          <strong>{{ message.role === "SYSTEM" ? "系统 → 百炼" : "百炼 → 系统" }}</strong>
+          <strong>{{ scriptGenerationMessageLabel(message, systemScriptConversationProject) }}</strong>
           <el-tag size="small" :type="message.status === 'FAILED' ? 'danger' : message.status === 'COMPLETED' ? 'success' : 'warning'">
-            {{ message.status === "FAILED" ? "失败" : message.status === "COMPLETED" ? "已返回" : message.status === "RUNNING" ? "生成中" : "已提交" }}
+            {{ scriptTaskStatusLabel(String(message.status || "")) }}
           </el-tag>
           <small>{{ message.at ? formatTime(message.at) : "" }}</small>
         </header>
         <p>{{ message.content }}</p>
       </div>
-      <el-empty v-if="!systemScriptConversation(systemScriptConversationProject).length" description="暂无生成记录；旧项目会从下一次重试开始记录" />
+      <el-empty v-if="!scriptGenerationMessages(systemScriptConversationProject).length" description="暂无生成记录；旧项目会从下一次重试开始记录" />
     </div>
     <template #footer>
       <el-button v-if="systemScriptConversationProject" @click="refreshSystemScriptConversationProject">只刷新当前项目</el-button>

@@ -1537,6 +1537,7 @@ export class VideoFactoryService {
       ...selectedViralKeywords.map((item) => item.keyword),
     ].filter(Boolean))).join("、");
     const keywords = String(input.keywords || input.topic || selectedKeywordText).trim();
+    if (referenceDirect && !productModel) throw new BadRequestException("请选择产品型号");
     if (referenceDirect && !referenceVideoUrl) throw new BadRequestException("请填写参考视频链接");
     if (!referenceDirect && !productModel) throw new BadRequestException("请选择产品型号");
     if (!referenceDirect && !videoType) throw new BadRequestException("请选择或填写视频类型");
@@ -1562,8 +1563,7 @@ export class VideoFactoryService {
       soundPrompt: String(input.soundPrompt || "").trim(),
       mustShowFacts: String(input.mustShowFacts || "").trim(),
       additionalPrompt: String(input.additionalPrompt || "").trim(),
-      videoType: normalizedVideoType,
-      keywords: normalizedKeywords,
+      ...(referenceDirect ? {} : { videoType: normalizedVideoType, keywords: normalizedKeywords }),
       reference: referenceVideoUrl,
       hook: String(input.hook || "").trim(),
       scene: String(input.scene || "").trim(),
@@ -4188,6 +4188,34 @@ export class VideoFactoryService {
       productionStage: this.projectedProductionStage(plan),
       topicCard: topicCardPayload(plan),
       scriptCandidates: this.candidates(plan),
+      activeAiTasks: await this.activeProjectAiTasks(plan),
+    });
+  }
+
+  private async activeProjectAiTasks(plan: { sourceSignals: Prisma.JsonValue }) {
+    const factory = sourceSignals(plan).find((signal) => signal.type === "VIDEO_FACTORY") || {};
+    const taskIds = Array.from(new Set([
+      String(factory.aiTaskId || "").trim(),
+      String(factory.videoAiTaskId || "").trim(),
+      String(factory.coverAiTaskId || "").trim(),
+    ].filter(Boolean)));
+    if (!taskIds.length) return [];
+    return this.prisma.aiTask.findMany({
+      where: { id: { in: taskIds } },
+      select: {
+        id: true,
+        taskNo: true,
+        type: true,
+        title: true,
+        status: true,
+        progress: true,
+        progressMessage: true,
+        failureReason: true,
+        createdAt: true,
+        updatedAt: true,
+        startedAt: true,
+        finishedAt: true,
+      },
     });
   }
 
