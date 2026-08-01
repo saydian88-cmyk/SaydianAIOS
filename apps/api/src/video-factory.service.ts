@@ -1296,7 +1296,7 @@ export class VideoFactoryService {
     if (!existing || !card) throw new NotFoundException("视频选题卡不存在");
     const assets = await this.prisma.asset.findMany({
       where: {
-        kind: { in: ["VIDEO", "IMAGE"] },
+        kind: "VIDEO",
         reviewStatus: "APPROVED",
         availabilityStatus: "ACTIVE",
         rightsStatus: { in: ["COMMERCIAL", "EDIT_ONLY"] },
@@ -1956,7 +1956,6 @@ export class VideoFactoryService {
     if (plan.productionStage !== "FACTORY_SCRIPT_READY") {
       throw new BadRequestException("当前脚本和素材匹配完成后才能确认");
     }
-    if (!approved && !note.trim()) throw new BadRequestException("退回脚本时必须填写修改原因");
     if (!this.candidates(plan).length) throw new BadRequestException("当前项目还没有可审核的脚本");
     const candidates = this.candidates(plan);
     const signals = sourceSignals(plan);
@@ -1972,6 +1971,11 @@ export class VideoFactoryService {
     const selectedCandidateIndex = candidateIndex === undefined
       ? Math.max(0, Math.min(candidates.length - 1, Number(factory.selectedCandidateIndex || 0)))
       : Math.max(0, Math.min(candidates.length - 1, Math.round(candidateIndex)));
+    const selectedCandidate = object(candidates[selectedCandidateIndex]);
+    const isInitialCodexTransfer = !approved && selectedCandidate.generationSource !== "REMOTE_CODEX";
+    if (!approved && !isInitialCodexTransfer && !note.trim()) {
+      throw new BadRequestException("退回 Codex 脚本时必须填写修改原因");
+    }
     const reviewedAt = new Date();
     const nextSignals = signals.map((signal) => signal.type === "VIDEO_FACTORY"
       ? {
@@ -1987,7 +1991,7 @@ export class VideoFactoryService {
           : {}),
         selectedCandidateIndex,
         scriptReview: {
-          status: approved ? "APPROVED" : "RETURNED",
+          status: approved ? "APPROVED" : isInitialCodexTransfer ? "TRANSFERRED_TO_CODEX" : "RETURNED",
           note: note.trim(),
           actor,
           reviewedAt: reviewedAt.toISOString(),
@@ -2009,7 +2013,7 @@ export class VideoFactoryService {
       this.prisma.approval.create({
         data: {
           contentPlanId,
-          action: approved ? "SCRIPT_APPROVE" : "SCRIPT_RETURN",
+          action: approved ? "SCRIPT_APPROVE" : isInitialCodexTransfer ? "SCRIPT_TRANSFER_TO_CODEX" : "SCRIPT_RETURN",
           actor,
           note: note.trim() || null,
         },
@@ -3001,7 +3005,14 @@ export class VideoFactoryService {
         availabilityStatus: "ACTIVE",
         rightsStatus: { in: ["COMMERCIAL", "EDIT_ONLY"] },
         deletedAt: null,
-        ...(product ? { products: { some: { productId: product.id } } } : {}),
+        ...((product || input.productModel)
+          ? {
+            OR: [
+              ...(product ? [{ products: { some: { productId: product.id } } }] : []),
+              ...(input.productModel ? [{ model: input.productModel }] : []),
+            ],
+          }
+          : {}),
       },
       select: {
         id: true, assetNo: true, displayName: true, kind: true, contentDescription: true,
