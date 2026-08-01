@@ -755,9 +755,14 @@ function applyRefreshedVideoProject(refreshed: Row) {
 async function refreshActiveVideoProject() {
   const projectId = activeVideoProjectId.value;
   if (!projectId) return;
+  await refreshVideoProject(projectId);
+}
+
+async function refreshVideoProject(projectId: string) {
+  if (!projectId) return;
   const refreshed = await api<Row>(`/api/v1/workbench/data-center/video-projects/${projectId}`);
   applyRefreshedVideoProject(refreshed);
-  ElMessage.success("项目状态已刷新");
+  ElMessage.success("当前项目已刷新");
 }
 
 const videoFlowSteps = [
@@ -1136,30 +1141,63 @@ function activeRemoteScriptTask(project?: Row) {
     .find((task: Row) => String(task.id) === taskId);
 }
 
+function activeCodexDirectVideoTask(project?: Row) {
+  if (!isCodexDirectVideoProject(project || {})) return undefined;
+  const signal = project && Array.isArray(project.sourceSignals)
+    ? project.sourceSignals.find((item: Row) => item.type === "VIDEO_FACTORY")
+    : undefined;
+  const taskId = String(signal?.videoAiTaskId || "");
+  if (!taskId) return undefined;
+  return (Array.isArray(project?.activeAiTasks) ? project?.activeAiTasks : [])
+    .find((task: Row) => String(task.id) === taskId);
+}
+
+function activeProjectGenerationTask(project?: Row) {
+  return activeCodexDirectVideoTask(project) || activeRemoteScriptTask(project);
+}
+
+function codexDirectTaskStatus(project?: Row) {
+  return String(activeCodexDirectVideoTask(project)?.status || "PENDING");
+}
+
+function codexDirectTaskProgress(project?: Row) {
+  return Math.max(0, Math.min(100, Number(activeCodexDirectVideoTask(project)?.progress || 0)));
+}
+
+function codexDirectTaskMessage(project?: Row) {
+  const task = activeCodexDirectVideoTask(project);
+  return String(task?.failureReason || task?.progressMessage || "等待远程 Codex 领取直出成片任务");
+}
+
 function scriptGenerationMessages(project?: Row) {
-  const task = activeRemoteScriptTask(project);
+  const task = activeProjectGenerationTask(project);
   if (!task) return systemScriptConversation(project);
   const progress = Math.max(0, Math.min(100, Number(task.progress || 0)));
   const status = String(task.status || "PENDING");
   const progressText = String(task.progressMessage || task.failureReason || "等待远程 Codex 领取任务");
+  const direct = isCodexDirectVideoProject(project || {});
   return [
-    { role: "SYSTEM", provider: "CODEX", status: "SUBMITTED", at: task.createdAt, content: `已提交远程 Codex 脚本任务 ${task.taskNo || ""}`.trim() },
+    { role: "SYSTEM", provider: "CODEX", status: "SUBMITTED", at: task.createdAt, content: `${direct ? "已提交远程 Codex 直出成片任务" : "已提交远程 Codex 脚本任务"} ${task.taskNo || ""}`.trim() },
     { role: "CODEX", provider: "CODEX", status, at: task.updatedAt || task.startedAt || task.finishedAt, content: `${progressText}${["COMPLETED", "FAILED", "CANCELLED"].includes(status) ? "" : `（${progress}%）`}` },
   ];
 }
 
 function scriptGenerationDialogTitle(project?: Row) {
+  if (isCodexDirectVideoProject(project || {})) return "Codex 直出成片任务进度";
   return activeRemoteScriptTask(project) ? "Codex 脚本任务进度" : "系统与百炼生成记录";
 }
 
 function scriptGenerationDialogHint(project?: Row) {
+  if (isCodexDirectVideoProject(project || {})) {
+    return "仅展示直出成片 AI 任务的真实状态、进度和失败原因；不会回传脚本、素材匹配或剪辑过程。点击“只刷新当前项目”只更新本项目。";
+  }
   return activeRemoteScriptTask(project)
     ? "这里展示当前远程 Codex AI 任务的真实状态、进度与失败原因；点击“只刷新当前项目”只会更新本项目。"
     : "百炼接口完成后一次性返回结果；生成期间这里只展示真实的任务提交和处理状态。";
 }
 
 function scriptGenerationMessageLabel(message: Row, project?: Row) {
-  if (activeRemoteScriptTask(project)) return message.role === "SYSTEM" ? "系统 ⇒ Codex" : "Codex ⇒ 系统";
+  if (activeProjectGenerationTask(project)) return message.role === "SYSTEM" ? "系统 ⇒ Codex" : "Codex ⇒ 系统";
   return message.role === "SYSTEM" ? "系统 ⇒ 百炼" : "百炼 ⇒ 系统";
 }
 
@@ -3341,7 +3379,20 @@ onBeforeUnmount(() => {
                 <section v-if="videoFlowStep(taskVideoProjectDetail) === 3" class="task-video-stage-panel">
                   <template v-if="isCodexDirectVideoProject(taskVideoProjectDetail)">
                     <h4>Codex 直出成片中</h4>
-                    <p>中间脚本、素材匹配和剪辑过程不会回传系统；完成后会自动进入最终成片审核。</p>
+                    <p>不回传脚本、素材匹配和剪辑细节；这里只展示后台 AI 任务进度。完成后自动进入最终成片审核。</p>
+                    <el-progress :percentage="codexDirectTaskProgress(taskVideoProjectDetail)" :status="codexDirectTaskStatus(taskVideoProjectDetail) === 'FAILED' ? 'exception' : undefined" />
+                    <p class="project-running-message">{{ codexDirectTaskMessage(taskVideoProjectDetail) }}</p>
+                    <el-alert
+                      v-if="codexDirectTaskStatus(taskVideoProjectDetail) === 'FAILED'"
+                      :title="`直出成片失败：${codexDirectTaskMessage(taskVideoProjectDetail)}`"
+                      type="error"
+                      :closable="false"
+                      show-icon
+                    />
+                    <div class="preview-actions">
+                      <el-button @click="openSystemScriptConversation(taskVideoProjectDetail)">查看 AI 任务</el-button>
+                      <el-button @click="refreshVideoProject(taskVideoProjectDetail.id)">刷新当前项目</el-button>
+                    </div>
                   </template>
                   <template v-else>
                     <h4>{{ taskVideoProjectDetail.productionStage === "READY_TO_EDIT" ? "素材齐全，可以生成视频" : "视频生成中" }}</h4>
@@ -3929,7 +3980,20 @@ onBeforeUnmount(() => {
                 <el-tag type="warning">视频生成中</el-tag>
                 <template v-if="isCodexDirectVideoProject(project)">
                   <h3>远程 Codex 正在直出成片</h3>
-                  <p>此模式不会回传脚本、素材匹配或剪辑过程；成片完成后会自动进入最终审核。</p>
+                  <p>不回传脚本、素材匹配或剪辑细节；这里只显示后台 AI 任务进度，成片完成后自动进入最终审核。</p>
+                  <el-progress :percentage="codexDirectTaskProgress(project)" :status="codexDirectTaskStatus(project) === 'FAILED' ? 'exception' : undefined" />
+                  <p class="project-running-message">{{ codexDirectTaskMessage(project) }}</p>
+                  <el-alert
+                    v-if="codexDirectTaskStatus(project) === 'FAILED'"
+                    :title="`直出成片失败：${codexDirectTaskMessage(project)}`"
+                    type="error"
+                    :closable="false"
+                    show-icon
+                  />
+                  <div class="preview-actions">
+                    <el-button @click="openSystemScriptConversation(project)">查看 AI 任务</el-button>
+                    <el-button @click="refreshVideoProject(project.id)">刷新当前项目</el-button>
+                  </div>
                 </template>
                 <template v-else>
                   <h3>远程 Codex 正在使用已确认脚本和绑定素材剪辑</h3>
@@ -4625,13 +4689,13 @@ onBeforeUnmount(() => {
 
       <section v-else-if="videoProjectMode === 'REFERENCE_DIRECT_FULL_VIDEO'" class="prototype-form-section">
         <header><strong>参考视频</strong><span>此模式仅需产品型号和参考视频链接</span></header>
-        <div class="prototype-reference-grid">
+        <div class="prototype-reference-grid reference-video-fields">
           <el-form-item label="产品型号" required>
             <el-select v-model="videoFactoryForm.productModel" filterable placeholder="搜索或选择产品型号">
               <el-option v-for="product in productOptions" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" />
             </el-select>
           </el-form-item>
-          <el-form-item label="参考视频链接" required>
+          <el-form-item class="reference-video-url-field" label="参考视频链接" required>
             <el-input v-model="videoFactoryForm.referenceVideoUrl" placeholder="粘贴可访问的参考视频链接" />
           </el-form-item>
         </div>

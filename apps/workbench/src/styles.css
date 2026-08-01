@@ -817,6 +817,10 @@ main { grid-column: 2; width: min(1240px, calc(100% - 48px)); margin: 24px auto;
   padding: 4px 2px;
 }
 
+.prototype-reference-grid.reference-video-fields {
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.3fr);
+}
+
 .prototype-optional-grid .wide {
   grid-column: 1 / -1;
 }
@@ -845,6 +849,11 @@ main { grid-column: 2; width: min(1240px, calc(100% - 48px)); margin: 24px auto;
 .prototype-project-form .el-form-item__content > .el-select,
 .prototype-project-form .el-form-item__content > .el-input {
   width: 100%;
+}
+
+.prototype-project-form .reference-video-url-field .el-form-item__label {
+  flex-basis: 108px;
+  white-space: nowrap;
 }
 
 .prototype-project-form .prototype-optional-grid .wide {
