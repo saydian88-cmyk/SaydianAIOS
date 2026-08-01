@@ -1591,7 +1591,7 @@ export class AiTaskCenterService implements OnModuleInit {
             finishedAt: new Date(),
             lockedBy: null,
             lockedAt: null,
-            heartbeatAt: new Date(),
+            heartbeatAt: null,
           },
         }),
         this.prisma.aiTaskAttempt.updateMany({
@@ -1634,7 +1634,7 @@ export class AiTaskCenterService implements OnModuleInit {
           progressMessage: domain.message,
           actualCost: number(body.actualCost) || task.actualCost,
           finishedAt: ["PENDING_REVIEW", "COMPLETED"].includes(status) ? new Date() : null,
-          heartbeatAt: new Date(),
+          heartbeatAt: null,
           lockedAt: null,
           lockedBy: null,
         },
@@ -2039,12 +2039,31 @@ export class AiTaskCenterService implements OnModuleInit {
       const existingContentPlanId = text(taskInput.existingContentPlanId);
       const taskModelPolicy = object(task.modelPolicy);
       const requestedModelId = text(taskModelPolicy.requestedModelId) || undefined;
-      const existingProject = existingContentPlanId
-        ? await this.prisma.contentPlan.findUnique({ where: { id: existingContentPlanId } })
+      const linkedProjectOutput = existingContentPlanId
+        ? null
+        : await this.prisma.aiTaskOutput.findFirst({
+          where: { aiTaskId: task.id, kind: "VIDEO_PROJECT", contentPlanId: { not: null } },
+          orderBy: { createdAt: "desc" },
+        });
+      const reusableContentPlanId = existingContentPlanId || linkedProjectOutput?.contentPlanId || "";
+      const existingProject = reusableContentPlanId
+        ? await this.prisma.contentPlan.findUnique({ where: { id: reusableContentPlanId } })
         : null;
       if (executionMode === "SCRIPT_ONLY") {
         const selectedScript = scriptCandidates.find((candidate) => candidate.selected) || scriptCandidates[0];
         scriptCandidates = [{ ...selectedScript, selected: true }];
+      }
+      if (executionMode !== "SCRIPT_ONLY" && linkedProjectOutput?.contentPlanId && existingProject) {
+        const [generationJobCount, renderJobCount] = await Promise.all([
+          this.prisma.videoGenerationJob.count({ where: { contentPlanId: existingProject.id } }),
+          this.prisma.videoRenderJob.count({ where: { contentPlanId: existingProject.id } }),
+        ]);
+        if (generationJobCount > 0 || renderJobCount > 0) {
+          return {
+            status: "RUNNING" as AiTaskStatus,
+            message: "已复用原视频项目，现有镜头生成与渲染任务继续执行",
+          };
+        }
       }
       const project = existingProject || await this.videoFactory.createCodexProject({
         platform: enumValue(projectInput.platform || task.platform, ["DOUYIN", "TIKTOK"] as const, "DOUYIN"),
@@ -2881,7 +2900,11 @@ export class AiTaskCenterService implements OnModuleInit {
   private async releaseStaleTasks() {
     const staleAt = new Date(Date.now() - 5 * 60 * 1000);
     const stale = await this.prisma.aiTask.findMany({
-      where: { status: { in: ["CLAIMED", "RUNNING", "QUALITY_CHECK", "UPLOADING"] }, heartbeatAt: { lt: staleAt } },
+      where: {
+        status: { in: ["CLAIMED", "RUNNING", "QUALITY_CHECK", "UPLOADING"] },
+        lockedBy: { not: null },
+        heartbeatAt: { lt: staleAt },
+      },
       select: { id: true, lockedBy: true, retryCount: true, maxRetries: true },
     });
     for (const task of stale) {
