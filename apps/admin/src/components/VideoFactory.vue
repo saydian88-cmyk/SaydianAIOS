@@ -184,6 +184,11 @@ function label(value?: string) {
   return statusLabels[String(value || "")] || String(value || "未记录");
 }
 
+function reviewLabel(value?: string) {
+  if (value === "PENDING") return "待审核";
+  return label(value);
+}
+
 function tagType(value?: string) {
   if (["HEALTHY", "SUCCEEDED", "DONE", "PASSED", "APPROVED", "PLATFORM_PACKAGING", "TOPIC_CARD_APPROVED"].includes(String(value))) return "success";
   if (["FAILED", "ERROR", "REJECTED", "RETURNED"].includes(String(value))) return "danger";
@@ -529,9 +534,14 @@ async function uploadProjectMaster(event: Event) {
     const form = new FormData();
     form.append("file", file);
     form.append("renderer", "CODEX_LOCAL_FFMPEG");
+    const sourceAssetIds = new Set<string>();
     for (const shot of selectedProject.value.videoShots || []) {
-      if (shot.selectedAssetId) form.append("sourceAssetIds", shot.selectedAssetId);
+      if (shot.selectedAssetId) sourceAssetIds.add(shot.selectedAssetId);
     }
+    for (const item of selectedProject.value.contentAssets || []) {
+      if (item.assetId && item.role !== "VIDEO_FACTORY_MASTER") sourceAssetIds.add(item.assetId);
+    }
+    for (const assetId of sourceAssetIds) form.append("sourceAssetIds", assetId);
     await upload(`/api/v1/video-factory/projects/${selectedProject.value.id}/master`, form);
     ElMessage.success("成片已上传，等待人工审核");
     await reload();
@@ -806,7 +816,7 @@ onBeforeUnmount(() => {
       <el-table :data="outputs" stripe height="570">
         <el-table-column prop="outputType" label="类型" width="105" />
         <el-table-column label="成品" min-width="250"><template #default="scope"><strong>{{ scope.row.outputAsset.displayName || scope.row.outputAsset.fileName }}</strong><small>{{ scope.row.project.topic }}</small></template></el-table-column>
-        <el-table-column label="审核" width="120"><template #default="scope"><el-tag :type="tagType(scope.row.outputAsset.reviewStatus)">{{ label(scope.row.outputAsset.reviewStatus) }}</el-tag></template></el-table-column>
+        <el-table-column label="审核" width="120"><template #default="scope"><el-tag :type="tagType(scope.row.outputAsset.reviewStatus)">{{ reviewLabel(scope.row.outputAsset.reviewStatus) }}</el-tag></template></el-table-column>
         <el-table-column label="尺寸" width="130"><template #default="scope">{{ scope.row.outputAsset.width || '—' }}×{{ scope.row.outputAsset.height || '—' }}</template></el-table-column>
         <el-table-column label="时长" width="90"><template #default="scope">{{ Number(scope.row.outputAsset.durationSeconds || 0).toFixed(1) }}s</template></el-table-column>
         <el-table-column label="编码/帧率" width="135"><template #default="scope">{{ scope.row.outputAsset.sourceSnapshot?.metadata?.codec || scope.row.outputAsset.sourceSnapshot?.codec || '未记录' }}<small>{{ scope.row.outputAsset.sourceSnapshot?.metadata?.frameRate || scope.row.outputAsset.sourceSnapshot?.frameRate || '未记录' }}</small></template></el-table-column>

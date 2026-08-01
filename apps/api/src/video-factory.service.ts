@@ -4167,15 +4167,55 @@ export class VideoFactoryService {
     }
     const plan = await this.prisma.contentPlan.findUnique({
       where: { id: contentPlanId },
-      select: { id: true, topic: true, productModel: true },
+      select: {
+        id: true,
+        topic: true,
+        productModel: true,
+        contentAssets: { select: { assetId: true, role: true } },
+      },
     });
     if (!plan) throw new NotFoundException("智能视频项目不存在");
     const hash = createHash("sha256").update(file.buffer).digest("hex");
+    const sourceAssetIds = [...new Set([
+      ...strings(body.sourceAssetIds),
+      ...plan.contentAssets
+        .filter((item) => item.role !== "VIDEO_FACTORY_MASTER")
+        .map((item) => item.assetId),
+    ])];
+    const generatedSceneFiles = strings(body.generatedSceneFiles);
+    const metadata = {
+      source: String(body.renderer || "CODEX_LOCAL_FFMPEG"),
+      codec,
+      frameRate,
+      usedAssetIds: sourceAssetIds,
+      generatedSceneFiles,
+    };
     const existing = await this.prisma.videoRenderJob.findUnique({
       where: { idempotencyKey: `manual-master:${contentPlanId}:${hash}` },
       include: { outputAsset: true },
     });
-    if (existing?.outputAsset) return jsonSafe({ renderJob: existing, asset: existing.outputAsset });
+    if (existing?.outputAsset) {
+      const snapshot = object(existing.outputAsset.sourceSnapshot);
+      const sourceSnapshot = {
+        ...snapshot,
+        renderer: metadata.source,
+        renderJobId: existing.id,
+        shotAssetIds: sourceAssetIds,
+        metadata: { ...object(snapshot.metadata), ...metadata },
+      };
+      const asset = await this.prisma.$transaction(async (tx) => {
+        const updated = await tx.asset.update({
+          where: { id: existing.outputAsset!.id },
+          data: { sourceSnapshot },
+        });
+        await tx.assetVersion.updateMany({
+          where: { assetId: existing.outputAsset!.id },
+          data: { codec, technicalMetadata: metadata },
+        });
+        return updated;
+      });
+      return jsonSafe({ renderJob: existing, asset });
+    }
 
     const renderJobId = randomUUID();
     const assetId = randomUUID();
@@ -4189,15 +4229,6 @@ export class VideoFactoryService {
       sha256: hash,
       originalName: file.originalname,
     });
-    const sourceAssetIds = strings(body.sourceAssetIds);
-    const generatedSceneFiles = strings(body.generatedSceneFiles);
-    const metadata = {
-      source: String(body.renderer || "CODEX_LOCAL_FFMPEG"),
-      codec,
-      frameRate,
-      usedAssetIds: sourceAssetIds,
-      generatedSceneFiles,
-    };
     const asset = await this.prisma.$transaction(async (tx) => {
       const created = await tx.asset.create({
         data: {
