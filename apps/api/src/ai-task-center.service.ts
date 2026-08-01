@@ -926,7 +926,13 @@ export class AiTaskCenterService implements OnModuleInit {
       }
       const policy = await this.policy(candidate.type);
       if (!policy.enabled) continue;
-      const running = await this.prisma.aiTask.count({ where: { type: candidate.type, status: { in: ["CLAIMED", "RUNNING", "QUALITY_CHECK", "UPLOADING"] } } });
+      const running = await this.prisma.aiTask.count({
+        where: {
+          type: candidate.type,
+          status: { in: ["CLAIMED", "RUNNING", "QUALITY_CHECK", "UPLOADING"] },
+          lockedBy: { not: null },
+        },
+      });
       if (running >= policy.maxConcurrency) continue;
       const claimed = await this.prisma.aiTask.updateMany({
         where: { id: candidate.id, status: candidate.status },

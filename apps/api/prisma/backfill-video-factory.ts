@@ -46,10 +46,12 @@ async function main() {
   let shotCount = 0;
   let jobCount = 0;
   for (const plan of plans) {
+    const existingShotCount = await prisma.videoShot.count({ where: { contentPlanId: plan.id } });
+    if (existingShotCount > 0) continue;
     const requirements = Array.isArray(plan.shootRequirements) ? plan.shootRequirements.map(object) : [];
     for (let index = 0; index < requirements.length; index += 1) {
       const requirement = requirements[index];
-      const requirementKey = String(requirement.id || `legacy-shot-${index + 1}`);
+      const requirementKey = String(requirement.id || requirement.key || `legacy-shot-${index + 1}`);
       const generation = object(requirement.aiGeneration);
       const videoAssetIds = strings(requirement.videoAssetIds);
       const assetIds = strings(requirement.assetIds);
