@@ -1677,6 +1677,57 @@ export class VideoFactoryService {
     return this.project(contentPlanId);
   }
 
+  async requestRemoteScriptAfterSystemFailure(contentPlanId: string, actor: string, note = "") {
+    const plan = await this.prisma.contentPlan.findUnique({ where: { id: contentPlanId } });
+    if (!plan) throw new NotFoundException("智能视频项目不存在");
+    const signals = sourceSignals(plan);
+    const factory = signals.find((signal) => signal.type === "VIDEO_FACTORY") || {};
+    const scriptEngineStatus = object(factory.scriptEngineStatus);
+    const factoryBrief = object(factory.brief);
+    if (scriptEngineStatus.SYSTEM_AI !== "FAILED") {
+      throw new BadRequestException("只有系统 AI 生成失败的项目可以直接转交 Codex");
+    }
+    const systemAiFailureReason = String(object(factory.scriptEngineErrors).SYSTEM_AI || "系统 AI 脚本生成失败");
+    const nextSignals = signals.map((signal) => signal.type === "VIDEO_FACTORY"
+      ? {
+        ...signal,
+        brief: {
+          ...factoryBrief,
+          scriptEngines: Array.from(new Set([
+            ...(Array.isArray(factoryBrief.scriptEngines) ? factoryBrief.scriptEngines.map(String) : ["SYSTEM_AI"]),
+            "REMOTE_CODEX",
+          ])),
+          remoteTransferContext: {
+            source: "SYSTEM_AI_FAILURE",
+            systemAiFailureReason,
+            userNote: note.trim(),
+          },
+        },
+        scriptEngineStatus: { ...scriptEngineStatus, REMOTE_CODEX: "PENDING" },
+        scriptEngineErrors: { ...object(signal.scriptEngineErrors), REMOTE_CODEX: "" },
+      }
+      : signal);
+    await this.prisma.$transaction([
+      this.prisma.contentPlan.update({
+        where: { id: contentPlanId },
+        data: {
+          productionStage: "SCRIPT_RETURNED",
+          sourceSignals: nextSignals as unknown as Prisma.InputJsonValue,
+        },
+      }),
+      this.prisma.auditLog.create({
+        data: {
+          actor,
+          action: "VIDEO_FACTORY_SYSTEM_AI_FAILURE_TRANSFER_TO_CODEX",
+          entityType: "ContentPlan",
+          entityId: contentPlanId,
+          after: { systemAiFailureReason, userNote: note.trim() },
+        },
+      }),
+    ]);
+    return this.project(contentPlanId);
+  }
+
   async generateSystemScriptCandidate(contentPlanId: string, actor: string, regenerationPrompt = "") {
     const plan = await this.prisma.contentPlan.findUnique({ where: { id: contentPlanId } });
     if (!plan) throw new NotFoundException("智能视频项目不存在");
@@ -1746,6 +1797,7 @@ export class VideoFactoryService {
       });
     } catch (error) {
       const failureReason = error instanceof Error ? error.message : "系统 AI 脚本生成失败";
+      const failedAt = new Date().toISOString();
       const scriptEngineStatus: Record<string, unknown> = {
         ...object(factory.scriptEngineStatus),
         SYSTEM_AI: "FAILED",
@@ -1755,6 +1807,10 @@ export class VideoFactoryService {
           ...signal,
           scriptEngineStatus,
           scriptEngineErrors: { ...object(signal.scriptEngineErrors), SYSTEM_AI: failureReason },
+          systemScriptConversation: [
+            ...(Array.isArray(signal.systemScriptConversation) ? signal.systemScriptConversation : []),
+            { role: "BAILIAN", status: "FAILED", at: failedAt, content: failureReason },
+          ].slice(-20),
         }
         : signal);
       await this.prisma.$transaction([
@@ -1801,6 +1857,15 @@ export class VideoFactoryService {
         ...signal,
         scriptCandidates: nextCandidates,
         scriptEngineStatus,
+        systemScriptConversation: [
+          ...(Array.isArray(signal.systemScriptConversation) ? signal.systemScriptConversation : []),
+          {
+            role: "BAILIAN",
+            status: "COMPLETED",
+            at: candidate.generatedAt,
+            content: String(candidate.title || candidate.hook || "脚本与素材预匹配已返回"),
+          },
+        ].slice(-20),
         systemRegenerationHistory: [
           ...(Array.isArray(signal.systemRegenerationHistory) ? signal.systemRegenerationHistory : []),
           {
@@ -1849,12 +1914,26 @@ export class VideoFactoryService {
     const plan = await this.prisma.contentPlan.findUnique({ where: { id: contentPlanId } });
     if (!plan) throw new NotFoundException("智能视频项目不存在");
     const signals = sourceSignals(plan);
+    const factory = signals.find((signal) => signal.type === "VIDEO_FACTORY") || {};
+    const brief = object(factory.brief);
+    const submittedAt = new Date().toISOString();
+    const requestSummary = [
+      `视频类型：${String(brief.videoType || "不限")}`,
+      `产品：${String(plan.productModel || "未指定")}`,
+      `关键词：${String(brief.keywords || plan.topic || "未指定")}`,
+      regenerationPrompt.trim() ? `本次调整：${regenerationPrompt.trim()}` : "按项目原始要求生成",
+    ].join("；");
     const nextSignals = signals.map((signal) => signal.type === "VIDEO_FACTORY"
       ? {
         ...signal,
         scriptEngineStatus: { ...object(signal.scriptEngineStatus), SYSTEM_AI: "RUNNING" },
         scriptEngineErrors: { ...object(signal.scriptEngineErrors), SYSTEM_AI: "" },
-        systemScriptStartedAt: new Date().toISOString(),
+        systemScriptStartedAt: submittedAt,
+        systemScriptConversation: [
+          ...(Array.isArray(signal.systemScriptConversation) ? signal.systemScriptConversation : []),
+          { role: "SYSTEM", status: "SENT", at: submittedAt, content: requestSummary },
+          { role: "BAILIAN", status: "RUNNING", at: submittedAt, content: "已接收任务，正在生成脚本并匹配素材" },
+        ].slice(-20),
       }
       : signal);
     await this.prisma.contentPlan.update({

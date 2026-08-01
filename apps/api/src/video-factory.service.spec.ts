@@ -365,6 +365,33 @@ describe("VideoFactoryService model routing", () => {
     await Promise.resolve();
   });
 
+  it("keeps the same project and prepares a Codex retry after Bailian fails", async () => {
+    prisma.contentPlan.findUnique.mockResolvedValue({
+      id: "failed-system-ai-project",
+      productionStage: "SCRIPT_GENERATING",
+      sourceSignals: [{
+        type: "VIDEO_FACTORY",
+        brief: { scriptEngines: ["SYSTEM_AI"], videoType: "功能演示型" },
+        scriptEngineStatus: { SYSTEM_AI: "FAILED" },
+        scriptEngineErrors: { SYSTEM_AI: "百炼生成超时" },
+      }],
+    });
+    prisma.contentPlan.update.mockResolvedValue({});
+    prisma.auditLog.create.mockResolvedValue({});
+    vi.spyOn(service, "project").mockResolvedValue({ id: "failed-system-ai-project" } as never);
+
+    await service.requestRemoteScriptAfterSystemFailure("failed-system-ai-project", "operator");
+
+    expect(prisma.contentPlan.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: "failed-system-ai-project" },
+      data: expect.objectContaining({ productionStage: "SCRIPT_RETURNED" }),
+    }));
+    const writtenSignals = prisma.contentPlan.update.mock.calls[0][0].data.sourceSignals;
+    expect(writtenSignals[0].brief.scriptEngines).toEqual(["SYSTEM_AI", "REMOTE_CODEX"]);
+    expect(writtenSignals[0].brief.remoteTransferContext.systemAiFailureReason).toBe("百炼生成超时");
+    expect(writtenSignals[0].scriptEngineStatus.REMOTE_CODEX).toBe("PENDING");
+  });
+
   it("keeps line ids and material bindings for punctuation-only script edits", async () => {
     prisma.contentPlan.findUnique.mockResolvedValue({
       id: "project-script",

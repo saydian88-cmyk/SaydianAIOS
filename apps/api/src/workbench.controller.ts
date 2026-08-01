@@ -1010,6 +1010,25 @@ export class WorkbenchController {
     return this.videoFactory.enqueueSystemScriptCandidate(id, employee.name, String(body.prompt || "").trim());
   }
 
+  @Post("data-center/video-projects/:id/system-script-transfer-to-codex")
+  async transferFailedSystemScriptToCodex(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    if (!employee.roles.some((role) => ["CONTENT_OPERATOR", "VIDEO_SPECIALIST"].includes(role))) {
+      throw new ForbiddenException("只有运营和视频专员可以转交 Codex 生成脚本");
+    }
+    const project = await this.videoFactory.project(id) as Record<string, any>;
+    if (project.createdBy !== employee.name) {
+      throw new ForbiddenException("只能转交自己创建的视频项目");
+    }
+    await this.videoFactory.requestRemoteScriptAfterSystemFailure(id, employee.name, String(body.note || "").trim());
+    const scriptSubmission = await this.submitVideoScriptTask(authorization, id);
+    return { ...scriptSubmission.project, scriptTask: scriptSubmission.task };
+  }
+
   @Get("data-center/video-projects/:id")
   async videoProjectDetail(
     @Headers("authorization") authorization: string | undefined,
