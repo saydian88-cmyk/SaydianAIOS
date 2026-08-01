@@ -143,7 +143,7 @@ async function main() {
   while (hasMore) {
     const query = new URLSearchParams({ nodeCode });
     if (cursor) query.set("cursor", cursor);
-    const page = await api(`/api/v1/ai-tasks/runner/material-index?${query.toString()}`);
+    const page = await api(`/api/v1/ai-tasks/runner/material-mirror-index?${query.toString()}`);
     changes.push(...(Array.isArray(page.changes) ? page.changes : []));
     cursor = String(page.cursor || cursor);
     hasMore = page.hasMore === true;

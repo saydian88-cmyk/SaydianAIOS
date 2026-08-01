@@ -1304,6 +1304,62 @@ export class AiTaskCenterService implements OnModuleInit {
     };
   }
 
+  async runnerMaterialMirrorIndex(token: string, body: JsonRecord) {
+    await this.runner(token, text(body.nodeCode));
+    const rawCursor = text(body.cursor);
+    const [cursorTime = "", cursorId = ""] = rawCursor.split("|");
+    const parsedCursor = cursorTime ? new Date(cursorTime) : null;
+    const cursor = parsedCursor && !Number.isNaN(parsedCursor.getTime()) ? parsedCursor : null;
+    const assets = await this.prisma.asset.findMany({
+      where: cursor ? {
+        OR: [
+          { updatedAt: { gt: cursor } },
+          ...(cursorId ? [{ updatedAt: cursor, id: { gt: cursorId } }] : []),
+        ],
+      } : {},
+      orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
+      take: 1_000,
+      select: {
+        id: true,
+        assetNo: true,
+        displayName: true,
+        kind: true,
+        extension: true,
+        sha256: true,
+        sizeBytes: true,
+        reviewStatus: true,
+        availabilityStatus: true,
+        rightsStatus: true,
+        deletedAt: true,
+        updatedAt: true,
+        aiIndex: true,
+        searchText: true,
+        indexVersion: true,
+        indexConfidence: true,
+        products: {
+          select: { product: { select: { modelCode: true, category: true, name: true } } },
+        },
+      },
+    });
+    const nextCursor = assets.length
+      ? `${assets[assets.length - 1]!.updatedAt.toISOString()}|${assets[assets.length - 1]!.id}`
+      : rawCursor;
+    return {
+      cursor: nextCursor,
+      hasMore: assets.length === 1_000,
+      changes: assets.map(({ sizeBytes, ...asset }) => ({
+        ...asset,
+        sizeBytes: sizeBytes.toString(),
+        updatedAt: asset.updatedAt.toISOString(),
+        deletedAt: asset.deletedAt?.toISOString() || null,
+        usable: !asset.deletedAt
+          && asset.reviewStatus === "APPROVED"
+          && asset.availabilityStatus === "ACTIVE"
+          && ["COMMERCIAL", "EDIT_ONLY"].includes(asset.rightsStatus),
+      })),
+    };
+  }
+
   async systemMaterialIndexStatus() {
     const [latest, totalAssets, indexedAssets, pendingLearning, disabledAssets] = await Promise.all([
       this.prisma.asset.findFirst({ orderBy: [{ updatedAt: "desc" }, { id: "desc" }], select: { id: true, updatedAt: true } }),

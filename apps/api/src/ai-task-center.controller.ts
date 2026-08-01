@@ -136,6 +136,15 @@ export class AiTaskCenterController {
     return this.tasks.runnerMaterialIndex(this.runnerToken(authorization), { nodeCode, cursor });
   }
 
+  @Get("runner/material-mirror-index")
+  materialMirrorIndex(
+    @Headers("authorization") authorization: string | undefined,
+    @Query("nodeCode") nodeCode: string,
+    @Query("cursor") cursor?: string,
+  ) {
+    return this.tasks.runnerMaterialMirrorIndex(this.runnerToken(authorization), { nodeCode, cursor });
+  }
+
   @Post("runner/material-downloads")
   materialDownloads(
     @Headers("authorization") authorization: string | undefined,
