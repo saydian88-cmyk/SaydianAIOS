@@ -9,6 +9,7 @@ const apiUrl = String(process.env.AI_TASK_API_URL || "https://stest.saydian.cn")
 const token = String(process.env.AI_TASK_RUNNER_TOKEN || "");
 const nodeCode = String(process.env.AI_TASK_RUNNER_NODE_CODE || "windows-codex-video-01");
 const libraryRoot = resolve(String(process.env.AI_TASK_LOCAL_MEDIA_LIBRARY || "F:\\赛电品牌素材库"));
+const packagingRoot = resolve(String(process.env.AI_TASK_LOCAL_PACKAGING_LIBRARY || "F:\\包装资源包"));
 const indexRoot = join(libraryRoot, ".saidian-system-index");
 const mapPath = join(indexRoot, "system-asset-map.json");
 const statePath = join(indexRoot, "sync-state.json");
@@ -57,6 +58,11 @@ function destinationOf(asset: Row) {
   const model = modelOf(asset);
   const purposes = strings(asset.aiIndex?.purpose).join(" ");
   const scenes = strings(asset.aiIndex?.scene).join(" ");
+  const searchable = `${purposes} ${scenes} ${String(asset.searchText || "")} ${strings(asset.tags).join(" ")}`;
+  if (/包装|贴纸|花字|音效|转场|边框|角标|背景|BGM|字体|模板/u.test(searchable)) {
+    const category = cleanName(strings(asset.aiIndex?.purpose)[0] || String(asset.kind || "通用"));
+    return join(packagingRoot, "系统同步", category);
+  }
   if (asset.kind === "VIDEO") {
     const module = /黄金|钩子|开头/u.test(`${purposes} ${scenes}`) ? "黄金3秒兴趣吸引画面"
       : /结尾|收尾/u.test(`${purposes} ${scenes}`) ? "结尾"
@@ -95,11 +101,17 @@ async function localHashes(existingMap: Row) {
       } catch { /* rescan below */ }
     }
   }
-  for (const path of await walk(libraryRoot)) {
-    if (knownPaths.has(path)) continue;
-    const buffer = await readFile(path);
-    byHash.set(hash(buffer), path);
-    knownPaths.add(path);
+  for (const root of [libraryRoot, packagingRoot]) {
+    try {
+      for (const path of await walk(root)) {
+        if (knownPaths.has(path)) continue;
+        const buffer = await readFile(path);
+        byHash.set(hash(buffer), path);
+        knownPaths.add(path);
+      }
+    } catch {
+      await mkdir(root, { recursive: true });
+    }
   }
   return byHash;
 }
@@ -189,6 +201,7 @@ async function main() {
           sha256: item.sha256,
           localPath,
           relativePath: relative(libraryRoot, localPath).replaceAll("\\", "/"),
+          sourceRoot: localPath.toLowerCase().startsWith(packagingRoot.toLowerCase()) ? packagingRoot : libraryRoot,
           displayName: item.displayName,
           kind: item.kind,
           model: modelOf(item),
@@ -202,7 +215,7 @@ async function main() {
       }
     }));
   }
-  const report = { syncedAt: new Date().toISOString(), libraryRoot, changed: changes.length, linked, downloaded, disabled, failed: failures.length, failures };
+  const report = { syncedAt: new Date().toISOString(), libraryRoot, packagingRoot, changed: changes.length, linked, downloaded, disabled, failed: failures.length, failures };
   await writeJsonAtomic(mapPath, mapping);
   await writeJsonAtomic(statePath, { cursor, syncedAt: report.syncedAt });
   await writeJsonAtomic(logPath, report);
