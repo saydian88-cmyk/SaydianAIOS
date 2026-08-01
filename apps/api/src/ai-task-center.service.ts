@@ -1279,7 +1279,7 @@ export class AiTaskCenterService implements OnModuleInit {
     await this.runner(token, text(body.nodeCode));
     const ids = Array.from(new Set(
       (Array.isArray(body.assetIds) ? body.assetIds : []).map((item) => text(item)).filter(Boolean),
-    )).slice(0, 100);
+    )).slice(0, 1_000);
     if (!ids.length) return { downloads: [] };
     const assets = await this.prisma.asset.findMany({
       where: {

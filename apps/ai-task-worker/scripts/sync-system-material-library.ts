@@ -152,8 +152,8 @@ async function main() {
   const byHash = await localHashes(mapping, changes);
   const pending = changes.filter((asset) => asset.usable === true && asset.sha256 && !byHash.has(String(asset.sha256)));
   const urls = new Map<string, string>();
-  for (let start = 0; start < pending.length; start += 100) {
-    const batch = pending.slice(start, start + 100);
+  for (let start = 0; start < pending.length; start += 1_000) {
+    const batch = pending.slice(start, start + 1_000);
     const result = await api("/api/v1/ai-tasks/runner/material-downloads", {
       method: "POST",
       body: JSON.stringify({ nodeCode, assetIds: batch.map((asset) => asset.id) }),
