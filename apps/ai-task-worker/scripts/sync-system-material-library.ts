@@ -124,13 +124,35 @@ async function localHashes(existingMap: Row, changes: Row[]) {
   return byHash;
 }
 
-async function download(asset: Row, url: string, target: string) {
+async function existingSourcePath(asset: Row) {
+  const candidates: string[] = [];
+  const sourcePath = String(asset.sourcePath || "");
+  if (/^[a-z]:[\\/]/iu.test(sourcePath)) candidates.push(resolve(sourcePath));
+  const metadata = asset.packagingMetadata && typeof asset.packagingMetadata === "object" ? asset.packagingMetadata : {};
+  const relativePath = String(metadata.originalRelativePath || "");
+  if (relativePath) candidates.push(resolve(packagingRoot, relativePath));
+  for (const path of candidates) {
+    try {
+      const file = await stat(path);
+      if (file.isFile() && (!Number(asset.sizeBytes || 0) || file.size === Number(asset.sizeBytes))) return path;
+    } catch { /* try next candidate */ }
+  }
+  return "";
+}
+
+async function download(asset: Row, url: string, target: string, byHash: Map<string, string>) {
   const response = await fetch(url, { signal: AbortSignal.timeout(300_000) });
   if (!response.ok) throw new Error(`下载失败 ${asset.id}: HTTP ${response.status}`);
   const buffer = Buffer.from(await response.arrayBuffer());
-  if (hash(buffer) !== String(asset.sha256).toLowerCase()) throw new Error(`哈希校验失败：${asset.id}`);
+  const contentSha256 = hash(buffer);
+  const expectedSize = Number(asset.sizeBytes || 0);
+  if (expectedSize > 0 && buffer.length !== expectedSize) throw new Error(`下载大小校验失败：${asset.id}`);
+  const existingPath = byHash.get(contentSha256);
+  if (existingPath) return { localPath: existingPath, contentSha256, reused: true };
   await mkdir(dirname(target), { recursive: true });
   await writeFile(target, buffer);
+  byHash.set(contentSha256, target);
+  return { localPath: target, contentSha256, reused: false };
 }
 
 async function main() {
@@ -185,6 +207,14 @@ async function main() {
       const id = String(asset.id || "");
       const sha = String(asset.sha256 || "");
       let localPath = byHash.get(sha);
+      let contentSha256 = sha;
+      if (!localPath) {
+        localPath = await existingSourcePath(asset);
+        if (localPath) {
+          contentSha256 = hash(await readFile(localPath));
+          byHash.set(contentSha256, localPath);
+        }
+      }
       if (!localPath) {
         const extension = String(asset.extension || extname(String(asset.displayName || "")) || ".bin");
         const folder = destinationOf(asset);
@@ -193,9 +223,11 @@ async function main() {
         try {
           const url = urls.get(id);
           if (!url) throw new Error("系统未返回下载地址");
-          await download(asset, url, localPath);
-          byHash.set(sha, localPath);
-          downloaded += 1;
+          const result = await download(asset, url, localPath, byHash);
+          localPath = result.localPath;
+          contentSha256 = result.contentSha256;
+          if (result.reused) linked += group.length;
+          else downloaded += 1;
         } catch (error) {
           failures.push({ id, message: error instanceof Error ? error.message : String(error) });
           return;
@@ -207,6 +239,7 @@ async function main() {
           systemAssetId: itemId,
           assetNo: item.assetNo,
           sha256: item.sha256,
+          contentSha256,
           localPath,
           relativePath: relative(libraryRoot, localPath).replaceAll("\\", "/"),
           sourceRoot: localPath.toLowerCase().startsWith(packagingRoot.toLowerCase()) ? packagingRoot : libraryRoot,
@@ -225,7 +258,7 @@ async function main() {
   }
   const report = { syncedAt: new Date().toISOString(), libraryRoot, packagingRoot, changed: changes.length, linked, downloaded, disabled, failed: failures.length, failures };
   await writeJsonAtomic(mapPath, mapping);
-  await writeJsonAtomic(statePath, { cursor, syncedAt: report.syncedAt });
+  await writeJsonAtomic(statePath, { cursor: failures.length ? String(oldState.cursor || "") : cursor, syncedAt: report.syncedAt });
   await writeJsonAtomic(logPath, report);
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
 }
