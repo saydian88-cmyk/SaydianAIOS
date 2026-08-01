@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { ContentStatus, IntegrationKind, JobStatus, Prisma } from "@prisma/client";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { AiContentService, type AiVideoCandidate } from "./ai-content.service";
 import { opsConfig } from "./config";
 import { ContentGuardService } from "./content-guard.service";
@@ -4036,6 +4036,156 @@ export class VideoFactoryService {
       return { assetId, url: this.oss.signedDownloadUrl(asset.objectKey, 3_600), fileName: asset.fileName };
     }
     return { assetId, url: asset.sourcePath, fileName: asset.fileName };
+  }
+
+  async uploadMaster(
+    contentPlanId: string,
+    file: { originalname: string; mimetype: string; size: number; buffer: Buffer } | undefined,
+    body: Record<string, unknown>,
+    actor: string,
+  ) {
+    if (!file?.buffer?.length) throw new BadRequestException("请选择需要上传的MP4成片");
+    if (!file.originalname.toLowerCase().endsWith(".mp4") && file.mimetype !== "video/mp4") {
+      throw new BadRequestException("成片只支持MP4格式");
+    }
+    const width = Math.max(0, Number(body.width || 0));
+    const height = Math.max(0, Number(body.height || 0));
+    const duration = Math.max(0, Number(body.durationSeconds || 0));
+    const codec = String(body.codec || "").trim().toLowerCase();
+    const frameRate = String(body.frameRate || "").trim();
+    if (!width || !height || !duration || !codec || !frameRate) {
+      throw new BadRequestException("请提供成片宽度、高度、时长、编码和帧率");
+    }
+    const plan = await this.prisma.contentPlan.findUnique({
+      where: { id: contentPlanId },
+      select: { id: true, topic: true, productModel: true },
+    });
+    if (!plan) throw new NotFoundException("智能视频项目不存在");
+    const hash = createHash("sha256").update(file.buffer).digest("hex");
+    const existing = await this.prisma.videoRenderJob.findUnique({
+      where: { idempotencyKey: `manual-master:${contentPlanId}:${hash}` },
+      include: { outputAsset: true },
+    });
+    if (existing?.outputAsset) return jsonSafe({ renderJob: existing, asset: existing.outputAsset });
+
+    const renderJobId = randomUUID();
+    const assetId = randomUUID();
+    const publicNo = `SD-FINAL-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${randomUUID().slice(0, 6).toUpperCase()}`;
+    const objectKey = this.oss.derivedObjectKey(renderJobId, "video-master", 1, hash, ".mp4");
+    const stored = await this.oss.uploadGeneratedBuffer({
+      objectKey,
+      buffer: file.buffer,
+      actor,
+      sourceType: "AI_GENERATED",
+      sha256: hash,
+      originalName: file.originalname,
+    });
+    const sourceAssetIds = strings(body.sourceAssetIds);
+    const generatedSceneFiles = strings(body.generatedSceneFiles);
+    const metadata = {
+      source: String(body.renderer || "CODEX_LOCAL_FFMPEG"),
+      codec,
+      frameRate,
+      usedAssetIds: sourceAssetIds,
+      generatedSceneFiles,
+    };
+    const asset = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.asset.create({
+        data: {
+          id: assetId,
+          sourceKey: `VIDEO_FACTORY_MANUAL_MASTER:${contentPlanId}:${hash}`,
+          sourceType: "AI_GENERATED",
+          sourcePath: `oss://${objectKey}`,
+          fileName: file.originalname,
+          originalFileName: file.originalname,
+          extension: ".mp4",
+          mediaType: "VIDEO",
+          kind: "VIDEO",
+          assetNo: publicNo,
+          displayName: `智能视频成片-${plan.topic}`,
+          level: "FINISHED",
+          productScope: plan.productModel ? "MODEL" : "UNKNOWN",
+          processingStatus: "READY_FOR_REVIEW",
+          reviewStatus: "PENDING",
+          availabilityStatus: "INACTIVE",
+          rightsStatus: "AUTH_REQUIRED",
+          sha256: hash,
+          sizeBytes: file.size,
+          modifiedAt: new Date(),
+          width,
+          height,
+          durationSeconds: duration,
+          aspectRatio: `${width}:${height}`,
+          model: plan.productModel,
+          status: "PENDING",
+          qualityScore: 85,
+          contentDescription: plan.topic,
+          sourceSnapshot: { renderer: metadata.source, renderJobId, shotAssetIds: sourceAssetIds, metadata },
+          aiIndex: { source: "VIDEO_FACTORY_MANUAL_MASTER", contentPlanId },
+          searchText: `${plan.productModel || ""} ${plan.topic} 智能视频成片`,
+          indexNeedsReview: true,
+          storageProvider: "ALIYUN_OSS",
+          objectKey,
+          objectVersionId: stored.objectVersionId,
+          etag: stored.etag,
+          storageUrl: stored.storageUrl,
+          storageSyncedAt: stored.uploadedAt,
+          discoveredBy: actor,
+          versions: {
+            create: {
+              version: 1,
+              sha256: hash,
+              sourcePath: `oss://${objectKey}`,
+              objectKey,
+              objectVersionId: stored.objectVersionId,
+              etag: stored.etag,
+              storageUrl: stored.storageUrl,
+              createdBy: actor,
+              originalFileName: file.originalname,
+              mimeType: "video/mp4",
+              extension: ".mp4",
+              sizeBytes: file.size,
+              width,
+              height,
+              durationSeconds: duration,
+              codec,
+              technicalMetadata: metadata,
+            },
+          },
+        },
+      });
+      await tx.videoRenderJob.create({
+        data: {
+          id: renderJobId,
+          idempotencyKey: `manual-master:${contentPlanId}:${hash}`,
+          contentPlanId,
+          status: "SUCCEEDED",
+          renderer: metadata.source,
+          input: { sourceAssetIds, generatedSceneFiles },
+          output: { objectKey, assetId, renderer: metadata.source },
+          outputAssetId: assetId,
+          outputPath: `oss://${objectKey}`,
+          actualCost: Number(body.actualCost || 0),
+          startedAt: new Date(),
+          finishedAt: new Date(),
+          createdBy: actor,
+        },
+      });
+      await tx.contentPlan.update({
+        where: { id: contentPlanId },
+        data: { masterVideoPath: `oss://${objectKey}`, masterVideoStatus: "READY_FOR_REVIEW", productionStage: "VIDEO_REVIEW" },
+      });
+      await tx.contentAsset.create({ data: { contentPlanId, assetId, role: "VIDEO_FACTORY_MASTER" } });
+      await tx.videoQualityCheck.create({
+        data: { contentPlanId, assetId, renderJobId, checkType: "TECHNICAL", status: "PASSED", score: 95, findings: [{ width, height, duration, codec, frameRate }] },
+      });
+      await tx.videoQualityCheck.create({
+        data: { contentPlanId, assetId, renderJobId, checkType: "FINAL_REVIEW", status: "REVIEW_REQUIRED", score: 0, findings: [{ message: "请核对字幕、配音、产品外形、功能画面和CTA" }] },
+      });
+      return created;
+    });
+    await this.notifyProjectMilestone(contentPlanId, "VIDEO_REVIEW", "视频成片等待审核", plan.topic);
+    return jsonSafe({ renderJobId, asset });
   }
 
   async reviewOutput(assetId: string, approved: boolean, actor: string, note = "") {

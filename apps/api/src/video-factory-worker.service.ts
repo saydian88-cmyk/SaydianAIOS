@@ -92,6 +92,39 @@ export function videoRenderCaptionTexts(plan: {
   });
 }
 
+export type VideoTechnicalMetadata = {
+  ok: boolean;
+  width: number;
+  height: number;
+  duration: number;
+  codec: string;
+  frameRate: string;
+  error?: string;
+};
+
+export function parseVideoTechnicalMetadata(stdout: string): VideoTechnicalMetadata {
+  const parsed = JSON.parse(stdout) as {
+    streams?: Array<{
+      width?: number;
+      height?: number;
+      duration?: string;
+      codec_name?: string;
+      avg_frame_rate?: string;
+      r_frame_rate?: string;
+    }>;
+    format?: { duration?: string };
+  };
+  const stream = parsed.streams?.[0] || {};
+  return {
+    ok: Boolean(stream.width && stream.height),
+    width: Number(stream.width || 0),
+    height: Number(stream.height || 0),
+    duration: Number(stream.duration || parsed.format?.duration || 0),
+    codec: String(stream.codec_name || "").trim(),
+    frameRate: String(stream.avg_frame_rate || stream.r_frame_rate || "").trim(),
+  };
+}
+
 type ProviderResult =
   | { state: "RUNNING"; externalJobId: string; response: JsonRow }
   | { state: "SUCCEEDED"; externalJobId?: string; outputUrl?: string; contentUrl?: string; response: JsonRow; cost?: number }
@@ -599,26 +632,34 @@ export class VideoFactoryWorkerService {
     return Buffer.from(await response.arrayBuffer());
   }
 
-  private async inspectVideo(path: string) {
+  private async inspectVideo(path: string): Promise<VideoTechnicalMetadata> {
     try {
       const { stdout } = await execFileAsync("ffprobe", [
         "-v", "error",
         "-select_streams", "v:0",
-        "-show_entries", "stream=width,height,duration",
+        "-show_entries", "stream=width,height,duration,codec_name,avg_frame_rate,r_frame_rate",
         "-show_entries", "format=duration",
         "-of", "json",
         path,
       ], { timeout: 60_000, windowsHide: true, maxBuffer: 2 * 1024 * 1024 });
-      const parsed = JSON.parse(stdout) as { streams?: Array<{ width?: number; height?: number; duration?: string }>; format?: { duration?: string } };
-      const stream = parsed.streams?.[0] || {};
-      return {
-        ok: Boolean(stream.width && stream.height),
-        width: Number(stream.width || 0),
-        height: Number(stream.height || 0),
-        duration: Number(stream.duration || parsed.format?.duration || 0),
-      };
+      return parseVideoTechnicalMetadata(stdout);
     } catch (error) {
-      return { ok: false, width: 0, height: 0, duration: 0, error: error instanceof Error ? error.message : "ffprobe失败" };
+      return { ok: false, width: 0, height: 0, duration: 0, codec: "", frameRate: "", error: error instanceof Error ? error.message : "ffprobe失败" };
+    }
+  }
+
+  async inspectUploadedVideo(file: { originalname: string; buffer: Buffer } | undefined) {
+    if (!file?.buffer?.length) throw new BadRequestException("请选择需要上传的MP4成片");
+    const tempDir = join(opsConfig.derivedOutputDir, "video-factory", "upload-inspection");
+    await mkdir(tempDir, { recursive: true });
+    const tempPath = join(tempDir, `${randomUUID()}${extname(file.originalname) || ".mp4"}`);
+    try {
+      await writeFile(tempPath, file.buffer);
+      const technical = await this.inspectVideo(tempPath);
+      if (!technical.ok) throw new BadRequestException(`成片技术检查失败：${technical.error || "无法读取视频流"}`);
+      return technical;
+    } finally {
+      await rm(tempPath, { force: true });
     }
   }
 
@@ -906,7 +947,17 @@ export class VideoFactoryWorkerService {
         status: "PENDING",
         qualityScore: 80,
         contentDescription: job.contentPlan.topic,
-        sourceSnapshot: { renderer: actualRenderer, renderJobId: job.id, shotAssetIds: assets.map((item) => item.id) },
+        sourceSnapshot: {
+          renderer: actualRenderer,
+          renderJobId: job.id,
+          shotAssetIds: assets.map((item) => item.id),
+          metadata: {
+            source: actualRenderer,
+            codec: technical.codec,
+            frameRate: technical.frameRate,
+            usedAssetIds: assets.map((item) => item.id),
+          },
+        },
         aiIndex: { source: "VIDEO_FACTORY_RENDER", contentPlanId: job.contentPlanId },
         searchText: `${job.contentPlan.productModel || ""} ${job.contentPlan.topic} 智能视频成片`,
         indexNeedsReview: true,
@@ -934,7 +985,13 @@ export class VideoFactoryWorkerService {
             width: technical.width,
             height: technical.height,
             durationSeconds: technical.duration,
-            technicalMetadata: { renderer: actualRenderer, renderJobId: job.id },
+            technicalMetadata: {
+              renderer: actualRenderer,
+              renderJobId: job.id,
+              codec: technical.codec,
+              frameRate: technical.frameRate,
+              usedAssetIds: assets.map((item) => item.id),
+            },
           },
         },
       },

@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Headers, Param, Patch, Post, Put, Query } from "@nestjs/common";
+import { Body, Controller, Get, Headers, Param, Patch, Post, Put, Query, UploadedFile, UseInterceptors } from "@nestjs/common";
+import { FileInterceptor } from "@nestjs/platform-express";
 import { AiTaskCenterService } from "./ai-task-center.service";
 import { AuthService } from "./auth.service";
 import { VideoFactoryWorkerService } from "./video-factory-worker.service";
@@ -313,6 +314,26 @@ export class VideoFactoryController {
     @Param("id") id: string,
   ) {
     return this.factory.enqueueRender(id, this.actor(authorization, requestedActor));
+  }
+
+  @Post("projects/:id/master")
+  @UseInterceptors(FileInterceptor("file", { limits: { fileSize: 500 * 1024 * 1024 } }))
+  async uploadMaster(
+    @Headers("authorization") authorization: string | undefined,
+    @Headers("x-ops-actor") requestedActor: string | undefined,
+    @Param("id") id: string,
+    @UploadedFile() file: { originalname: string; mimetype: string; size: number; buffer: Buffer } | undefined,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const technical = await this.worker.inspectUploadedVideo(file);
+    return this.factory.uploadMaster(id, file, {
+      ...body,
+      width: technical.width,
+      height: technical.height,
+      durationSeconds: technical.duration,
+      codec: technical.codec,
+      frameRate: technical.frameRate,
+    }, this.actor(authorization, requestedActor));
   }
 
   @Get("jobs/:id")

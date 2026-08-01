@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { encryptIntegrationValue } from "./integration-secret";
 import {
   usesConfiguredVideoRenderer,
+  parseVideoTechnicalMetadata,
   videoRenderCaptionTexts,
   VideoFactoryWorkerService,
   wrapVideoSubtitle,
@@ -11,6 +12,20 @@ import {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("Douyin viral render isolation", () => {
+  it("preserves codec, frame rate and media dimensions from ffprobe", () => {
+    expect(parseVideoTechnicalMetadata(JSON.stringify({
+      streams: [{ width: 1080, height: 1920, duration: "25.033", codec_name: "h264", avg_frame_rate: "30/1" }],
+      format: { duration: "25.04" },
+    }))).toEqual({
+      ok: true,
+      width: 1080,
+      height: 1920,
+      duration: 25.033,
+      codec: "h264",
+      frameRate: "30/1",
+    });
+  });
+
   it("uses deterministic local rendering instead of the shared renderer command", () => {
     expect(usesConfiguredVideoRenderer({
       sourceSignals: [{ type: "VIDEO_FACTORY", factoryModule: "DOUYIN_VIRAL" }],

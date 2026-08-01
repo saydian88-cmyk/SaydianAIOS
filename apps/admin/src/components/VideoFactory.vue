@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
 import { Plus, Refresh } from "@element-plus/icons-vue";
-import { api, patch, post } from "../api";
+import { api, patch, post, upload } from "../api";
 
 type Row = Record<string, any>;
 
@@ -16,6 +16,7 @@ const props = withDefaults(defineProps<{
 });
 const emit = defineEmits<{ (event: "open-system-config"): void }>();
 const loading = ref(false);
+const loaded = ref(false);
 const view = ref("topicCards");
 const topicCards = ref<Row[]>([]);
 const projects = ref<Row[]>([]);
@@ -35,6 +36,8 @@ const topicCardEdit = ref(false);
 const approvalDialog = ref(false);
 const selectedProject = ref<Row>();
 const detailDrawer = ref(false);
+const masterUploadInput = ref<HTMLInputElement>();
+const masterUploadBusy = ref(false);
 const outputPreviewDialog = ref(false);
 const selectedOutput = ref<Row>();
 const outputPreviewUrl = ref("");
@@ -150,10 +153,12 @@ const filteredTopicCards = computed(() => topicCards.value.filter((row) => {
     && Number(row.score || 0) >= Number(topicFilters.minScore || 0)
     && Number(card.materialCoverage?.coveragePercent || 0) >= Number(topicFilters.minCoverage || 0);
 }));
-const outputs = computed(() => projects.value.flatMap((project) => [
-  ...(project.videoGenerationJobs || []).filter((job: Row) => job.outputAsset).map((job: Row) => ({ ...job, project, outputType: "AI镜头" })),
-  ...(project.videoRenderJobs || []).filter((job: Row) => job.outputAsset).map((job: Row) => ({ ...job, project, outputType: "最终成片" })),
-]));
+const outputs = computed(() => projects.value.flatMap((project) => {
+  const latest = [...(project.videoRenderJobs || [])]
+    .filter((job: Row) => job.status === "SUCCEEDED" && job.outputAsset)
+    .sort((left: Row, right: Row) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())[0];
+  return latest ? [{ ...latest, project, outputType: "最终成片" }] : [];
+}));
 const topicCardOutput = computed(() =>
   (selectedTopicCard.value?.videoRenderJobs || []).find((job: Row) => job.outputAsset)?.outputAsset,
 );
@@ -229,6 +234,7 @@ async function reload() {
     opportunityKeywords.value = [...douyinKeywords.slice(0, 5), ...tiktokKeywords.slice(0, 5)];
     opportunityReferences.value = referenceRows;
     employees.value = workspace.employees || [];
+    loaded.value = true;
     for (const platform of ["DOUYIN", "TIKTOK"] as const) {
       routeForm[platform] = routeRows.find((item) => item.platform === platform)?.primaryModelId || "";
     }
@@ -510,6 +516,34 @@ async function renderProject(row: Row) {
   }, "成片合成任务已排队");
 }
 
+function selectMasterUpload() {
+  masterUploadInput.value?.click();
+}
+
+async function uploadProjectMaster(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file || !selectedProject.value) return;
+  masterUploadBusy.value = true;
+  try {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("renderer", "CODEX_LOCAL_FFMPEG");
+    for (const shot of selectedProject.value.videoShots || []) {
+      if (shot.selectedAssetId) form.append("sourceAssetIds", shot.selectedAssetId);
+    }
+    await upload(`/api/v1/video-factory/projects/${selectedProject.value.id}/master`, form);
+    ElMessage.success("成片已上传，等待人工审核");
+    await reload();
+    await openProject(selectedProject.value.id);
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "成片上传失败");
+  } finally {
+    masterUploadBusy.value = false;
+    input.value = "";
+  }
+}
+
 async function openOutput(assetId: string) {
   await run(async () => {
     selectedOutput.value = outputs.value.find((item: Row) => item.outputAsset?.id === assetId)
@@ -686,18 +720,18 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="factory-summary">
-      <article><span>待确认选题</span><strong>{{ topicCards.filter((item: Row) => item.productionStage === 'TOPIC_CARD_RECOMMENDED').length }}</strong><small>确认前不会创建生产任务</small></article>
-      <article><span>视频项目</span><strong>{{ projects.length }}</strong><small>脚本、分镜、成片统一追踪</small></article>
-      <article><span>执行中</span><strong>{{ runningCount }}</strong><small>生成与渲染异步处理</small></article>
-      <article><span>待审核成片</span><strong>{{ outputs.filter((item: Row) => item.outputAsset?.reviewStatus === 'PENDING').length }}</strong><small>审核通过前不可发布</small></article>
+      <article><span>待确认选题</span><strong>{{ loaded ? topicCards.filter((item: Row) => item.productionStage === 'TOPIC_CARD_RECOMMENDED').length : '—' }}</strong><small>确认前不会创建生产任务</small></article>
+      <article><span>视频项目</span><strong>{{ loaded ? projects.length : '—' }}</strong><small>脚本、分镜、成片统一追踪</small></article>
+      <article><span>执行中</span><strong>{{ loaded ? runningCount : '—' }}</strong><small>生成与渲染异步处理</small></article>
+      <article><span>待审核成片</span><strong>{{ loaded ? outputs.filter((item: Row) => item.outputAsset?.reviewStatus === 'PENDING').length : '—' }}</strong><small>审核通过前不可发布</small></article>
     </div>
 
     <el-segmented v-model="view" :options="[
-      { label: `视频选题卡 ${topicCards.length}`, value: 'topicCards' },
-      { label: `视频项目 ${projects.length}`, value: 'projects' },
+      { label: loaded ? `视频选题卡 ${topicCards.length}` : '视频选题卡', value: 'topicCards' },
+      { label: loaded ? `视频项目 ${projects.length}` : '视频项目', value: 'projects' },
       { label: '分镜与素材', value: 'shots' },
-      { label: `生成任务 ${runningCount}`, value: 'jobs' },
-      { label: `成片库 ${outputs.length}`, value: 'outputs' },
+      { label: loaded ? `生成任务 ${runningCount}` : '生成任务', value: 'jobs' },
+      { label: loaded ? `成片库 ${outputs.length}` : '成片库', value: 'outputs' },
       { label: '质检审核', value: 'quality' },
     ]" />
 
@@ -775,8 +809,8 @@ onBeforeUnmount(() => {
         <el-table-column label="审核" width="120"><template #default="scope"><el-tag :type="tagType(scope.row.outputAsset.reviewStatus)">{{ label(scope.row.outputAsset.reviewStatus) }}</el-tag></template></el-table-column>
         <el-table-column label="尺寸" width="130"><template #default="scope">{{ scope.row.outputAsset.width || '—' }}×{{ scope.row.outputAsset.height || '—' }}</template></el-table-column>
         <el-table-column label="时长" width="90"><template #default="scope">{{ Number(scope.row.outputAsset.durationSeconds || 0).toFixed(1) }}s</template></el-table-column>
-        <el-table-column label="编码/帧率" width="135"><template #default="scope">{{ scope.row.outputAsset.sourceSnapshot?.metadata?.codec || '—' }}<small>{{ scope.row.outputAsset.sourceSnapshot?.metadata?.frameRate || '—' }}</small></template></el-table-column>
-        <el-table-column label="素材来源" min-width="150"><template #default="scope">{{ scope.row.outputAsset.sourceSnapshot?.metadata?.source || scope.row.renderer || '—' }}<small>{{ scope.row.outputAsset.sourceSnapshot?.metadata?.usedAssetIds?.length || 0 }}项素材</small></template></el-table-column>
+        <el-table-column label="编码/帧率" width="135"><template #default="scope">{{ scope.row.outputAsset.sourceSnapshot?.metadata?.codec || scope.row.outputAsset.sourceSnapshot?.codec || '未记录' }}<small>{{ scope.row.outputAsset.sourceSnapshot?.metadata?.frameRate || scope.row.outputAsset.sourceSnapshot?.frameRate || '未记录' }}</small></template></el-table-column>
+        <el-table-column label="素材来源" min-width="150"><template #default="scope">{{ scope.row.outputAsset.sourceSnapshot?.metadata?.source || scope.row.outputAsset.sourceSnapshot?.renderer || scope.row.renderer || '—' }}<small>{{ (scope.row.outputAsset.sourceSnapshot?.metadata?.usedAssetIds || scope.row.outputAsset.sourceSnapshot?.shotAssetIds || []).length }}项素材</small></template></el-table-column>
         <el-table-column label="操作" width="200"><template #default="scope"><el-button link type="primary" @click="openOutput(scope.row.outputAsset.id)">预览</el-button><el-button v-if="scope.row.outputAsset.reviewStatus === 'PENDING'" link type="success" @click="reviewOutput(scope.row.outputAsset.id, true)">通过</el-button><el-button v-if="scope.row.outputAsset.reviewStatus === 'PENDING'" link type="danger" @click="reviewOutput(scope.row.outputAsset.id, false)">退回</el-button></template></el-table-column>
       </el-table>
     </div>
@@ -1009,7 +1043,11 @@ onBeforeUnmount(() => {
           <el-table-column label="素材" min-width="180"><template #default="scope">{{ scope.row.selectedAsset?.displayName || '待补素材' }}</template></el-table-column>
           <el-table-column label="操作" width="250"><template #default="scope"><el-button v-if="scope.row.status === 'OPEN'" link type="primary" @click="generateShot(scope.row)">智能推荐生成</el-button><el-dropdown v-if="scope.row.status === 'OPEN'" @command="generateShot(scope.row, $event)"><el-button link>指定模型</el-button><template #dropdown><el-dropdown-menu><el-dropdown-item v-for="model in shotModels(scope.row)" :key="model.id" :command="model.id">{{ model.provider.displayName }} · {{ model.displayName }}</el-dropdown-item></el-dropdown-menu></template></el-dropdown><el-button v-if="scope.row.selectedAssetId" link @click="openOutput(scope.row.selectedAssetId)">预览</el-button></template></el-table-column>
         </el-table>
-        <div class="detail-actions"><el-button v-if="selectedProject.productionStage === 'READY_TO_EDIT'" type="primary" @click="renderProject(selectedProject)">合成1080×1920成片</el-button></div>
+        <div class="detail-actions">
+          <input ref="masterUploadInput" class="native-file-input" type="file" accept="video/mp4,.mp4" @change="uploadProjectMaster" />
+          <el-button :loading="masterUploadBusy" @click="selectMasterUpload">上传本地成片</el-button>
+          <el-button v-if="selectedProject.productionStage === 'READY_TO_EDIT'" type="primary" @click="renderProject(selectedProject)">合成1080×1920成片</el-button>
+        </div>
       </template>
     </el-drawer>
   </section>
@@ -1033,6 +1071,7 @@ onBeforeUnmount(() => {
 .model-route { grid-template-columns: 1fr 1fr; }.model-route article { display: grid; grid-template-columns: 150px 1fr auto; align-items: center; gap: 10px; }.two-cards { grid-template-columns: .9fr 1.1fr; }.card-title { display: flex; align-items: center; justify-content: space-between; padding: 12px 15px; border-bottom: 1px solid #edf0f5; }.card-title h4 { margin: 0; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 18px; }.form-grid .full { grid-column: 1 / -1; }.form-tip { display: block; margin-top: 6px; color: #8a94a5; }
 .detail-head { display: flex; align-items: center; justify-content: space-between; padding-bottom: 14px; border-bottom: 1px solid #edf0f5; }.detail-head strong, .detail-head span { display: block; }.detail-head strong { font-size: 22px; }.detail-head span { margin-top: 4px; color: #7c8797; }
+.native-file-input { display: none; }
 .candidate-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 20px; }.candidate-grid article { padding: 14px; border: 1px solid #e3e8f0; border-radius: 12px; }.candidate-grid strong { display: block; margin: 8px 0; }.candidate-grid p { min-height: 48px; color: #657187; }.candidate-grid small { display: block; margin-bottom: 9px; color: #8a94a5; }.detail-actions { display: flex; justify-content: flex-end; padding-top: 16px; }
 @media (max-width: 1100px) { .factory-summary, .opportunity-grid, .candidate-grid, .topic-card-kpis, .topic-detail-grid { grid-template-columns: 1fr 1fr; }.two-cards, .model-route, .topic-filters { grid-template-columns: 1fr 1fr; }.viral-pipeline { grid-template-columns: 1fr 1fr; }.viral-pipeline i { display: none; } }
 </style>
