@@ -3059,8 +3059,18 @@ export class AiTaskCenterService implements OnModuleInit {
     const stale = await this.prisma.aiTask.findMany({
       where: {
         status: { in: ["CLAIMED", "RUNNING", "QUALITY_CHECK", "UPLOADING"] },
-        lockedBy: { not: null },
-        heartbeatAt: { lt: staleAt },
+        OR: [
+          // A normal runner-owned task has a lock and periodically refreshes
+          // its heartbeat.  It is safe to release only after that heartbeat is
+          // stale.
+          { lockedBy: { not: null }, heartbeatAt: { lt: staleAt } },
+          // Older runners could clear the lock after reporting a partial
+          // result, while leaving the task in an executing status.  Such a
+          // task can never be claimed again and otherwise remains stuck in
+          // the employee project forever.  Treat it as an orphan once it has
+          // not changed for the same timeout window.
+          { lockedBy: null, updatedAt: { lt: staleAt } },
+        ],
       },
       select: { id: true, lockedBy: true, retryCount: true, maxRetries: true },
     });
