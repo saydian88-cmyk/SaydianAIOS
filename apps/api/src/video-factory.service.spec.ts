@@ -1,6 +1,16 @@
 import { BadRequestException } from "@nestjs/common";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { materialReviewApproved, VideoFactoryService } from "./video-factory.service";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { encryptIntegrationValue } from "./integration-secret";
+import {
+  applyVideoShotImageFallback,
+  materialReviewApproved,
+  partitionVideoShotAssetIds,
+  videoFactoryModule,
+  videoRenderJobIsStale,
+  VideoFactoryService,
+} from "./video-factory.service";
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe("material review gate", () => {
   it("accepts only the approved current workflow and binding fingerprint", () => {
@@ -21,6 +31,64 @@ describe("material review gate", () => {
   });
 });
 
+describe("video shot asset classification", () => {
+  it("keeps product images auxiliary instead of treating them as completed video shots", () => {
+    expect(partitionVideoShotAssetIds(
+      ["image-1", "video-1"],
+      ["image-2"],
+      [
+        { id: "image-1", kind: "IMAGE" },
+        { id: "image-2", kind: "IMAGE" },
+        { id: "video-1", kind: "VIDEO" },
+      ],
+    )).toEqual({
+      matchedVideoAssetIds: ["video-1"],
+      auxiliaryImageAssetIds: ["image-2", "image-1"],
+    });
+  });
+
+  it("reuses an approved product image for every uncovered generated shot", () => {
+    expect(applyVideoShotImageFallback([
+      { matchedAssetIds: [], matchedVideoAssetIds: [], auxiliaryImageAssetIds: [], reason: "缺少镜头" },
+      { matchedAssetIds: [], matchedVideoAssetIds: [], auxiliaryImageAssetIds: [], reason: "缺少镜头" },
+    ], ["product-image-1"])).toEqual([
+      {
+        matchedAssetIds: ["product-image-1"],
+        matchedVideoAssetIds: [],
+        auxiliaryImageAssetIds: ["product-image-1"],
+        reason: "缺少镜头；使用已审核产品图保持产品外观一致",
+      },
+      {
+        matchedAssetIds: ["product-image-1"],
+        matchedVideoAssetIds: [],
+        auxiliaryImageAssetIds: ["product-image-1"],
+        reason: "缺少镜头；使用已审核产品图保持产品外观一致",
+      },
+    ]);
+  });
+
+  it("preserves the dedicated Douyin factory module from a Codex project signal", () => {
+    expect(videoFactoryModule({
+      sourceSignals: [{ type: "VIDEO_FACTORY", factoryModule: "DOUYIN_VIRAL" }],
+    })).toBe("DOUYIN_VIRAL");
+  });
+
+  it("requeues only an interrupted viral render after its shorter local-render timeout", () => {
+    const startedAt = new Date("2026-08-01T00:00:00.000Z");
+    const now = new Date("2026-08-01T00:11:00.000Z");
+    expect(videoRenderJobIsStale(
+      { sourceSignals: [{ type: "VIDEO_FACTORY", factoryModule: "DOUYIN_VIRAL" }] },
+      { status: "RUNNING", startedAt },
+      now,
+    )).toBe(true);
+    expect(videoRenderJobIsStale(
+      { sourceSignals: [{ type: "VIDEO_FACTORY", factoryModule: "GENERAL_VIDEO_FACTORY" }] },
+      { status: "RUNNING", startedAt },
+      now,
+    )).toBe(false);
+  });
+});
+
 describe("VideoFactoryService model routing", () => {
   let prisma: Record<string, any>;
   let service: VideoFactoryService;
@@ -35,7 +103,9 @@ describe("VideoFactoryService model routing", () => {
         findFirst: vi.fn(),
       },
       videoModelProvider: {
+        findUnique: vi.fn(),
         findMany: vi.fn(),
+        update: vi.fn(),
       },
       contentPlan: {
         count: vi.fn(),
@@ -128,6 +198,31 @@ describe("VideoFactoryService model routing", () => {
     expect(result[0]).not.toHaveProperty("secretRef");
   });
 
+  it("checks Seedance credentials without creating a paid generation task", async () => {
+    prisma.videoModelProvider.findUnique.mockResolvedValue({
+      id: "seedance-provider",
+      code: "VOLCENGINE_SEEDANCE",
+      baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+      publicConfig: {},
+      secretRef: encryptIntegrationValue(JSON.stringify({ apiKey: "ark-key" })),
+    });
+    prisma.videoModelProvider.update.mockImplementation(({ data }: any) => Promise.resolve({
+      id: "seedance-provider",
+      code: "VOLCENGINE_SEEDANCE",
+      secretRef: "encrypted",
+      ...data,
+    }));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 404 }));
+
+    const result = await service.checkProvider("seedance-provider", "admin");
+
+    expect(result).toMatchObject({ state: "HEALTHY", secretConfigured: true });
+    expect(fetch).toHaveBeenCalledWith(
+      "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks/__saydian_connection_check__",
+      expect.objectContaining({ headers: { Authorization: "Bearer ark-key" } }),
+    );
+  });
+
   it("serializes nested asset BigInt fields in project lists", async () => {
     prisma.contentPlan.findMany.mockResolvedValue([{
       id: "project-1",
@@ -202,7 +297,7 @@ describe("VideoFactoryService model routing", () => {
     prisma.videoGenerationJob.count.mockResolvedValue(2);
     prisma.videoRenderJob.count.mockResolvedValue(1);
 
-    const result = await service.archiveProject("project-delete", "运营甲");
+    const result = await service.archiveProject("project-delete", "管理员", true);
 
     expect(result).toMatchObject({
       archived: true,
@@ -236,6 +331,65 @@ describe("VideoFactoryService model routing", () => {
 
     expect(result?.productionStage).toBe("SCRIPT_GENERATING");
     expect(prisma.contentPlan.update).not.toHaveBeenCalled();
+  });
+
+  it("queues Bailian script generation without blocking the project response", async () => {
+    prisma.contentPlan.findUnique.mockResolvedValue({
+      id: "system-ai-project",
+      productionStage: "PROJECT_BRIEF",
+      sourceSignals: [{
+        type: "VIDEO_FACTORY",
+        scriptEngineStatus: { SYSTEM_AI: "PENDING" },
+        scriptEngineErrors: { SYSTEM_AI: "previous error" },
+      }],
+    });
+    prisma.contentPlan.update.mockResolvedValue({});
+    let releaseGeneration: ((value: any) => void) | undefined;
+    vi.spyOn(service, "generateSystemScriptCandidate").mockImplementation(() => new Promise((resolve) => {
+      releaseGeneration = resolve;
+    }));
+    vi.spyOn(service, "project").mockResolvedValue({ id: "system-ai-project", productionStage: "SCRIPT_GENERATING" } as never);
+
+    const result = await service.enqueueSystemScriptCandidate("system-ai-project", "operator");
+
+    expect(result).toMatchObject({ id: "system-ai-project", productionStage: "SCRIPT_GENERATING" });
+    expect(prisma.contentPlan.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ productionStage: "SCRIPT_GENERATING" }),
+    }));
+    const writtenSignals = prisma.contentPlan.update.mock.calls[0][0].data.sourceSignals;
+    expect(writtenSignals[0].scriptEngineStatus.SYSTEM_AI).toBe("RUNNING");
+    expect(writtenSignals[0].scriptEngineErrors.SYSTEM_AI).toBe("");
+    expect(service.generateSystemScriptCandidate).toHaveBeenCalledWith("system-ai-project", "operator", "");
+
+    releaseGeneration?.({ id: "system-ai-project" });
+    await Promise.resolve();
+  });
+
+  it("keeps the same project and prepares a Codex retry after Bailian fails", async () => {
+    prisma.contentPlan.findUnique.mockResolvedValue({
+      id: "failed-system-ai-project",
+      productionStage: "SCRIPT_GENERATING",
+      sourceSignals: [{
+        type: "VIDEO_FACTORY",
+        brief: { scriptEngines: ["SYSTEM_AI"], videoType: "功能演示型" },
+        scriptEngineStatus: { SYSTEM_AI: "FAILED" },
+        scriptEngineErrors: { SYSTEM_AI: "百炼生成超时" },
+      }],
+    });
+    prisma.contentPlan.update.mockResolvedValue({});
+    prisma.auditLog.create.mockResolvedValue({});
+    vi.spyOn(service, "project").mockResolvedValue({ id: "failed-system-ai-project" } as never);
+
+    await service.requestRemoteScriptAfterSystemFailure("failed-system-ai-project", "operator");
+
+    expect(prisma.contentPlan.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: "failed-system-ai-project" },
+      data: expect.objectContaining({ productionStage: "SCRIPT_RETURNED" }),
+    }));
+    const writtenSignals = prisma.contentPlan.update.mock.calls[0][0].data.sourceSignals;
+    expect(writtenSignals[0].brief.scriptEngines).toEqual(["SYSTEM_AI", "REMOTE_CODEX"]);
+    expect(writtenSignals[0].brief.remoteTransferContext.systemAiFailureReason).toBe("百炼生成超时");
+    expect(writtenSignals[0].scriptEngineStatus.REMOTE_CODEX).toBe("PENDING");
   });
 
   it("keeps line ids and material bindings for punctuation-only script edits", async () => {

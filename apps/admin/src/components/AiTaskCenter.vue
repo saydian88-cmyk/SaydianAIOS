@@ -168,6 +168,7 @@ function hasSuccessfulAttempt(task?: Row) {
 function routedSkill(task?: Row) {
   if (task?.output?.execution?.skill) return task.output.execution.skill;
   if (!hasSuccessfulAttempt(task)) return "等待执行";
+  if (task?.input?.factoryModule === "DOUYIN_VIRAL") return "saydian-douyin-viral-video-generator";
   return ({
     VIDEO: "video-editing-from-media-library-share",
     IMAGE: "imagegen",
@@ -225,7 +226,7 @@ function time(value?: string) {
 async function load() {
   loading.value = true;
   try {
-    const [summary, taskRows, policyRows, runnerRows, ledger, wecomStatus, productRows] = await Promise.all([
+    const [summary, taskRows, policyRows, runnerRows, ledger, wecomStatus, productRows] = await Promise.allSettled([
       api<Row>("/api/v1/ai-tasks/overview"),
       api<Row[]>("/api/v1/ai-tasks"),
       api<Row[]>("/api/v1/ai-tasks/policies"),
@@ -234,13 +235,19 @@ async function load() {
       api<Row>("/api/v1/ai-tasks/notifications/wecom"),
       api<Row[]>("/api/v1/brand-data/products"),
     ]);
-    overview.value = summary;
-    tasks.value = taskRows;
-    policies.value = policyRows.map((row) => ({ ...row }));
-    runners.value = runnerRows;
-    employees.value = ledger.employees || [];
-    products.value = productRows || [];
-    Object.assign(wecom, wecomStatus, { appSecret: "" });
+    if (summary.status === "fulfilled") overview.value = summary.value;
+    if (taskRows.status === "fulfilled") tasks.value = taskRows.value;
+    if (policyRows.status === "fulfilled") policies.value = policyRows.value.map((row) => ({ ...row }));
+    if (runnerRows.status === "fulfilled") runners.value = runnerRows.value;
+    if (ledger.status === "fulfilled") employees.value = ledger.value.employees || [];
+    if (productRows.status === "fulfilled") products.value = productRows.value || [];
+    if (wecomStatus.status === "fulfilled") Object.assign(wecom, wecomStatus.value, { appSecret: "" });
+
+    const coreFailures = [summary, taskRows].filter((result) => result.status === "rejected");
+    if (coreFailures.length) {
+      const reason = coreFailures[0]?.status === "rejected" ? coreFailures[0].reason : undefined;
+      ElMessage.error(reason instanceof Error ? reason.message : "AI任务数据加载失败");
+    }
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : "AI任务中心加载失败");
   } finally {
@@ -572,7 +579,8 @@ onMounted(load);
         <el-table-column label="操作" width="290" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="showDetail(row)">详情</el-button>
-            <el-button v-if="['PENDING','WAITING_CONFIRMATION','RETURNED'].includes(row.status)" link type="primary" @click="action(row, 'start')">运行</el-button>
+            <span v-if="row.status === 'PENDING'" class="muted">已排队</span>
+            <el-button v-if="['WAITING_CONFIRMATION','RETURNED'].includes(row.status)" link type="primary" @click="action(row, 'start')">运行</el-button>
             <el-button v-if="runningStatuses.includes(row.status)" link type="danger" @click="action(row, 'cancel')">取消</el-button>
             <el-button v-if="['FAILED','CANCELLED'].includes(row.status)" link type="warning" @click="action(row, 'retry')">重试</el-button>
             <el-button v-if="row.status === 'PENDING_REVIEW'" link type="success" @click="openReview(row, 'APPROVE')">通过</el-button>

@@ -38,6 +38,7 @@ export type VideoMaterialCoverage = {
 
 export type VideoTopicCardPayload = {
   cardNo?: string;
+  factoryModule?: "DOUYIN_VIRAL" | "GENERAL_VIDEO_FACTORY";
   platform: "DOUYIN" | "TIKTOK";
   market: string;
   productModel?: string;

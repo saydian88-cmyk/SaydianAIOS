@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateBailianVideoScriptResult } from "./bailian-video-script-policy";
+import { buildBailianEditingVideoContext, validateBailianVideoScriptResult } from "./bailian-video-script-policy";
 import { isCompleteVideoCandidate, type AiVideoCandidate } from "./ai-content.service";
 
 function candidate(overrides: Partial<AiVideoCandidate> = {}): AiVideoCandidate {
@@ -83,6 +83,28 @@ describe("video candidate completeness", () => {
 });
 
 describe("Bailian video-script material gate", () => {
+  it("sends only editing-footage videos to Bailian", () => {
+    const context = buildBailianEditingVideoContext({
+      assets: [
+        { id: "video-1", kind: "VIDEO", purpose: "EDITING_FOOTAGE" },
+        { id: "image-1", kind: "IMAGE", purpose: "EDITING_FOOTAGE" },
+        { id: "audio-1", kind: "AUDIO", purpose: "EDITING_FOOTAGE" },
+        { id: "packaging-video-1", kind: "VIDEO", purpose: "PACKAGING_RESOURCE" },
+        { id: "cover-video-1", kind: "VIDEO", resourceType: "COVER_TEMPLATE" },
+      ],
+      packagingResources: [{ id: "pack-1", kind: "VIDEO" }],
+      imageAssets: [{ id: "image-2", kind: "IMAGE" }],
+      audioAssets: [{ id: "audio-2", kind: "AUDIO" }],
+    }) as Record<string, any>;
+
+    expect(context.assets).toEqual([{ id: "video-1", kind: "VIDEO", purpose: "EDITING_FOOTAGE" }]);
+    expect(context.availableVideoAssetIds).toEqual(["video-1"]);
+    expect(context.assetInputPolicy.mode).toBe("EDITING_VIDEO_ONLY");
+    expect(context.packagingResources).toBeUndefined();
+    expect(context.imageAssets).toBeUndefined();
+    expect(context.audioAssets).toBeUndefined();
+  });
+
   it("accepts covered lines only when they bind real video assets", () => {
     const value = candidate({ assetIds: ["video-1"] }) as unknown as Record<string, unknown>;
     expect(validateBailianVideoScriptResult(value, {
@@ -103,6 +125,23 @@ describe("Bailian video-script material gate", () => {
     expect(validateBailianVideoScriptResult(value, {
       assets: [{ id: "video-1", kind: "VIDEO" }],
     })).toContain("line_01标记COVERED但没有绑定真实VIDEO素材");
+  });
+
+  it("rejects any auxiliary image returned by Bailian", () => {
+    const value = candidate({ assetIds: ["video-1"] }) as unknown as Record<string, any>;
+    value.scriptPackage.shotRequirements[0].auxiliaryImageAssetIds = ["image-1"];
+    const errors = validateBailianVideoScriptResult(value, {
+      assets: [{ id: "video-1", kind: "VIDEO" }],
+    });
+    expect(errors).toContain("line_01百炼脚本请求未提供图片或包装资源，auxiliaryImageAssetIds必须为空");
+  });
+
+  it("requires top-level assetIds to equal the videos used by script lines", () => {
+    const value = candidate({ assetIds: [] }) as unknown as Record<string, any>;
+    const errors = validateBailianVideoScriptResult(value, {
+      assets: [{ id: "video-1", kind: "VIDEO" }],
+    });
+    expect(errors).toContain("assetIds缺少逐句已绑定的视频素材：video-1");
   });
 
   it("rejects weak hooks and missing internet-style checks", () => {

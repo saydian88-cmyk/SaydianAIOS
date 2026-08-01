@@ -9,7 +9,7 @@ import { opsConfig } from "./config";
 import { decryptIntegrationValue } from "./integration-secret";
 import { OssStorageService } from "./oss-storage.service";
 import { PrismaService } from "./prisma.service";
-import { VideoFactoryService } from "./video-factory.service";
+import { videoFactoryModule, VideoFactoryService } from "./video-factory.service";
 
 const execFileAsync = promisify(execFile);
 const execAsync = promisify(exec);
@@ -41,6 +41,90 @@ function ffmpegFilterPath(path: string) {
   return path.replaceAll("\\", "/").replaceAll(":", "\\:").replaceAll("'", "\\'");
 }
 
+function providerFailureMessage(message: string) {
+  if (/account balance not enough/i.test(message)) return "视频模型账户余额不足，请充值或切换备用模型";
+  if (/quota|rate limit/i.test(message)) return "视频模型额度或调用频率已达上限，请稍后重试或切换备用模型";
+  return message;
+}
+
+export function usesConfiguredVideoRenderer(plan: { sourceSignals: unknown }) {
+  return videoFactoryModule(plan) !== "DOUYIN_VIRAL";
+}
+
+export function wrapVideoSubtitle(value: unknown, maxCharsPerLine = 14) {
+  const text = String(value || "").replace(/\s+/gu, " ").trim();
+  if (!text) return "";
+  const maximum = Math.max(8, maxCharsPerLine) * 2;
+  const characters = Array.from(text);
+  const limited = characters.length > maximum
+    ? [...characters.slice(0, maximum - 1), "…"]
+    : characters;
+  if (limited.length <= maxCharsPerLine) return limited.join("");
+  const splitAt = Math.min(maxCharsPerLine, Math.ceil(limited.length / 2));
+  return `${limited.slice(0, splitAt).join("")}\n${limited.slice(splitAt).join("")}`;
+}
+
+export function videoRenderCaptionTexts(plan: {
+  sourceSignals: unknown;
+  hook: unknown;
+  objective: unknown;
+  outline: unknown;
+  videoShots: Array<{ description: unknown }>;
+}) {
+  const signals = Array.isArray(plan.sourceSignals) ? plan.sourceSignals.map(object) : [];
+  const factory = signals.find((item) => item.type === "VIDEO_FACTORY") || {};
+  const candidates = Array.isArray(factory.scriptCandidates) ? factory.scriptCandidates.map(object) : [];
+  const selectedIndex = Math.max(0, Math.min(candidates.length - 1, Number(factory.selectedCandidateIndex || 0)));
+  const selected = candidates[selectedIndex] || {};
+  const candidateShots = Array.isArray(selected.shots) ? selected.shots.map(object) : [];
+  const packageSubtitles = strings(object(selected.scriptPackage).subtitles);
+  const outline = Array.isArray(plan.outline) ? plan.outline.map(String) : [];
+
+  return plan.videoShots.map((shot, index) => {
+    const candidateShot = candidateShots[index] || {};
+    const concise = String(candidateShot.subtitle || packageSubtitles[index] || candidateShot.voiceover || "").trim();
+    const fallback = index === 0
+      ? plan.hook
+      : index === plan.videoShots.length - 1
+        ? plan.objective
+        : outline[index] || shot.description;
+    return wrapVideoSubtitle(concise || fallback || shot.description);
+  });
+}
+
+export type VideoTechnicalMetadata = {
+  ok: boolean;
+  width: number;
+  height: number;
+  duration: number;
+  codec: string;
+  frameRate: string;
+  error?: string;
+};
+
+export function parseVideoTechnicalMetadata(stdout: string): VideoTechnicalMetadata {
+  const parsed = JSON.parse(stdout) as {
+    streams?: Array<{
+      width?: number;
+      height?: number;
+      duration?: string;
+      codec_name?: string;
+      avg_frame_rate?: string;
+      r_frame_rate?: string;
+    }>;
+    format?: { duration?: string };
+  };
+  const stream = parsed.streams?.[0] || {};
+  return {
+    ok: Boolean(stream.width && stream.height),
+    width: Number(stream.width || 0),
+    height: Number(stream.height || 0),
+    duration: Number(stream.duration || parsed.format?.duration || 0),
+    codec: String(stream.codec_name || "").trim(),
+    frameRate: String(stream.avg_frame_rate || stream.r_frame_rate || "").trim(),
+  };
+}
+
 type ProviderResult =
   | { state: "RUNNING"; externalJobId: string; response: JsonRow }
   | { state: "SUCCEEDED"; externalJobId?: string; outputUrl?: string; contentUrl?: string; response: JsonRow; cost?: number }
@@ -63,6 +147,11 @@ export class VideoFactoryWorkerService {
       await this.processGeneration(generation.id).catch((error) => this.failGeneration(generation.id, error));
       return { kind: "GENERATION", id: generation.id };
     }
+    const render = await this.claimRenderJob();
+    if (render) {
+      await this.processRender(render.id).catch((error) => this.failRender(render.id, error));
+      return { kind: "RENDER", id: render.id };
+    }
     const running = await this.prisma.videoGenerationJob.findFirst({
       where: { status: "RUNNING", attempts: { some: { status: "RUNNING", externalJobId: { not: null } } } },
       orderBy: { updatedAt: "asc" },
@@ -70,11 +159,6 @@ export class VideoFactoryWorkerService {
     if (running) {
       await this.pollGeneration(running.id).catch((error) => this.failGeneration(running.id, error));
       return { kind: "GENERATION_POLL", id: running.id };
-    }
-    const render = await this.claimRenderJob();
-    if (render) {
-      await this.processRender(render.id).catch((error) => this.failRender(render.id, error));
-      return { kind: "RENDER", id: render.id };
     }
     return null;
   }
@@ -158,17 +242,21 @@ export class VideoFactoryWorkerService {
     const input = object(job.input);
     const capability = strings(input.auxiliaryImageAssetIds).length ? "IMAGE_TO_VIDEO" : "TEXT_TO_VIDEO";
     const fixed = job.routingMode === "FIXED";
+    const scenario = String(
+      input.modelScenario
+      || (String(input.factoryModule || "").toUpperCase() === "DOUYIN_VIRAL" ? "DOUYIN_VIRAL" : "SCENE"),
+    ).toUpperCase();
     const resolved = await this.factory.resolveModel({
       requestedModelId: fixed ? job.requestedModelId : undefined,
       platform: String(input.platform || ""),
-      scenario: "SCENE",
+      scenario,
       capability,
     });
     let models = [resolved.primary, ...resolved.fallbacks];
     if (fixed && job.allowFallback) {
       const automatic = await this.factory.resolveModel({
         platform: String(input.platform || ""),
-        scenario: "SCENE",
+        scenario,
         capability,
       });
       models = [
@@ -300,7 +388,49 @@ export class VideoFactoryWorkerService {
     let url = "";
     let body: JsonRow = {};
 
-    if (provider.code === "BAILIAN_WAN") {
+    if (provider.code === "VOLCENGINE_SEEDANCE") {
+      const config = { ...object(provider.publicConfig), ...object(model.modelConfig) };
+      url = `${baseUrl}/contents/generations/tasks`;
+      body = {
+        model: model.code,
+        content: [
+          { type: "text", text: job.prompt },
+          ...(reference ? [{
+            type: "image_url",
+            image_url: { url: reference.url },
+            role: String(config.imageRole || "reference_image"),
+          }] : []),
+        ],
+        resolution: String(input.resolution || config.resolution || "720p").toLowerCase(),
+        ratio: String(input.ratio || config.ratio || "9:16"),
+        duration: Math.max(4, Math.min(15, duration)),
+        generate_audio: config.generateAudio !== false,
+        watermark: config.watermark === true,
+      };
+    } else if (provider.code === "KLING") {
+      const config = { ...object(provider.publicConfig), ...object(model.modelConfig) };
+      const endpointModel = String(config.endpointModel || "kling-3.0-turbo");
+      const settings: JsonRow = {
+        resolution: String(input.resolution || config.resolution || "720p").toLowerCase(),
+        duration: Math.max(3, Math.min(15, Math.round(duration))),
+      };
+      if (!reference) settings.aspect_ratio = String(input.ratio || config.ratio || "9:16");
+      url = `${baseUrl}/${reference ? "image-to-video" : "text-to-video"}/${encodeURIComponent(endpointModel)}`;
+      body = reference
+        ? {
+          contents: [
+            { type: "prompt", text: job.prompt },
+            { type: "first_frame", url: reference.url },
+          ],
+          settings,
+          options: { external_task_id: job.id, watermark_info: { enabled: config.watermark === true } },
+        }
+        : {
+          prompt: job.prompt,
+          settings,
+          options: { external_task_id: job.id, watermark_info: { enabled: config.watermark === true } },
+        };
+    } else if (provider.code === "BAILIAN_WAN") {
       url = opsConfig.bailian.videoGenerationUrl;
       body = {
         model: model.code,
@@ -352,12 +482,22 @@ export class VideoFactoryWorkerService {
       signal: AbortSignal.timeout(60_000),
     });
     const payload = await response.json().catch(() => ({})) as JsonRow;
-    if (!response.ok) return { state: "FAILED", error: String(payload.message || payload.error || `模型请求失败（${response.status}）`), response: payload };
+    if (!response.ok) return {
+      state: "FAILED",
+      error: String(payload.message || object(payload.error).message || payload.error || `模型请求失败（${response.status}）`),
+      response: payload,
+    };
+    if (provider.code === "KLING" && Number(payload.code ?? 0) !== 0) return {
+      state: "FAILED",
+      error: String(payload.message || "可灵任务创建失败"),
+      response: payload,
+    };
     const externalJobId = String(
       object(payload.output).task_id
       || payload.id
       || object(payload.data).video_id
       || object(payload.data).task_id
+      || object(payload.data).id
       || "",
     );
     const immediateUrl = String(
@@ -379,7 +519,9 @@ export class VideoFactoryWorkerService {
   ): Promise<ProviderResult> {
     const baseUrl = String(provider.baseUrl || "").replace(/\/$/u, "");
     let url = "";
-    if (provider.code === "BAILIAN_WAN") url = `${opsConfig.bailian.taskUrl.replace(/\/$/u, "")}/${encodeURIComponent(externalJobId)}`;
+    if (provider.code === "VOLCENGINE_SEEDANCE") url = `${baseUrl}/contents/generations/tasks/${encodeURIComponent(externalJobId)}`;
+    else if (provider.code === "KLING") url = `${baseUrl}/tasks?task_ids=${encodeURIComponent(externalJobId)}`;
+    else if (provider.code === "BAILIAN_WAN") url = `${opsConfig.bailian.taskUrl.replace(/\/$/u, "")}/${encodeURIComponent(externalJobId)}`;
     else if (provider.code === "RUNWAY") url = `${baseUrl}/v1/tasks/${encodeURIComponent(externalJobId)}`;
     else if (provider.code === "HEYGEN") url = `${baseUrl}/v1/video_status.get?video_id=${encodeURIComponent(externalJobId)}`;
     else if (provider.code === "OPENAI_VIDEOS") url = `${baseUrl}/videos/${encodeURIComponent(externalJobId)}`;
@@ -395,15 +537,32 @@ export class VideoFactoryWorkerService {
       signal: AbortSignal.timeout(30_000),
     });
     const payload = await response.json().catch(() => ({})) as JsonRow;
-    if (!response.ok) return { state: "FAILED", externalJobId, error: String(payload.message || payload.error || `进度查询失败（${response.status}）`), response: payload };
+    if (!response.ok) return {
+      state: "FAILED",
+      externalJobId,
+      error: String(payload.message || object(payload.error).message || payload.error || `进度查询失败（${response.status}）`),
+      response: payload,
+    };
+    if (provider.code === "KLING" && Number(payload.code ?? 0) !== 0) return {
+      state: "FAILED",
+      externalJobId,
+      error: String(payload.message || "可灵进度查询失败"),
+      response: payload,
+    };
     const output = object(payload.output);
-    const data = object(payload.data);
+    const klingData = provider.code === "KLING" && Array.isArray(payload.data) ? object(payload.data[0]) : {};
+    const data = provider.code === "KLING" ? klingData : object(payload.data);
+    const content = object(payload.content);
     const status = statusValue(output.task_status || payload.status || data.status || payload.state);
     const outputArray = Array.isArray(payload.output) ? payload.output : [];
+    const klingOutputs = Array.isArray(data.outputs) ? data.outputs.map(object) : [];
+    const klingVideo = klingOutputs.find((item) => String(item.type || "") === "video") || {};
     const outputUrl = String(
       output.video_url
       || data.video_url
       || data.video_url_caption
+      || klingVideo.url
+      || content.video_url
       || payload.video_url
       || outputArray[0]
       || "",
@@ -413,7 +572,15 @@ export class VideoFactoryWorkerService {
         return { state: "SUCCEEDED", externalJobId, contentUrl: `${baseUrl}/videos/${encodeURIComponent(externalJobId)}/content`, response: payload };
       }
       if (!outputUrl) return { state: "FAILED", externalJobId, error: "任务完成但未返回视频地址", response: payload };
-      return { state: "SUCCEEDED", externalJobId, outputUrl, response: payload };
+      const klingBilling = Array.isArray(data.billing) ? data.billing.map(object) : [];
+      const cashCharge = klingBilling.find((item) => String(item.charge_type || "") === "cash");
+      return {
+        state: "SUCCEEDED",
+        externalJobId,
+        outputUrl,
+        response: payload,
+        ...(cashCharge ? { cost: Number(cashCharge.amount || 0) } : {}),
+      };
     }
     if (["FAILED", "FAILURE", "CANCELED", "CANCELLED", "ERROR"].includes(status)) {
       return { state: "FAILED", externalJobId, error: String(output.message || data.error || payload.error || payload.message || "视频生成失败"), response: payload };
@@ -431,18 +598,19 @@ export class VideoFactoryWorkerService {
       return;
     }
     if (result.state === "FAILED") {
+      const failureReason = providerFailureMessage(result.error);
       const job = await this.prisma.videoGenerationJob.findUnique({ where: { id: jobId } });
       await this.prisma.videoGenerationAttempt.update({
         where: { id: attemptId },
-        data: { status: "FAILED", externalJobId: result.externalJobId, response: result.response as Prisma.InputJsonValue, failureReason: result.error, finishedAt: new Date() },
+        data: { status: "FAILED", externalJobId: result.externalJobId, response: result.response as Prisma.InputJsonValue, failureReason, finishedAt: new Date() },
       });
       if (job && job.allowFallback && job.attemptCount < job.maxAttempts) {
         await this.prisma.videoGenerationJob.update({
           where: { id: jobId },
-          data: { status: "RETRY", failureReason: result.error, nextAttemptAt: new Date(Date.now() + 5_000) },
+          data: { status: "RETRY", failureReason, nextAttemptAt: new Date(Date.now() + 5_000) },
         });
       } else {
-        await this.prisma.videoGenerationJob.update({ where: { id: jobId }, data: { status: "FAILED", failureReason: result.error, finishedAt: new Date() } });
+        await this.prisma.videoGenerationJob.update({ where: { id: jobId }, data: { status: "FAILED", failureReason, finishedAt: new Date() } });
       }
       if (job?.shotId) await this.prisma.videoShot.update({ where: { id: job.shotId }, data: { status: "OPEN" } });
       if (job?.contentPlanId) await this.factory.syncCompatibility(job.contentPlanId);
@@ -464,26 +632,34 @@ export class VideoFactoryWorkerService {
     return Buffer.from(await response.arrayBuffer());
   }
 
-  private async inspectVideo(path: string) {
+  private async inspectVideo(path: string): Promise<VideoTechnicalMetadata> {
     try {
       const { stdout } = await execFileAsync("ffprobe", [
         "-v", "error",
         "-select_streams", "v:0",
-        "-show_entries", "stream=width,height,duration",
+        "-show_entries", "stream=width,height,duration,codec_name,avg_frame_rate,r_frame_rate",
         "-show_entries", "format=duration",
         "-of", "json",
         path,
       ], { timeout: 60_000, windowsHide: true, maxBuffer: 2 * 1024 * 1024 });
-      const parsed = JSON.parse(stdout) as { streams?: Array<{ width?: number; height?: number; duration?: string }>; format?: { duration?: string } };
-      const stream = parsed.streams?.[0] || {};
-      return {
-        ok: Boolean(stream.width && stream.height),
-        width: Number(stream.width || 0),
-        height: Number(stream.height || 0),
-        duration: Number(stream.duration || parsed.format?.duration || 0),
-      };
+      return parseVideoTechnicalMetadata(stdout);
     } catch (error) {
-      return { ok: false, width: 0, height: 0, duration: 0, error: error instanceof Error ? error.message : "ffprobe失败" };
+      return { ok: false, width: 0, height: 0, duration: 0, codec: "", frameRate: "", error: error instanceof Error ? error.message : "ffprobe失败" };
+    }
+  }
+
+  async inspectUploadedVideo(file: { originalname: string; buffer: Buffer } | undefined) {
+    if (!file?.buffer?.length) throw new BadRequestException("请选择需要上传的MP4成片");
+    const tempDir = join(opsConfig.derivedOutputDir, "video-factory", "upload-inspection");
+    await mkdir(tempDir, { recursive: true });
+    const tempPath = join(tempDir, `${randomUUID()}${extname(file.originalname) || ".mp4"}`);
+    try {
+      await writeFile(tempPath, file.buffer);
+      const technical = await this.inspectVideo(tempPath);
+      if (!technical.ok) throw new BadRequestException(`成片技术检查失败：${technical.error || "无法读取视频流"}`);
+      return technical;
+    } finally {
+      await rm(tempPath, { force: true });
     }
   }
 
@@ -626,7 +802,7 @@ export class VideoFactoryWorkerService {
   }
 
   private async failGeneration(id: string, error: unknown) {
-    const message = error instanceof Error ? error.message : "视频生成失败";
+    const message = providerFailureMessage(error instanceof Error ? error.message : "视频生成失败");
     this.logger.error(`Generation ${id}: ${message}`);
     const job = await this.prisma.videoGenerationJob.findUnique({ where: { id } });
     if (!job) return;
@@ -682,17 +858,12 @@ export class VideoFactoryWorkerService {
       normalized.push(normalizedPath);
     }
     let elapsed = 0;
+    const captionTexts = videoRenderCaptionTexts(job.contentPlan);
     const captions = job.contentPlan.videoShots.map((shot, index) => {
       const duration = Math.max(1, Number(shot.durationSeconds || 5));
       const start = elapsed;
       elapsed += duration;
-      const outline = Array.isArray(job.contentPlan.outline) ? job.contentPlan.outline.map(String) : [];
-      const text = index === 0
-        ? job.contentPlan.hook
-        : index === job.contentPlan.videoShots.length - 1
-          ? job.contentPlan.objective
-          : outline[index] || shot.description;
-      return `${index + 1}\n${srtTime(start)} --> ${srtTime(elapsed)}\n${String(text || shot.description).replaceAll("\n", " ")}\n`;
+      return `${index + 1}\n${srtTime(start)} --> ${srtTime(elapsed)}\n${captionTexts[index]}\n`;
     });
     const subtitlePath = join(workDir, "captions.srt");
     await writeFile(subtitlePath, captions.join("\n"), "utf8");
@@ -700,7 +871,7 @@ export class VideoFactoryWorkerService {
     await writeFile(concatList, normalized.map((path) => `file '${path.replaceAll("'", "'\\''")}'`).join("\n"), "utf8");
     const outputPath = join(workDir, `${job.contentPlan.productionNo || job.contentPlan.id}-master.mp4`);
     let actualRenderer = "FFMPEG_TEMPLATE";
-    if (opsConfig.videoRenderCommand) {
+    if (opsConfig.videoRenderCommand && usesConfiguredVideoRenderer(job.contentPlan)) {
       const briefPath = join(workDir, "BRIEF.md");
       await writeFile(briefPath, [
         "---", "workflow: general-video", "flow: automation", "aspect: 9:16", "resolution: 1080x1920", "---",
@@ -727,7 +898,7 @@ export class VideoFactoryWorkerService {
     if (actualRenderer !== "HYPERFRAMES") {
       await execFileAsync("ffmpeg", [
         "-y", "-f", "concat", "-safe", "0", "-i", concatList,
-        "-vf", `subtitles='${ffmpegFilterPath(subtitlePath)}':force_style='FontName=Noto Sans CJK SC,FontSize=14,PrimaryColour=&H00FFFFFF,OutlineColour=&H80000000,BorderStyle=3,Outline=1,Shadow=0,MarginV=110,Alignment=2'`,
+        "-vf", `subtitles='${ffmpegFilterPath(subtitlePath)}':force_style='FontName=Noto Sans CJK SC,FontSize=14,PrimaryColour=&H00FFFFFF,OutlineColour=&H80000000,BorderStyle=3,Outline=1,Shadow=0,MarginL=80,MarginR=80,MarginV=110,Alignment=2'`,
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
         outputPath,
@@ -776,7 +947,17 @@ export class VideoFactoryWorkerService {
         status: "PENDING",
         qualityScore: 80,
         contentDescription: job.contentPlan.topic,
-        sourceSnapshot: { renderer: actualRenderer, renderJobId: job.id, shotAssetIds: assets.map((item) => item.id) },
+        sourceSnapshot: {
+          renderer: actualRenderer,
+          renderJobId: job.id,
+          shotAssetIds: assets.map((item) => item.id),
+          metadata: {
+            source: actualRenderer,
+            codec: technical.codec,
+            frameRate: technical.frameRate,
+            usedAssetIds: assets.map((item) => item.id),
+          },
+        },
         aiIndex: { source: "VIDEO_FACTORY_RENDER", contentPlanId: job.contentPlanId },
         searchText: `${job.contentPlan.productModel || ""} ${job.contentPlan.topic} 智能视频成片`,
         indexNeedsReview: true,
@@ -804,7 +985,13 @@ export class VideoFactoryWorkerService {
             width: technical.width,
             height: technical.height,
             durationSeconds: technical.duration,
-            technicalMetadata: { renderer: actualRenderer, renderJobId: job.id },
+            technicalMetadata: {
+              renderer: actualRenderer,
+              renderJobId: job.id,
+              codec: technical.codec,
+              frameRate: technical.frameRate,
+              usedAssetIds: assets.map((item) => item.id),
+            },
           },
         },
       },

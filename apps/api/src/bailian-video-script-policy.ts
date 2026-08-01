@@ -14,6 +14,50 @@ function strings(value: unknown): string[] {
   return Array.isArray(value) ? value.map(text).filter(Boolean) : [];
 }
 
+export function buildBailianEditingVideoContext(context: JsonRecord): JsonRecord {
+  const editingVideos = rows(context.assets).filter((asset) => {
+    const kind = text(asset.kind || asset.mediaType).toUpperCase();
+    const purpose = text(asset.purpose).toUpperCase();
+    const resourceType = text(asset.resourceType || asset.resourceRole || asset.category).toUpperCase();
+    const isPackagingResource = resourceType.includes("PACKAGING")
+      || resourceType.includes("COVER")
+      || resourceType.includes("STICKER")
+      || resourceType.includes("TRANSITION")
+      || resourceType.includes("TEMPLATE");
+
+    return kind === "VIDEO"
+      && (!purpose || purpose === "EDITING_FOOTAGE")
+      && !isPackagingResource;
+  });
+  const availableVideoAssetIds = Array.from(new Set(editingVideos.map((asset) => text(asset.id)).filter(Boolean)));
+  const sanitizedContext: JsonRecord = { ...context };
+  delete sanitizedContext.assets;
+  delete sanitizedContext.images;
+  delete sanitizedContext.imageAssets;
+  delete sanitizedContext.audioAssets;
+  delete sanitizedContext.documents;
+  delete sanitizedContext.packagingResources;
+  delete sanitizedContext.packagingAssets;
+  delete sanitizedContext.coverResources;
+
+  return {
+    ...sanitizedContext,
+    assets: editingVideos,
+    availableVideoAssetIds,
+    assetInputPolicy: {
+      mode: "EDITING_VIDEO_ONLY",
+      allowedAssetKinds: ["VIDEO"],
+      allowedPurpose: "EDITING_FOOTAGE",
+      excludedResourceKinds: ["IMAGE", "AUDIO", "DOCUMENT", "PACKAGING_RESOURCE"],
+      rules: [
+        "assetIds and matchedVideoAssetIds must only use availableVideoAssetIds",
+        "auxiliaryImageAssetIds must always be an empty array",
+        "when no supplied video matches, return NEED_SHOOT with no invented asset id",
+      ],
+    },
+  };
+}
+
 export const BAILIAN_VIDEO_SCRIPT_SYSTEM_POLICY = `
 你是赛电短视频脚本工程师，主要职责是根据系统已经学习完成的真实素材索引生成待审核脚本，不负责生成视频主体。
 
@@ -27,8 +71,8 @@ export const BAILIAN_VIDEO_SCRIPT_SYSTEM_POLICY = `
 7. 输出只作为script_review待审核稿。脚本未经用户明确确认，不得声称已进入配音、剪辑或成片阶段。
 
 素材硬规则：
-- 主体时间线只能由真实VIDEO素材构成。IMAGE、DOCUMENT、AUDIO及包装资源不能作为主镜头，不能补时长。
-- 图片仅可记录为叠加在仍播放的视频上的auxiliaryImageAssetIds，不能单独形成镜头。
+- 本次只会收到可作为剪辑主镜头的真实VIDEO素材索引。IMAGE、DOCUMENT、AUDIO及包装资源不会提供，也不得引用。
+- auxiliaryImageAssetIds必须始终返回空数组；图片、封面、字幕模板、贴纸、转场及其他包装资源留给后续视频制作阶段处理。
 - 外观、包装、佩戴空镜不能证明具体功能；具体功能必须有对应操作、过程或结果视频。
 - 只能引用输入中真实存在、已审核且可用的assetId。不得凭文件名猜测，不得虚构素材ID、时间段、功能或用户体验。
 - 优先使用indexNeedsReview=false且indexConfidence较高的素材。低置信度或待复核素材不能作为确定事实的唯一证据。
@@ -67,6 +111,8 @@ export function validateBailianVideoScriptResult(candidate: JsonRecord, context:
   const styleChecks = packageRow.styleChecks && typeof packageRow.styleChecks === "object" && !Array.isArray(packageRow.styleChecks)
     ? packageRow.styleChecks as JsonRecord
     : {};
+  const declaredAssetIds = strings(candidate.assetIds);
+  const matchedAssetIds = new Set<string>();
 
   for (const id of strings(candidate.assetIds)) {
     if (!knownAssetIds.has(id)) errors.push(`引用了输入中不存在的素材ID：${id}`);
@@ -116,6 +162,8 @@ export function validateBailianVideoScriptResult(candidate: JsonRecord, context:
     const auxiliaryIds = strings(requirement.auxiliaryImageAssetIds);
     const status = text(requirement.assetStatus).toUpperCase();
 
+    primaryIds.forEach((id) => matchedAssetIds.add(id));
+
     for (const id of primaryIds) {
       if (!knownAssetIds.has(id)) errors.push(`${lineId}引用了不存在的视频素材：${id}`);
       else if (assetKinds.get(id) !== "VIDEO") errors.push(`${lineId}主镜头引用了非VIDEO素材：${id}`);
@@ -124,13 +172,27 @@ export function validateBailianVideoScriptResult(candidate: JsonRecord, context:
       if (!knownAssetIds.has(id)) errors.push(`${lineId}引用了不存在的辅助图片：${id}`);
       else if (assetKinds.get(id) !== "IMAGE") errors.push(`${lineId}辅助图片列表含非IMAGE素材：${id}`);
     }
+    if (auxiliaryIds.length > 0) {
+      errors.push(`${lineId}百炼脚本请求未提供图片或包装资源，auxiliaryImageAssetIds必须为空`);
+    }
     if (status === "COVERED" && primaryIds.length === 0) {
       errors.push(`${lineId}标记COVERED但没有绑定真实VIDEO素材`);
     }
     if (primaryIds.length === 0 && auxiliaryIds.length > 0 && status !== "NEED_SHOOT") {
       errors.push(`${lineId}只有图片辅助素材时必须标记NEED_SHOOT`);
     }
+    if (status === "NEED_SHOOT" && primaryIds.length > 0) {
+      errors.push(`${lineId}标记NEED_SHOOT时不得同时绑定视频素材`);
+    }
   });
+
+  const declaredSet = new Set(declaredAssetIds);
+  for (const id of matchedAssetIds) {
+    if (!declaredSet.has(id)) errors.push(`assetIds缺少逐句已绑定的视频素材：${id}`);
+  }
+  for (const id of declaredSet) {
+    if (!matchedAssetIds.has(id)) errors.push(`assetIds包含未被任何逐句使用的视频素材：${id}`);
+  }
 
   return Array.from(new Set(errors));
 }

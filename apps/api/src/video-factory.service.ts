@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { ContentStatus, IntegrationKind, JobStatus, Prisma } from "@prisma/client";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { AiContentService, type AiVideoCandidate } from "./ai-content.service";
 import { opsConfig } from "./config";
 import { ContentGuardService } from "./content-guard.service";
@@ -93,12 +93,22 @@ type TopicCardApprovalInput = {
 
 const PROVIDER_SEEDS = [
   {
+    code: "VOLCENGINE_SEEDANCE",
+    displayName: "火山方舟 · Seedance 2.0",
+    region: "CN",
+    baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+    capabilities: ["TEXT_TO_VIDEO", "IMAGE_TO_VIDEO", "REFERENCE_TO_VIDEO", "NATIVE_AUDIO"],
+    priority: 5,
+    publicConfig: { adapter: "SEEDANCE_2", generateAudio: true, watermark: false },
+  },
+  {
     code: "BAILIAN_WAN",
     displayName: "阿里百炼 · Wan",
     region: "CN",
     baseUrl: "https://dashscope.aliyuncs.com",
     capabilities: ["TEXT_TO_VIDEO", "IMAGE_TO_VIDEO", "REFERENCE_TO_VIDEO"],
     priority: 10,
+    publicConfig: {},
   },
   {
     code: "RUNWAY",
@@ -107,6 +117,7 @@ const PROVIDER_SEEDS = [
     baseUrl: "https://api.dev.runwayml.com",
     capabilities: ["TEXT_TO_VIDEO", "IMAGE_TO_VIDEO", "VIDEO_EDIT"],
     priority: 20,
+    publicConfig: {},
   },
   {
     code: "HEYGEN",
@@ -115,6 +126,7 @@ const PROVIDER_SEEDS = [
     baseUrl: "https://api.heygen.com",
     capabilities: ["AVATAR", "TEXT_TO_VIDEO", "NATIVE_AUDIO"],
     priority: 30,
+    publicConfig: {},
   },
   {
     code: "OPENAI_VIDEOS",
@@ -123,6 +135,7 @@ const PROVIDER_SEEDS = [
     baseUrl: "https://api.openai.com/v1",
     capabilities: ["TEXT_TO_VIDEO", "IMAGE_TO_VIDEO", "VIDEO_EDIT"],
     priority: 40,
+    publicConfig: {},
   },
   {
     code: "GOOGLE_VEO",
@@ -131,14 +144,16 @@ const PROVIDER_SEEDS = [
     baseUrl: "https://generativelanguage.googleapis.com",
     capabilities: ["TEXT_TO_VIDEO", "IMAGE_TO_VIDEO", "REFERENCE_TO_VIDEO"],
     priority: 50,
+    publicConfig: {},
   },
   {
     code: "KLING",
     displayName: "可灵",
     region: "CN",
-    baseUrl: "https://api.klingai.com",
+    baseUrl: "https://api-beijing.klingai.com",
     capabilities: ["TEXT_TO_VIDEO", "IMAGE_TO_VIDEO", "VIDEO_EDIT"],
     priority: 60,
+    publicConfig: { adapter: "KLING_API_2", endpointModel: "kling-3.0-turbo", watermark: false },
   },
   {
     code: "CUSTOM_HTTP",
@@ -147,10 +162,12 @@ const PROVIDER_SEEDS = [
     baseUrl: null,
     capabilities: ["TEXT_TO_VIDEO", "IMAGE_TO_VIDEO"],
     priority: 100,
+    publicConfig: {},
   },
 ] as const;
 
 const MODEL_SEEDS = [
+  { provider: "VOLCENGINE_SEEDANCE", code: "doubao-seedance-2-0-260128", name: "Seedance 2.0", capabilities: ["TEXT_TO_VIDEO", "IMAGE_TO_VIDEO", "REFERENCE_TO_VIDEO", "NATIVE_AUDIO"], durations: [4, 5, 8, 10, 12, 15], resolutions: ["480P", "720P", "1080P"], tags: ["DOUYIN", "FAMILY", "PRODUCT", "BRAND", "CN"] },
   { provider: "BAILIAN_WAN", code: "wan2.5-t2v-preview", name: "Wan 文生视频", capabilities: ["TEXT_TO_VIDEO"], durations: [5, 10], resolutions: ["480P"], tags: ["DOUYIN", "CN"] },
   { provider: "BAILIAN_WAN", code: "wan2.5-i2v-preview", name: "Wan 图生视频", capabilities: ["IMAGE_TO_VIDEO"], durations: [5, 10], resolutions: ["480P"], tags: ["DOUYIN", "PRODUCT", "CN"] },
   { provider: "RUNWAY", code: "gen4_turbo", name: "Runway Gen-4 Turbo", capabilities: ["IMAGE_TO_VIDEO"], durations: [5, 10], resolutions: ["720P"], tags: ["TIKTOK", "UGC", "GLOBAL"] },
@@ -158,7 +175,7 @@ const MODEL_SEEDS = [
   { provider: "HEYGEN", code: "avatar-v3", name: "HeyGen Avatar", capabilities: ["AVATAR", "NATIVE_AUDIO"], durations: [15, 30], resolutions: ["1080P"], tags: ["FAQ", "TUTORIAL", "GLOBAL"] },
   { provider: "OPENAI_VIDEOS", code: "sora-2", name: "OpenAI Sora 2", capabilities: ["TEXT_TO_VIDEO", "IMAGE_TO_VIDEO"], durations: [4, 8, 12], resolutions: ["720P"], tags: ["CREATIVE", "GLOBAL"] },
   { provider: "GOOGLE_VEO", code: "veo-3.1-fast-generate-001", name: "Google Veo 3.1 Fast", capabilities: ["TEXT_TO_VIDEO", "IMAGE_TO_VIDEO"], durations: [8], resolutions: ["720P", "1080P"], tags: ["BRAND", "GLOBAL"] },
-  { provider: "KLING", code: "kling-video", name: "可灵视频", capabilities: ["TEXT_TO_VIDEO", "IMAGE_TO_VIDEO"], durations: [5, 10], resolutions: ["720P"], tags: ["CN"] },
+  { provider: "KLING", code: "kling-video", name: "可灵 3.0 Turbo", capabilities: ["TEXT_TO_VIDEO", "IMAGE_TO_VIDEO"], durations: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], resolutions: ["720P", "1080P"], tags: ["DOUYIN", "UGC", "HUMAN_ACTION", "CN"] },
 ] as const;
 
 function strings(value: unknown): string[] {
@@ -336,12 +353,71 @@ function materialBindingFingerprint(shots: Array<{
     .join("|");
 }
 
+function douyinViralModelScenario(description: unknown) {
+  const text = String(description || "");
+  return /(佩戴|抬腕|手势|手部动作|腕部动作|人物动作|真人动作|走路|跑步|运动动作)/u.test(text)
+    ? "DOUYIN_VIRAL_ACTION"
+    : "DOUYIN_VIRAL";
+}
+
 export function materialReviewApproved(plan: { sourceSignals: unknown; workflowVersion: number }, fingerprint?: string) {
   const factory = sourceSignals(plan).find((item) => item.type === "VIDEO_FACTORY") || {};
   const review = object(factory.materialReview);
   return review.status === "APPROVED"
     && Number(review.workflowVersion) === plan.workflowVersion
     && (!fingerprint || String(review.bindingFingerprint || "") === fingerprint);
+}
+
+export function partitionVideoShotAssetIds(
+  selectedAssetIds: string[],
+  auxiliaryImageAssetIds: string[],
+  assets: Array<{ id: string; kind: string | null }>,
+) {
+  const kindById = new Map(assets.map((asset) => [asset.id, asset.kind]));
+  const matchedVideoAssetIds = selectedAssetIds.filter((id) => kindById.get(id) === "VIDEO");
+  const imageAssetIds = selectedAssetIds.filter((id) => kindById.get(id) === "IMAGE");
+  return {
+    matchedVideoAssetIds,
+    auxiliaryImageAssetIds: Array.from(new Set([...auxiliaryImageAssetIds, ...imageAssetIds])),
+  };
+}
+
+export function applyVideoShotImageFallback<T extends {
+  matchedAssetIds: string[];
+  matchedVideoAssetIds: string[];
+  auxiliaryImageAssetIds: string[];
+  reason: string;
+}>(coverage: T[], approvedImageAssetIds: string[]): T[] {
+  if (!approvedImageAssetIds.length) return coverage;
+  return coverage.map((shot, index) => {
+    if (shot.matchedVideoAssetIds.length || shot.auxiliaryImageAssetIds.length) return shot;
+    const fallbackId = approvedImageAssetIds[index % approvedImageAssetIds.length];
+    return {
+      ...shot,
+      matchedAssetIds: Array.from(new Set([...shot.matchedAssetIds, fallbackId])),
+      auxiliaryImageAssetIds: [fallbackId],
+      reason: `${shot.reason}；使用已审核产品图保持产品外观一致`,
+    };
+  });
+}
+
+export function videoFactoryModule(plan: { sourceSignals: unknown }) {
+  const signals = sourceSignals(plan);
+  const topicModule = topicCardPayload(plan)?.factoryModule;
+  const factoryModule = String(signals.find((item) => item.type === "VIDEO_FACTORY")?.factoryModule || "");
+  return topicModule === "DOUYIN_VIRAL" || factoryModule === "DOUYIN_VIRAL"
+    ? "DOUYIN_VIRAL"
+    : "GENERAL_VIDEO_FACTORY";
+}
+
+export function videoRenderJobIsStale(
+  plan: { sourceSignals: unknown },
+  job: { status: string; startedAt: Date | null },
+  now = new Date(),
+) {
+  if (job.status !== "RUNNING" || !job.startedAt) return false;
+  const timeoutMs = videoFactoryModule(plan) === "DOUYIN_VIRAL" ? 10 * 60_000 : 35 * 60_000;
+  return now.getTime() - job.startedAt.getTime() >= timeoutMs;
 }
 
 function number(value: unknown, fallback = 0) {
@@ -392,6 +468,7 @@ function topicCardPayload(plan: { sourceSignals: unknown }): VideoTopicCardPaylo
 
 @Injectable()
 export class VideoFactoryService {
+  private readonly systemScriptJobs = new Set<string>();
   constructor(
     private readonly prisma: PrismaService,
     private readonly aiContent: AiContentService,
@@ -614,6 +691,7 @@ export class VideoFactoryService {
             region: seed.region,
             baseUrl: seed.baseUrl,
             capabilities: [...seed.capabilities],
+            publicConfig: seed.publicConfig,
             priority: seed.priority,
             enabled: bailianConfigured,
             state: bailianConfigured ? "CONFIGURED" : "UNCONFIGURED",
@@ -667,8 +745,60 @@ export class VideoFactoryService {
     const bailianImageModel = await this.prisma.videoModelConfig.findFirst({
       where: { provider: { code: "BAILIAN_WAN" }, code: opsConfig.bailian.imageToVideoModel },
     });
+    const seedanceModel = await this.prisma.videoModelConfig.findFirst({
+      where: { provider: { code: "VOLCENGINE_SEEDANCE" }, code: "doubao-seedance-2-0-260128" },
+    });
+    const klingModel = await this.prisma.videoModelConfig.findFirst({
+      where: { provider: { code: "KLING" }, code: "kling-video" },
+    });
     const runwayModel = await this.prisma.videoModelConfig.findFirst({
       where: { provider: { code: "RUNWAY" }, code: "gen4_turbo" },
+    });
+    await this.prisma.videoRoutingPolicy.upsert({
+      where: { policyKey: "DOUYIN_VIRAL_EXTERNAL" },
+      create: {
+        policyKey: "DOUYIN_VIRAL_EXTERNAL",
+        name: "抖音爆款外部视频路由",
+        platform: "DOUYIN",
+        scenario: "DOUYIN_VIRAL",
+        primaryModelId: seedanceModel?.id,
+        fallbackModelIds: [klingModel?.id, bailianImageModel?.id].filter(Boolean) as string[],
+        rules: { capability: "IMAGE_TO_VIDEO", preferRealAssets: true, externalGenerationOptIn: true },
+        priority: 1,
+      },
+      update: {
+        name: "抖音爆款外部视频路由",
+        platform: "DOUYIN",
+        scenario: "DOUYIN_VIRAL",
+        primaryModelId: seedanceModel?.id,
+        fallbackModelIds: [klingModel?.id, bailianImageModel?.id].filter(Boolean) as string[],
+        rules: { capability: "IMAGE_TO_VIDEO", preferRealAssets: true, externalGenerationOptIn: true },
+        priority: 1,
+        active: true,
+      },
+    });
+    await this.prisma.videoRoutingPolicy.upsert({
+      where: { policyKey: "DOUYIN_VIRAL_ACTION" },
+      create: {
+        policyKey: "DOUYIN_VIRAL_ACTION",
+        name: "抖音爆款人物动作增强路由",
+        platform: "DOUYIN",
+        scenario: "DOUYIN_VIRAL_ACTION",
+        primaryModelId: klingModel?.id,
+        fallbackModelIds: [seedanceModel?.id].filter(Boolean) as string[],
+        rules: { capability: "TEXT_TO_VIDEO", preferRealAssets: true, externalGenerationOptIn: true },
+        priority: 1,
+      },
+      update: {
+        name: "抖音爆款人物动作增强路由",
+        platform: "DOUYIN",
+        scenario: "DOUYIN_VIRAL_ACTION",
+        primaryModelId: klingModel?.id,
+        fallbackModelIds: [seedanceModel?.id].filter(Boolean) as string[],
+        rules: { capability: "TEXT_TO_VIDEO", preferRealAssets: true, externalGenerationOptIn: true },
+        priority: 1,
+        active: true,
+      },
     });
     await this.prisma.videoRoutingPolicy.upsert({
       where: { policyKey: "DEFAULT_DOUYIN" },
@@ -821,6 +951,7 @@ export class VideoFactoryService {
     platform: string;
     cards: unknown[];
     policyVersion?: string;
+    factoryModule?: string;
   }, actor: string) {
     const platform = integrationKind(input.platform);
     const cardPlatform: "DOUYIN" | "TIKTOK" = platform === IntegrationKind.TIKTOK ? "TIKTOK" : "DOUYIN";
@@ -922,6 +1053,7 @@ export class VideoFactoryService {
       const title = this.safeTopicTitle(raw, validReferences);
       const card: VideoTopicCardPayload = {
         cardNo,
+        factoryModule: input.factoryModule === "DOUYIN_VIRAL" ? "DOUYIN_VIRAL" : "GENERAL_VIDEO_FACTORY",
         platform: cardPlatform,
         market: String(raw.market || (cardPlatform === "TIKTOK" ? "US" : "CN")),
         productModel: product?.modelCode,
@@ -1313,6 +1445,10 @@ export class VideoFactoryService {
     keywordIds?: string[];
     externalVideoIds?: string[];
     aiTaskId: string;
+    factoryModule?: string;
+    routingMode?: string;
+    requestedModelId?: string;
+    allowFallback?: boolean;
   }, actor: string) {
     const platform = integrationKind(input.platform);
     const productionNo = `VF-${localDateKey(new Date()).replaceAll("-", "")}-${randomUUID().slice(0, 6).toUpperCase()}`;
@@ -1343,8 +1479,10 @@ export class VideoFactoryService {
             keywordIds: input.keywordIds || [],
             externalVideoIds: input.externalVideoIds || [],
             externalReferencePolicy: "STRUCTURE_ONLY",
-            routingMode: "AUTO",
-            allowFallback: false,
+            factoryModule: input.factoryModule === "DOUYIN_VIRAL" ? "DOUYIN_VIRAL" : "GENERAL_VIDEO_FACTORY",
+            routingMode: input.routingMode === "FIXED" ? "FIXED" : "AUTO",
+            requestedModelId: input.requestedModelId || undefined,
+            allowFallback: input.allowFallback !== false,
           }] as unknown as Prisma.InputJsonValue,
           evidenceIds: [],
           status: ContentStatus.DRAFT,
@@ -1539,6 +1677,57 @@ export class VideoFactoryService {
     return this.project(contentPlanId);
   }
 
+  async requestRemoteScriptAfterSystemFailure(contentPlanId: string, actor: string, note = "") {
+    const plan = await this.prisma.contentPlan.findUnique({ where: { id: contentPlanId } });
+    if (!plan) throw new NotFoundException("智能视频项目不存在");
+    const signals = sourceSignals(plan);
+    const factory = signals.find((signal) => signal.type === "VIDEO_FACTORY") || {};
+    const scriptEngineStatus = object(factory.scriptEngineStatus);
+    const factoryBrief = object(factory.brief);
+    if (scriptEngineStatus.SYSTEM_AI !== "FAILED") {
+      throw new BadRequestException("只有系统 AI 生成失败的项目可以直接转交 Codex");
+    }
+    const systemAiFailureReason = String(object(factory.scriptEngineErrors).SYSTEM_AI || "系统 AI 脚本生成失败");
+    const nextSignals = signals.map((signal) => signal.type === "VIDEO_FACTORY"
+      ? {
+        ...signal,
+        brief: {
+          ...factoryBrief,
+          scriptEngines: Array.from(new Set([
+            ...(Array.isArray(factoryBrief.scriptEngines) ? factoryBrief.scriptEngines.map(String) : ["SYSTEM_AI"]),
+            "REMOTE_CODEX",
+          ])),
+          remoteTransferContext: {
+            source: "SYSTEM_AI_FAILURE",
+            systemAiFailureReason,
+            userNote: note.trim(),
+          },
+        },
+        scriptEngineStatus: { ...scriptEngineStatus, REMOTE_CODEX: "PENDING" },
+        scriptEngineErrors: { ...object(signal.scriptEngineErrors), REMOTE_CODEX: "" },
+      }
+      : signal);
+    await this.prisma.$transaction([
+      this.prisma.contentPlan.update({
+        where: { id: contentPlanId },
+        data: {
+          productionStage: "SCRIPT_RETURNED",
+          sourceSignals: nextSignals as unknown as Prisma.InputJsonValue,
+        },
+      }),
+      this.prisma.auditLog.create({
+        data: {
+          actor,
+          action: "VIDEO_FACTORY_SYSTEM_AI_FAILURE_TRANSFER_TO_CODEX",
+          entityType: "ContentPlan",
+          entityId: contentPlanId,
+          after: { systemAiFailureReason, userNote: note.trim() },
+        },
+      }),
+    ]);
+    return this.project(contentPlanId);
+  }
+
   async generateSystemScriptCandidate(contentPlanId: string, actor: string, regenerationPrompt = "") {
     const plan = await this.prisma.contentPlan.findUnique({ where: { id: contentPlanId } });
     if (!plan) throw new NotFoundException("智能视频项目不存在");
@@ -1608,6 +1797,7 @@ export class VideoFactoryService {
       });
     } catch (error) {
       const failureReason = error instanceof Error ? error.message : "系统 AI 脚本生成失败";
+      const failedAt = new Date().toISOString();
       const scriptEngineStatus: Record<string, unknown> = {
         ...object(factory.scriptEngineStatus),
         SYSTEM_AI: "FAILED",
@@ -1617,13 +1807,19 @@ export class VideoFactoryService {
           ...signal,
           scriptEngineStatus,
           scriptEngineErrors: { ...object(signal.scriptEngineErrors), SYSTEM_AI: failureReason },
+          systemScriptConversation: [
+            ...(Array.isArray(signal.systemScriptConversation) ? signal.systemScriptConversation : []),
+            { role: "BAILIAN", status: "FAILED", at: failedAt, content: failureReason },
+          ].slice(-20),
         }
         : signal);
       await this.prisma.$transaction([
         this.prisma.contentPlan.update({
           where: { id: contentPlanId },
           data: {
-            productionStage: "SCRIPT_GENERATING",
+            productionStage: Array.isArray(factory.scriptCandidates) && factory.scriptCandidates.length
+              ? "FACTORY_SCRIPT_READY"
+              : "SCRIPT_GENERATING",
             sourceSignals: nextSignals as unknown as Prisma.InputJsonValue,
           },
         }),
@@ -1661,6 +1857,15 @@ export class VideoFactoryService {
         ...signal,
         scriptCandidates: nextCandidates,
         scriptEngineStatus,
+        systemScriptConversation: [
+          ...(Array.isArray(signal.systemScriptConversation) ? signal.systemScriptConversation : []),
+          {
+            role: "BAILIAN",
+            status: "COMPLETED",
+            at: candidate.generatedAt,
+            content: String(candidate.title || candidate.hook || "脚本与素材预匹配已返回"),
+          },
+        ].slice(-20),
         systemRegenerationHistory: [
           ...(Array.isArray(signal.systemRegenerationHistory) ? signal.systemRegenerationHistory : []),
           {
@@ -1701,6 +1906,47 @@ export class VideoFactoryService {
         `脚本已生成，可直接审核；已匹配${Number(preMatch.covered || 0)}个镜头，缺失${Number(preMatch.missing || 0)}个镜头。`,
       ).catch(() => undefined);
     }
+    return this.project(contentPlanId);
+  }
+
+  async enqueueSystemScriptCandidate(contentPlanId: string, actor: string, regenerationPrompt = "") {
+    if (this.systemScriptJobs.has(contentPlanId)) return this.project(contentPlanId);
+    const plan = await this.prisma.contentPlan.findUnique({ where: { id: contentPlanId } });
+    if (!plan) throw new NotFoundException("智能视频项目不存在");
+    const signals = sourceSignals(plan);
+    const factory = signals.find((signal) => signal.type === "VIDEO_FACTORY") || {};
+    const brief = object(factory.brief);
+    const submittedAt = new Date().toISOString();
+    const requestSummary = [
+      `视频类型：${String(brief.videoType || "不限")}`,
+      `产品：${String(plan.productModel || "未指定")}`,
+      `关键词：${String(brief.keywords || plan.topic || "未指定")}`,
+      regenerationPrompt.trim() ? `本次调整：${regenerationPrompt.trim()}` : "按项目原始要求生成",
+    ].join("；");
+    const nextSignals = signals.map((signal) => signal.type === "VIDEO_FACTORY"
+      ? {
+        ...signal,
+        scriptEngineStatus: { ...object(signal.scriptEngineStatus), SYSTEM_AI: "RUNNING" },
+        scriptEngineErrors: { ...object(signal.scriptEngineErrors), SYSTEM_AI: "" },
+        systemScriptStartedAt: submittedAt,
+        systemScriptConversation: [
+          ...(Array.isArray(signal.systemScriptConversation) ? signal.systemScriptConversation : []),
+          { role: "SYSTEM", status: "SENT", at: submittedAt, content: requestSummary },
+          { role: "BAILIAN", status: "RUNNING", at: submittedAt, content: "已接收任务，正在生成脚本并匹配素材" },
+        ].slice(-20),
+      }
+      : signal);
+    await this.prisma.contentPlan.update({
+      where: { id: contentPlanId },
+      data: {
+        productionStage: "SCRIPT_GENERATING",
+        sourceSignals: nextSignals as unknown as Prisma.InputJsonValue,
+      },
+    });
+    this.systemScriptJobs.add(contentPlanId);
+    void this.generateSystemScriptCandidate(contentPlanId, actor, regenerationPrompt)
+      .catch(() => undefined)
+      .finally(() => this.systemScriptJobs.delete(contentPlanId));
     return this.project(contentPlanId);
   }
 
@@ -2503,6 +2749,73 @@ export class VideoFactoryService {
     const secret = object(JSON.parse(decryptIntegrationValue(provider.secretRef) || "{}"));
     const publicConfig = object(provider.publicConfig);
     const healthPath = String(publicConfig.healthPath || "").trim();
+    if (provider.code === "VOLCENGINE_SEEDANCE") {
+      const apiKey = String(secret.apiKey || "");
+      const url = `${String(provider.baseUrl || "").replace(/\/$/u, "")}/contents/generations/tasks/__saydian_connection_check__`;
+      try {
+        const response = await fetch(url, {
+          headers: { Authorization: `Bearer ${apiKey}` },
+          signal: AbortSignal.timeout(15_000),
+        });
+        if ([401, 403].includes(response.status)) throw new Error("API密钥无效或未开通Seedance权限");
+        if (response.status >= 500) throw new Error(`火山方舟服务返回${response.status}`);
+        const updated = await this.prisma.videoModelProvider.update({
+          where: { id },
+          data: {
+            state: "HEALTHY",
+            message: "连接正常，模型权限将在首次生成时确认",
+            lastCheckedAt: new Date(),
+            lastSuccessAt: new Date(),
+          },
+        });
+        await this.prisma.auditLog.create({
+          data: { actor, action: "VIDEO_PROVIDER_CHECK", entityType: "VideoModelProvider", entityId: id, after: { state: "HEALTHY" } },
+        });
+        return this.providerView(updated);
+      } catch (error) {
+        const updated = await this.prisma.videoModelProvider.update({
+          where: { id },
+          data: { state: "ERROR", message: error instanceof Error ? error.message : "连接失败", lastCheckedAt: new Date() },
+        });
+        return this.providerView(updated);
+      }
+    }
+    if (provider.code === "KLING") {
+      const apiKey = String(secret.apiKey || "");
+      const url = `${String(provider.baseUrl || "").replace(/\/$/u, "")}/tasks`;
+      try {
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ limit: 1 }),
+          signal: AbortSignal.timeout(15_000),
+        });
+        const payload = await response.json().catch(() => ({})) as JsonRow;
+        if ([401, 403].includes(response.status)) throw new Error("API密钥无效");
+        if (!response.ok || Number(payload.code ?? 0) !== 0) {
+          throw new Error(String(payload.message || `可灵服务返回${response.status}`));
+        }
+        const updated = await this.prisma.videoModelProvider.update({
+          where: { id },
+          data: {
+            state: "HEALTHY",
+            message: "连接正常，可灵 3.0 Turbo 已启用",
+            lastCheckedAt: new Date(),
+            lastSuccessAt: new Date(),
+          },
+        });
+        await this.prisma.auditLog.create({
+          data: { actor, action: "VIDEO_PROVIDER_CHECK", entityType: "VideoModelProvider", entityId: id, after: { state: "HEALTHY" } },
+        });
+        return this.providerView(updated);
+      } catch (error) {
+        const updated = await this.prisma.videoModelProvider.update({
+          where: { id },
+          data: { state: "ERROR", message: error instanceof Error ? error.message : "连接失败", lastCheckedAt: new Date() },
+        });
+        return this.providerView(updated);
+      }
+    }
     if (!healthPath) {
       return this.providerView(await this.prisma.videoModelProvider.update({
         where: { id },
@@ -3114,15 +3427,30 @@ export class VideoFactoryService {
     const candidateIndex = Math.max(0, Math.min(candidates.length - 1, Number(input.candidateIndex || 0)));
     const selected = candidates[candidateIndex];
     if (!selected) throw new BadRequestException("项目没有可执行脚本");
+    const selectedRecord = selected as unknown as Record<string, unknown>;
+    const selectedShots = Array.isArray(selectedRecord.shots)
+      ? selectedRecord.shots as Array<Record<string, unknown>>
+      : [];
+    const selectedOutline = Array.isArray(selectedRecord.outline)
+      ? strings(selectedRecord.outline)
+      : selectedShots.map((shot) => String(shot.visual || shot.description || shot.voiceover || "")).filter(Boolean);
+    const selectedScripts = object(selectedRecord.scripts);
+    const selectedScript = String(selectedRecord.script || selectedScripts.zh15 || selectedScripts.zh30 || "").trim();
+    const selectedTitle = String(selectedRecord.topic || selectedRecord.title || plan.topic || "").trim();
+    const selectedAudience = String(selectedRecord.audience || plan.audience || "").trim();
+    const selectedObjective = String(selectedRecord.objective || plan.objective || "").trim();
     const check = await this.guard.evaluate({
-      title: selected.topic,
-      body: `${selected.hook}\n${selected.outline.join("\n")}\n${selected.scripts.zh15}\n${selected.scripts.en15}`,
+      title: selectedTitle,
+      body: `${String(selectedRecord.hook || "").trim()}\n${selectedOutline.join("\n")}\n${selectedScript}\n${String(selectedScripts.en15 || "").trim()}`,
       productModel: plan.productModel || undefined,
       evidenceIds: plan.evidenceIds,
     });
     if (!check.allowed) throw new BadRequestException(`脚本审核未通过：${check.reasons.join("；")}`);
 
-    const assetIds = Array.from(new Set(selected.assetIds));
+    const assetIds = Array.from(new Set([
+      ...strings(selectedRecord.assetIds),
+      ...selectedShots.flatMap((shot) => [...strings(shot.selectedAssetIds), ...strings(shot.auxiliaryImageAssetIds)]),
+    ]));
     const assets = assetIds.length ? await this.prisma.asset.findMany({
       where: {
         id: { in: assetIds },
@@ -3134,15 +3462,17 @@ export class VideoFactoryService {
       },
       include: { tags: { include: { tag: true } } },
     }) : [];
-    const preMatchedShots = Array.isArray((selected as unknown as Record<string, unknown>).shots)
-      ? (selected as unknown as Record<string, unknown>).shots as Array<Record<string, unknown>>
-      : [];
+    const preMatchedShots = selectedShots;
     let coverage: Array<{ description: string; matchedAssetIds: string[]; matchedVideoAssetIds: string[]; auxiliaryImageAssetIds: string[]; coverage: "EXISTING" | "MISSING"; reason: string }> = preMatchedShots.map((shot) => {
-      const matchedVideoAssetIds = strings(shot.selectedAssetIds);
-      const auxiliaryImageAssetIds = strings(shot.auxiliaryImageAssetIds);
+      const selectedAssetIds = strings(shot.selectedAssetIds);
+      const { matchedVideoAssetIds, auxiliaryImageAssetIds } = partitionVideoShotAssetIds(
+        selectedAssetIds,
+        strings(shot.auxiliaryImageAssetIds),
+        assets,
+      );
       return {
         description: String(shot.visual || shot.description || shot.voiceover || ""),
-        matchedAssetIds: Array.from(new Set([...matchedVideoAssetIds, ...auxiliaryImageAssetIds])),
+        matchedAssetIds: Array.from(new Set([...selectedAssetIds, ...auxiliaryImageAssetIds])),
         matchedVideoAssetIds,
         auxiliaryImageAssetIds,
         coverage: matchedVideoAssetIds.length ? "EXISTING" : "MISSING",
@@ -3164,7 +3494,7 @@ export class VideoFactoryService {
         })).shots;
       } catch {
         const videoIds = assets.filter((asset) => asset.kind === "VIDEO").map((asset) => asset.id);
-        coverage = selected.outline.map((description, index) => ({
+        coverage = selectedOutline.map((description, index) => ({
           description,
           matchedAssetIds: videoIds[index] ? [videoIds[index]] : [],
           matchedVideoAssetIds: videoIds[index] ? [videoIds[index]] : [],
@@ -3175,15 +3505,28 @@ export class VideoFactoryService {
       }
     }
     if (!coverage.length) throw new BadRequestException("未能生成分镜素材清单");
+    coverage = applyVideoShotImageFallback(
+      coverage,
+      assets.filter((asset) => asset.kind === "IMAGE").map((asset) => asset.id),
+    );
 
     const signals = sourceSignals(plan);
     const factorySignal = signals.find((item) => item.type === "VIDEO_FACTORY") || {};
+    const factoryModule = videoFactoryModule(plan);
     const routingMode = String(input.routingMode || factorySignal.routingMode || "AUTO").toUpperCase();
     const requestedModelId = String(input.requestedModelId || factorySignal.requestedModelId || "").trim() || undefined;
     const allowFallback = input.allowFallback ?? factorySignal.allowFallback !== false;
     if (!input.prepareOnly && coverage.some((shot) => shot.coverage === "MISSING")) {
-      await this.resolveModel({ requestedModelId, platform: plan.targetPlatforms[0], scenario: "SCENE", capability: "IMAGE_TO_VIDEO" })
-        .catch(async () => this.resolveModel({ requestedModelId, platform: plan.targetPlatforms[0], scenario: "SCENE", capability: "TEXT_TO_VIDEO" }));
+      const modelRequirements = Array.from(new Map(coverage
+        .filter((shot) => shot.coverage === "MISSING")
+        .map((shot) => {
+          const scenario = factoryModule === "DOUYIN_VIRAL" ? douyinViralModelScenario(shot.description) : "SCENE";
+          const capability = shot.auxiliaryImageAssetIds.length ? "IMAGE_TO_VIDEO" : "TEXT_TO_VIDEO";
+          return [`${scenario}:${capability}`, { scenario, capability }];
+        })).values());
+      await Promise.all(modelRequirements.map(async ({ scenario, capability }) => {
+        await this.resolveModel({ requestedModelId, platform: plan.targetPlatforms[0], scenario, capability });
+      }));
     }
 
     await this.prisma.$transaction(async (tx) => {
@@ -3219,6 +3562,9 @@ export class VideoFactoryService {
           },
         });
         if (!selectedAssetId && !input.prepareOnly) {
+          const modelScenario = factoryModule === "DOUYIN_VIRAL"
+            ? douyinViralModelScenario(item.description)
+            : "SCENE";
           await tx.videoGenerationJob.create({
             data: {
               idempotencyKey: `video-shot:${id}:${shot.id}:${candidateIndex}`,
@@ -3231,6 +3577,8 @@ export class VideoFactoryService {
               input: {
                 platform: plan.targetPlatforms[0],
                 productModel: plan.productModel,
+                factoryModule,
+                modelScenario,
                 duration: 5,
                 ratio: "9:16",
                 resolution: "1080P",
@@ -3290,13 +3638,13 @@ export class VideoFactoryService {
           status: "APPROVED",
           approvedBy: actor,
           approvedAt: new Date(),
-          topic: selected.topic,
-          audience: selected.audience,
-          objective: selected.objective,
-          hook: selected.hook,
-          outline: selected.outline,
-          score: selected.score,
-          scoreBreakdown: selected.scoreBreakdown,
+          topic: selectedTitle,
+          audience: selectedAudience,
+          objective: selectedObjective,
+          hook: String(selectedRecord.hook || "").trim(),
+          outline: selectedOutline,
+          score: Number(selectedRecord.score || 0),
+          scoreBreakdown: object(selectedRecord.scoreBreakdown) as Prisma.InputJsonValue,
           sourceSignals: nextSignals as Prisma.InputJsonValue,
           shootRequirements: requirements as Prisma.InputJsonValue,
           productionStage: allMaterialsReady
@@ -3402,6 +3750,17 @@ export class VideoFactoryService {
       || !["COMMERCIAL", "EDIT_ONLY"].includes(shot.selectedAsset.rightsStatus),
     );
     if (invalid.length) throw new BadRequestException(`有${invalid.length}个镜头素材尚未满足审核和使用条件`);
+    const activeRender = await this.prisma.videoRenderJob.findFirst({
+      where: { contentPlanId: id, status: { in: ["PENDING", "RUNNING", "RETRY"] } },
+      orderBy: { createdAt: "desc" },
+    });
+    if (activeRender && !videoRenderJobIsStale(plan, activeRender)) return activeRender;
+    if (activeRender) {
+      await this.prisma.videoRenderJob.update({
+        where: { id: activeRender.id },
+        data: { status: "FAILED", failureReason: "渲染进程中断，已重新排队", finishedAt: new Date() },
+      });
+    }
     const latestReturnedReview = await this.prisma.videoQualityCheck.findFirst({
       where: { contentPlanId: id, checkType: "FINAL_REVIEW", status: "REJECTED" },
       orderBy: [{ reviewedAt: "desc" }, { createdAt: "desc" }],
@@ -3433,7 +3792,7 @@ export class VideoFactoryService {
     return job;
   }
 
-  async archiveProject(id: string, actor: string) {
+  async archiveProject(id: string, actor: string, allowAdminOverride = false) {
     const plan = await this.prisma.contentPlan.findUnique({
       where: { id },
       include: {
@@ -3444,7 +3803,7 @@ export class VideoFactoryService {
     if (!plan || plan.kind !== "VIDEO" || !sourceSignals(plan).some((item) => item.type === "VIDEO_FACTORY")) {
       throw new NotFoundException("智能视频项目不存在");
     }
-    if (![plan.owner, plan.createdBy, plan.assignedTo].filter(Boolean).includes(actor)) {
+    if (!allowAdminOverride && ![plan.owner, plan.createdBy, plan.assignedTo].filter(Boolean).includes(actor)) {
       throw new BadRequestException("只能删除自己创建的视频项目");
     }
     if (plan.productionStage === "VIDEO_FACTORY_ARCHIVED") return { id, archived: true };
@@ -3786,6 +4145,187 @@ export class VideoFactoryService {
       return { assetId, url: this.oss.signedDownloadUrl(asset.objectKey, 3_600), fileName: asset.fileName };
     }
     return { assetId, url: asset.sourcePath, fileName: asset.fileName };
+  }
+
+  async uploadMaster(
+    contentPlanId: string,
+    file: { originalname: string; mimetype: string; size: number; buffer: Buffer } | undefined,
+    body: Record<string, unknown>,
+    actor: string,
+  ) {
+    if (!file?.buffer?.length) throw new BadRequestException("请选择需要上传的MP4成片");
+    if (!file.originalname.toLowerCase().endsWith(".mp4") && file.mimetype !== "video/mp4") {
+      throw new BadRequestException("成片只支持MP4格式");
+    }
+    const width = Math.max(0, Number(body.width || 0));
+    const height = Math.max(0, Number(body.height || 0));
+    const duration = Math.max(0, Number(body.durationSeconds || 0));
+    const codec = String(body.codec || "").trim().toLowerCase();
+    const frameRate = String(body.frameRate || "").trim();
+    if (!width || !height || !duration || !codec || !frameRate) {
+      throw new BadRequestException("请提供成片宽度、高度、时长、编码和帧率");
+    }
+    const plan = await this.prisma.contentPlan.findUnique({
+      where: { id: contentPlanId },
+      select: {
+        id: true,
+        topic: true,
+        productModel: true,
+        contentAssets: { select: { assetId: true, role: true } },
+      },
+    });
+    if (!plan) throw new NotFoundException("智能视频项目不存在");
+    const hash = createHash("sha256").update(file.buffer).digest("hex");
+    const sourceAssetIds = [...new Set([
+      ...strings(body.sourceAssetIds),
+      ...plan.contentAssets
+        .filter((item) => item.role !== "VIDEO_FACTORY_MASTER")
+        .map((item) => item.assetId),
+    ])];
+    const generatedSceneFiles = strings(body.generatedSceneFiles);
+    const metadata = {
+      source: String(body.renderer || "CODEX_LOCAL_FFMPEG"),
+      codec,
+      frameRate,
+      usedAssetIds: sourceAssetIds,
+      generatedSceneFiles,
+    };
+    const existing = await this.prisma.videoRenderJob.findUnique({
+      where: { idempotencyKey: `manual-master:${contentPlanId}:${hash}` },
+      include: { outputAsset: true },
+    });
+    if (existing?.outputAsset) {
+      const snapshot = object(existing.outputAsset.sourceSnapshot);
+      const sourceSnapshot = {
+        ...snapshot,
+        renderer: metadata.source,
+        renderJobId: existing.id,
+        shotAssetIds: sourceAssetIds,
+        metadata: { ...object(snapshot.metadata), ...metadata },
+      };
+      const asset = await this.prisma.$transaction(async (tx) => {
+        const updated = await tx.asset.update({
+          where: { id: existing.outputAsset!.id },
+          data: { sourceSnapshot },
+        });
+        await tx.assetVersion.updateMany({
+          where: { assetId: existing.outputAsset!.id },
+          data: { codec, technicalMetadata: metadata },
+        });
+        return updated;
+      });
+      return jsonSafe({ renderJob: existing, asset });
+    }
+
+    const renderJobId = randomUUID();
+    const assetId = randomUUID();
+    const publicNo = `SD-FINAL-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${randomUUID().slice(0, 6).toUpperCase()}`;
+    const objectKey = this.oss.derivedObjectKey(renderJobId, "video-master", 1, hash, ".mp4");
+    const stored = await this.oss.uploadGeneratedBuffer({
+      objectKey,
+      buffer: file.buffer,
+      actor,
+      sourceType: "AI_GENERATED",
+      sha256: hash,
+      originalName: file.originalname,
+    });
+    const asset = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.asset.create({
+        data: {
+          id: assetId,
+          sourceKey: `VIDEO_FACTORY_MANUAL_MASTER:${contentPlanId}:${hash}`,
+          sourceType: "AI_GENERATED",
+          sourcePath: `oss://${objectKey}`,
+          fileName: file.originalname,
+          originalFileName: file.originalname,
+          extension: ".mp4",
+          mediaType: "VIDEO",
+          kind: "VIDEO",
+          assetNo: publicNo,
+          displayName: `智能视频成片-${plan.topic}`,
+          level: "FINISHED",
+          productScope: plan.productModel ? "MODEL" : "UNKNOWN",
+          processingStatus: "READY_FOR_REVIEW",
+          reviewStatus: "PENDING",
+          availabilityStatus: "INACTIVE",
+          rightsStatus: "AUTH_REQUIRED",
+          sha256: hash,
+          sizeBytes: file.size,
+          modifiedAt: new Date(),
+          width,
+          height,
+          durationSeconds: duration,
+          aspectRatio: `${width}:${height}`,
+          model: plan.productModel,
+          status: "PENDING",
+          qualityScore: 85,
+          contentDescription: plan.topic,
+          sourceSnapshot: { renderer: metadata.source, renderJobId, shotAssetIds: sourceAssetIds, metadata },
+          aiIndex: { source: "VIDEO_FACTORY_MANUAL_MASTER", contentPlanId },
+          searchText: `${plan.productModel || ""} ${plan.topic} 智能视频成片`,
+          indexNeedsReview: true,
+          storageProvider: "ALIYUN_OSS",
+          objectKey,
+          objectVersionId: stored.objectVersionId,
+          etag: stored.etag,
+          storageUrl: stored.storageUrl,
+          storageSyncedAt: stored.uploadedAt,
+          discoveredBy: actor,
+          versions: {
+            create: {
+              version: 1,
+              sha256: hash,
+              sourcePath: `oss://${objectKey}`,
+              objectKey,
+              objectVersionId: stored.objectVersionId,
+              etag: stored.etag,
+              storageUrl: stored.storageUrl,
+              createdBy: actor,
+              originalFileName: file.originalname,
+              mimeType: "video/mp4",
+              extension: ".mp4",
+              sizeBytes: file.size,
+              width,
+              height,
+              durationSeconds: duration,
+              codec,
+              technicalMetadata: metadata,
+            },
+          },
+        },
+      });
+      await tx.videoRenderJob.create({
+        data: {
+          id: renderJobId,
+          idempotencyKey: `manual-master:${contentPlanId}:${hash}`,
+          contentPlanId,
+          status: "SUCCEEDED",
+          renderer: metadata.source,
+          input: { sourceAssetIds, generatedSceneFiles },
+          output: { objectKey, assetId, renderer: metadata.source },
+          outputAssetId: assetId,
+          outputPath: `oss://${objectKey}`,
+          actualCost: Number(body.actualCost || 0),
+          startedAt: new Date(),
+          finishedAt: new Date(),
+          createdBy: actor,
+        },
+      });
+      await tx.contentPlan.update({
+        where: { id: contentPlanId },
+        data: { masterVideoPath: `oss://${objectKey}`, masterVideoStatus: "READY_FOR_REVIEW", productionStage: "VIDEO_REVIEW" },
+      });
+      await tx.contentAsset.create({ data: { contentPlanId, assetId, role: "VIDEO_FACTORY_MASTER" } });
+      await tx.videoQualityCheck.create({
+        data: { contentPlanId, assetId, renderJobId, checkType: "TECHNICAL", status: "PASSED", score: 95, findings: [{ width, height, duration, codec, frameRate }] },
+      });
+      await tx.videoQualityCheck.create({
+        data: { contentPlanId, assetId, renderJobId, checkType: "FINAL_REVIEW", status: "REVIEW_REQUIRED", score: 0, findings: [{ message: "请核对字幕、配音、产品外形、功能画面和CTA" }] },
+      });
+      return created;
+    });
+    await this.notifyProjectMilestone(contentPlanId, "VIDEO_REVIEW", "视频成片等待审核", plan.topic);
+    return jsonSafe({ renderJobId, asset });
   }
 
   async reviewOutput(assetId: string, approved: boolean, actor: string, note = "") {

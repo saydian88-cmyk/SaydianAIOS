@@ -985,7 +985,7 @@ export class WorkbenchController {
     }, employee.name) as Record<string, any>;
     if (task) await this.videoFactory.attachRemoteTask(id, task.id, "SCRIPT_ONLY", employee.name);
     if (scriptEngines.includes("SYSTEM_AI")) {
-      await this.videoFactory.generateSystemScriptCandidate(id, employee.name);
+      await this.videoFactory.enqueueSystemScriptCandidate(id, employee.name);
     }
     return { project: await this.videoFactory.project(id), task, scriptEngines };
   }
@@ -1007,7 +1007,26 @@ export class WorkbenchController {
     if (!["FACTORY_SCRIPT_READY", "SCRIPT_GENERATING"].includes(String(project.productionStage))) {
       throw new ForbiddenException("当前项目阶段不能重新生成系统 AI 脚本");
     }
-    return this.videoFactory.generateSystemScriptCandidate(id, employee.name, String(body.prompt || "").trim());
+    return this.videoFactory.enqueueSystemScriptCandidate(id, employee.name, String(body.prompt || "").trim());
+  }
+
+  @Post("data-center/video-projects/:id/system-script-transfer-to-codex")
+  async transferFailedSystemScriptToCodex(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    if (!employee.roles.some((role) => ["CONTENT_OPERATOR", "VIDEO_SPECIALIST"].includes(role))) {
+      throw new ForbiddenException("只有运营和视频专员可以转交 Codex 生成脚本");
+    }
+    const project = await this.videoFactory.project(id) as Record<string, any>;
+    if (project.createdBy !== employee.name) {
+      throw new ForbiddenException("只能转交自己创建的视频项目");
+    }
+    await this.videoFactory.requestRemoteScriptAfterSystemFailure(id, employee.name, String(body.note || "").trim());
+    const scriptSubmission = await this.submitVideoScriptTask(authorization, id);
+    return { ...scriptSubmission.project, scriptTask: scriptSubmission.task };
   }
 
   @Get("data-center/video-projects/:id")

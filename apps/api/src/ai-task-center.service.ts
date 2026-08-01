@@ -926,7 +926,13 @@ export class AiTaskCenterService implements OnModuleInit {
       }
       const policy = await this.policy(candidate.type);
       if (!policy.enabled) continue;
-      const running = await this.prisma.aiTask.count({ where: { type: candidate.type, status: { in: ["CLAIMED", "RUNNING", "QUALITY_CHECK", "UPLOADING"] } } });
+      const running = await this.prisma.aiTask.count({
+        where: {
+          type: candidate.type,
+          status: { in: ["CLAIMED", "RUNNING", "QUALITY_CHECK", "UPLOADING"] },
+          lockedBy: { not: null },
+        },
+      });
       if (running >= policy.maxConcurrency) continue;
       const claimed = await this.prisma.aiTask.updateMany({
         where: { id: candidate.id, status: candidate.status },
@@ -1054,6 +1060,8 @@ export class AiTaskCenterService implements OnModuleInit {
     const libraryState = await this.systemMaterialIndexStatus();
     const input = object(task.input);
     const modelPolicy = object(task.modelPolicy);
+    const dedicatedDouyin = text(input.factoryModule).toUpperCase() === "DOUYIN_VIRAL";
+    const executionMode = text(input.executionMode).toUpperCase() || (task.type === "VIDEO" ? "FULL_VIDEO" : "DEFAULT");
     return {
       task: {
         id: task.id,
@@ -1098,23 +1106,27 @@ export class AiTaskCenterService implements OnModuleInit {
         };
       }),
       execution: {
-        mode: text(input.executionMode).toUpperCase() || (task.type === "VIDEO" ? "FULL_VIDEO" : "DEFAULT"),
-        strategy: ["IMAGE", "ARTICLE"].includes(task.type)
+        mode: executionMode,
+        strategy: ["IMAGE", "ARTICLE"].includes(task.type) || dedicatedDouyin
           ? "CODEX_SKILL"
           : text(modelPolicy.strategy).toUpperCase() || "CODEX_FIRST",
         allowExternalGeneration: ["IMAGE", "ARTICLE"].includes(task.type)
           ? false
           : modelPolicy.allowExternalGeneration === true,
         requiredSkill: task.type === "VIDEO"
-          && ["FULL_VIDEO", "SCRIPT_ONLY", "SIMILAR_VIDEO", "NO_VOICE_VIDEO", "COVER_TITLE"].includes(text(input.executionMode).toUpperCase() || "FULL_VIDEO")
-          ? "saidian-ai-task-dispatcher"
+          && dedicatedDouyin
+          && ["TOPIC_CARD_BATCH", "FULL_VIDEO", "SCRIPT_ONLY"].includes(executionMode)
+          ? "saydian-douyin-viral-video-generator"
+          : task.type === "VIDEO"
+            && ["FULL_VIDEO", "SCRIPT_ONLY", "SIMILAR_VIDEO", "NO_VOICE_VIDEO", "COVER_TITLE"].includes(executionMode)
+            ? "saidian-ai-task-dispatcher"
           : task.type === "IMAGE"
             ? "imagegen"
             : task.type === "ARTICLE"
               ? "build-health-brand-trust-content"
             : undefined,
         fallbackOrder: task.type === "VIDEO"
-          && (text(input.executionMode).toUpperCase() || "FULL_VIDEO") === "FULL_VIDEO"
+          && executionMode === "FULL_VIDEO"
           ? [
             "APPROVED_REAL_VIDEO",
             "PRODUCT_IMAGE_AUXILIARY_OVERLAY",
@@ -1122,6 +1134,38 @@ export class AiTaskCenterService implements OnModuleInit {
             "EXTERNAL_VISUAL_IF_EXPLICITLY_ALLOWED",
             "RESHOOT_OPS_TASK",
           ]
+          : undefined,
+        videoModelRouting: dedicatedDouyin
+          ? {
+            policyVersion: "douyin-viral-v1",
+            localFirst: true,
+            requiresConfiguredProvider: true,
+            externalShotAllocation: {
+              SEEDANCE_2: 70,
+              KLING: 30,
+            },
+            recipeRoutes: {
+              PAIN_SOLVE: "SEEDANCE_2",
+              GIFT_EMOTION: "SEEDANCE_2",
+              CONTRARIAN: "SEEDANCE_2",
+              FAQ: "APPROVED_REAL_ASSET",
+              REVIEW: "APPROVED_REAL_ASSET",
+              COMPARISON: "APPROVED_REAL_ASSET",
+              UGC: "KLING",
+              VISUAL_AD: "SEEDANCE_2",
+            },
+            shotRoutes: {
+              FAMILY_STORY: "SEEDANCE_2",
+              PRODUCT_ATMOSPHERE: "SEEDANCE_2",
+              MULTI_SHOT: "SEEDANCE_2",
+              IMAGE_TO_VIDEO: "SEEDANCE_2",
+              HUMAN_ACTION: "KLING",
+              ELDER_GESTURE: "KLING",
+              SPORTS_ACTION: "KLING",
+              PRODUCT_CLOSEUP: "APPROVED_REAL_ASSET",
+              FUNCTION_PROOF: "APPROVED_REAL_ASSET",
+            },
+          }
           : undefined,
         healthContentAllowed: input.healthContentAllowed !== false,
         output: task.type === "VIDEO"
@@ -1584,7 +1628,7 @@ export class AiTaskCenterService implements OnModuleInit {
             finishedAt: new Date(),
             lockedBy: null,
             lockedAt: null,
-            heartbeatAt: new Date(),
+            heartbeatAt: null,
           },
         }),
         this.prisma.aiTaskAttempt.updateMany({
@@ -1627,7 +1671,7 @@ export class AiTaskCenterService implements OnModuleInit {
           progressMessage: domain.message,
           actualCost: number(body.actualCost) || task.actualCost,
           finishedAt: ["PENDING_REVIEW", "COMPLETED"].includes(status) ? new Date() : null,
-          heartbeatAt: new Date(),
+          heartbeatAt: null,
           lockedAt: null,
           lockedBy: null,
         },
@@ -1754,14 +1798,22 @@ export class AiTaskCenterService implements OnModuleInit {
     throw new NotFoundException("任务输出没有可下载文件");
   }
 
-  async createDailyTopicCardTasks(now = new Date(), actor = "系统自动化") {
+  async createDailyTopicCardTasks(
+    now = new Date(),
+    actor = "系统自动化",
+    platforms: Array<"DOUYIN" | "TIKTOK"> = ["DOUYIN", "TIKTOK"],
+    factoryModule = "",
+  ) {
     const key = dateKey(now);
     const policy = await this.policy("VIDEO");
     const config = object(policy.config);
     const counts = object(config.dailyTopicCards);
     const policyVersion = text(config.topicCardPolicyVersion) || DEFAULT_VIDEO_POLICY_CONFIG.topicCardPolicyVersion;
     const results: Record<string, unknown> = {};
-    for (const platform of ["DOUYIN", "TIKTOK"] as const) {
+    for (const platform of platforms) {
+      const resolvedFactoryModule = factoryModule === "DOUYIN_VIRAL" || (!factoryModule && platform === "DOUYIN")
+        ? "DOUYIN_VIRAL"
+        : "GENERAL_VIDEO_FACTORY";
       const cardCount = Math.max(1, Math.min(30, Math.round(number(counts[platform]) || DEFAULT_VIDEO_POLICY_CONFIG.dailyTopicCards[platform])));
       const task = await this.createTask({
         type: "VIDEO",
@@ -1769,11 +1821,12 @@ export class AiTaskCenterService implements OnModuleInit {
         platform,
         sourceType: "DAILY_VIDEO_TOPIC_CARDS",
         sourceId: `${key}:${platform}`,
-        idempotencyKey: `ai-task:topic-card:${platform}:${key}:${policyVersion}`,
+        idempotencyKey: `ai-task:topic-card:${resolvedFactoryModule === "DOUYIN_VIRAL" ? "douyin-viral:" : ""}${platform}:${key}:${policyVersion}`,
         estimatedCost: 0,
         skipPaidBudget: true,
         input: {
           executionMode: "TOPIC_CARD_BATCH",
+          factoryModule: resolvedFactoryModule,
           cardCount,
           policyVersion,
           manualApprovalRequired: true,
@@ -1921,6 +1974,7 @@ export class AiTaskCenterService implements OnModuleInit {
           platform: text(taskInput.platform || task.platform) || "DOUYIN",
           cards: Array.isArray(result.topicCards) ? result.topicCards : [],
           policyVersion: text(taskInput.policyVersion) || DEFAULT_VIDEO_POLICY_CONFIG.topicCardPolicyVersion,
+          factoryModule: text(taskInput.factoryModule).toUpperCase(),
         }, actor);
         for (const raw of persisted.created) {
           const card = object(raw);
@@ -2020,12 +2074,33 @@ export class AiTaskCenterService implements OnModuleInit {
         return { status: "WAITING_INPUT" as AiTaskStatus, message: "Codex未返回符合V3结构的脚本和分镜" };
       }
       const existingContentPlanId = text(taskInput.existingContentPlanId);
-      const existingProject = existingContentPlanId
-        ? await this.prisma.contentPlan.findUnique({ where: { id: existingContentPlanId } })
+      const taskModelPolicy = object(task.modelPolicy);
+      const requestedModelId = text(taskModelPolicy.requestedModelId) || undefined;
+      const linkedProjectOutput = existingContentPlanId
+        ? null
+        : await this.prisma.aiTaskOutput.findFirst({
+          where: { aiTaskId: task.id, kind: "VIDEO_PROJECT", contentPlanId: { not: null } },
+          orderBy: { createdAt: "desc" },
+        });
+      const reusableContentPlanId = existingContentPlanId || linkedProjectOutput?.contentPlanId || "";
+      const existingProject = reusableContentPlanId
+        ? await this.prisma.contentPlan.findUnique({ where: { id: reusableContentPlanId } })
         : null;
       if (executionMode === "SCRIPT_ONLY") {
         const selectedScript = scriptCandidates.find((candidate) => candidate.selected) || scriptCandidates[0];
         scriptCandidates = [{ ...selectedScript, selected: true }];
+      }
+      if (executionMode !== "SCRIPT_ONLY" && linkedProjectOutput?.contentPlanId && existingProject) {
+        const [generationJobCount, renderJobCount] = await Promise.all([
+          this.prisma.videoGenerationJob.count({ where: { contentPlanId: existingProject.id } }),
+          this.prisma.videoRenderJob.count({ where: { contentPlanId: existingProject.id } }),
+        ]);
+        if (generationJobCount > 0 || renderJobCount > 0) {
+          return {
+            status: "RUNNING" as AiTaskStatus,
+            message: "已复用原视频项目，现有镜头生成与渲染任务继续执行",
+          };
+        }
       }
       const project = existingProject || await this.videoFactory.createCodexProject({
         platform: enumValue(projectInput.platform || task.platform, ["DOUYIN", "TIKTOK"] as const, "DOUYIN"),
@@ -2036,6 +2111,10 @@ export class AiTaskCenterService implements OnModuleInit {
         keywordIds: strings(projectInput.keywordIds),
         externalVideoIds: strings(projectInput.externalVideoIds),
         aiTaskId: task.id,
+        factoryModule: text(taskInput.factoryModule).toUpperCase(),
+        routingMode: requestedModelId ? "FIXED" : "AUTO",
+        requestedModelId,
+        allowFallback: taskModelPolicy.allowFallback !== false,
       }, actor);
       await this.videoFactory.applyCodexProjectResult({
         contentPlanId: project.id,
@@ -2155,12 +2234,14 @@ export class AiTaskCenterService implements OnModuleInit {
         return { status: "PENDING_REVIEW" as AiTaskStatus, message: "Codex本地成片已上传，等待审核" };
       }
 
-      const modelPolicy = object(task.modelPolicy);
+      const modelPolicy = taskModelPolicy;
       if (modelPolicy.allowExternalGeneration === true) {
+        const requestedModelId = text(modelPolicy.requestedModelId) || undefined;
         await this.videoFactory.generateProject(project.id, {
           candidateIndex: Math.max(0, scriptCandidates.findIndex((item) => item.selected === true)),
-          routingMode: "AUTO",
-          allowFallback: true,
+          requestedModelId,
+          routingMode: requestedModelId ? "FIXED" : "AUTO",
+          allowFallback: modelPolicy.allowFallback !== false,
         }, actor);
         return { status: "RUNNING" as AiTaskStatus, message: "本地素材不足，已按任务许可进入外部视觉能力补齐" };
       }
@@ -2349,7 +2430,7 @@ export class AiTaskCenterService implements OnModuleInit {
     if (type === "VIDEO" && executionMode === "TOPIC_CARD_BATCH") {
       const platform = enumValue(baseInput.platform || body.platform, ["DOUYIN", "TIKTOK"] as const, "DOUYIN");
       const market = platform === "TIKTOK" ? "US" : "CN";
-      const [products, keywords, knowledge, faqs, externalVideos, assets, historicalContent] = await Promise.all([
+      const [products, keywords, knowledge, faqs, externalVideos, assets, historicalContent, comments] = await Promise.all([
         this.prisma.product.findMany({
           where: { status: "READY" },
           select: {
@@ -2462,6 +2543,20 @@ export class AiTaskCenterService implements OnModuleInit {
           orderBy: { updatedAt: "desc" },
           take: 40,
         }),
+        this.prisma.commentRecord.findMany({
+          where: { integration: { kind: platform } },
+          select: {
+            id: true,
+            remoteContentId: true,
+            text: true,
+            category: true,
+            confidence: true,
+            riskReasons: true,
+            createdAtRemote: true,
+          },
+          orderBy: { createdAtRemote: "desc" },
+          take: 80,
+        }),
       ]);
       const usableReferences = externalVideos.filter((item) => {
         const modules = Array.isArray(item.moduleSummary) ? item.moduleSummary : [];
@@ -2551,6 +2646,15 @@ export class AiTaskCenterService implements OnModuleInit {
         products: item.products.map((relation) => relation.product),
         tags: item.tags.slice(0, 12).map((relation) => relation.tag.label),
       }));
+      const topicComments = comments.map((item) => ({
+        id: item.id,
+        remoteContentId: item.remoteContentId,
+        text: clippedText(item.text, 360),
+        category: item.category,
+        confidence: item.confidence,
+        riskReasons: item.riskReasons,
+        createdAt: item.createdAtRemote,
+      }));
       const missingFields: string[] = [];
       if (!products.length) missingFields.push("已审核产品资料");
       if (!keywords.length) missingFields.push("可用于选题的智能关键词");
@@ -2564,6 +2668,7 @@ export class AiTaskCenterService implements OnModuleInit {
           keywords: topicKeywords,
           knowledge,
           faqs: topicFaqs,
+          comments: topicComments,
           externalVideos: topicReferences,
           assets: topicAssets,
           historicalContent,
@@ -2692,7 +2797,8 @@ export class AiTaskCenterService implements OnModuleInit {
           missingFields,
         };
       }
-      const [product, keywords, knowledge, assets] = await Promise.all([
+      const requestedModelId = text(object(body.modelPolicy).requestedModelId);
+      const [product, keywords, knowledge, assets, requestedModel] = await Promise.all([
         productId
           ? this.prisma.product.findUnique({ where: { id: productId } })
           : productModel
@@ -2724,8 +2830,39 @@ export class AiTaskCenterService implements OnModuleInit {
           orderBy: [{ qualityScore: "desc" }, { useCount: "desc" }],
           take: 30,
         }),
+        requestedModelId
+          ? this.prisma.videoModelConfig.findUnique({
+            where: { id: requestedModelId },
+            select: {
+              id: true,
+              code: true,
+              displayName: true,
+              enabled: true,
+              capabilities: true,
+              provider: { select: { code: true, displayName: true, enabled: true, state: true } },
+            },
+          })
+          : Promise.resolve(null),
       ]);
-      return { payload: { ...baseInput, product, keywords, knowledge, assets }, missingFields: [] as string[] };
+      return {
+        payload: {
+          ...baseInput,
+          product,
+          keywords,
+          knowledge,
+          assets,
+          externalVisualModelsAllowed: object(body.modelPolicy).allowExternalGeneration === true,
+          requestedVisualModel: requestedModel
+            ? {
+              ...requestedModel,
+              configured: requestedModel.enabled
+                && requestedModel.provider.enabled
+                && ["CONFIGURED", "HEALTHY"].includes(requestedModel.provider.state),
+            }
+            : null,
+        },
+        missingFields: [] as string[],
+      };
     }
     if (type === "STORE_ANALYSIS") {
       const run = await this.prisma.operationAnalysisRun.findFirst({ where: { status: "SUCCEEDED" }, orderBy: { periodEnd: "desc" } });
@@ -2800,7 +2937,11 @@ export class AiTaskCenterService implements OnModuleInit {
   private async releaseStaleTasks() {
     const staleAt = new Date(Date.now() - 5 * 60 * 1000);
     const stale = await this.prisma.aiTask.findMany({
-      where: { status: { in: ["CLAIMED", "RUNNING", "QUALITY_CHECK", "UPLOADING"] }, heartbeatAt: { lt: staleAt } },
+      where: {
+        status: { in: ["CLAIMED", "RUNNING", "QUALITY_CHECK", "UPLOADING"] },
+        lockedBy: { not: null },
+        heartbeatAt: { lt: staleAt },
+      },
       select: { id: true, lockedBy: true, retryCount: true, maxRetries: true },
     });
     for (const task of stale) {

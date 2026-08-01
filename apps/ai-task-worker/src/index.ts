@@ -622,8 +622,16 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
     const cardCount = Math.max(1, Math.min(30, Number(requirements.exactCount || 10)));
     return [
       "你是赛电视频工厂的视频选题分析执行器。",
+      ...(detectedSkill.key === "saydian-douyin-viral-video-generator"
+        ? [
+          "本任务属于独立的抖音爆款生成模块，必须直接使用 $saydian-douyin-viral-video-generator。",
+          `必须先完整读取并严格执行：${detectedSkill.skillPath}`,
+          "不得调用 $saidian-ai-task-dispatcher 或 video-editing-from-media-library-share。",
+        ]
+        : []),
       `必须生成恰好${cardCount}张${String(payload.platform || task.platform || "")}视频选题卡，只生成卡片，不创建脚本、视频文件或付费模型任务。`,
       "每张卡必须使用输入快照中已审核产品，引用真实keywordIds；没有产品事实或关键词依据的内容不能进入结果。",
+      "用户评论只用于提炼与当前产品和关键词明确相关的真实问题、顾虑和用语；不得引用用户名，不相关评论不得进入选题。",
       "外部爆款只允许提取Hook模式、节奏、镜头结构和CTA模式，不能复制竞品品牌名、价格、产品承诺、标题或商业素材。",
       "按平台、产品、关键词簇、人群、痛点和主配方主动去重；合并大小写、空格、连字符和明显错别字。",
       "机会分必须严格使用输入中的九项权重；素材覆盖率只计算manifest内已审核、启用且可商用素材。",
@@ -643,31 +651,44 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
     COMPETITOR_ANALYSIS: "分析竞品商品、价格、内容和关键词变化，输出机会及待确认行动，禁止虚构竞品数据。",
     LIVE_ANALYSIS: "完成直播前方案或直播后复盘，输出切片建议、话术调整和下一场行动。",
   };
+  const isDedicatedDouyinSkill = detectedSkill.key === "saydian-douyin-viral-video-generator";
   const skillInstruction = detectedSkill.key === "legacy-codex"
     ? ""
     : [
       `本任务由统一 Skill Registry 选择 $${detectedSkill.name}。`,
       `必须先完整读取并严格执行：${detectedSkill.skillPath}`,
-      `Skill版本：${detectedSkill.version}。不得改用其他 Skill 或第三方模型。`,
+      `Skill版本：${detectedSkill.version}。${isDedicatedDouyinSkill
+        ? "不得改用其他 Skill；外部视觉模型只按任务包 execution.allowExternalGeneration 和 videoModelRouting 执行。"
+        : "不得改用其他 Skill 或第三方模型。"}`,
     ].join("\n");
   const requiredVideoSkill = type === "VIDEO" && ["FULL_VIDEO", "SCRIPT_ONLY", "SIMILAR_VIDEO", "NO_VOICE_VIDEO", "COVER_TITLE"].includes(executionMode)
-    ? [
-      `本任务必须先使用 $saidian-ai-task-dispatcher 执行系统任务调度，再由其调用 $${detectedSkill.downstreamSkillName || "video-editing-from-media-library"} 完成当前视频阶段。`,
-      `下游视频Skill路径：${detectedSkill.downstreamSkillPath || "未配置"}。必须完整读取并遵循其素材只读、镜头连续性、内容禁止库、质检和交付规则。`,
-      `系统任务素材模式已启用；health_content_allowed=${execution.healthContentAllowed !== false ? "true" : "false"}。`,
-      "任务包中的assets与materialBindings是本次任务的唯一素材白名单，禁止从本地素材库另选白名单外素材。",
-      "主时间线只能使用真实视频素材。图片、详情图和产品图只能作为绑定underlying_shot_id的短时辅助层，禁止图片轮播、静态图推拉或无关镜头补时长。",
-      "每个功能镜头必须有直接对应画面；任何reshoot缺口都要停止受影响成片渲染，并输出明确补拍清单。",
-      executionMode === "COVER_TITLE"
-        ? "本次必须由视频剪辑 Skill 调用 $feng-mian-biao-ti 子 Skill；分析系统提供的已审核成片，为每个目标平台生成封面、标题和标题汇总表。每个封面文件须在outputFiles登记，kind=COVER_IMAGE，metadata.platform须对应平台。"
-        : ["FULL_VIDEO", "SIMILAR_VIDEO", "NO_VOICE_VIDEO"].includes(executionMode)
-          ? "最终必须输出该Skill质检通过的1080×1920、30fps MP4，并在outputFiles中登记为VIDEO_MASTER。"
-          : "本次只执行脚本和分镜阶段，只允许返回1套selected=true的最终完整脚本；禁止生成三套候选、比较稿或占位稿。outputFiles不得包含VIDEO_MASTER，也不得调用付费成片能力。",
-    ].join("\n")
+    ? isDedicatedDouyinSkill
+      ? [
+        "本任务直接使用 $saydian-douyin-viral-video-generator 完成，不得调用 $saidian-ai-task-dispatcher 或 video-editing-from-media-library-share。",
+        `系统任务素材模式已启用；health_content_allowed=${execution.healthContentAllowed !== false ? "true" : "false"}。`,
+        "任务包中的assets与materialBindings是本次任务的唯一素材白名单。",
+        "模型选择以execution.videoModelRouting为准：真实素材和本地合成优先；需要外部补镜头时由Seedance 2.0主生成家庭叙事、产品氛围和多镜头，Kling增强人物、手势和运动动作；未配置时返回未配置。",
+        executionMode === "FULL_VIDEO"
+          ? "最终必须输出专用Skill质检通过的1080×1920、30fps MP4，并在outputFiles中登记为VIDEO_MASTER。"
+          : "本次只执行脚本和分镜阶段，只允许返回1套selected=true的最终完整脚本；outputFiles不得包含VIDEO_MASTER。",
+      ].join("\n")
+      : [
+        `本任务必须先使用 $saidian-ai-task-dispatcher 执行系统任务调度，再由其调用 $${detectedSkill.downstreamSkillName || "video-editing-from-media-library"} 完成当前视频阶段。`,
+        `下游视频Skill路径：${detectedSkill.downstreamSkillPath || "未配置"}。必须完整读取并遵循其素材只读、镜头连续性、内容禁止库、质检和交付规则。`,
+        `系统任务素材模式已启用；health_content_allowed=${execution.healthContentAllowed !== false ? "true" : "false"}。`,
+        "任务包中的assets与materialBindings是本次任务的唯一素材白名单，禁止从本地素材库另选白名单外素材。",
+        "主时间线只能使用真实视频素材。图片、详情图和产品图只能作为绑定underlying_shot_id的短时辅助层，禁止图片轮播、静态图推拉或无关镜头补时长。",
+        "每个功能镜头必须有直接对应画面；任何reshoot缺口都要停止受影响成片渲染，并输出明确补拍清单。",
+        executionMode === "COVER_TITLE"
+          ? "本次必须由视频剪辑 Skill 调用 $feng-mian-biao-ti 子 Skill；分析系统提供的已审核成片，为每个目标平台生成封面、标题和标题汇总表。每个封面文件须在outputFiles登记，kind=COVER_IMAGE，metadata.platform须对应平台。"
+          : ["FULL_VIDEO", "SIMILAR_VIDEO", "NO_VOICE_VIDEO"].includes(executionMode)
+            ? "最终必须输出该Skill质检通过的1080×1920、30fps MP4，并在outputFiles中登记为VIDEO_MASTER。"
+            : "本次只执行脚本和分镜阶段，只允许返回1套selected=true的最终完整脚本；禁止生成三套候选、比较稿或占位稿。outputFiles不得包含VIDEO_MASTER，也不得调用付费成片能力。",
+      ].join("\n")
     : "";
   const videoInstructionPriority = type === "VIDEO"
     ? [
-      "视频任务的创作规则优先级固定为：下游视频 Skill 及其 references 的硬性规则 > 已审核产品事实与素材可见事实 > 系统任务包中的创作提示 > 通用默认值。",
+      `视频任务的创作规则优先级固定为：${isDedicatedDouyinSkill ? "抖音爆款生成专用 Skill" : "下游视频 Skill"} 及其 references 的硬性规则 > 已审核产品事实与素材可见事实 > 系统任务包中的创作提示 > 通用默认值。`,
       "系统任务包是型号、功能、素材、审核状态和合规边界的事实来源，但任务要求、项目描述、方向、关键词、Hook 或推荐场景只作为辅助提示词；不得覆盖视频 Skill 的脚本结构、账号口吻、短句节奏、网感、素材证明和合规规则。",
       "禁止机械复述系统要求，禁止把任务包长句直接拼入口播，禁止为了逐项响应系统字段把脚本写成产品说明书或功能菜单。",
       executionMode === "SCRIPT_ONLY"
@@ -777,7 +798,8 @@ async function verifyVideoSkillRuntime(taskPackageValue: JsonRecord, detectedSki
   const execution = record(taskPackageValue.execution);
   if (String(task.type || "") !== "VIDEO"
     || !["FULL_VIDEO", "SCRIPT_ONLY", "SIMILAR_VIDEO", "NO_VOICE_VIDEO", "COVER_TITLE"].includes(String(execution.mode || ""))
-    || detectedSkill.key !== "saidian-ai-task-dispatcher") return;
+    || !["saidian-ai-task-dispatcher", "saydian-douyin-viral-video-generator"].includes(detectedSkill.key)) return;
+  if (detectedSkill.key === "saydian-douyin-viral-video-generator") return;
   const downstreamPath = String(detectedSkill.downstreamSkillPath || "");
   if (!downstreamPath) throw new Error("调度Skill未配置下游视频剪辑Skill");
   const downstream = await stat(downstreamPath);
@@ -943,7 +965,7 @@ async function renderLocalVideo(result: JsonRecord, taskPackageValue: JsonRecord
   const candidates = Array.isArray(project.scriptCandidates) ? project.scriptCandidates.map(record) : [];
   const selected = candidates.find((item) => item.selected === true) || candidates[0] || {};
   const shots = Array.isArray(selected.shots) ? selected.shots.map(record) : [];
-  if (String(execution.requiredSkill || "") === "saidian-ai-task-dispatcher") {
+  if (["saidian-ai-task-dispatcher", "saydian-douyin-viral-video-generator"].includes(String(execution.requiredSkill || ""))) {
     const missing = Array.isArray(selected.missingAssets) ? selected.missingAssets : [];
     selected.missingAssets = missing.length ? missing : [{
       moduleType: "VIDEO_MASTER",
@@ -1177,6 +1199,21 @@ async function runCodex(
 }
 
 function packageFingerprint(taskPackageValue: JsonRecord) {
+  const task = record(taskPackageValue.task);
+  const stableTask = {
+    id: task.id,
+    taskNo: task.taskNo,
+    type: task.type,
+    title: task.title,
+    platform: task.platform,
+    productId: task.productId,
+    productModel: task.productModel,
+    instructions: task.instructions,
+    input: task.input,
+    modelPolicy: task.modelPolicy,
+    sourceType: task.sourceType,
+    sourceId: task.sourceId,
+  };
   const stableAssets = (Array.isArray(taskPackageValue.assets) ? taskPackageValue.assets.map(record) : []).map((asset) => ({
     id: asset.id,
     sha256: asset.sha256,
@@ -1184,7 +1221,7 @@ function packageFingerprint(taskPackageValue: JsonRecord) {
     workspacePath: asset.workspacePath,
   }));
   return sha256(Buffer.from(JSON.stringify({
-    task: taskPackageValue.task,
+    task: stableTask,
     snapshots: taskPackageValue.snapshots,
     execution: taskPackageValue.execution,
     assets: stableAssets,

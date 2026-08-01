@@ -32,6 +32,7 @@ function serviceWith(overrides: Record<string, unknown> = {}) {
     contentPlan: { findUnique: vi.fn().mockResolvedValue(null) },
     smartKeyword: { findMany: vi.fn().mockResolvedValue([]) },
     knowledgeEntry: { findMany: vi.fn().mockResolvedValue([]) },
+    commentRecord: { findMany: vi.fn().mockResolvedValue([]) },
     asset: { findMany: vi.fn().mockResolvedValue([]) },
     operationAnalysisRun: { findFirst: vi.fn().mockResolvedValue(null) },
     storeMetricSnapshot: { findMany: vi.fn().mockResolvedValue([]) },
@@ -193,12 +194,82 @@ describe("AiTaskCenterService", () => {
     expect(createTask.mock.calls.map(([body]) => ({
       platform: body.platform,
       mode: (body.input as Record<string, unknown>).executionMode,
+      factoryModule: (body.input as Record<string, unknown>).factoryModule,
       count: (body.input as Record<string, unknown>).cardCount,
       estimatedCost: body.estimatedCost,
     }))).toEqual([
-      { platform: "DOUYIN", mode: "TOPIC_CARD_BATCH", count: 10, estimatedCost: 0 },
-      { platform: "TIKTOK", mode: "TOPIC_CARD_BATCH", count: 10, estimatedCost: 0 },
+      { platform: "DOUYIN", mode: "TOPIC_CARD_BATCH", factoryModule: "DOUYIN_VIRAL", count: 10, estimatedCost: 0 },
+      { platform: "TIKTOK", mode: "TOPIC_CARD_BATCH", factoryModule: "GENERAL_VIDEO_FACTORY", count: 10, estimatedCost: 0 },
     ]);
+  });
+
+  it("can create only the requested Douyin topic-card batch", async () => {
+    const prisma = {
+      aiTaskPolicy: {
+        upsert: vi.fn().mockResolvedValue({
+          type: "VIDEO",
+          config: {
+            topicCardPolicyVersion: "v2.1",
+            dailyTopicCards: { DOUYIN: 10, TIKTOK: 10 },
+          },
+        }),
+      },
+    };
+    const service = new AiTaskCenterService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+    const createTask = vi.spyOn(service, "createTask").mockImplementation(async (body) => body as never);
+
+    await service.createDailyTopicCardTasks(
+      new Date("2026-07-28T00:00:00.000Z"),
+      "测试管理员",
+      ["DOUYIN"],
+    );
+
+    expect(createTask).toHaveBeenCalledTimes(1);
+    expect(createTask.mock.calls[0][0].platform).toBe("DOUYIN");
+    expect((createTask.mock.calls[0][0].input as Record<string, unknown>).executionMode).toBe("TOPIC_CARD_BATCH");
+  });
+
+  it("marks Douyin viral topic-card batches for the dedicated Skill route", async () => {
+    const prisma = {
+      aiTaskPolicy: {
+        upsert: vi.fn().mockResolvedValue({
+          type: "VIDEO",
+          config: {
+            topicCardPolicyVersion: "v2.1",
+            dailyTopicCards: { DOUYIN: 10, TIKTOK: 10 },
+          },
+        }),
+      },
+    };
+    const service = new AiTaskCenterService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+    const createTask = vi.spyOn(service, "createTask").mockImplementation(async (body) => body as never);
+
+    await service.createDailyTopicCardTasks(
+      new Date("2026-07-28T00:00:00.000Z"),
+      "测试管理员",
+      ["DOUYIN"],
+      "DOUYIN_VIRAL",
+    );
+
+    expect(createTask.mock.calls[0][0].idempotencyKey).toContain("douyin-viral");
+    expect(createTask.mock.calls[0][0].input).toMatchObject({
+      executionMode: "TOPIC_CARD_BATCH",
+      factoryModule: "DOUYIN_VIRAL",
+    });
   });
 
   it("keeps store analysis in WAITING_INPUT when no operating snapshot exists", async () => {
@@ -366,6 +437,32 @@ describe("AiTaskCenterService", () => {
       strategy: "CODEX_SKILL",
       allowExternalGeneration: false,
       requiredSkill: "build-health-brand-trust-content",
+    });
+
+    task.type = "VIDEO";
+    task.input = { executionMode: "FULL_VIDEO", factoryModule: "DOUYIN_VIRAL" };
+    task.modelPolicy = { strategy: "CODEX_FIRST", allowExternalGeneration: false };
+    const douyinResult = await service.runnerPackage(token, task.id, { nodeCode: "windows-codex-01" });
+    expect(douyinResult.execution).toMatchObject({
+      strategy: "CODEX_SKILL",
+      requiredSkill: "saydian-douyin-viral-video-generator",
+      videoModelRouting: {
+        localFirst: true,
+        externalShotAllocation: {
+          SEEDANCE_2: 70,
+          KLING: 30,
+        },
+        recipeRoutes: {
+          GIFT_EMOTION: "SEEDANCE_2",
+          UGC: "KLING",
+          FAQ: "APPROVED_REAL_ASSET",
+        },
+        shotRoutes: {
+          FAMILY_STORY: "SEEDANCE_2",
+          HUMAN_ACTION: "KLING",
+          PRODUCT_CLOSEUP: "APPROVED_REAL_ASSET",
+        },
+      },
     });
   });
 

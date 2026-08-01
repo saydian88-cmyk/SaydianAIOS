@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Headers, Param, Patch, Post, Put, Query } from "@nestjs/common";
+import { Body, Controller, Get, Headers, Param, Patch, Post, Put, Query, UploadedFile, UseInterceptors } from "@nestjs/common";
+import { FileInterceptor } from "@nestjs/platform-express";
 import { AiTaskCenterService } from "./ai-task-center.service";
 import { AuthService } from "./auth.service";
 import { VideoFactoryWorkerService } from "./video-factory-worker.service";
@@ -129,8 +130,16 @@ export class VideoFactoryController {
   generateDailyTopicCards(
     @Headers("authorization") authorization: string | undefined,
     @Headers("x-ops-actor") requestedActor: string | undefined,
+    @Body() body: Record<string, unknown>,
   ) {
-    return this.aiTasks.createDailyTopicCardTasks(new Date(), this.actor(authorization, requestedActor));
+    const platform = String(body.platform || "").toUpperCase();
+    const factoryModule = String(body.factoryModule || "").toUpperCase();
+    return this.aiTasks.createDailyTopicCardTasks(
+      new Date(),
+      this.actor(authorization, requestedActor),
+      platform === "DOUYIN" || platform === "TIKTOK" ? [platform] : undefined,
+      factoryModule === "DOUYIN_VIRAL" ? "DOUYIN_VIRAL" : "",
+    );
   }
 
   @Patch("topic-cards/:id")
@@ -172,6 +181,10 @@ export class VideoFactoryController {
     const executionMode = String(body.executionMode || "").toUpperCase();
     const ownerId = String(body.ownerId || "");
     const reviewerId = String(body.reviewerId || "");
+    const requestedFactoryModule = String(body.factoryModule || "").toUpperCase();
+    const requestedModelId = String(body.requestedModelId || "").trim();
+    const allowExternalGeneration = executionMode === "FULL_VIDEO" && body.allowExternalGeneration === true;
+    const allowFallback = allowExternalGeneration && body.allowFallback !== false;
     const prepared = await this.factory.prepareTopicCardApproval(id, {
       executionMode: executionMode as "SCRIPT_ONLY" | "FULL_VIDEO",
       ownerId,
@@ -186,20 +199,25 @@ export class VideoFactoryController {
       reviewerEmployeeId: reviewerId,
       sourceType: "VIDEO_TOPIC_CARD",
       sourceId: id,
-      idempotencyKey: `ai-task:video-topic-card:${id}:${executionMode}:v${prepared.plan.workflowVersion}`,
+      idempotencyKey: `ai-task:video-topic-card:${id}:${executionMode}:${requestedFactoryModule === "DOUYIN_VIRAL" ? "douyin-viral" : "general"}:v${prepared.plan.workflowVersion}`,
       estimatedCost: 0,
       skipPaidBudget: true,
       instructions: `${prepared.card.objective}；目标人群：${prepared.card.audience}；主配方：${prepared.card.primaryRecipe}`,
       input: {
         executionMode,
+        factoryModule: requestedFactoryModule === "DOUYIN_VIRAL"
+          || prepared.card.factoryModule === "DOUYIN_VIRAL"
+          ? "DOUYIN_VIRAL"
+          : "GENERAL_VIDEO_FACTORY",
         existingContentPlanId: id,
         topicCardId: id,
         candidateIndex: 0,
       },
       modelPolicy: {
         strategy: "CODEX_FIRST",
-        allowExternalGeneration: false,
-        allowFallback: false,
+        ...(requestedModelId ? { requestedModelId } : {}),
+        allowExternalGeneration,
+        allowFallback,
       },
     }, actor);
     const card = await this.factory.markTopicCardApproved(id, {
@@ -249,6 +267,15 @@ export class VideoFactoryController {
     return this.factory.project(id);
   }
 
+  @Post("projects/:id/archive")
+  archiveProject(
+    @Headers("authorization") authorization: string | undefined,
+    @Headers("x-ops-actor") requestedActor: string | undefined,
+    @Param("id") id: string,
+  ) {
+    return this.factory.archiveProject(id, this.actor(authorization, requestedActor), true);
+  }
+
   @Post("projects/:id/generate")
   generateProject(
     @Headers("authorization") authorization: string | undefined,
@@ -287,6 +314,26 @@ export class VideoFactoryController {
     @Param("id") id: string,
   ) {
     return this.factory.enqueueRender(id, this.actor(authorization, requestedActor));
+  }
+
+  @Post("projects/:id/master")
+  @UseInterceptors(FileInterceptor("file", { limits: { fileSize: 500 * 1024 * 1024 } }))
+  async uploadMaster(
+    @Headers("authorization") authorization: string | undefined,
+    @Headers("x-ops-actor") requestedActor: string | undefined,
+    @Param("id") id: string,
+    @UploadedFile() file: { originalname: string; mimetype: string; size: number; buffer: Buffer } | undefined,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const technical = await this.worker.inspectUploadedVideo(file);
+    return this.factory.uploadMaster(id, file, {
+      ...body,
+      width: technical.width,
+      height: technical.height,
+      durationSeconds: technical.duration,
+      codec: technical.codec,
+      frameRate: technical.frameRate,
+    }, this.actor(authorization, requestedActor));
   }
 
   @Get("jobs/:id")

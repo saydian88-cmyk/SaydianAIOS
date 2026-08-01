@@ -2,13 +2,21 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
 import { Plus, Refresh } from "@element-plus/icons-vue";
-import { api, patch, post } from "../api";
+import { api, patch, post, upload } from "../api";
 
 type Row = Record<string, any>;
 
-const props = defineProps<{ products: Row[] }>();
+const props = withDefaults(defineProps<{
+  products: Row[];
+  platformScope?: "" | "DOUYIN" | "TIKTOK";
+  mode?: "factory" | "douyin-viral";
+}>(), {
+  platformScope: "",
+  mode: "factory",
+});
 const emit = defineEmits<{ (event: "open-system-config"): void }>();
 const loading = ref(false);
+const loaded = ref(false);
 const view = ref("topicCards");
 const topicCards = ref<Row[]>([]);
 const projects = ref<Row[]>([]);
@@ -28,6 +36,8 @@ const topicCardEdit = ref(false);
 const approvalDialog = ref(false);
 const selectedProject = ref<Row>();
 const detailDrawer = ref(false);
+const masterUploadInput = ref<HTMLInputElement>();
+const masterUploadBusy = ref(false);
 const outputPreviewDialog = ref(false);
 const selectedOutput = ref<Row>();
 const outputPreviewUrl = ref("");
@@ -39,7 +49,7 @@ const editingModelId = ref("");
 let pollTimer: number | undefined;
 
 const topicFilters = reactive({
-  platform: "",
+  platform: props.platformScope,
   productModel: "",
   sourceType: "",
   status: "",
@@ -61,13 +71,19 @@ const approvalForm = reactive({
   executionMode: "FULL_VIDEO",
   ownerId: "",
   reviewerId: "",
+  requestedModelId: "",
+  allowExternalGeneration: true,
+  allowFallback: true,
 });
 
 const createForm = reactive({
-  platform: "DOUYIN",
+  platform: props.platformScope || "DOUYIN",
   productModel: "",
   topic: "",
   audience: "",
+  pain: "",
+  scene: "",
+  hook: "",
   objective: "内容种草与商品点击",
   keywordIds: [] as string[],
   externalVideoIds: [] as string[],
@@ -107,12 +123,22 @@ const modelForm = reactive({
   enabled: false,
 });
 const routeForm = reactive({ DOUYIN: "", TIKTOK: "" });
+const isDouyinViralSystem = computed(() => props.mode === "douyin-viral");
+const factoryModule = computed(() => isDouyinViralSystem.value ? "DOUYIN_VIRAL" : "GENERAL_VIDEO_FACTORY");
+const heroKicker = computed(() => isDouyinViralSystem.value ? "DOUYIN VIRAL VIDEO SYSTEM · V1.0" : "SMART VIDEO FACTORY · V2.0");
+const heroTitle = computed(() => isDouyinViralSystem.value ? "抖音爆款视频生成系统" : "视频工厂");
+const heroDescription = computed(() => isDouyinViralSystem.value
+  ? "从抖音关键词和爆款结构发现机会，结合产品知识与真实素材生成选题卡；人工确认后由独立Codex Skill按镜头选择本地合成、Seedance或Kling。"
+  : "先把关键词、爆款结构、FAQ、产品知识和真实素材整理成选题卡；人工确认后再进入Codex生产。");
 
 const enabledModels = computed(() => models.value.filter((item) =>
   item.enabled
   && item.provider?.enabled
   && ["CONFIGURED", "HEALTHY"].includes(item.provider?.state),
 ));
+const taskModels = computed(() => isDouyinViralSystem.value
+  ? enabledModels.value.filter((item) => ["VOLCENGINE_SEEDANCE", "KLING"].includes(item.provider?.code))
+  : enabledModels.value);
 const runningCount = computed(() => projects.value.reduce((total, project) =>
   total
   + (project.videoGenerationJobs || []).filter((job: Row) => ["PENDING", "RUNNING", "RETRY"].includes(job.status)).length
@@ -127,10 +153,12 @@ const filteredTopicCards = computed(() => topicCards.value.filter((row) => {
     && Number(row.score || 0) >= Number(topicFilters.minScore || 0)
     && Number(card.materialCoverage?.coveragePercent || 0) >= Number(topicFilters.minCoverage || 0);
 }));
-const outputs = computed(() => projects.value.flatMap((project) => [
-  ...(project.videoGenerationJobs || []).filter((job: Row) => job.outputAsset).map((job: Row) => ({ ...job, project, outputType: "AI镜头" })),
-  ...(project.videoRenderJobs || []).filter((job: Row) => job.outputAsset).map((job: Row) => ({ ...job, project, outputType: "最终成片" })),
-]));
+const outputs = computed(() => projects.value.flatMap((project) => {
+  const latest = [...(project.videoRenderJobs || [])]
+    .filter((job: Row) => job.status === "SUCCEEDED" && job.outputAsset)
+    .sort((left: Row, right: Row) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())[0];
+  return latest ? [{ ...latest, project, outputType: "最终成片" }] : [];
+}));
 const topicCardOutput = computed(() =>
   (selectedTopicCard.value?.videoRenderJobs || []).find((job: Row) => job.outputAsset)?.outputAsset,
 );
@@ -154,6 +182,11 @@ const statusLabels: Record<string, string> = {
 
 function label(value?: string) {
   return statusLabels[String(value || "")] || String(value || "未记录");
+}
+
+function reviewLabel(value?: string) {
+  if (value === "PENDING") return "待审核";
+  return label(value);
 }
 
 function tagType(value?: string) {
@@ -183,15 +216,19 @@ async function run(task: () => Promise<void>, success?: string) {
 
 async function reload() {
   await run(async () => {
+    const platformQuery = props.platformScope ? `?platform=${props.platformScope}` : "";
+    const referenceQuery = props.platformScope ? `?platform=${props.platformScope}&take=20` : "?take=20";
     const [cardRows, projectRows, providerRows, modelRows, routeRows, douyinKeywords, tiktokKeywords, referenceRows, workspace] = await Promise.all([
-      api<Row[]>("/api/v1/video-factory/topic-cards"),
-      api<Row[]>("/api/v1/video-factory/projects"),
+      api<Row[]>(`/api/v1/video-factory/topic-cards${platformQuery}`),
+      api<Row[]>(`/api/v1/video-factory/projects${platformQuery}`),
       api<Row[]>("/api/v1/video-factory/providers"),
       api<Row[]>("/api/v1/video-factory/models"),
       api<Row[]>("/api/v1/video-factory/routing"),
       api<Row[]>("/api/v1/brand-data/smart-keywords/active?platform=DOUYIN&consumer=SMART_VIDEO"),
-      api<Row[]>("/api/v1/brand-data/smart-keywords/active?platform=TIKTOK&consumer=SMART_VIDEO"),
-      api<Row[]>("/api/v1/brand-data/external-videos?take=20"),
+      props.platformScope === "DOUYIN"
+        ? Promise.resolve([] as Row[])
+        : api<Row[]>("/api/v1/brand-data/smart-keywords/active?platform=TIKTOK&consumer=SMART_VIDEO"),
+      api<Row[]>(`/api/v1/brand-data/external-videos${referenceQuery}`),
       api<Row>("/api/v1/admin/workspace"),
     ]);
     topicCards.value = cardRows;
@@ -202,6 +239,7 @@ async function reload() {
     opportunityKeywords.value = [...douyinKeywords.slice(0, 5), ...tiktokKeywords.slice(0, 5)];
     opportunityReferences.value = referenceRows;
     employees.value = workspace.employees || [];
+    loaded.value = true;
     for (const platform of ["DOUYIN", "TIKTOK"] as const) {
       routeForm[platform] = routeRows.find((item) => item.platform === platform)?.primaryModelId || "";
     }
@@ -279,6 +317,9 @@ function openApproval(row: Row, executionMode: "SCRIPT_ONLY" | "FULL_VIDEO") {
     executionMode,
     ownerId: row.topicCard?.ownerEmployeeId || row.assignedEmployeeId || "",
     reviewerId: row.topicCard?.reviewerEmployeeId || "",
+    requestedModelId: "",
+    allowExternalGeneration: executionMode === "FULL_VIDEO",
+    allowFallback: true,
   });
   approvalDialog.value = true;
 }
@@ -287,7 +328,10 @@ async function approveTopicCard() {
   if (!selectedTopicCard.value) return;
   if (!approvalForm.ownerId || !approvalForm.reviewerId) return ElMessage.warning("请选择负责人和审核人");
   await run(async () => {
-    await post(`/api/v1/video-factory/topic-cards/${selectedTopicCard.value!.id}/approve`, approvalForm);
+    await post(`/api/v1/video-factory/topic-cards/${selectedTopicCard.value!.id}/approve`, {
+      ...approvalForm,
+      factoryModule: factoryModule.value,
+    });
     approvalDialog.value = false;
     topicCardDrawer.value = false;
     await reload();
@@ -296,9 +340,12 @@ async function approveTopicCard() {
 
 async function generateDailyTopicCards() {
   await run(async () => {
-    await post("/api/v1/video-factory/topic-cards/generate-daily", {});
+    await post("/api/v1/video-factory/topic-cards/generate-daily", {
+      ...(props.platformScope ? { platform: props.platformScope } : {}),
+      factoryModule: factoryModule.value,
+    });
     await reload();
-  }, "抖音和TikTok选题卡任务已创建");
+  }, props.platformScope === "DOUYIN" ? "今日抖音选题卡任务已创建" : "抖音和TikTok选题卡任务已创建");
 }
 
 async function rematchTopicCard(row: Row) {
@@ -319,7 +366,8 @@ async function archiveTopicCard(row: Row) {
 
 function resetCreate() {
   Object.assign(createForm, {
-    platform: "DOUYIN", productModel: "", topic: "", audience: "", objective: "内容种草与商品点击",
+    platform: props.platformScope || "DOUYIN", productModel: "", topic: "", audience: "", objective: "内容种草与商品点击",
+    pain: "", scene: "", hook: "",
     keywordIds: [], externalVideoIds: [], requestedModelId: "", allowFallback: true,
     executionMode: "FULL_VIDEO", allowExternalGeneration: false,
     assetGapTaskId: "",
@@ -338,7 +386,7 @@ function onCreateModelChange(value: string) {
 
 function shotModels(shot: Row) {
   const capability = shot.metadata?.imageAssetIds?.length ? "IMAGE_TO_VIDEO" : "TEXT_TO_VIDEO";
-  return enabledModels.value.filter((model) => model.capabilities?.includes(capability));
+  return taskModels.value.filter((model) => model.capabilities?.includes(capability));
 }
 
 function createFromKeyword(keyword: Row) {
@@ -384,12 +432,28 @@ async function createAndGenerate() {
             ? "VIRAL_RESEARCH"
             : "VIDEO_FACTORY",
       sourceId: createForm.assetGapTaskId || createForm.keywordIds[0] || createForm.externalVideoIds[0] || undefined,
-      instructions: `${createForm.objective}；目标人群：${createForm.audience || "目标用户"}`,
+      instructions: [
+        createForm.objective,
+        `目标人群：${createForm.audience || "目标用户"}`,
+        createForm.pain ? `核心痛点：${createForm.pain}` : "",
+        createForm.scene ? `推荐场景：${createForm.scene}` : "",
+        createForm.hook ? `Hook方向：${createForm.hook}` : "",
+      ].filter(Boolean).join("；"),
       input: {
         executionMode: createForm.executionMode,
+        factoryModule: factoryModule.value,
         topic: createForm.topic,
+        keyword: createForm.topic,
         audience: createForm.audience,
+        targetAudience: createForm.audience,
+        pain: createForm.pain,
+        painPoint: createForm.pain,
+        corePain: createForm.pain,
+        scene: createForm.scene,
+        recommendedScene: createForm.scene,
+        hook: createForm.hook,
         objective: createForm.objective,
+        contentGoal: createForm.objective,
         keywordIds: createForm.keywordIds,
         externalVideoIds: createForm.externalVideoIds,
         assetGapTaskId: createForm.assetGapTaskId || undefined,
@@ -423,6 +487,7 @@ async function generateProject(row: Row, candidateIndex = 0) {
       instructions: `执行视频工厂第${candidateIndex + 1}套方案`,
       input: {
         executionMode: "FULL_VIDEO",
+        factoryModule: factoryModule.value,
         existingContentPlanId: row.id,
         candidateIndex,
       },
@@ -454,6 +519,39 @@ async function renderProject(row: Row) {
     await post(`/api/v1/video-factory/projects/${row.id}/render`, {});
     await reload();
   }, "成片合成任务已排队");
+}
+
+function selectMasterUpload() {
+  masterUploadInput.value?.click();
+}
+
+async function uploadProjectMaster(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file || !selectedProject.value) return;
+  masterUploadBusy.value = true;
+  try {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("renderer", "CODEX_LOCAL_FFMPEG");
+    const sourceAssetIds = new Set<string>();
+    for (const shot of selectedProject.value.videoShots || []) {
+      if (shot.selectedAssetId) sourceAssetIds.add(shot.selectedAssetId);
+    }
+    for (const item of selectedProject.value.contentAssets || []) {
+      if (item.assetId && item.role !== "VIDEO_FACTORY_MASTER") sourceAssetIds.add(item.assetId);
+    }
+    for (const assetId of sourceAssetIds) form.append("sourceAssetIds", assetId);
+    await upload(`/api/v1/video-factory/projects/${selectedProject.value.id}/master`, form);
+    ElMessage.success("成片已上传，等待人工审核");
+    await reload();
+    await openProject(selectedProject.value.id);
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "成片上传失败");
+  } finally {
+    masterUploadBusy.value = false;
+    input.value = "";
+  }
 }
 
 async function openOutput(assetId: string) {
@@ -607,37 +705,50 @@ onBeforeUnmount(() => {
   <section class="video-factory" v-loading="loading">
     <div class="factory-hero">
       <div>
-        <span>SMART VIDEO FACTORY · V2.0</span>
-        <h3>视频工厂</h3>
-        <p>先把关键词、爆款结构、FAQ、产品知识和真实素材整理成选题卡；人工确认后再进入Codex生产。</p>
+        <span>{{ heroKicker }}</span>
+        <h3>{{ heroTitle }}</h3>
+        <p>{{ heroDescription }}</p>
       </div>
       <div>
         <el-button :icon="Refresh" @click="reload">刷新</el-button>
         <el-button @click="emit('open-system-config')">前往系统配置</el-button>
-        <el-button @click="openCreate">人工创建视频</el-button>
-        <el-button type="primary" :icon="Plus" @click="generateDailyTopicCards">生成今日选题卡</el-button>
+        <el-button @click="openCreate">提交视频任务</el-button>
+        <el-button type="primary" :icon="Plus" @click="generateDailyTopicCards">{{ isDouyinViralSystem ? '生成今日抖音选题卡' : '生成今日选题卡' }}</el-button>
       </div>
     </div>
 
+    <div v-if="isDouyinViralSystem" class="viral-pipeline" aria-label="抖音爆款视频生产流程">
+      <article><b>01</b><span>爆款与关键词</span><small>发现抖音内容机会</small></article>
+      <i>→</i>
+      <article><b>02</b><span>结构拆解</span><small>提取Hook、节奏与CTA</small></article>
+      <i>→</i>
+      <article><b>03</b><span>选题卡确认</span><small>人工确认产品与人群</small></article>
+      <i>→</i>
+      <article><b>04</b><span>智能模型制作</span><small>真实素材优先 · Seedance主生成 · Kling动作增强</small></article>
+      <i>→</i>
+      <article><b>05</b><span>审核与复盘</span><small>成片审核、发布和回流</small></article>
+    </div>
+
     <div class="factory-summary">
-      <article><span>待确认选题</span><strong>{{ topicCards.filter((item: Row) => item.productionStage === 'TOPIC_CARD_RECOMMENDED').length }}</strong><small>确认前不会创建生产任务</small></article>
-      <article><span>视频项目</span><strong>{{ projects.length }}</strong><small>脚本、分镜、成片统一追踪</small></article>
-      <article><span>执行中</span><strong>{{ runningCount }}</strong><small>生成与渲染异步处理</small></article>
-      <article><span>待审核成片</span><strong>{{ outputs.filter((item: Row) => item.outputAsset?.reviewStatus === 'PENDING').length }}</strong><small>审核通过前不可发布</small></article>
+      <article><span>待确认选题</span><strong>{{ loaded ? topicCards.filter((item: Row) => item.productionStage === 'TOPIC_CARD_RECOMMENDED').length : '—' }}</strong><small>确认前不会创建生产任务</small></article>
+      <article><span>视频项目</span><strong>{{ loaded ? projects.length : '—' }}</strong><small>脚本、分镜、成片统一追踪</small></article>
+      <article><span>执行中</span><strong>{{ loaded ? runningCount : '—' }}</strong><small>生成与渲染异步处理</small></article>
+      <article><span>待审核成片</span><strong>{{ loaded ? outputs.filter((item: Row) => item.outputAsset?.reviewStatus === 'PENDING').length : '—' }}</strong><small>审核通过前不可发布</small></article>
     </div>
 
     <el-segmented v-model="view" :options="[
-      { label: `视频选题卡 ${topicCards.length}`, value: 'topicCards' },
-      { label: `视频项目 ${projects.length}`, value: 'projects' },
+      { label: loaded ? `视频选题卡 ${topicCards.length}` : '视频选题卡', value: 'topicCards' },
+      { label: loaded ? `视频项目 ${projects.length}` : '视频项目', value: 'projects' },
       { label: '分镜与素材', value: 'shots' },
-      { label: `生成任务 ${runningCount}`, value: 'jobs' },
-      { label: `成片库 ${outputs.length}`, value: 'outputs' },
+      { label: loaded ? `生成任务 ${runningCount}` : '生成任务', value: 'jobs' },
+      { label: loaded ? `成片库 ${outputs.length}` : '成片库', value: 'outputs' },
       { label: '质检审核', value: 'quality' },
     ]" />
 
     <div v-if="view === 'topicCards'" class="data-card topic-card-panel">
       <div class="topic-filters">
-        <el-select v-model="topicFilters.platform" clearable placeholder="全部平台"><el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" /></el-select>
+        <el-select v-if="!props.platformScope" v-model="topicFilters.platform" clearable placeholder="全部平台"><el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" /></el-select>
+        <el-tag v-else type="danger" effect="plain">抖音</el-tag>
         <el-select v-model="topicFilters.productModel" clearable filterable placeholder="全部产品"><el-option v-for="product in props.products" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" /></el-select>
         <el-select v-model="topicFilters.sourceType" clearable placeholder="全部来源"><el-option label="智能关键词" value="SMART_KEYWORD" /><el-option label="爆款研究" value="VIRAL_RESEARCH" /><el-option label="FAQ" value="FAQ" /></el-select>
         <el-select v-model="topicFilters.status" clearable placeholder="全部状态"><el-option label="待确认" value="TOPIC_CARD_RECOMMENDED" /><el-option label="已确认" value="TOPIC_CARD_APPROVED" /></el-select>
@@ -651,7 +762,7 @@ onBeforeUnmount(() => {
           <small>{{ row.topicCard?.audience }}｜{{ row.topicCard?.pain }}</small>
         </article>
       </div>
-      <div class="card-title"><h4>可执行选题</h4><small>每天抖音10张、TikTok 10张；管理员确认前不创建脚本或成片任务</small></div>
+      <div class="card-title"><h4>可执行选题</h4><small>{{ isDouyinViralSystem ? '每日生成10张抖音选题卡；管理员确认前不创建脚本或成片任务' : '每天抖音10张、TikTok 10张；管理员确认前不创建脚本或成片任务' }}</small></div>
       <el-table ref="topicTable" :data="filteredTopicCards" stripe height="510" @selection-change="topicSelection">
         <el-table-column type="selection" width="46" />
         <el-table-column label="选题卡" min-width="270"><template #default="scope"><strong>{{ scope.row.topic }}</strong><small>{{ scope.row.productionNo }} · {{ scope.row.productModel || '缺产品事实' }}</small></template></el-table-column>
@@ -705,11 +816,11 @@ onBeforeUnmount(() => {
       <el-table :data="outputs" stripe height="570">
         <el-table-column prop="outputType" label="类型" width="105" />
         <el-table-column label="成品" min-width="250"><template #default="scope"><strong>{{ scope.row.outputAsset.displayName || scope.row.outputAsset.fileName }}</strong><small>{{ scope.row.project.topic }}</small></template></el-table-column>
-        <el-table-column label="审核" width="120"><template #default="scope"><el-tag :type="tagType(scope.row.outputAsset.reviewStatus)">{{ label(scope.row.outputAsset.reviewStatus) }}</el-tag></template></el-table-column>
+        <el-table-column label="审核" width="120"><template #default="scope"><el-tag :type="tagType(scope.row.outputAsset.reviewStatus)">{{ reviewLabel(scope.row.outputAsset.reviewStatus) }}</el-tag></template></el-table-column>
         <el-table-column label="尺寸" width="130"><template #default="scope">{{ scope.row.outputAsset.width || '—' }}×{{ scope.row.outputAsset.height || '—' }}</template></el-table-column>
         <el-table-column label="时长" width="90"><template #default="scope">{{ Number(scope.row.outputAsset.durationSeconds || 0).toFixed(1) }}s</template></el-table-column>
-        <el-table-column label="编码/帧率" width="135"><template #default="scope">{{ scope.row.outputAsset.sourceSnapshot?.metadata?.codec || '—' }}<small>{{ scope.row.outputAsset.sourceSnapshot?.metadata?.frameRate || '—' }}</small></template></el-table-column>
-        <el-table-column label="素材来源" min-width="150"><template #default="scope">{{ scope.row.outputAsset.sourceSnapshot?.metadata?.source || scope.row.renderer || '—' }}<small>{{ scope.row.outputAsset.sourceSnapshot?.metadata?.usedAssetIds?.length || 0 }}项素材</small></template></el-table-column>
+        <el-table-column label="编码/帧率" width="135"><template #default="scope">{{ scope.row.outputAsset.sourceSnapshot?.metadata?.codec || scope.row.outputAsset.sourceSnapshot?.codec || '未记录' }}<small>{{ scope.row.outputAsset.sourceSnapshot?.metadata?.frameRate || scope.row.outputAsset.sourceSnapshot?.frameRate || '未记录' }}</small></template></el-table-column>
+        <el-table-column label="素材来源" min-width="150"><template #default="scope">{{ scope.row.outputAsset.sourceSnapshot?.metadata?.source || scope.row.outputAsset.sourceSnapshot?.renderer || scope.row.renderer || '—' }}<small>{{ (scope.row.outputAsset.sourceSnapshot?.metadata?.usedAssetIds || scope.row.outputAsset.sourceSnapshot?.shotAssetIds || []).length }}项素材</small></template></el-table-column>
         <el-table-column label="操作" width="200"><template #default="scope"><el-button link type="primary" @click="openOutput(scope.row.outputAsset.id)">预览</el-button><el-button v-if="scope.row.outputAsset.reviewStatus === 'PENDING'" link type="success" @click="reviewOutput(scope.row.outputAsset.id, true)">通过</el-button><el-button v-if="scope.row.outputAsset.reviewStatus === 'PENDING'" link type="danger" @click="reviewOutput(scope.row.outputAsset.id, false)">退回</el-button></template></el-table-column>
       </el-table>
     </div>
@@ -841,7 +952,12 @@ onBeforeUnmount(() => {
         <el-form-item label="执行方式"><el-radio-group v-model="approvalForm.executionMode"><el-radio-button value="SCRIPT_ONLY">仅生成脚本</el-radio-button><el-radio-button value="FULL_VIDEO">生成完整视频</el-radio-button></el-radio-group></el-form-item>
         <el-form-item label="负责人" required><el-select v-model="approvalForm.ownerId" filterable><el-option v-for="employee in employees" :key="employee.id" :label="`${employee.name} · ${employee.role}`" :value="employee.id" /></el-select></el-form-item>
         <el-form-item label="审核人" required><el-select v-model="approvalForm.reviewerId" filterable><el-option v-for="employee in employees" :key="employee.id" :label="`${employee.name} · ${employee.role}`" :value="employee.id" /></el-select></el-form-item>
-        <el-alert type="info" :closable="false" title="确认后进入AI任务中心；完整视频优先复用已审核真实素材，再使用本地工具补齐。" />
+        <template v-if="approvalForm.executionMode === 'FULL_VIDEO'">
+          <el-form-item label="外部补镜头"><el-switch v-model="approvalForm.allowExternalGeneration" active-text="本地素材不足时允许使用Seedance或Kling" /></el-form-item>
+          <el-form-item v-if="approvalForm.allowExternalGeneration" label="生成模型"><el-select v-model="approvalForm.requestedModelId" clearable placeholder="智能推荐：Seedance主生成、Kling动作增强"><el-option v-for="item in taskModels" :key="item.id" :label="`${item.provider.displayName} · ${item.displayName}`" :value="item.id" /></el-select></el-form-item>
+          <el-form-item v-if="approvalForm.allowExternalGeneration" label="失败策略"><el-switch v-model="approvalForm.allowFallback" active-text="当前模型失败时按专用路由切换" /></el-form-item>
+        </template>
+        <el-alert type="info" :closable="false" title="确认后进入AI任务中心；先用已审核真实素材和本地工具，只有明确允许时才调用外部模型。" />
       </el-form>
       <template #footer><el-button @click="approvalDialog = false">取消</el-button><el-button type="primary" @click="approveTopicCard">确认并创建任务</el-button></template>
     </el-dialog>
@@ -864,19 +980,22 @@ onBeforeUnmount(() => {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="createDialog" title="一键生成智能视频" width="820px" destroy-on-close>
+    <el-dialog v-model="createDialog" :title="isDouyinViralSystem ? '提交抖音视频任务' : '提交视频任务'" width="820px" destroy-on-close>
       <el-form label-position="top" class="form-grid">
-        <el-form-item label="目标平台"><el-select v-model="createForm.platform"><el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" /></el-select></el-form-item>
+        <el-form-item label="目标平台"><el-select v-model="createForm.platform" :disabled="Boolean(props.platformScope)"><el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" /></el-select></el-form-item>
         <el-form-item label="产品型号"><el-select v-model="createForm.productModel" clearable filterable><el-option v-for="item in props.products" :key="item.id" :label="`${item.modelCode} · ${item.name}`" :value="item.modelCode" /></el-select></el-form-item>
-        <el-form-item label="任务模式" class="full"><el-radio-group v-model="createForm.executionMode"><el-radio-button value="SCRIPT_ONLY">仅生成脚本</el-radio-button><el-radio-button value="FULL_VIDEO">生成完整视频</el-radio-button></el-radio-group><small class="form-tip">完整视频优先复用已审核素材，由本地Codex完成合成和质检。</small></el-form-item>
+        <el-form-item label="任务模式" class="full"><el-radio-group v-model="createForm.executionMode"><el-radio-button value="SCRIPT_ONLY">仅生成脚本</el-radio-button><el-radio-button value="FULL_VIDEO">生成完整视频</el-radio-button></el-radio-group><small class="form-tip">脚本模式输出1套最终脚本与逐镜头计划；完整视频优先复用已审核素材，再按需调用Seedance或Kling补镜头。</small></el-form-item>
         <el-form-item label="主题/主关键词" class="full" required><el-input v-model="createForm.topic" maxlength="150" /></el-form-item>
         <el-form-item label="目标人群"><el-input v-model="createForm.audience" /></el-form-item>
         <el-form-item label="内容目标"><el-input v-model="createForm.objective" /></el-form-item>
-        <el-form-item label="生成模型" class="full"><el-select v-model="createForm.requestedModelId" clearable placeholder="Codex智能推荐（默认）" @change="onCreateModelChange"><el-option v-for="item in enabledModels" :key="item.id" :label="`${item.provider.displayName} · ${item.displayName}`" :value="item.id" /></el-select><small class="form-tip">默认使用Codex本地工具；指定模型表示允许该任务调用外部视觉能力。</small></el-form-item>
+        <el-form-item label="核心痛点"><el-input v-model="createForm.pain" placeholder="用户为什么需要看完这条视频" /></el-form-item>
+        <el-form-item label="推荐场景"><el-input v-model="createForm.scene" placeholder="如家庭早餐、通勤、正确佩戴" /></el-form-item>
+        <el-form-item label="Hook方向" class="full"><el-input v-model="createForm.hook" placeholder="可选；留空由Codex结合关键词与爆款结构生成" /></el-form-item>
+        <el-form-item label="生成模型" class="full"><el-select v-model="createForm.requestedModelId" clearable placeholder="Codex智能推荐（默认）" @change="onCreateModelChange"><el-option v-for="item in taskModels" :key="item.id" :label="`${item.provider.displayName} · ${item.displayName}`" :value="item.id" /></el-select><small class="form-tip">默认使用Codex本地工具；指定模型表示允许该任务调用外部视觉能力。</small></el-form-item>
         <el-form-item label="外部视觉能力" class="full"><el-switch v-model="createForm.allowExternalGeneration" active-text="本地素材不足时允许调用已配置模型" /></el-form-item>
         <el-form-item label="失败策略" class="full"><el-switch v-model="createForm.allowFallback" active-text="允许失败后自动切换模型" /></el-form-item>
       </el-form>
-      <template #footer><el-button @click="createDialog = false">取消</el-button><el-button type="primary" @click="createAndGenerate">{{ createForm.executionMode === 'SCRIPT_ONLY' ? '生成3套脚本' : '生成3套脚本并执行主方案' }}</el-button></template>
+      <template #footer><el-button @click="createDialog = false">取消</el-button><el-button type="primary" @click="createAndGenerate">{{ createForm.executionMode === 'SCRIPT_ONLY' ? '提交脚本任务' : '提交完整视频任务' }}</el-button></template>
     </el-dialog>
 
     <el-dialog v-model="providerDialog" :title="editingProviderId ? '设置视频服务商' : '新增视频服务商'" width="760px" destroy-on-close>
@@ -934,7 +1053,11 @@ onBeforeUnmount(() => {
           <el-table-column label="素材" min-width="180"><template #default="scope">{{ scope.row.selectedAsset?.displayName || '待补素材' }}</template></el-table-column>
           <el-table-column label="操作" width="250"><template #default="scope"><el-button v-if="scope.row.status === 'OPEN'" link type="primary" @click="generateShot(scope.row)">智能推荐生成</el-button><el-dropdown v-if="scope.row.status === 'OPEN'" @command="generateShot(scope.row, $event)"><el-button link>指定模型</el-button><template #dropdown><el-dropdown-menu><el-dropdown-item v-for="model in shotModels(scope.row)" :key="model.id" :command="model.id">{{ model.provider.displayName }} · {{ model.displayName }}</el-dropdown-item></el-dropdown-menu></template></el-dropdown><el-button v-if="scope.row.selectedAssetId" link @click="openOutput(scope.row.selectedAssetId)">预览</el-button></template></el-table-column>
         </el-table>
-        <div class="detail-actions"><el-button v-if="selectedProject.productionStage === 'READY_TO_EDIT'" type="primary" @click="renderProject(selectedProject)">合成1080×1920成片</el-button></div>
+        <div class="detail-actions">
+          <input ref="masterUploadInput" class="native-file-input" type="file" accept="video/mp4,.mp4" @change="uploadProjectMaster" />
+          <el-button :loading="masterUploadBusy" @click="selectMasterUpload">上传本地成片</el-button>
+          <el-button v-if="selectedProject.productionStage === 'READY_TO_EDIT'" type="primary" @click="renderProject(selectedProject)">合成1080×1920成片</el-button>
+        </div>
       </template>
     </el-drawer>
   </section>
@@ -945,6 +1068,7 @@ onBeforeUnmount(() => {
 .factory-hero, .factory-summary, .model-route, .two-cards, .opportunity-grid { display: grid; gap: 14px; }
 .factory-hero { grid-template-columns: 1fr auto; align-items: start; padding: 20px 22px; color: #fff; border-radius: 16px; background: linear-gradient(135deg, #16253f, #304e79); }
 .factory-hero span { font-size: 12px; letter-spacing: .12em; opacity: .76; }.factory-hero h3 { margin: 5px 0; font-size: 25px; }.factory-hero p { margin: 0; color: #dce7f6; }.factory-hero > div:last-child { display: flex; gap: 9px; }
+.viral-pipeline { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr) auto) minmax(0, 1fr); align-items: center; gap: 10px; padding: 14px 16px; border: 1px solid #eadfe0; border-radius: 14px; background: linear-gradient(90deg, #fff, #fff7f5); }.viral-pipeline article { display: grid; grid-template-columns: auto 1fr; column-gap: 9px; align-items: center; }.viral-pipeline b { grid-row: 1 / 3; color: #b4232d; font-size: 20px; }.viral-pipeline span, .viral-pipeline small { display: block; }.viral-pipeline span { color: #202b3c; font-weight: 700; }.viral-pipeline small { margin-top: 2px; color: #8791a0; }.viral-pipeline i { color: #c8ced8; font-style: normal; }
 .factory-summary { grid-template-columns: repeat(4, minmax(0, 1fr)); }.factory-summary article, .opportunity-grid article, .model-route article { padding: 17px 19px; border: 1px solid #e4e9f1; border-radius: 14px; background: #fff; }.factory-summary span, .factory-summary small { display: block; color: #7d8797; }.factory-summary strong { display: block; margin: 5px 0; color: #18263e; font-size: 27px; }
 .opportunity-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }.opportunity-grid h4 { margin: 9px 0 5px; }.opportunity-grid p { min-height: 62px; color: #6f7a8c; line-height: 1.6; }.opportunity-grid .el-icon { color: #a2202b; font-size: 26px; }
 .data-card { overflow: hidden; border: 1px solid #e4e9f1; border-radius: 14px; background: #fff; }.data-card strong, .data-card small { display: block; }.data-card small { margin-top: 3px; color: #8a94a5; }
@@ -957,6 +1081,7 @@ onBeforeUnmount(() => {
 .model-route { grid-template-columns: 1fr 1fr; }.model-route article { display: grid; grid-template-columns: 150px 1fr auto; align-items: center; gap: 10px; }.two-cards { grid-template-columns: .9fr 1.1fr; }.card-title { display: flex; align-items: center; justify-content: space-between; padding: 12px 15px; border-bottom: 1px solid #edf0f5; }.card-title h4 { margin: 0; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 18px; }.form-grid .full { grid-column: 1 / -1; }.form-tip { display: block; margin-top: 6px; color: #8a94a5; }
 .detail-head { display: flex; align-items: center; justify-content: space-between; padding-bottom: 14px; border-bottom: 1px solid #edf0f5; }.detail-head strong, .detail-head span { display: block; }.detail-head strong { font-size: 22px; }.detail-head span { margin-top: 4px; color: #7c8797; }
+.native-file-input { display: none; }
 .candidate-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 20px; }.candidate-grid article { padding: 14px; border: 1px solid #e3e8f0; border-radius: 12px; }.candidate-grid strong { display: block; margin: 8px 0; }.candidate-grid p { min-height: 48px; color: #657187; }.candidate-grid small { display: block; margin-bottom: 9px; color: #8a94a5; }.detail-actions { display: flex; justify-content: flex-end; padding-top: 16px; }
-@media (max-width: 1100px) { .factory-summary, .opportunity-grid, .candidate-grid, .topic-card-kpis, .topic-detail-grid { grid-template-columns: 1fr 1fr; }.two-cards, .model-route, .topic-filters { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 1100px) { .factory-summary, .opportunity-grid, .candidate-grid, .topic-card-kpis, .topic-detail-grid { grid-template-columns: 1fr 1fr; }.two-cards, .model-route, .topic-filters { grid-template-columns: 1fr 1fr; }.viral-pipeline { grid-template-columns: 1fr 1fr; }.viral-pipeline i { display: none; } }
 </style>
