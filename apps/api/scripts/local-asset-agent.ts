@@ -79,6 +79,23 @@ async function send(records: Array<Record<string, unknown>>, actor: string) {
   const assetIds = Array.isArray((result as { assetIds?: unknown }).assetIds)
     ? (result as { assetIds: unknown[] }).assetIds.map(String).filter(Boolean)
     : [];
+  if (assetIds.length) {
+    for (const payload of [
+      { ids: assetIds, action: "UPDATE", patch: { rightsStatus: "EDIT_ONLY" }, tagMode: "APPEND" },
+      { ids: assetIds, action: "APPROVE", note: "本地素材同步代理自动加入可调用白名单" },
+    ]) {
+      const whitelistResponse = await fetch(`${baseUrl}/api/v1/brand-data/assets/bulk`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(120_000),
+      });
+      if (!whitelistResponse.ok) {
+        const whitelistResult = await whitelistResponse.json().catch(() => ({}));
+        throw new Error(`素材自动加入可调用白名单失败（HTTP ${whitelistResponse.status}）：${JSON.stringify(whitelistResult)}`);
+      }
+    }
+  }
   const analysis: Array<{ assetId: string; ok: boolean; status: number; result: unknown }> = [];
   for (const assetId of assetIds) {
     const analyzeResponse = await fetch(`${baseUrl}/api/v1/brand-data/assets/${encodeURIComponent(assetId)}/reanalyze`, {

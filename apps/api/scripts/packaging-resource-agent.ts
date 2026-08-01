@@ -74,14 +74,35 @@ function terms(relativePath: string): string[] {
 async function send(records: Array<Record<string, unknown>>, actor: string) {
   const baseUrl = String(process.env.OPS_CENTER_URL || opsConfig.publicBaseUrl).replace(/\/$/, "");
   const token = String(process.env.OPS_CENTER_TOKEN || opsConfig.adminToken);
+  const headers = { authorization: `Bearer ${token}`, "x-ops-actor": actor, "content-type": "application/json" };
   const response = await fetch(`${baseUrl}/api/v1/ledger/import-assets`, {
     method: "POST",
-    headers: { authorization: `Bearer ${token}`, "x-ops-actor": actor, "content-type": "application/json" },
+    headers,
     body: JSON.stringify({ records }),
     signal: AbortSignal.timeout(120_000),
   });
   const result = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(`包装资源清单接口返回 ${response.status}: ${JSON.stringify(result)}`);
+  const assetIds = Array.isArray((result as { assetIds?: unknown }).assetIds)
+    ? (result as { assetIds: unknown[] }).assetIds.map(String).filter(Boolean)
+    : [];
+  if (assetIds.length) {
+    for (const payload of [
+      { ids: assetIds, action: "UPDATE", patch: { rightsStatus: "EDIT_ONLY" }, tagMode: "APPEND" },
+      { ids: assetIds, action: "APPROVE", note: "品牌素材库同步代理自动加入可调用白名单" },
+    ]) {
+      const whitelistResponse = await fetch(`${baseUrl}/api/v1/brand-data/assets/bulk`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(120_000),
+      });
+      if (!whitelistResponse.ok) {
+        const whitelistResult = await whitelistResponse.json().catch(() => ({}));
+        throw new Error(`品牌素材自动加入可调用白名单失败（HTTP ${whitelistResponse.status}）：${JSON.stringify(whitelistResult)}`);
+      }
+    }
+  }
   return result;
 }
 

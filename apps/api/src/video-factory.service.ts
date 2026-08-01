@@ -26,6 +26,8 @@ import {
 type JsonRow = Record<string, unknown>;
 
 type ProjectCreateInput = {
+  projectMode?: "STANDARD" | "REFERENCE_DIRECT_FULL_VIDEO";
+  referenceVideoUrl?: string;
   platform?: string;
   voiceoverMode?: string;
   accountType?: string;
@@ -1511,6 +1513,8 @@ export class VideoFactoryService {
   async createDraftProject(input: ProjectCreateInput, actor: string) {
     const productModel = String(input.productModel || "").trim();
     const videoType = String(input.videoType || "").trim();
+    const referenceDirect = input.projectMode === "REFERENCE_DIRECT_FULL_VIDEO";
+    const referenceVideoUrl = String(input.referenceVideoUrl || input.reference || "").trim();
     const requestedKeywordIds = Array.from(new Set((input.keywordIds || []).map(String).filter(Boolean)));
     const [selectedSmartKeywords, selectedViralKeywords] = requestedKeywordIds.length
       ? await Promise.all([
@@ -1533,12 +1537,16 @@ export class VideoFactoryService {
       ...selectedViralKeywords.map((item) => item.keyword),
     ].filter(Boolean))).join("、");
     const keywords = String(input.keywords || input.topic || selectedKeywordText).trim();
-    if (!productModel) throw new BadRequestException("请选择产品型号");
-    if (!videoType) throw new BadRequestException("请选择或填写视频类型");
-    if (!keywords && !input.keywordIds?.length) throw new BadRequestException("请填写或选择关键词");
+    if (referenceDirect && !referenceVideoUrl) throw new BadRequestException("请填写参考视频链接");
+    if (!referenceDirect && !productModel) throw new BadRequestException("请选择产品型号");
+    if (!referenceDirect && !videoType) throw new BadRequestException("请选择或填写视频类型");
+    if (!referenceDirect && !keywords && !input.keywordIds?.length) throw new BadRequestException("请填写或选择关键词");
     const platform = integrationKind(input.platform);
     const productionNo = `VF-${localDateKey(new Date()).replaceAll("-", "")}-${randomUUID().slice(0, 6).toUpperCase()}`;
-    const topic = conciseVideoTopic(String(input.topic || `${productModel} 智能视频项目`));
+    const normalizedProductModel = productModel || "REFERENCE_VIDEO";
+    const normalizedVideoType = videoType || "参考视频直出";
+    const normalizedKeywords = keywords || "参考视频直出";
+    const topic = conciseVideoTopic(String(input.topic || (referenceDirect ? "参考视频直出项目" : `${normalizedProductModel} 智能视频项目`)));
     const brief = {
       ...(input.platform ? { platform } : {}),
       ...(input.voiceoverMode ? { voiceoverMode: String(input.voiceoverMode).toUpperCase() } : {}),
@@ -1554,14 +1562,14 @@ export class VideoFactoryService {
       soundPrompt: String(input.soundPrompt || "").trim(),
       mustShowFacts: String(input.mustShowFacts || "").trim(),
       additionalPrompt: String(input.additionalPrompt || "").trim(),
-      videoType,
-      keywords,
-      reference: String(input.reference || "").trim(),
+      videoType: normalizedVideoType,
+      keywords: normalizedKeywords,
+      reference: referenceVideoUrl,
       hook: String(input.hook || "").trim(),
       scene: String(input.scene || "").trim(),
       painPoint: String(input.painPoint || "").trim(),
       audience: String(input.audience || "").trim(),
-      scriptEngines: Array.from(new Set((input.scriptEngines?.length
+      scriptEngines: referenceDirect ? ["REMOTE_CODEX"] : Array.from(new Set((input.scriptEngines?.length
         ? input.scriptEngines
         : ["SYSTEM_AI"]).map((item) => String(item).toUpperCase())))
         .filter((item) => ["REMOTE_CODEX", "SYSTEM_AI"].includes(item)),
@@ -1582,7 +1590,7 @@ export class VideoFactoryService {
           planDate: new Date(),
           kind: "VIDEO",
           topic,
-          productModel,
+          productModel: normalizedProductModel,
           audience: String(input.audience || "目标用户").trim() || "目标用户",
           objective: String(input.objective || "内容测试").trim() || "内容测试",
           score: 0,
@@ -1592,15 +1600,15 @@ export class VideoFactoryService {
           sourceSignals: [{
             type: "VIDEO_FACTORY",
             workflowVersion: 4,
-            projectMode: "SINGLE_SCRIPT_SYSTEM_FIRST",
+            projectMode: referenceDirect ? "REFERENCE_DIRECT_FULL_VIDEO" : "SINGLE_SCRIPT_SYSTEM_FIRST",
             brief,
             scriptCandidates: [],
             selectedCandidateIndex: 0,
             scriptEngineStatus: Object.fromEntries(brief.scriptEngines.map((engine) => [engine, "PENDING"])),
             keywordIds,
             externalVideoIds: input.externalVideoIds || [],
-            externalReferencePolicy: "STRUCTURE_ONLY",
-            routingMode: "SYSTEM_FIRST",
+            externalReferencePolicy: referenceDirect ? "REFERENCE_STYLE_AND_BGM" : "STRUCTURE_ONLY",
+            routingMode: referenceDirect ? "CODEX_DIRECT" : "SYSTEM_FIRST",
             allowFallback: false,
           }] as unknown as Prisma.InputJsonValue,
           evidenceIds: [],
@@ -1628,7 +1636,7 @@ export class VideoFactoryService {
           action: "VIDEO_FACTORY_PROJECT_DRAFT_CREATE",
           entityType: "ContentPlan",
           entityId: created.id,
-          after: { productionNo, projectMode: "SINGLE_SCRIPT_SYSTEM_FIRST", scriptEngines: brief.scriptEngines },
+          after: { productionNo, projectMode: referenceDirect ? "REFERENCE_DIRECT_FULL_VIDEO" : "SINGLE_SCRIPT_SYSTEM_FIRST", scriptEngines: brief.scriptEngines },
         },
       });
       return created;
@@ -1795,6 +1803,7 @@ export class VideoFactoryService {
           ...(brief.materialPolicy ? { materialPolicy: brief.materialPolicy } : {}),
         },
       });
+      if (!generated[0]) throw new BadRequestException("系统 AI 未返回有效脚本");
     } catch (error) {
       const failureReason = error instanceof Error ? error.message : "系统 AI 脚本生成失败";
       const failedAt = new Date().toISOString();
@@ -1835,7 +1844,6 @@ export class VideoFactoryService {
       ]);
       return this.project(contentPlanId);
     }
-    if (!generated[0]) throw new BadRequestException("系统 AI 未返回有效脚本");
     const candidate = await this.preMatchScriptCandidate({
       ...generated[0],
       generationSource: "SYSTEM_AI",
@@ -2018,6 +2026,54 @@ export class VideoFactoryService {
           note: note.trim() || null,
         },
       }),
+    ]);
+    return this.project(contentPlanId);
+  }
+
+  /** First transfer keeps the complete existing brief; it is not a Codex return. */
+  async transferScriptToCodex(contentPlanId: string, actor: string, candidateIndex?: number) {
+    const plan = await this.prisma.contentPlan.findUnique({ where: { id: contentPlanId } });
+    if (!plan) throw new NotFoundException("智能视频项目不存在");
+    if (plan.productionStage !== "FACTORY_SCRIPT_READY") {
+      throw new BadRequestException("当前项目阶段不能转交 Codex 生成脚本");
+    }
+    const candidates = this.candidates(plan);
+    if (!candidates.length) throw new BadRequestException("当前项目还没有可转交的脚本");
+    const selectedCandidateIndex = candidateIndex === undefined
+      ? 0
+      : Math.max(0, Math.min(candidates.length - 1, Math.round(candidateIndex)));
+    if (object(candidates[selectedCandidateIndex]).generationSource === "REMOTE_CODEX") {
+      throw new BadRequestException("当前脚本已由 Codex 生成，请使用退回 Codex 并填写修改原因");
+    }
+    const signals = sourceSignals(plan);
+    const reviewedAt = new Date();
+    const transferNote = "转交 Codex 生成，沿用当前项目需求、素材策略和系统脚本";
+    const nextSignals = signals.map((signal) => {
+      if (signal.type !== "VIDEO_FACTORY") return signal;
+      const factory = object(signal);
+      const brief = object(factory.brief);
+      return {
+        ...factory,
+        brief: { ...brief, scriptEngines: ["REMOTE_CODEX"] },
+        scriptEngineStatus: { ...object(factory.scriptEngineStatus), REMOTE_CODEX: "PENDING" },
+        scriptEngineErrors: { ...object(factory.scriptEngineErrors), REMOTE_CODEX: "" },
+        selectedCandidateIndex,
+        scriptReview: { status: "TRANSFERRED_TO_CODEX", note: transferNote, actor, reviewedAt: reviewedAt.toISOString() },
+      };
+    });
+    await this.prisma.$transaction([
+      this.prisma.contentPlan.update({
+        where: { id: contentPlanId },
+        data: {
+          productionStage: "SCRIPT_RETURNED",
+          approvedBy: null,
+          approvedAt: null,
+          rejectedReason: transferNote,
+          workflowVersion: { increment: 1 },
+          sourceSignals: nextSignals as unknown as Prisma.InputJsonValue,
+        },
+      }),
+      this.prisma.approval.create({ data: { contentPlanId, action: "SCRIPT_TRANSFER_TO_CODEX", actor, note: transferNote } }),
     ]);
     return this.project(contentPlanId);
   }
@@ -3001,7 +3057,6 @@ export class VideoFactoryService {
       where: {
         kind: "VIDEO",
         purpose: "EDITING_FOOTAGE",
-        indexNeedsReview: false,
         reviewStatus: "APPROVED",
         availabilityStatus: "ACTIVE",
         rightsStatus: { in: ["COMMERCIAL", "EDIT_ONLY"] },
@@ -3071,7 +3126,7 @@ export class VideoFactoryService {
       assets,
       assetKnowledgePolicy: {
         source: "PERSISTENT_STRUCTURED_ASSET_INDEX",
-        instruction: "写脚本前先按产品、功能、动作、场景、景别和有效时段检索assets中的持久化索引；围绕无需复核的已有VIDEO素材设计逐句镜头。当前阶段不以indexConfidence数值作为准入条件。不得凭文件名推断功能，不得使用图片。只有索引无法提供直接视频证据时才列为缺失素材。",
+        instruction: "写脚本前先按产品、功能、动作、场景、景别和有效时段检索assets中的持久化索引；围绕已审核可调用的VIDEO素材设计逐句镜头。indexNeedsReview和indexConfidence只作为辅助信息，不是准入门槛。不得凭文件名推断功能，不得使用图片。只有索引无法提供直接视频证据时才列为缺失素材。",
         minimumPreferredIndexConfidence: null,
         learnedAssetCount: assets.filter((asset) => asset.indexVersion >= 4).length,
         reviewRequiredAssetCount: assets.filter((asset) => asset.indexNeedsReview).length,

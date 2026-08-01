@@ -263,10 +263,12 @@ const videoFactoryForm = reactive({
   hook: "",
   scene: "",
   painPoint: "",
+  referenceVideoUrl: "",
   scriptEngines: ["SYSTEM_AI"] as string[],
   keywordIds: [] as string[],
   externalVideoIds: [] as string[],
 });
+const videoProjectMode = ref<"STANDARD" | "REFERENCE_DIRECT_FULL_VIDEO">("STANDARD");
 const videoOptionalOpen = ref(false);
 const videoDefaultsOpen = ref(false);
 const videoProjectCollapseNames = ref<string[]>([]);
@@ -698,6 +700,7 @@ function projectWaitingForScripts(project: Row) {
   const factory = Array.isArray(project.sourceSignals)
     ? project.sourceSignals.find((item: Row) => item.type === "VIDEO_FACTORY")
     : undefined;
+  if (factory?.projectMode === "REFERENCE_DIRECT_FULL_VIDEO") return false;
   const requestedEngines = Array.isArray(factory?.brief?.scriptEngines)
     ? factory.brief.scriptEngines.map((engine: unknown) => String(engine))
     : [];
@@ -1341,6 +1344,8 @@ async function ensureContentTaskOptions() {
 }
 
 async function openNewVideoProjectDialog() {
+  videoProjectMode.value = "STANDARD";
+  videoFactoryForm.referenceVideoUrl = "";
   videoFactoryForm.scriptEngines = ["SYSTEM_AI"];
   videoProjectCollapseNames.value = active.value === "tasks" ? ["optional"] : [];
   createdVideoProjectDialogId.value = "";
@@ -1730,14 +1735,19 @@ async function useViralVideoInFactory(video: Row) {
 }
 
 async function createVideoFactoryProject() {
+  if (videoProjectMode.value === "REFERENCE_DIRECT_FULL_VIDEO") {
+    if (!videoFactoryForm.referenceVideoUrl.trim()) return ElMessage.warning("请填写参考视频链接");
+  } else {
   if (!videoFactoryForm.productModel) return ElMessage.warning("请选择产品型号");
   if (!videoFactoryForm.videoType.trim()) return ElMessage.warning("请选择或填写视频类型");
   if (!videoFactoryForm.keywords.trim() && !videoFactoryForm.keywordIds.length) return ElMessage.warning("请填写或选择关键词");
+  }
   videoFactoryForm.scriptEngines = ["SYSTEM_AI"];
   creatingVideoProject.value = true;
   try {
     const createdProject = await post<Row>("/api/v1/workbench/data-center/video-projects", {
       ...videoFactoryForm,
+      projectMode: videoProjectMode.value,
       generationMode: videoScriptMode.value === "ASSET_ONLY" ? "ASSET_ONLY" : videoScriptMode.value === "ASSET_FIRST" ? "ASSET_FIRST" : "AUTO",
       contentRestrictionMode: videoFactoryForm.healthContentAllowed === null
         ? "AUTO"
@@ -1763,6 +1773,10 @@ async function createVideoFactoryProject() {
 }
 
 function checkNewVideoProjectBrief() {
+  if (videoProjectMode.value === "REFERENCE_DIRECT_FULL_VIDEO") {
+    if (!videoFactoryForm.referenceVideoUrl.trim()) return ElMessage.warning("请填写参考视频链接");
+    return ElMessage.success("参考视频链接可用，可以提交 Codex 全流程任务");
+  }
   if (!videoFactoryForm.productModel) return ElMessage.warning("请先选择产品型号");
   if (!videoFactoryForm.videoType.trim()) return ElMessage.warning("请选择或填写视频类型");
   if (!videoFactoryForm.keywords.trim() && !videoFactoryForm.keywordIds.length) return ElMessage.warning("请填写或选择关键词");
@@ -1774,24 +1788,14 @@ async function reviewProjectScript(project: Row, approved: boolean, candidateInd
   const candidates = projectCandidates(project);
   const selectedCandidate = candidates[candidateIndex ?? 0] || {};
   if (!approved) {
-    const isInitialCodexTransfer = selectedCandidate.generationSource !== "REMOTE_CODEX";
-    if (isInitialCodexTransfer) {
-      const confirmed = await ElMessageBox.confirm(
-        "Codex 将沿用创建项目时的全部需求、素材策略和当前百炼脚本生成新版本，无需重复填写要求。",
-        "转交 Codex 生成",
-        { confirmButtonText: "确认转交", cancelButtonText: "取消", type: "info" },
-      ).then(() => true).catch(() => false);
-      if (!confirmed) return;
-    } else {
-      const result = await ElMessageBox.prompt(
-        "请说明当前 Codex 脚本哪里需要修改，Codex 会根据原因重写",
-        "退回 Codex 重写",
-        { confirmButtonText: "确认退回", cancelButtonText: "取消", inputType: "textarea" },
-      ).catch(() => null);
-      if (!result) return;
-      note = result.value.trim();
-      if (!note) return ElMessage.warning("退回脚本时必须填写修改原因");
-    }
+    const result = await ElMessageBox.prompt(
+      "请说明当前 Codex 脚本哪里需要修改，Codex 会根据原因重写",
+      "退回 Codex 重写",
+      { confirmButtonText: "确认退回", cancelButtonText: "取消", inputType: "textarea" },
+    ).catch(() => null);
+    if (!result) return;
+    note = result.value.trim();
+    if (!note) return ElMessage.warning("退回脚本时必须填写修改原因");
   }
   reviewingScriptProjectId.value = project.id;
   try {
@@ -1802,11 +1806,27 @@ async function reviewProjectScript(project: Row, approved: boolean, candidateInd
     });
     ElMessage.success(approved
       ? "脚本审核通过，可以补齐缺失素材"
-      : selectedCandidate.generationSource === "REMOTE_CODEX"
-        ? "Codex 脚本已退回，系统已按修改原因提交重写任务"
-        : "已转交 Codex 生成，当前百炼脚本会保留用于对照");
+      : "Codex 脚本已退回，系统已按修改原因提交重写任务");
     await invalidateDataCenterSection("videoFactory");
     await loadDataCenter(true);
+    await refreshTaskVideoProject();
+  } finally {
+    reviewingScriptProjectId.value = "";
+  }
+}
+
+async function transferProjectScriptToCodex(project: Row, candidateIndex?: number) {
+  const confirmed = await ElMessageBox.confirm(
+    "将沿用创建项目时的全部需求、素材策略和当前系统脚本交给 Codex 生成新版本，无需重复填写要求。",
+    "转交 Codex 生成",
+    { confirmButtonText: "确认转交", cancelButtonText: "取消", type: "info" },
+  ).then(() => true).catch(() => false);
+  if (!confirmed) return;
+  reviewingScriptProjectId.value = project.id;
+  try {
+    await post(`/api/v1/workbench/data-center/video-projects/${project.id}/script-transfer-to-codex`, { candidateIndex });
+    ElMessage.success("已转交 Codex，项目需求、当前脚本和素材上下文已自动携带");
+    await invalidateDataCenterSection("videoFactory");
     await refreshTaskVideoProject();
   } finally {
     reviewingScriptProjectId.value = "";
@@ -3177,7 +3197,7 @@ onBeforeUnmount(() => {
                           @click="regenerateSystemScript(taskVideoProjectDetail)"
                         >重新生成</el-button>
                         <el-button type="success" @click="reviewProjectScript(taskVideoProjectDetail, true, index)">确认脚本与素材</el-button>
-                        <el-button type="danger" plain @click="reviewProjectScript(taskVideoProjectDetail, false, index)">
+                        <el-button type="danger" plain @click="candidate.generationSource === 'REMOTE_CODEX' ? reviewProjectScript(taskVideoProjectDetail, false, index) : transferProjectScriptToCodex(taskVideoProjectDetail, index)">
                           {{ candidate.generationSource === "REMOTE_CODEX" ? "退回 Codex" : "转交 Codex" }}
                         </el-button>
                       </div>
@@ -3714,7 +3734,7 @@ onBeforeUnmount(() => {
                       type="danger"
                       plain
                       :loading="reviewingScriptProjectId === project.id"
-                      @click="reviewProjectScript(project, false, index)"
+                      @click="candidate.generationSource === 'REMOTE_CODEX' ? reviewProjectScript(project, false, index) : transferProjectScriptToCodex(project, index)"
                     >{{ candidate.generationSource === "REMOTE_CODEX" ? "退回 Codex" : "转交 Codex" }}</el-button>
                   </template>
                   <el-tag v-else-if="project.productionStage === 'SCRIPT_APPROVED'" type="success">脚本已审核通过</el-tag>
@@ -4411,7 +4431,15 @@ onBeforeUnmount(() => {
     <div v-if="!createdVideoProjectDialogId" v-loading="videoProjectOptionsLoading" class="prototype-project-form">
       <el-alert title="填写项目要求并创建后，系统 AI 会立即生成脚本并同步匹配素材；不满意时可重新生成或转交 Codex。" type="info" :closable="false" />
 
-      <section class="prototype-form-section">
+      <el-radio-group v-model="videoProjectMode" class="project-mode-switch">
+        <el-radio-button label="STANDARD">标准智能项目</el-radio-button>
+        <el-radio-button label="REFERENCE_DIRECT_FULL_VIDEO">参考视频直出</el-radio-button>
+      </el-radio-group>
+      <p v-if="videoProjectMode === 'REFERENCE_DIRECT_FULL_VIDEO'" class="project-mode-help">
+        只需提供参考视频链接。项目会直接交给远程 Codex 完成脚本、素材匹配、剪辑和成片，默认参考其节奏与可访问的 BGM；员工只需审核最终成片。
+      </p>
+
+      <section v-if="videoProjectMode === 'STANDARD'" class="prototype-form-section">
         <header><strong>必填信息</strong><span>视频类型、产品和关键词为必填项</span></header>
         <div class="prototype-required-grid">
           <el-form-item label="视频类型" required>
@@ -4447,7 +4475,14 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <el-collapse v-model="videoProjectCollapseNames" class="prototype-collapses">
+      <section v-else class="prototype-form-section">
+        <header><strong>参考视频</strong><span>此模式无需填写产品、视频类型和关键词</span></header>
+        <el-form-item label="参考视频链接" required>
+          <el-input v-model="videoFactoryForm.referenceVideoUrl" placeholder="粘贴可访问的参考视频链接" />
+        </el-form-item>
+      </section>
+
+      <el-collapse v-if="videoProjectMode === 'STANDARD'" v-model="videoProjectCollapseNames" class="prototype-collapses">
         <el-collapse-item name="optional">
           <template #title>
             <span class="prototype-collapse-title">
@@ -4483,6 +4518,7 @@ onBeforeUnmount(() => {
       </el-collapse>
 
       <el-alert
+        v-if="videoProjectMode === 'STANDARD'"
         title="创建项目后由系统 AI 立即生成可编辑脚本；不满意时可填写提示词重新生成，或转交远程 Codex 重写。"
         type="info"
         :closable="false"
@@ -4564,7 +4600,7 @@ onBeforeUnmount(() => {
               @click="regenerateSystemScript(taskVideoProjectDetail)"
             >重新生成</el-button>
             <el-button type="success" @click="reviewProjectScript(taskVideoProjectDetail, true, index)">确认脚本与素材</el-button>
-            <el-button type="danger" plain @click="reviewProjectScript(taskVideoProjectDetail, false, index)">
+            <el-button type="danger" plain @click="candidate.generationSource === 'REMOTE_CODEX' ? reviewProjectScript(taskVideoProjectDetail, false, index) : transferProjectScriptToCodex(taskVideoProjectDetail, index)">
               {{ candidate.generationSource === "REMOTE_CODEX" ? "退回 Codex" : "转交 Codex" }}
             </el-button>
           </div>
@@ -4576,7 +4612,7 @@ onBeforeUnmount(() => {
       <template v-if="!createdVideoProjectDialogId">
         <el-button @click="newVideoProjectVisible = false">取消</el-button>
         <el-button @click="checkNewVideoProjectBrief">AI检查任务信息</el-button>
-        <el-button type="primary" :loading="creatingVideoProject" @click="createVideoFactoryProject">创建项目并生成脚本</el-button>
+        <el-button type="primary" :loading="creatingVideoProject" @click="createVideoFactoryProject">{{ videoProjectMode === 'REFERENCE_DIRECT_FULL_VIDEO' ? '提交 Codex 全流程任务' : '创建项目并生成脚本' }}</el-button>
       </template>
       <el-button v-else @click="newVideoProjectVisible = false">关闭，稍后继续</el-button>
     </template>

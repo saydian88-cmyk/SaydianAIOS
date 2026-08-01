@@ -202,7 +202,7 @@ export class AiContentService {
     const result = await this.callJson(
       `根据已审核的赛电产品知识、FAQ、高分自有素材和外部参考，生成${exactCount}个完整短视频脚本候选。
 只使用输入中的assetId、referenceId、产品事实和证据；缺素材写入missingAssets，不得虚构。
-assets是系统已经学习并持久化的素材知识，不需要也不得仅凭文件名重新猜测。必须综合aiIndex、tags、contentDescription、segments和indexNeedsReview判断素材能证明什么；只使用indexNeedsReview=false的VIDEO，当前阶段不以indexConfidence数值作为准入条件。
+assets是系统已经学习并持久化的素材知识，不需要也不得仅凭文件名重新猜测。必须综合aiIndex、tags、contentDescription、segments和indexNeedsReview判断素材能证明什么；输入中已经预筛为可调用VIDEO，indexNeedsReview和indexConfidence均不能作为排除门槛。
 先在内部完成“产品型号→核心功能/场景→动作→景别→有效片段”的素材检索，再写内容定位、口播和逐句镜头。每个COVERED镜头必须返回真实assetId并与口播事实直接对应；外观、包装、佩戴空镜不能替代具体功能操作、过程或结果。
 IMAGE只能作为仍在播放的视频上的辅助层，不能单独构成带时长的主镜头。若只有图片没有视频，该镜头必须标记NEED_SHOOT。
 ${assetPolicy}
