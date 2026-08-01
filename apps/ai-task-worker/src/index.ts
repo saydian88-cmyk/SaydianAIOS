@@ -892,6 +892,46 @@ async function verifyVideoSkillRuntime(taskPackageValue: JsonRecord, detectedSki
     : String(detectedSkill.downstreamSkillPath || "");
   if (!skillPath) throw new Error("视频剪辑 Skill 未配置");
   const downstream = await stat(skillPath);
+
+  // A Codex direct-output task deliberately contains no system assets. It can only
+  // run after the shared local media-library skill has completed its onboarding.
+  if (detectedSkill.key === "video-editing-from-media-library-share" && isCodexDirectFullVideoTask(taskPackageValue)) {
+    const localAppData = String(process.env.LOCALAPPDATA || process.env.APPDATA || "").trim();
+    const activeConfigPath = join(
+      localAppData || workRoot,
+      localAppData ? "Codex" : ".codex",
+      "video-editing-from-media-library-share",
+      "active-config.json",
+    );
+    const activeConfig = await readJson<JsonRecord>(activeConfigPath);
+    const runtimeConfigPath = String(activeConfig?.config_path || "").trim();
+    if (!runtimeConfigPath) {
+      throw new Error("Codex 直出任务未启动：本机素材库尚未完成初始化（缺少活动配置）。请先完成素材库、包装资源、临时工作区、成片输出目录和索引目录初始化，再重新提交任务。");
+    }
+    const runtimeConfig = await readJson<JsonRecord>(runtimeConfigPath);
+    if (!runtimeConfig || String(runtimeConfig.initialization_status || "").toLowerCase() !== "ready") {
+      throw new Error("Codex 直出任务未启动：本机素材库配置尚未就绪。请先完成本机剪辑 Skill 初始化，再重新提交任务。");
+    }
+    for (const key of ["library_root", "packaging_root", "workspace_root", "output_root", "config_root"]) {
+      const path = String(runtimeConfig[key] || "").trim();
+      if (!path) throw new Error(`Codex 直出任务未启动：本机素材库配置缺少 ${key}。`);
+      try {
+        await stat(path);
+      } catch {
+        throw new Error(`Codex 直出任务未启动：本机素材库路径不可访问（${key}）。`);
+      }
+    }
+    for (const key of ["material_index", "packaging_index"]) {
+      const path = String(runtimeConfig[key] || "").trim();
+      if (!path) throw new Error(`Codex 直出任务未启动：本机素材库配置缺少 ${key}。`);
+      try {
+        const index = await stat(path);
+        if (!index.isFile()) throw new Error("not-file");
+      } catch {
+        throw new Error(`Codex 直出任务未启动：本机素材库索引不可用（${key}）。`);
+      }
+    }
+  }
   if (!downstream.isFile()) throw new Error("本地视频剪辑Skill不可用");
 }
 
