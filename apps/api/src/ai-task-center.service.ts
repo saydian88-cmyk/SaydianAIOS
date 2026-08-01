@@ -1336,6 +1336,7 @@ export class AiTaskCenterService implements OnModuleInit {
         extension: true,
         sha256: true,
         sizeBytes: true,
+        // Local runners use these fields to map legacy assets whose old OSS objects are unavailable.
         sourcePath: true,
         purpose: true,
         packagingMetadata: true,
