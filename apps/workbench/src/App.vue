@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import type { UploadUserFile } from "element-plus";
 import {
@@ -352,6 +352,8 @@ const selectedAssetGapIds = ref<string[]>([]);
 const assetGapVisible = ref(false);
 const assetGapProductModel = ref("");
 let dataCenterRequestId = 0;
+let currentVideoProjectPollingTimer: ReturnType<typeof setInterval> | undefined;
+let currentVideoProjectPolling = false;
 const dataCenterCache = new Map<string, { data: Row; cachedAt: number }>();
 const dataCenterCacheDbName = "saidian-workbench-cache";
 const dataCenterCacheStore = "data-center";
@@ -956,6 +958,25 @@ async function refreshTaskVideoProject() {
   if (!projectId) return;
   taskVideoProjectDetail.value = await api<Row>(`/api/v1/workbench/data-center/video-projects/${projectId}`);
   ElMessage.success("当前项目已刷新");
+}
+
+async function pollCurrentVideoProject() {
+  if (currentVideoProjectPolling) return;
+  const projectId = expandedTaskVideoProjectId.value || activeVideoProjectId.value;
+  if (!projectId) return;
+  const currentProject = expandedTaskVideoProjectId.value === projectId
+    ? taskVideoProjectDetail.value
+    : activeVideoProject.value;
+  if (!currentProject || !projectWaitingForScripts(currentProject)) return;
+  currentVideoProjectPolling = true;
+  try {
+    const refreshed = await api<Row>(`/api/v1/workbench/data-center/video-projects/${projectId}`);
+    applyRefreshedVideoProject(refreshed);
+  } catch {
+    // 后台生成期间的短暂网络错误留给下一轮当前项目轮询，不刷新全部项目。
+  } finally {
+    currentVideoProjectPolling = false;
+  }
 }
 
 async function quickCreateProject(command: string) {
@@ -1750,9 +1771,10 @@ function checkNewVideoProjectBrief() {
 
 async function reviewProjectScript(project: Row, approved: boolean, candidateIndex?: number) {
   let note = "";
+  const candidates = projectCandidates(project);
+  const selectedCandidate = candidates[candidateIndex ?? 0] || {};
   if (!approved) {
-    const candidate = (project.candidates || [])[candidateIndex ?? 0] || {};
-    const isInitialCodexTransfer = candidate.generationSource !== "REMOTE_CODEX";
+    const isInitialCodexTransfer = selectedCandidate.generationSource !== "REMOTE_CODEX";
     if (isInitialCodexTransfer) {
       const confirmed = await ElMessageBox.confirm(
         "Codex 将沿用创建项目时的全部需求、素材策略和当前百炼脚本生成新版本，无需重复填写要求。",
@@ -1778,7 +1800,6 @@ async function reviewProjectScript(project: Row, approved: boolean, candidateInd
       note,
       candidateIndex,
     });
-    const selectedCandidate = (project.candidates || [])[candidateIndex ?? 0] || {};
     ElMessage.success(approved
       ? "脚本审核通过，可以补齐缺失素材"
       : selectedCandidate.generationSource === "REMOTE_CODEX"
@@ -1947,6 +1968,23 @@ function projectShotForScriptLine(project: Row, scriptLine: Row, index: number) 
 function scriptLineVideoAssetId(project: Row, scriptLine: Row, index: number) {
   const persistedShot = projectShotForScriptLine(project, scriptLine, index);
   return String(persistedShot?.selectedAssetId || scriptLine?.selectedAssetIds?.[0] || "");
+}
+
+function scriptLineMaterialDescription(project: Row, scriptLine: Row, index: number) {
+  const persistedShot = projectShotForScriptLine(project, scriptLine, index);
+  const assetId = scriptLineVideoAssetId(project, scriptLine, index);
+  let description = String(scriptLine.materialMatchReason || scriptLine.missingReason || scriptLine.description || "").trim();
+  if (assetId) {
+    const escapedAssetId = assetId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    description = description
+      .replace(new RegExp(`^asset\\s*${escapedAssetId}\\s*`, "i"), "")
+      .replace(new RegExp(escapedAssetId, "gi"), "")
+      .replace(/^[：:，,；;、\-—\s]+/u, "")
+      .trim();
+  }
+  return description
+    || String(persistedShot?.selectedAsset?.displayName || persistedShot?.selectedAsset?.title || "").trim()
+    || (assetId ? "已匹配对应视频素材" : "暂未匹配到合适的视频素材");
 }
 
 function previewScriptLineAsset(project: Row, scriptLine: Row, index: number) {
@@ -2713,7 +2751,13 @@ async function bootstrap() {
   }
 }
 
-onMounted(() => void bootstrap());
+onMounted(() => {
+  void bootstrap();
+  currentVideoProjectPollingTimer = setInterval(() => void pollCurrentVideoProject(), 5000);
+});
+onBeforeUnmount(() => {
+  if (currentVideoProjectPollingTimer) clearInterval(currentVideoProjectPollingTimer);
+});
 </script>
 
 <template>
@@ -3094,7 +3138,7 @@ onMounted(() => void bootstrap());
                             <el-tag size="small" :type="projectShotForScriptLine(taskVideoProjectDetail, shot, shotIndex)?.selectedAssetId || shot.selectedAssetIds?.length ? 'success' : 'warning'">
                               {{ projectShotForScriptLine(taskVideoProjectDetail, shot, shotIndex)?.selectedAssetId || shot.selectedAssetIds?.length ? "已有素材" : "缺失素材" }}
                             </el-tag>
-                            <small>{{ shot.materialMatchReason || shot.missingReason || shot.description }}</small>
+                            <small>{{ scriptLineMaterialDescription(taskVideoProjectDetail, shot, shotIndex) }}</small>
                             <div class="script-line-material-actions">
                               <el-button
                                 v-if="scriptLineVideoAssetId(taskVideoProjectDetail, shot, shotIndex)"
@@ -3623,7 +3667,7 @@ onMounted(() => void bootstrap());
                         <el-tag size="small" :type="projectShotForScriptLine(project, shot, shotIndex)?.selectedAssetId || shot.selectedAssetIds?.length ? 'success' : 'warning'">
                           {{ projectShotForScriptLine(project, shot, shotIndex)?.selectedAssetId || shot.selectedAssetIds?.length ? "已有素材" : "缺失素材" }}
                         </el-tag>
-                        <small>{{ shot.materialMatchReason || shot.missingReason || shot.description }}</small>
+                        <small>{{ scriptLineMaterialDescription(project, shot, shotIndex) }}</small>
                         <div class="script-line-material-actions">
                           <el-button
                             v-if="scriptLineVideoAssetId(project, shot, shotIndex)"
@@ -4481,7 +4525,7 @@ onMounted(() => void bootstrap());
                 <el-tag size="small" :type="projectShotForScriptLine(taskVideoProjectDetail, shot, shotIndex)?.selectedAssetId || shot.selectedAssetIds?.length ? 'success' : 'warning'">
                   {{ projectShotForScriptLine(taskVideoProjectDetail, shot, shotIndex)?.selectedAssetId || shot.selectedAssetIds?.length ? "已有素材" : "缺失素材" }}
                 </el-tag>
-                <small>{{ shot.materialMatchReason || shot.missingReason || shot.description }}</small>
+                <small>{{ scriptLineMaterialDescription(taskVideoProjectDetail, shot, shotIndex) }}</small>
                 <div class="script-line-material-actions">
                   <el-button
                     v-if="scriptLineVideoAssetId(taskVideoProjectDetail, shot, shotIndex)"

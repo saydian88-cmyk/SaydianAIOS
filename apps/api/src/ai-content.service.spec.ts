@@ -86,19 +86,24 @@ describe("Bailian video-script material gate", () => {
   it("sends only editing-footage videos to Bailian", () => {
     const context = buildBailianEditingVideoContext({
       assets: [
-        { id: "video-1", kind: "VIDEO", purpose: "EDITING_FOOTAGE" },
+        { id: "video-1", kind: "VIDEO", purpose: "EDITING_FOOTAGE", indexConfidence: 0.92, indexNeedsReview: false },
         { id: "image-1", kind: "IMAGE", purpose: "EDITING_FOOTAGE" },
         { id: "audio-1", kind: "AUDIO", purpose: "EDITING_FOOTAGE" },
         { id: "packaging-video-1", kind: "VIDEO", purpose: "PACKAGING_RESOURCE" },
         { id: "cover-video-1", kind: "VIDEO", resourceType: "COVER_TEMPLATE" },
+        { id: "zero-confidence-video", kind: "VIDEO", purpose: "EDITING_FOOTAGE", indexConfidence: 0, indexNeedsReview: false },
+        { id: "needs-review-video", kind: "VIDEO", purpose: "EDITING_FOOTAGE", indexConfidence: 0.95, indexNeedsReview: true },
       ],
       packagingResources: [{ id: "pack-1", kind: "VIDEO" }],
       imageAssets: [{ id: "image-2", kind: "IMAGE" }],
       audioAssets: [{ id: "audio-2", kind: "AUDIO" }],
     }) as Record<string, any>;
 
-    expect(context.assets).toEqual([{ id: "video-1", kind: "VIDEO", purpose: "EDITING_FOOTAGE" }]);
-    expect(context.availableVideoAssetIds).toEqual(["video-1"]);
+    expect(context.assets).toEqual([
+      { id: "video-1", kind: "VIDEO", purpose: "EDITING_FOOTAGE", indexConfidence: 0.92, indexNeedsReview: false },
+      { id: "zero-confidence-video", kind: "VIDEO", purpose: "EDITING_FOOTAGE", indexConfidence: 0, indexNeedsReview: false },
+    ]);
+    expect(context.availableVideoAssetIds).toEqual(["video-1", "zero-confidence-video"]);
     expect(context.assetInputPolicy.mode).toBe("EDITING_VIDEO_ONLY");
     expect(context.packagingResources).toBeUndefined();
     expect(context.imageAssets).toBeUndefined();

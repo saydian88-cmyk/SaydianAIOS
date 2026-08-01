@@ -1058,16 +1058,22 @@ export class WorkbenchController {
     const note = String(body.note || "").trim();
     if (!["APPROVE", "RETURN"].includes(action)) throw new ForbiddenException("审核动作不正确");
     const candidateIndex = body.candidateIndex === undefined ? 0 : Number(body.candidateIndex);
-    const candidates = Array.isArray(project.candidates) ? project.candidates : [];
+    const factory = Array.isArray(project.sourceSignals)
+      ? project.sourceSignals.find((item: Record<string, unknown>) => item?.type === "VIDEO_FACTORY") || {}
+      : {};
+    const candidates = Array.isArray(project.candidates) && project.candidates.length
+      ? project.candidates
+      : Array.isArray(project.scriptCandidates) && project.scriptCandidates.length
+        ? project.scriptCandidates
+        : Array.isArray(factory.scriptCandidates)
+          ? factory.scriptCandidates
+          : [];
     const selectedCandidate = candidates[Math.max(0, Math.min(candidates.length - 1, Number.isFinite(candidateIndex) ? candidateIndex : 0))] || {};
     const isInitialCodexTransfer = action === "RETURN" && selectedCandidate.generationSource !== "REMOTE_CODEX";
     if (action === "RETURN" && !isInitialCodexTransfer && !note) {
       throw new ForbiddenException("退回 Codex 脚本时必须填写修改原因");
     }
     const reviewNote = note || (isInitialCodexTransfer ? "转交 Codex 生成，沿用当前项目需求、素材策略和百炼脚本" : "");
-    const factory = Array.isArray(project.sourceSignals)
-      ? project.sourceSignals.find((item: Record<string, unknown>) => item?.type === "VIDEO_FACTORY") || {}
-      : {};
     if (factory.aiTaskId) {
       await this.aiTasks.review(String(factory.aiTaskId), { action, note: reviewNote }, employee.name);
     }
