@@ -9,7 +9,7 @@ type Row = Record<string, any>;
 const props = withDefaults(defineProps<{
   products: Row[];
   platformScope?: "" | "DOUYIN" | "TIKTOK";
-  mode?: "factory" | "douyin-viral";
+  mode?: "factory" | "douyin-viral" | "tiktok-viral";
 }>(), {
   platformScope: "",
   mode: "factory",
@@ -124,11 +124,20 @@ const modelForm = reactive({
 });
 const routeForm = reactive({ DOUYIN: "", TIKTOK: "" });
 const isDouyinViralSystem = computed(() => props.mode === "douyin-viral");
+const isTiktokViralSystem = computed(() => props.mode === "tiktok-viral");
+const isViralSystem = computed(() => isDouyinViralSystem.value || isTiktokViralSystem.value);
+const platformLabel = computed(() => props.platformScope === "TIKTOK" ? "TikTok" : props.platformScope === "DOUYIN" ? "抖音" : "全平台");
 const factoryModule = computed(() => isDouyinViralSystem.value ? "DOUYIN_VIRAL" : "GENERAL_VIDEO_FACTORY");
-const heroKicker = computed(() => isDouyinViralSystem.value ? "DOUYIN VIRAL VIDEO SYSTEM · V1.0" : "SMART VIDEO FACTORY · V2.0");
-const heroTitle = computed(() => isDouyinViralSystem.value ? "抖音爆款视频生成系统" : "视频工厂");
+const heroKicker = computed(() => isDouyinViralSystem.value
+  ? "DOUYIN VIRAL VIDEO SYSTEM · V1.0"
+  : isTiktokViralSystem.value ? "TIKTOK VIRAL VIDEO SYSTEM · V1.0" : "SMART VIDEO FACTORY · V2.0");
+const heroTitle = computed(() => isDouyinViralSystem.value
+  ? "抖音爆款视频生成系统"
+  : isTiktokViralSystem.value ? "TikTok爆款视频生成系统" : "视频工厂");
 const heroDescription = computed(() => isDouyinViralSystem.value
   ? "从抖音关键词和爆款结构发现机会，结合产品知识与真实素材生成选题卡；人工确认后由独立Codex Skill按镜头选择本地合成、Seedance或Kling。"
+  : isTiktokViralSystem.value
+    ? "从TikTok关键词和爆款结构发现机会，结合产品知识与真实素材生成选题卡；人工确认后进入脚本、分镜、素材匹配与成片生产。"
   : "先把关键词、爆款结构、FAQ、产品知识和真实素材整理成选题卡；人工确认后再进入Codex生产。");
 
 const enabledModels = computed(() => models.value.filter((item) =>
@@ -136,7 +145,7 @@ const enabledModels = computed(() => models.value.filter((item) =>
   && item.provider?.enabled
   && ["CONFIGURED", "HEALTHY"].includes(item.provider?.state),
 ));
-const taskModels = computed(() => isDouyinViralSystem.value
+const taskModels = computed(() => isViralSystem.value
   ? enabledModels.value.filter((item) => ["VOLCENGINE_SEEDANCE", "KLING"].includes(item.provider?.code))
   : enabledModels.value);
 const runningCount = computed(() => projects.value.reduce((total, project) =>
@@ -224,7 +233,9 @@ async function reload() {
       api<Row[]>("/api/v1/video-factory/providers"),
       api<Row[]>("/api/v1/video-factory/models"),
       api<Row[]>("/api/v1/video-factory/routing"),
-      api<Row[]>("/api/v1/brand-data/smart-keywords/active?platform=DOUYIN&consumer=SMART_VIDEO"),
+      props.platformScope === "TIKTOK"
+        ? Promise.resolve([] as Row[])
+        : api<Row[]>("/api/v1/brand-data/smart-keywords/active?platform=DOUYIN&consumer=SMART_VIDEO"),
       props.platformScope === "DOUYIN"
         ? Promise.resolve([] as Row[])
         : api<Row[]>("/api/v1/brand-data/smart-keywords/active?platform=TIKTOK&consumer=SMART_VIDEO"),
@@ -345,7 +356,9 @@ async function generateDailyTopicCards() {
       factoryModule: factoryModule.value,
     });
     await reload();
-  }, props.platformScope === "DOUYIN" ? "今日抖音选题卡任务已创建" : "抖音和TikTok选题卡任务已创建");
+  }, props.platformScope === "DOUYIN"
+    ? "今日抖音选题卡任务已创建"
+    : props.platformScope === "TIKTOK" ? "今日TikTok选题卡任务已创建" : "抖音和TikTok选题卡任务已创建");
 }
 
 async function rematchTopicCard(row: Row) {
@@ -713,12 +726,12 @@ onBeforeUnmount(() => {
         <el-button :icon="Refresh" @click="reload">刷新</el-button>
         <el-button @click="emit('open-system-config')">前往系统配置</el-button>
         <el-button @click="openCreate">提交视频任务</el-button>
-        <el-button type="primary" :icon="Plus" @click="generateDailyTopicCards">{{ isDouyinViralSystem ? '生成今日抖音选题卡' : '生成今日选题卡' }}</el-button>
+        <el-button type="primary" :icon="Plus" @click="generateDailyTopicCards">{{ props.platformScope ? `生成今日${platformLabel}选题卡` : '生成今日选题卡' }}</el-button>
       </div>
     </div>
 
-    <div v-if="isDouyinViralSystem" class="viral-pipeline" aria-label="抖音爆款视频生产流程">
-      <article><b>01</b><span>爆款与关键词</span><small>发现抖音内容机会</small></article>
+    <div v-if="isViralSystem" class="viral-pipeline" :aria-label="`${platformLabel}爆款视频生产流程`">
+      <article><b>01</b><span>爆款与关键词</span><small>发现{{ platformLabel }}内容机会</small></article>
       <i>→</i>
       <article><b>02</b><span>结构拆解</span><small>提取Hook、节奏与CTA</small></article>
       <i>→</i>
@@ -748,7 +761,7 @@ onBeforeUnmount(() => {
     <div v-if="view === 'topicCards'" class="data-card topic-card-panel">
       <div class="topic-filters">
         <el-select v-if="!props.platformScope" v-model="topicFilters.platform" clearable placeholder="全部平台"><el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" /></el-select>
-        <el-tag v-else type="danger" effect="plain">抖音</el-tag>
+        <el-tag v-else type="danger" effect="plain">{{ platformLabel }}</el-tag>
         <el-select v-model="topicFilters.productModel" clearable filterable placeholder="全部产品"><el-option v-for="product in props.products" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" /></el-select>
         <el-select v-model="topicFilters.sourceType" clearable placeholder="全部来源"><el-option label="智能关键词" value="SMART_KEYWORD" /><el-option label="爆款研究" value="VIRAL_RESEARCH" /><el-option label="FAQ" value="FAQ" /></el-select>
         <el-select v-model="topicFilters.status" clearable placeholder="全部状态"><el-option label="待确认" value="TOPIC_CARD_RECOMMENDED" /><el-option label="已确认" value="TOPIC_CARD_APPROVED" /></el-select>
@@ -762,7 +775,7 @@ onBeforeUnmount(() => {
           <small>{{ row.topicCard?.audience }}｜{{ row.topicCard?.pain }}</small>
         </article>
       </div>
-      <div class="card-title"><h4>可执行选题</h4><small>{{ isDouyinViralSystem ? '每日生成10张抖音选题卡；管理员确认前不创建脚本或成片任务' : '每天抖音10张、TikTok 10张；管理员确认前不创建脚本或成片任务' }}</small></div>
+      <div class="card-title"><h4>可执行选题</h4><small>{{ props.platformScope ? `每日生成10张${platformLabel}选题卡；管理员确认前不创建脚本或成片任务` : '每天抖音10张、TikTok 10张；管理员确认前不创建脚本或成片任务' }}</small></div>
       <el-table ref="topicTable" :data="filteredTopicCards" stripe height="510" @selection-change="topicSelection">
         <el-table-column type="selection" width="46" />
         <el-table-column label="选题卡" min-width="270"><template #default="scope"><strong>{{ scope.row.topic }}</strong><small>{{ scope.row.productionNo }} · {{ scope.row.productModel || '缺产品事实' }}</small></template></el-table-column>
@@ -980,7 +993,7 @@ onBeforeUnmount(() => {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="createDialog" :title="isDouyinViralSystem ? '提交抖音视频任务' : '提交视频任务'" width="820px" destroy-on-close>
+    <el-dialog v-model="createDialog" :title="props.platformScope ? `提交${platformLabel}视频任务` : '提交视频任务'" width="820px" destroy-on-close>
       <el-form label-position="top" class="form-grid">
         <el-form-item label="目标平台"><el-select v-model="createForm.platform" :disabled="Boolean(props.platformScope)"><el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" /></el-select></el-form-item>
         <el-form-item label="产品型号"><el-select v-model="createForm.productModel" clearable filterable><el-option v-for="item in props.products" :key="item.id" :label="`${item.modelCode} · ${item.name}`" :value="item.modelCode" /></el-select></el-form-item>
