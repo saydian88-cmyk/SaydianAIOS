@@ -90,6 +90,29 @@ const baseProperties = {
   },
 };
 
+function isCodexDirectFullVideoTask(taskPackage: JsonRecord) {
+  const task = record(taskPackage.task);
+  const execution = record(taskPackage.execution);
+  const input = record(task.input);
+  return String(task.type || "") === "VIDEO"
+    && String(execution.mode || "").toUpperCase() === "FULL_VIDEO"
+    && input.codexDirectFullVideo === true;
+}
+
+function assertCodexDirectMasterOutput(result: JsonRecord, taskPackage: JsonRecord) {
+  if (!isCodexDirectFullVideoTask(taskPackage)) return;
+  const masters = (Array.isArray(result.outputFiles) ? result.outputFiles : [])
+    .map(record)
+    .filter((item) => String(item.kind || "").toUpperCase() === "VIDEO_MASTER");
+  if (masters.length !== 1) {
+    throw new Error("Codex 直出任务未返回唯一的最终成片（VIDEO_MASTER），任务不能标记成功");
+  }
+  const masterPath = String(masters[0]?.path || "").toLowerCase();
+  if (!masterPath.endsWith(".mp4")) {
+    throw new Error("Codex 直出任务返回的最终成片不是 MP4，任务不能标记成功");
+  }
+}
+
 function outputSchema(type: string, executionMode = "", requestedCardCount = 10) {
   if (type === "VIDEO") {
     if (executionMode === "COVER_TITLE") {
@@ -844,6 +867,23 @@ async function verifyVideoSkillRuntime(taskPackageValue: JsonRecord, detectedSki
 async function downloadInputs(taskPackageValue: JsonRecord, workspace: string): Promise<JsonRecord> {
   const inputsDir = join(workspace, "inputs");
   await mkdir(inputsDir, { recursive: true });
+  if (isCodexDirectFullVideoTask(taskPackageValue)) {
+    const packaged: JsonRecord = {
+      ...taskPackageValue,
+      assets: [],
+      snapshots: [],
+      localMaterialLibrary: {
+        root: localMediaLibraryRoot,
+        systemAssetMapPath: localSystemMaterialMapPath,
+        primaryForEditing: true,
+        directOutputOnly: true,
+        identityRule: "local media library only; do not consume system task assets",
+      },
+    };
+    await writeJsonAtomic(join(workspace, "snapshot.json"), []);
+    await writeJsonAtomic(join(workspace, "manifest.json"), []);
+    return packaged;
+  }
   const assets = Array.isArray(taskPackageValue.assets) ? taskPackageValue.assets.map(record) : [];
   const localMaterialMap = (await readJson<JsonRecord>(localSystemMaterialMapPath).catch(() => undefined)) || {};
   const downloaded: JsonRecord[] = [];
@@ -956,6 +996,9 @@ async function renderLocalVideo(result: JsonRecord, taskPackageValue: JsonRecord
   const task = record(taskPackageValue.task);
   const execution = record(taskPackageValue.execution);
   if (String(task.type || "") !== "VIDEO" || String(execution.mode || "") !== "FULL_VIDEO") return result;
+  // Direct-output jobs are completed by the designated local Skill. Never fall
+  // back to the legacy renderer or manufacture a placeholder output for them.
+  if (isCodexDirectFullVideoTask(taskPackageValue)) return result;
   const existingFiles = Array.isArray(result.outputFiles) ? result.outputFiles.map(record) : [];
   const existingMaster = existingFiles.find((item) => String(item.kind || "") === "VIDEO_MASTER");
   if (existingMaster) {
@@ -1367,12 +1410,13 @@ async function execute(claimed: JsonRecord) {
     });
     await verifyVideoSkillRuntime(packaged, detectedSkill);
 
+    const packagedTask = record(packaged.task);
     const execution = record(packaged.execution);
     const snapshots = Array.isArray(packaged.snapshots) ? packaged.snapshots.map(record) : [];
     const snapshotPayload = record(snapshots[0]?.payload);
     const requirements = record(snapshotPayload.requirements);
     const schema = outputSchema(
-      String(task.type || ""),
+      String(packagedTask.type || ""),
       String(execution.mode || ""),
       Number(requirements.exactCount || 10),
     );
@@ -1384,10 +1428,11 @@ async function execute(claimed: JsonRecord) {
       if (savedResult) {
         try {
           validateResult(savedResult, schema, true);
-          if (String(task.type || "") === "VIDEO" && String(execution.mode || "") === "SCRIPT_ONLY") {
+          if (String(packagedTask.type || "") === "VIDEO" && String(execution.mode || "") === "SCRIPT_ONLY") {
             validateVideoScriptMaterialIds(savedResult, Array.isArray(packaged.assets) ? packaged.assets : []);
           }
           result = await validateOutputArtifacts(savedResult, workspace);
+          assertCodexDirectMasterOutput(result, packaged);
           result.execution = {
             ...record(result.execution),
             resumed: true,
@@ -1413,7 +1458,7 @@ async function execute(claimed: JsonRecord) {
         },
         (candidate) => {
           validateResult(candidate, schema);
-          if (String(task.type || "") === "VIDEO" && String(execution.mode || "") === "SCRIPT_ONLY") {
+          if (String(packagedTask.type || "") === "VIDEO" && String(execution.mode || "") === "SCRIPT_ONLY") {
             validateVideoScriptMaterialIds(candidate, Array.isArray(packaged.assets) ? packaged.assets : []);
           }
           return candidate;
@@ -1443,15 +1488,17 @@ async function execute(claimed: JsonRecord) {
         schemaAttempts,
       };
       result = await validateOutputArtifacts(result, workspace);
+      assertCodexDirectMasterOutput(result, packaged);
       validateResult(result, schema, true);
-      if (String(task.type || "") === "VIDEO" && String(execution.mode || "") === "SCRIPT_ONLY") {
+      if (String(packagedTask.type || "") === "VIDEO" && String(execution.mode || "") === "SCRIPT_ONLY") {
         validateVideoScriptMaterialIds(result, Array.isArray(packaged.assets) ? packaged.assets : []);
       }
       await writeJsonAtomic(join(workspace, "result.json"), result);
     } else {
       schemaAttempts = Number(record(result.execution).schemaAttempts || 1);
       validateResult(result, schema, true);
-      if (String(task.type || "") === "VIDEO" && String(execution.mode || "") === "SCRIPT_ONLY") {
+      assertCodexDirectMasterOutput(result, packaged);
+      if (String(packagedTask.type || "") === "VIDEO" && String(execution.mode || "") === "SCRIPT_ONLY") {
         validateVideoScriptMaterialIds(result, Array.isArray(packaged.assets) ? packaged.assets : []);
       }
       await writeJsonAtomic(join(workspace, "result.json"), result);
@@ -1492,9 +1539,7 @@ async function execute(claimed: JsonRecord) {
       };
       await saveWorkspaceState(workspace, taskState);
     }
-    taskState.stage = "COMPLETE";
-    taskState.updatedAt = new Date().toISOString();
-    await saveWorkspaceState(workspace, taskState);
+    await report("FINALIZING", 95, "正在提交最终成片和任务完成状态");
     await api(`/api/v1/ai-tasks/runner/tasks/${taskId}/complete`, {
       method: "POST",
       body: JSON.stringify({
@@ -1508,6 +1553,9 @@ async function execute(claimed: JsonRecord) {
         },
       }),
     });
+    taskState.stage = "COMPLETE";
+    taskState.updatedAt = new Date().toISOString();
+    await saveWorkspaceState(workspace, taskState);
     await appendExecutionLog(workspace, "TASK_COMPLETE", { skill: currentSkill });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Codex执行失败";
