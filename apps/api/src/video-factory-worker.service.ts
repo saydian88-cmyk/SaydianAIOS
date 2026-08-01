@@ -63,6 +63,11 @@ export class VideoFactoryWorkerService {
       await this.processGeneration(generation.id).catch((error) => this.failGeneration(generation.id, error));
       return { kind: "GENERATION", id: generation.id };
     }
+    const render = await this.claimRenderJob();
+    if (render) {
+      await this.processRender(render.id).catch((error) => this.failRender(render.id, error));
+      return { kind: "RENDER", id: render.id };
+    }
     const running = await this.prisma.videoGenerationJob.findFirst({
       where: { status: "RUNNING", attempts: { some: { status: "RUNNING", externalJobId: { not: null } } } },
       orderBy: { updatedAt: "asc" },
@@ -70,11 +75,6 @@ export class VideoFactoryWorkerService {
     if (running) {
       await this.pollGeneration(running.id).catch((error) => this.failGeneration(running.id, error));
       return { kind: "GENERATION_POLL", id: running.id };
-    }
-    const render = await this.claimRenderJob();
-    if (render) {
-      await this.processRender(render.id).catch((error) => this.failRender(render.id, error));
-      return { kind: "RENDER", id: render.id };
     }
     return null;
   }
