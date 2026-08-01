@@ -272,7 +272,7 @@ export class VideoFactoryController {
     @Headers("x-ops-actor") requestedActor: string | undefined,
     @Param("id") id: string,
   ) {
-    return this.factory.archiveProject(id, this.actor(authorization, requestedActor));
+    return this.factory.archiveProject(id, this.actor(authorization, requestedActor), true);
   }
 
   @Post("projects/:id/generate")

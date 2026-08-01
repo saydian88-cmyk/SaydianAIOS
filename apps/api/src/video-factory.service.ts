@@ -3627,7 +3627,7 @@ export class VideoFactoryService {
     return job;
   }
 
-  async archiveProject(id: string, actor: string) {
+  async archiveProject(id: string, actor: string, allowAdminOverride = false) {
     const plan = await this.prisma.contentPlan.findUnique({
       where: { id },
       include: {
@@ -3638,7 +3638,7 @@ export class VideoFactoryService {
     if (!plan || plan.kind !== "VIDEO" || !sourceSignals(plan).some((item) => item.type === "VIDEO_FACTORY")) {
       throw new NotFoundException("智能视频项目不存在");
     }
-    if (![plan.owner, plan.createdBy, plan.assignedTo].filter(Boolean).includes(actor)) {
+    if (!allowAdminOverride && ![plan.owner, plan.createdBy, plan.assignedTo].filter(Boolean).includes(actor)) {
       throw new BadRequestException("只能删除自己创建的视频项目");
     }
     if (plan.productionStage === "VIDEO_FACTORY_ARCHIVED") return { id, archived: true };

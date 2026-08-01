@@ -249,7 +249,7 @@ describe("VideoFactoryService model routing", () => {
     prisma.videoGenerationJob.count.mockResolvedValue(2);
     prisma.videoRenderJob.count.mockResolvedValue(1);
 
-    const result = await service.archiveProject("project-delete", "运营甲");
+    const result = await service.archiveProject("project-delete", "管理员", true);
 
     expect(result).toMatchObject({
       archived: true,
