@@ -25,6 +25,7 @@ const navItems = [
   { key: "content", label: "内容审核", icon: DocumentChecked },
   { key: "assets", label: "品牌数据中心", icon: Files },
   { key: "douyinVideo", label: "抖音爆款生成", icon: VideoCamera },
+  { key: "tiktokVideo", label: "TK爆款视频生成", icon: VideoCamera },
   { key: "ledger", label: "经营责任台账", icon: Monitor },
   { key: "operationAnalysis", label: "运营分析", icon: DataAnalysis },
   { key: "engagement", label: "评论与直播", icon: VideoCamera },
@@ -60,6 +61,7 @@ const adminTaskCenter = ref<{ reload: () => Promise<void> }>();
 const aiTaskCenter = ref<{ reload: () => Promise<void> }>();
 const systemConfigCenter = ref<{ reload: () => Promise<void> }>();
 const douyinVideoSystem = ref<{ reload: () => Promise<void> }>();
+const tiktokVideoSystem = ref<{ reload: () => Promise<void> }>();
 const comments = ref<AnyRow[]>([]);
 const live = ref<AnyRow[]>([]);
 const shopItems = ref<AnyRow[]>([]);
@@ -253,6 +255,10 @@ async function loadActive() {
   if (active.value === "douyinVideo") {
     ledger.value = await api("/api/v1/ledger");
     await douyinVideoSystem.value?.reload();
+  }
+  if (active.value === "tiktokVideo") {
+    ledger.value = await api("/api/v1/ledger");
+    await tiktokVideoSystem.value?.reload();
   }
   if (active.value === "operationAnalysis") await operationAnalysis.value?.reload();
   if (active.value === "ledger") ledger.value = await api("/api/v1/ledger");
@@ -971,6 +977,16 @@ onBeforeUnmount(() => window.removeEventListener("storage", handleSharedLogin));
           :products="ledger.products"
           platform-scope="DOUYIN"
           mode="douyin-viral"
+          @open-system-config="switchPage('integrations')"
+        />
+      </section>
+
+      <section v-else-if="active === 'tiktokVideo'" class="page">
+        <VideoFactory
+          ref="tiktokVideoSystem"
+          :products="ledger.products"
+          platform-scope="TIKTOK"
+          mode="tiktok-viral"
           @open-system-config="switchPage('integrations')"
         />
       </section>
