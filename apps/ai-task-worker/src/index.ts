@@ -1176,6 +1176,21 @@ async function runCodex(
 }
 
 function packageFingerprint(taskPackageValue: JsonRecord) {
+  const task = record(taskPackageValue.task);
+  const stableTask = {
+    id: task.id,
+    taskNo: task.taskNo,
+    type: task.type,
+    title: task.title,
+    platform: task.platform,
+    productId: task.productId,
+    productModel: task.productModel,
+    instructions: task.instructions,
+    input: task.input,
+    modelPolicy: task.modelPolicy,
+    sourceType: task.sourceType,
+    sourceId: task.sourceId,
+  };
   const stableAssets = (Array.isArray(taskPackageValue.assets) ? taskPackageValue.assets.map(record) : []).map((asset) => ({
     id: asset.id,
     sha256: asset.sha256,
@@ -1183,7 +1198,7 @@ function packageFingerprint(taskPackageValue: JsonRecord) {
     workspacePath: asset.workspacePath,
   }));
   return sha256(Buffer.from(JSON.stringify({
-    task: taskPackageValue.task,
+    task: stableTask,
     snapshots: taskPackageValue.snapshots,
     execution: taskPackageValue.execution,
     assets: stableAssets,
