@@ -70,6 +70,23 @@ describe("skill task router", () => {
     });
   });
 
+  it("routes Codex direct full-video tasks straight to the share editing Skill", () => {
+    const shareSkillPath = join(routeOnlyCodexHome, "skills", "video-editing-from-media-library-share", "SKILL.md");
+    expect(routeTask({
+      task: { type: "VIDEO", input: { executionMode: "FULL_VIDEO", codexDirectFullVideo: true } },
+      execution: {
+        mode: "FULL_VIDEO",
+        strategy: "CODEX_FIRST",
+        requiredSkill: "video-editing-from-media-library-share",
+      },
+    }, { ...process.env, CODEX_HOME: routeOnlyCodexHome })).toMatchObject({
+      key: "video-editing-from-media-library-share",
+      strategy: "CODEX_SKILL",
+      skillPath: shareSkillPath,
+      fallbackOrder: ["LOCAL_MEDIA_LIBRARY", "FINAL_VIDEO_ONLY"],
+    });
+  });
+
   it("accepts legacy task packages that name the share video Skill directly", () => {
     expect(routeTask({
       task: { type: "VIDEO", input: { executionMode: "SCRIPT_ONLY" } },

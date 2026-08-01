@@ -206,9 +206,9 @@ function compileCodexDirectFullVideoPrompt(project: Record<string, any>, brief: 
     `用户 AI 提示词：${prompt}`,
     "请直接完成：脚本 → 素材匹配 → 剪辑 → 9:16 成片。中间脚本、镜头、素材匹配、剪辑进度均不回传系统；仅在最终成片完成或任务失败时回传。",
     "无需脚本审核、无需素材补全确认，员工只审核最终成片。",
-    "优先使用系统中已审核、可剪辑的 VIDEO 主画面素材；包装资源仅可用于包装，不得作为主画面。",
-    "素材不足时可在本地合理改写或生成必要画面，但不得伪造产品功能、医疗效果或不存在的素材事实。",
-    "完成时回传主成片路径、成片元数据、使用素材绑定摘要和审核说明；失败时返回 FAILED 及明确原因。",
+    "这是本地素材库直出模式：系统不会提供 assets、素材快照、素材 ID 或包装资源；请按本地 Skill 自行学习和检索可用素材库。",
+    "不得向系统回传中间脚本、镜头、素材匹配或素材绑定；完成时仅回传真实主成片路径、成片元数据和简短审核说明。",
+    "素材不足时可在本地合理改写或生成必要画面，但不得伪造产品功能、医疗效果或不存在的素材事实。失败时返回 FAILED 及明确原因。",
   ].join("\n");
 }
 
@@ -1298,8 +1298,11 @@ export class WorkbenchController {
         existingContentPlanId: project.id,
         workflowVersion: project.workflowVersion,
         skillName: "video-editing-from-media-library-share",
+        codexDirectInput: {
+          productModel: project.productModel,
+          prompt: String(brief.additionalPrompt || "").trim(),
+        },
         workflowGuard: { projectId: project.id, workflowVersion: project.workflowVersion, stage: "FULL_VIDEO", allowedProjectStages: ["PROJECT_BRIEF", "EDITING"] },
-        projectBrief: brief,
         requiredOutputs: ["master_video", "master_video_path", "source_asset_bindings", "review_summary"],
       },
       modelPolicy: { strategy: "CODEX_FIRST", allowExternalGeneration: false, allowFallback: false },

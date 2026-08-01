@@ -9,6 +9,7 @@ export type SkillKey =
   | "build-health-brand-trust-content"
   | "saydian-douyin-viral-video-generator"
   | "saidian-ai-task-dispatcher"
+  | "video-editing-from-media-library-share"
   | "legacy-codex";
 
 export type SkillRoute = {
@@ -68,6 +69,10 @@ export function skillRegistry(env: NodeJS.ProcessEnv = process.env): Record<Excl
       env.AI_TASK_DISPATCHER_SKILL_PATH
       || join(home, "skills", "saidian-ai-task-dispatcher", "SKILL.md"),
     )),
+    "video-editing-from-media-library-share": resolve(String(
+      env.AI_TASK_DIRECT_VIDEO_SKILL_PATH
+      || join(home, "skills", "video-editing-from-media-library-share", "SKILL.md"),
+    )),
   };
 }
 
@@ -118,6 +123,9 @@ export function routeTask(taskPackage: JsonRecord, env: NodeJS.ProcessEnv = proc
     execution.mode || taskInput.executionMode || (type === "VIDEO" ? "FULL_VIDEO" : "DEFAULT"),
   ).trim().toUpperCase();
   const isDouyinViralModule = String(taskInput.factoryModule || "").trim().toUpperCase() === "DOUYIN_VIRAL";
+  const isCodexDirectFullVideo = type === "VIDEO"
+    && executionMode === "FULL_VIDEO"
+    && taskInput.codexDirectFullVideo === true;
   const registry = () => skillRegistry(env);
 
   if (type === "IMAGE") {
@@ -143,6 +151,23 @@ export function routeTask(taskPackage: JsonRecord, env: NodeJS.ProcessEnv = proc
       reason: "AiTask.type=ARTICLE 固定使用健康品牌信任内容 Skill",
       fallbackOrder: ["CODEX_TRUST_CONTENT"],
       skillPath: registry()["build-health-brand-trust-content"],
+    };
+  }
+
+  if (isCodexDirectFullVideo) {
+    assertPackageRoute(
+      execution,
+      "video-editing-from-media-library-share",
+      ["CODEX_SKILL", "CODEX_FIRST"],
+    );
+    return {
+      key: "video-editing-from-media-library-share",
+      taskType: type,
+      executionMode,
+      strategy: "CODEX_SKILL",
+      reason: "Codex 直出成片任务直接使用本地素材库剪辑 Skill，不经过系统任务调度器",
+      fallbackOrder: ["LOCAL_MEDIA_LIBRARY", "FINAL_VIDEO_ONLY"],
+      skillPath: registry()["video-editing-from-media-library-share"],
     };
   }
 

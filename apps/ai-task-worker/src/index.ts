@@ -615,6 +615,27 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
   const execution = record(taskPackage.execution);
   const type = String(task.type || "");
   const executionMode = String(execution.mode || "");
+  const taskInput = record(task.input);
+  const isCodexDirectFullVideo = type === "VIDEO"
+    && executionMode === "FULL_VIDEO"
+    && taskInput.codexDirectFullVideo === true;
+  if (isCodexDirectFullVideo) {
+    const directInput = record(taskInput.codexDirectInput);
+    return [
+      "你是赛电 Codex 直出视频执行器。",
+      `必须先完整读取并严格执行 ${detectedSkill.skillPath}（video-editing-from-media-library-share）。`,
+      "这是本地素材库直出模式：不要使用系统任务包中的 assets、snapshots、materialBindings，也不要下载或请求系统素材。",
+      "只使用以下产品型号与用户 AI 提示词，按 Skill 的本地素材库学习、检索、合规、剪辑、质检和交付规则完成任务。",
+      JSON.stringify({
+        taskId: String(task.id || ""),
+        productModel: String(directInput.productModel || task.productModel || ""),
+        aiPrompt: String(directInput.prompt || ""),
+      }, null, 2),
+      "从脚本、镜头、素材选择到剪辑成片都在本地完成，不回传中间脚本、镜头、素材匹配或审核节点；员工只审核最终成片。",
+      "成功时只输出一个真实存在的 1080x1920 MP4，并在 outputFiles 中登记为 VIDEO_MASTER。失败时返回 FAILED 与明确的阻塞原因，禁止伪造完成。",
+      "输出必须符合任务 output schema，outputFiles 只能指向当前任务工作区内真实存在的文件。",
+    ].join("\n\n");
+  }
   if (type === "VIDEO" && executionMode === "TOPIC_CARD_BATCH") {
     const snapshots = Array.isArray(taskPackage.snapshots) ? taskPackage.snapshots.map(record) : [];
     const payload = record(snapshots[0]?.payload);
@@ -798,11 +819,13 @@ async function verifyVideoSkillRuntime(taskPackageValue: JsonRecord, detectedSki
   const execution = record(taskPackageValue.execution);
   if (String(task.type || "") !== "VIDEO"
     || !["FULL_VIDEO", "SCRIPT_ONLY", "SIMILAR_VIDEO", "NO_VOICE_VIDEO", "COVER_TITLE"].includes(String(execution.mode || ""))
-    || !["saidian-ai-task-dispatcher", "saydian-douyin-viral-video-generator"].includes(detectedSkill.key)) return;
+    || !["saidian-ai-task-dispatcher", "saydian-douyin-viral-video-generator", "video-editing-from-media-library-share"].includes(detectedSkill.key)) return;
   if (detectedSkill.key === "saydian-douyin-viral-video-generator") return;
-  const downstreamPath = String(detectedSkill.downstreamSkillPath || "");
-  if (!downstreamPath) throw new Error("调度Skill未配置下游视频剪辑Skill");
-  const downstream = await stat(downstreamPath);
+  const skillPath = detectedSkill.key === "video-editing-from-media-library-share"
+    ? String(detectedSkill.skillPath || "")
+    : String(detectedSkill.downstreamSkillPath || "");
+  if (!skillPath) throw new Error("视频剪辑 Skill 未配置");
+  const downstream = await stat(skillPath);
   if (!downstream.isFile()) throw new Error("本地视频剪辑Skill不可用");
 }
 
@@ -969,7 +992,7 @@ async function renderLocalVideo(result: JsonRecord, taskPackageValue: JsonRecord
   const candidates = Array.isArray(project.scriptCandidates) ? project.scriptCandidates.map(record) : [];
   const selected = candidates.find((item) => item.selected === true) || candidates[0] || {};
   const shots = Array.isArray(selected.shots) ? selected.shots.map(record) : [];
-  if (["saidian-ai-task-dispatcher", "saydian-douyin-viral-video-generator"].includes(String(execution.requiredSkill || ""))) {
+  if (["saidian-ai-task-dispatcher", "saydian-douyin-viral-video-generator", "video-editing-from-media-library-share"].includes(String(execution.requiredSkill || ""))) {
     const missing = Array.isArray(selected.missingAssets) ? selected.missingAssets : [];
     selected.missingAssets = missing.length ? missing : [{
       moduleType: "VIDEO_MASTER",

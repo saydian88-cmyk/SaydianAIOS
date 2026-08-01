@@ -996,12 +996,21 @@ export class AiTaskCenterService implements OnModuleInit {
     const node = await this.runner(token, text(body.nodeCode));
     await this.ensureRunnerTask(node.nodeCode, id);
     const task = await this.task(id);
+    const input = object(task.input);
+    const modelPolicy = object(task.modelPolicy);
+    const dedicatedDouyin = text(input.factoryModule).toUpperCase() === "DOUYIN_VIRAL";
+    const executionMode = text(input.executionMode).toUpperCase() || (task.type === "VIDEO" ? "FULL_VIDEO" : "DEFAULT");
+    const codexDirectFullVideo = task.type === "VIDEO"
+      && executionMode === "FULL_VIDEO"
+      && input.codexDirectFullVideo === true;
     const assetIds = new Set<string>();
-    for (const snapshot of task.inputSnapshots || []) {
-      const payload = object(snapshot.payload);
-      for (const item of Array.isArray(payload.assets) ? payload.assets.map(object) : []) {
-        const assetId = text(item.id);
-        if (assetId) assetIds.add(assetId);
+    if (!codexDirectFullVideo) {
+      for (const snapshot of task.inputSnapshots || []) {
+        const payload = object(snapshot.payload);
+        for (const item of Array.isArray(payload.assets) ? payload.assets.map(object) : []) {
+          const assetId = text(item.id);
+          if (assetId) assetIds.add(assetId);
+        }
       }
     }
     const assets = assetIds.size
@@ -1058,10 +1067,6 @@ export class AiTaskCenterService implements OnModuleInit {
       })
       : [];
     const libraryState = await this.systemMaterialIndexStatus();
-    const input = object(task.input);
-    const modelPolicy = object(task.modelPolicy);
-    const dedicatedDouyin = text(input.factoryModule).toUpperCase() === "DOUYIN_VIRAL";
-    const executionMode = text(input.executionMode).toUpperCase() || (task.type === "VIDEO" ? "FULL_VIDEO" : "DEFAULT");
     return {
       task: {
         id: task.id,
@@ -1076,7 +1081,7 @@ export class AiTaskCenterService implements OnModuleInit {
         input,
         modelPolicy,
       },
-      snapshots: (task.inputSnapshots || []).map((snapshot) => ({
+      snapshots: (codexDirectFullVideo ? [] : task.inputSnapshots || []).map((snapshot) => ({
         id: snapshot.id,
         kind: snapshot.kind,
         sourceType: snapshot.sourceType,
@@ -1113,7 +1118,9 @@ export class AiTaskCenterService implements OnModuleInit {
         allowExternalGeneration: ["IMAGE", "ARTICLE"].includes(task.type)
           ? false
           : modelPolicy.allowExternalGeneration === true,
-        requiredSkill: task.type === "VIDEO"
+        requiredSkill: codexDirectFullVideo
+          ? "video-editing-from-media-library-share"
+          : task.type === "VIDEO"
           && dedicatedDouyin
           && ["TOPIC_CARD_BATCH", "FULL_VIDEO", "SCRIPT_ONLY"].includes(executionMode)
           ? "saydian-douyin-viral-video-generator"
@@ -1125,7 +1132,9 @@ export class AiTaskCenterService implements OnModuleInit {
             : task.type === "ARTICLE"
               ? "build-health-brand-trust-content"
             : undefined,
-        fallbackOrder: task.type === "VIDEO"
+        fallbackOrder: codexDirectFullVideo
+          ? ["LOCAL_MEDIA_LIBRARY", "FINAL_VIDEO_ONLY"]
+          : task.type === "VIDEO"
           && executionMode === "FULL_VIDEO"
           ? [
             "APPROVED_REAL_VIDEO",
