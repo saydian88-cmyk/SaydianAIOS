@@ -812,7 +812,11 @@ async function downloadInputs(taskPackageValue: JsonRecord, workspace: string): 
   const assets = Array.isArray(taskPackageValue.assets) ? taskPackageValue.assets.map(record) : [];
   const localMaterialMap = (await readJson<JsonRecord>(localSystemMaterialMapPath).catch(() => undefined)) || {};
   const downloaded: JsonRecord[] = [];
-  for (const asset of assets.slice(0, 30)) {
+  const prioritizedAssets = [...assets].sort((left, right) => {
+    const priority = (asset: JsonRecord) => String(asset.kind || "").toUpperCase() === "VIDEO" ? 0 : 1;
+    return priority(left) - priority(right);
+  });
+  for (const asset of prioritizedAssets.slice(0, 30)) {
     const id = String(asset.id || `asset-${downloaded.length + 1}`);
     const extension = String(asset.extension || extname(String(asset.displayName || "")) || (String(asset.kind) === "IMAGE" ? ".jpg" : ".mp4"));
     const target = join(inputsDir, `${safeName(id)}${extension.startsWith(".") ? extension : `.${extension}`}`);
