@@ -87,9 +87,15 @@ async function walk(root: string, output: string[] = []) {
   return output;
 }
 
-async function localHashes(existingMap: Row) {
+async function localHashes(existingMap: Row, changes: Row[]) {
   const byHash = new Map<string, string>();
   const knownPaths = new Set<string>();
+  const desiredSizes = new Set(
+    changes
+      .filter((asset) => asset.usable === true && asset.sha256)
+      .map((asset) => Number(asset.sizeBytes || 0))
+      .filter((size) => Number.isFinite(size) && size > 0),
+  );
   for (const entry of Object.values(existingMap) as Row[]) {
     const path = String(entry.localPath || "");
     if (path && String(entry.sha256 || "")) {
@@ -105,6 +111,8 @@ async function localHashes(existingMap: Row) {
     try {
       for (const path of await walk(root)) {
         if (knownPaths.has(path)) continue;
+        const file = await stat(path);
+        if (desiredSizes.size && !desiredSizes.has(file.size)) continue;
         const buffer = await readFile(path);
         byHash.set(hash(buffer), path);
         knownPaths.add(path);
@@ -141,7 +149,7 @@ async function main() {
     hasMore = page.hasMore === true;
   }
 
-  const byHash = await localHashes(mapping);
+  const byHash = await localHashes(mapping, changes);
   const pending = changes.filter((asset) => asset.usable === true && asset.sha256 && !byHash.has(String(asset.sha256)));
   const urls = new Map<string, string>();
   for (let start = 0; start < pending.length; start += 100) {
