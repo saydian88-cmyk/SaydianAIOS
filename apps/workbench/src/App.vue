@@ -2787,7 +2787,7 @@ onBeforeUnmount(() => {
     <section class="login-card">
       <div class="logo">S</div>
       <p class="eyebrow">SAYDIAN WORKBENCH</p>
-      <h1>赛电员工工作台</h1>
+      <h1>赛电智能工作台</h1>
       <p class="muted">进入后只看与你岗位相关的任务、素材和消息。</p>
       <el-alert v-if="loginMessage" :title="loginMessage" type="warning" :closable="false" />
       <div class="qr-frame" v-loading="qrLoading">
