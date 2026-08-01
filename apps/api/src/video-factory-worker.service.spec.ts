@@ -1,9 +1,20 @@
 import { UnauthorizedException } from "@nestjs/common";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { encryptIntegrationValue } from "./integration-secret";
-import { VideoFactoryWorkerService } from "./video-factory-worker.service";
+import { usesConfiguredVideoRenderer, VideoFactoryWorkerService } from "./video-factory-worker.service";
 
 afterEach(() => vi.unstubAllGlobals());
+
+describe("Douyin viral render isolation", () => {
+  it("uses deterministic local rendering instead of the shared renderer command", () => {
+    expect(usesConfiguredVideoRenderer({
+      sourceSignals: [{ type: "VIDEO_FACTORY", factoryModule: "DOUYIN_VIRAL" }],
+    })).toBe(false);
+    expect(usesConfiguredVideoRenderer({
+      sourceSignals: [{ type: "VIDEO_FACTORY", factoryModule: "GENERAL_VIDEO_FACTORY" }],
+    })).toBe(true);
+  });
+});
 
 describe("VideoFactoryWorkerService webhook", () => {
   function setup() {

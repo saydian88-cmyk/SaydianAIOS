@@ -9,7 +9,7 @@ import { opsConfig } from "./config";
 import { decryptIntegrationValue } from "./integration-secret";
 import { OssStorageService } from "./oss-storage.service";
 import { PrismaService } from "./prisma.service";
-import { VideoFactoryService } from "./video-factory.service";
+import { videoFactoryModule, VideoFactoryService } from "./video-factory.service";
 
 const execFileAsync = promisify(execFile);
 const execAsync = promisify(exec);
@@ -45,6 +45,10 @@ function providerFailureMessage(message: string) {
   if (/account balance not enough/i.test(message)) return "视频模型账户余额不足，请充值或切换备用模型";
   if (/quota|rate limit/i.test(message)) return "视频模型额度或调用频率已达上限，请稍后重试或切换备用模型";
   return message;
+}
+
+export function usesConfiguredVideoRenderer(plan: { sourceSignals: unknown }) {
+  return videoFactoryModule(plan) !== "DOUYIN_VIRAL";
 }
 
 type ProviderResult =
@@ -790,7 +794,7 @@ export class VideoFactoryWorkerService {
     await writeFile(concatList, normalized.map((path) => `file '${path.replaceAll("'", "'\\''")}'`).join("\n"), "utf8");
     const outputPath = join(workDir, `${job.contentPlan.productionNo || job.contentPlan.id}-master.mp4`);
     let actualRenderer = "FFMPEG_TEMPLATE";
-    if (opsConfig.videoRenderCommand) {
+    if (opsConfig.videoRenderCommand && usesConfiguredVideoRenderer(job.contentPlan)) {
       const briefPath = join(workDir, "BRIEF.md");
       await writeFile(briefPath, [
         "---", "workflow: general-video", "flow: automation", "aspect: 9:16", "resolution: 1080x1920", "---",
