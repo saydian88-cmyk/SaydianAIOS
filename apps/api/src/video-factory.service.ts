@@ -382,6 +382,34 @@ export function partitionVideoShotAssetIds(
   };
 }
 
+export function applyVideoShotImageFallback<T extends {
+  matchedAssetIds: string[];
+  matchedVideoAssetIds: string[];
+  auxiliaryImageAssetIds: string[];
+  reason: string;
+}>(coverage: T[], approvedImageAssetIds: string[]): T[] {
+  if (!approvedImageAssetIds.length) return coverage;
+  return coverage.map((shot, index) => {
+    if (shot.matchedVideoAssetIds.length || shot.auxiliaryImageAssetIds.length) return shot;
+    const fallbackId = approvedImageAssetIds[index % approvedImageAssetIds.length];
+    return {
+      ...shot,
+      matchedAssetIds: Array.from(new Set([...shot.matchedAssetIds, fallbackId])),
+      auxiliaryImageAssetIds: [fallbackId],
+      reason: `${shot.reason}；使用已审核产品图保持产品外观一致`,
+    };
+  });
+}
+
+export function videoFactoryModule(plan: { sourceSignals: unknown }) {
+  const signals = sourceSignals(plan);
+  const topicModule = topicCardPayload(plan)?.factoryModule;
+  const factoryModule = String(signals.find((item) => item.type === "VIDEO_FACTORY")?.factoryModule || "");
+  return topicModule === "DOUYIN_VIRAL" || factoryModule === "DOUYIN_VIRAL"
+    ? "DOUYIN_VIRAL"
+    : "GENERAL_VIDEO_FACTORY";
+}
+
 function number(value: unknown, fallback = 0) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -3358,20 +3386,27 @@ export class VideoFactoryService {
       }
     }
     if (!coverage.length) throw new BadRequestException("未能生成分镜素材清单");
+    coverage = applyVideoShotImageFallback(
+      coverage,
+      assets.filter((asset) => asset.kind === "IMAGE").map((asset) => asset.id),
+    );
 
     const signals = sourceSignals(plan);
     const factorySignal = signals.find((item) => item.type === "VIDEO_FACTORY") || {};
-    const factoryModule = topicCardPayload(plan)?.factoryModule || "GENERAL_VIDEO_FACTORY";
+    const factoryModule = videoFactoryModule(plan);
     const routingMode = String(input.routingMode || factorySignal.routingMode || "AUTO").toUpperCase();
     const requestedModelId = String(input.requestedModelId || factorySignal.requestedModelId || "").trim() || undefined;
     const allowFallback = input.allowFallback ?? factorySignal.allowFallback !== false;
     if (!input.prepareOnly && coverage.some((shot) => shot.coverage === "MISSING")) {
-      const scenarios = Array.from(new Set(coverage
+      const modelRequirements = Array.from(new Map(coverage
         .filter((shot) => shot.coverage === "MISSING")
-        .map((shot) => factoryModule === "DOUYIN_VIRAL" ? douyinViralModelScenario(shot.description) : "SCENE")));
-      await Promise.all(scenarios.map(async (scenario) => {
-        await this.resolveModel({ requestedModelId, platform: plan.targetPlatforms[0], scenario, capability: "IMAGE_TO_VIDEO" })
-          .catch(async () => this.resolveModel({ requestedModelId, platform: plan.targetPlatforms[0], scenario, capability: "TEXT_TO_VIDEO" }));
+        .map((shot) => {
+          const scenario = factoryModule === "DOUYIN_VIRAL" ? douyinViralModelScenario(shot.description) : "SCENE";
+          const capability = shot.auxiliaryImageAssetIds.length ? "IMAGE_TO_VIDEO" : "TEXT_TO_VIDEO";
+          return [`${scenario}:${capability}`, { scenario, capability }];
+        })).values());
+      await Promise.all(modelRequirements.map(async ({ scenario, capability }) => {
+        await this.resolveModel({ requestedModelId, platform: plan.targetPlatforms[0], scenario, capability });
       }));
     }
 

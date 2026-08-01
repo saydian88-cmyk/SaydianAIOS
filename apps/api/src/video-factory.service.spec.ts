@@ -1,7 +1,13 @@
 import { BadRequestException } from "@nestjs/common";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { encryptIntegrationValue } from "./integration-secret";
-import { materialReviewApproved, partitionVideoShotAssetIds, VideoFactoryService } from "./video-factory.service";
+import {
+  applyVideoShotImageFallback,
+  materialReviewApproved,
+  partitionVideoShotAssetIds,
+  videoFactoryModule,
+  VideoFactoryService,
+} from "./video-factory.service";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -38,6 +44,32 @@ describe("video shot asset classification", () => {
       matchedVideoAssetIds: ["video-1"],
       auxiliaryImageAssetIds: ["image-2", "image-1"],
     });
+  });
+
+  it("reuses an approved product image for every uncovered generated shot", () => {
+    expect(applyVideoShotImageFallback([
+      { matchedAssetIds: [], matchedVideoAssetIds: [], auxiliaryImageAssetIds: [], reason: "缺少镜头" },
+      { matchedAssetIds: [], matchedVideoAssetIds: [], auxiliaryImageAssetIds: [], reason: "缺少镜头" },
+    ], ["product-image-1"])).toEqual([
+      {
+        matchedAssetIds: ["product-image-1"],
+        matchedVideoAssetIds: [],
+        auxiliaryImageAssetIds: ["product-image-1"],
+        reason: "缺少镜头；使用已审核产品图保持产品外观一致",
+      },
+      {
+        matchedAssetIds: ["product-image-1"],
+        matchedVideoAssetIds: [],
+        auxiliaryImageAssetIds: ["product-image-1"],
+        reason: "缺少镜头；使用已审核产品图保持产品外观一致",
+      },
+    ]);
+  });
+
+  it("preserves the dedicated Douyin factory module from a Codex project signal", () => {
+    expect(videoFactoryModule({
+      sourceSignals: [{ type: "VIDEO_FACTORY", factoryModule: "DOUYIN_VIRAL" }],
+    })).toBe("DOUYIN_VIRAL");
   });
 });
 
