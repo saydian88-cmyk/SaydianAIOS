@@ -672,11 +672,12 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
     const directModeContract = [
       "DIRECT_MODE_CONTRACT: This is a local-library direct-render job.",
       "The empty assets, snapshots, and materialBindings arrays are intentional. They do not make this a system AI task and must never cause a system-material whitelist request.",
-      "Do not use or invoke saidian-ai-task-dispatcher. Use only the local_library route in video-editing-from-media-library-share.",
+      "Use saidian-ai-task-dispatcher and then the full local video-editing-from-media-library Skill. Never use the share edition as a quality shortcut.",
       "Read the active local-library configuration and the verified-editing-videos-by-product manifest. Do not download, request, or return any system task assets.",
       "Use only VIDEO entries whose visual validation is VERIFIED and whose exact productModel equals this task productModel. Never use another product model, unverified media, images, audio, packaging, cover, sticker, transition or template resources as footage.",
       "If the local library is not initialized or not ready, fail explicitly with the missing local configuration or index. Do not return a system-task WAITING_INPUT result.",
-      "Return no intermediate script, shot plan, material binding, or review state. Return exactly one real 1080x1920 MP4 VIDEO_MASTER and delivery={taskMode:CODEX_DIRECT_FULL_VIDEO, finalReviewOnly:true}.",
+      "The employee UI only receives the final review node, but internal script, shot plan, material coverage, composition, packaging, audio and delivery QA steps remain mandatory.",
+      "Create requirements-check.json, shot-plan.json, composition-qc.json, packaging-qc.json and audio-qc.json in the task workspace with real evidence. Return exactly one real 1080x1920 MP4 VIDEO_MASTER and delivery={taskMode:CODEX_DIRECT_FULL_VIDEO, finalReviewOnly:true}.",
       ...(isRevision ? [
         "REVISION_CONTRACT: This is a targeted revision, not a new creative job. Reuse the previous project structure, footage choices, pacing, audio, and output specification wherever they do not conflict with the return reason.",
         "Locate and reuse the previous task's local final MP4 when it is available. Make only the requested corrections. Do not silently replace the entire concept, product, or video structure.",
@@ -686,7 +687,7 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
     return [
       ...directModeContract,
       "你是赛电 Codex 直出视频执行器。",
-      `必须先完整读取并严格执行 ${detectedSkill.skillPath}（video-editing-from-media-library-share）。`,
+      `必须先完整读取并严格执行 ${detectedSkill.skillPath}（saidian-ai-task-dispatcher），再完整读取并执行 ${detectedSkill.downstreamSkillPath || "video-editing-from-media-library"}（本机完整版剪辑 Skill）。`,
       "这是本地素材库直出模式：不要使用系统任务包中的 assets、snapshots、materialBindings，也不要下载或请求系统素材。",
       "只使用以下产品型号、用户 AI 提示词和严格素材准入规则，按 Skill 的本地素材库学习、检索、合规、剪辑、质检和交付规则完成任务。",
       JSON.stringify({
@@ -697,7 +698,7 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
         ...(isRevision ? { revision } : {}),
       }, null, 2),
       "若当前型号在 verified-editing-videos-by-product 清单内没有足够的可用视频，立即返回 FAILED，错误码 MATERIAL_GAP_EXACT_PRODUCT；不得跨型号替代或使用包装资源补位。",
-      "从脚本、镜头、素材选择到剪辑成片都在本地完成，不回传中间脚本、镜头、素材匹配或审核节点；员工只审核最终成片。",
+      "从脚本、镜头、素材选择到剪辑成片都在本地完成；中间产物必须真实落盘并通过校验，但不回传为员工审核节点，员工只审核最终成片。",
       "成功时只输出一个真实存在的 1080x1920 MP4，并在 outputFiles 中登记为 VIDEO_MASTER。失败时返回 FAILED 与明确的阻塞原因，禁止伪造完成。",
       "输出必须符合任务 output schema，outputFiles 只能指向当前任务工作区内真实存在的文件。",
     ].join("\n\n");
@@ -763,7 +764,9 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
         `本任务必须先使用 $saidian-ai-task-dispatcher 执行系统任务调度，再由其调用 $${detectedSkill.downstreamSkillName || "video-editing-from-media-library"} 完成当前视频阶段。`,
         `下游视频Skill路径：${detectedSkill.downstreamSkillPath || "未配置"}。必须完整读取并遵循其素材只读、镜头连续性、内容禁止库、质检和交付规则。`,
         `系统任务素材模式已启用；health_content_allowed=${execution.healthContentAllowed !== false ? "true" : "false"}。`,
-        "任务包中的assets与materialBindings是本次任务的唯一素材白名单，禁止从本地素材库另选白名单外素材。",
+        executionMode === "SCRIPT_ONLY"
+          ? "SCRIPT_ONLY必须检索完整本机素材索引，并通过system-asset-map.json把实际选中素材反查为系统ID；不得限制为任务包前30条。"
+          : "FULL_VIDEO及其他成片阶段只使用用户已确认的完整materialBindings，禁止临时换材或截断绑定列表。",
         "主时间线只能使用真实视频素材。图片、详情图和产品图只能作为绑定underlying_shot_id的短时辅助层，禁止图片轮播、静态图推拉或无关镜头补时长。",
         "每个功能镜头必须有直接对应画面；任何reshoot缺口都要停止受影响成片渲染，并输出明确补拍清单。",
         executionMode === "COVER_TITLE"
@@ -790,7 +793,7 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
     requiredVideoSkill,
     videoInstructionPriority,
     "必须以提供的JSON快照为事实边界；缺失数据明确写未配置或缺失，不编造数据、认证、费用和执行结果。",
-    "优先使用manifest中已审核真实素材。VIDEO脚本生成必须先按产品、功能、动作、场景和景别检索素材索引，再围绕命中的真实VIDEO素材写逐句脚本；每个已覆盖镜头必须通过matchedVideoAssetIds或selectedAssetIds回传任务包内的具体素材ID。不得把已存在但未回传ID的素材算作已覆盖，也不得为了写更宽泛的文案而忽略已有素材。只有检索后确实不存在直接对应视频时才写清missingReason、alternativePlan和missingAssets，不得拿文件顺序代替镜头匹配。",
+    "优先使用已审核真实素材。VIDEO脚本生成必须先按产品、功能、动作、场景和景别检索完整本机素材索引，再围绕命中的真实VIDEO素材写逐句脚本；每个已覆盖镜头必须通过matchedVideoAssetIds或selectedAssetIds回传system-asset-map.json中的具体系统素材ID。不得把已存在但未回传ID的素材算作已覆盖，也不得为了写更宽泛的文案而忽略已有素材。只有检索后确实不存在直接对应视频时才写清missingReason、alternativePlan和missingAssets，不得拿文件顺序代替镜头匹配。",
     `固定回退顺序：${detectedSkill.fallbackOrder.join(" -> ")}。`,
     "输出必须符合output schema。outputFiles只能引用当前任务工作区内真实存在的文件。",
     `任务包JSON：\n${JSON.stringify(taskPackage, null, 2)}`,
@@ -968,12 +971,41 @@ async function downloadInputs(taskPackageValue: JsonRecord, workspace: string): 
   }
   const assets = Array.isArray(taskPackageValue.assets) ? taskPackageValue.assets.map(record) : [];
   const localMaterialMap = (await readJson<JsonRecord>(localSystemMaterialMapPath).catch(() => undefined)) || {};
+  const executionMode = String(record(taskPackageValue.execution).mode || "").toUpperCase();
+  if (executionMode === "SCRIPT_ONLY") {
+    const indexedAssets = assets.flatMap((asset) => {
+      const id = String(asset.id || "");
+      const mapped = record(localMaterialMap[id]);
+      const localPath = String(mapped.localPath || "");
+      if (!id || mapped.active !== true || !localPath) return [];
+      return [{
+        ...asset,
+        downloadUrl: undefined,
+        localPath,
+        contentSha256: String(mapped.contentSha256 || mapped.sha256 || asset.sha256 || ""),
+      }];
+    });
+    const packaged = {
+      ...taskPackageValue,
+      assets: indexedAssets,
+      localMaterialLibrary: {
+        root: localMediaLibraryRoot,
+        systemAssetMapPath: localSystemMaterialMapPath,
+        primaryForEditing: true,
+        fullIndexSearchRequired: true,
+        identityRule: "systemAssetId + contentSha256",
+      },
+    };
+    await writeJsonAtomic(join(workspace, "snapshot.json"), taskPackageValue.snapshots || []);
+    await writeJsonAtomic(join(workspace, "manifest.json"), indexedAssets);
+    return packaged;
+  }
   const downloaded: JsonRecord[] = [];
   const prioritizedAssets = [...assets].sort((left, right) => {
     const priority = (asset: JsonRecord) => String(asset.kind || "").toUpperCase() === "VIDEO" ? 0 : 1;
     return priority(left) - priority(right);
   });
-  for (const asset of prioritizedAssets.slice(0, 30)) {
+  for (const asset of prioritizedAssets) {
     const id = String(asset.id || `asset-${downloaded.length + 1}`);
     const extension = String(asset.extension || extname(String(asset.displayName || "")) || (String(asset.kind) === "IMAGE" ? ".jpg" : ".mp4"));
     const target = join(inputsDir, `${safeName(id)}${extension.startsWith(".") ? extension : `.${extension}`}`);
@@ -987,6 +1019,7 @@ async function downloadInputs(taskPackageValue: JsonRecord, workspace: string): 
     const mappedLocalPath = mapped.active === true && String(mapped.sha256 || "").toLowerCase() === expectedHash
       ? String(mapped.localPath || "")
       : "";
+    const mappedContentHash = String(mapped.contentSha256 || mapped.sha256 || "").toLowerCase();
     try {
       const existing = await readFile(target);
       if (expectedHash && verifySha256(existing, expectedHash)) buffer = existing;
@@ -997,7 +1030,7 @@ async function downloadInputs(taskPackageValue: JsonRecord, workspace: string): 
       if (mappedLocalPath) {
         try {
           const local = await readFile(mappedLocalPath);
-          if (!expectedHash || verifySha256(local, expectedHash)) buffer = local;
+          if (!mappedContentHash || verifySha256(local, mappedContentHash)) buffer = local;
         } catch {
           buffer = undefined;
         }
@@ -1024,7 +1057,7 @@ async function downloadInputs(taskPackageValue: JsonRecord, workspace: string): 
     }
     if (!buffer) continue;
     const actualHash = sha256(buffer);
-    if (!verifySha256(buffer, expectedHash)) throw new Error(`素材校验失败：${id}`);
+    if (!verifySha256(buffer, mappedLocalPath ? mappedContentHash : expectedHash)) throw new Error(`素材校验失败：${id}`);
     await mkdir(cacheDir, { recursive: true });
     try {
       const cached = await readFile(cacheTarget);
@@ -1413,6 +1446,36 @@ async function validateOutputArtifacts(result: JsonRecord, workspace: string) {
   return result;
 }
 
+async function validateMandatoryVideoEvidence(taskPackageValue: JsonRecord, workspace: string) {
+  const task = record(taskPackageValue.task);
+  const execution = record(taskPackageValue.execution);
+  if (String(task.type || "") !== "VIDEO" || !["FULL_VIDEO", "SIMILAR_VIDEO", "NO_VOICE_VIDEO"].includes(String(execution.mode || ""))) return;
+  const requiredFiles = [
+    "requirements-check.json",
+    "shot-plan.json",
+    "composition-qc.json",
+    "packaging-qc.json",
+    "audio-qc.json",
+  ];
+  for (const file of requiredFiles) {
+    const path = join(workspace, file);
+    try {
+      const info = await stat(path);
+      if (!info.isFile() || info.size < 10) throw new Error("empty");
+      JSON.parse(await readFile(path, "utf8"));
+    } catch {
+      throw new Error(`完整版剪辑Skill证据缺失或无效：${file}`);
+    }
+  }
+  const checklist = await readJson<JsonRecord>(join(workspace, "requirements-check.json"));
+  const rows = Array.isArray(checklist?.items)
+    ? checklist.items.map(record)
+    : Array.isArray(checklist?.requirements) ? checklist.requirements.map(record) : [];
+  if (!rows.length) throw new Error("requirements-check.json 没有逐项验收记录");
+  const failed = rows.filter((item) => item.applicable !== false && item.passed !== true);
+  if (failed.length) throw new Error(`完整版剪辑Skill仍有未通过要求：${failed.map((item) => String(item.id || "unknown")).join("、")}`);
+}
+
 // A completed Codex direct-output task may fail only while registering its MP4
 // with the API. Keep that already-rendered master reusable: the next retry must
 // upload/register it instead of invoking Codex and rendering a second time.
@@ -1686,7 +1749,8 @@ async function execute(claimed: JsonRecord) {
       await writeJsonAtomic(join(workspace, "result.json"), result);
     }
 
-    await report("QUALITY_CHECK", 78, "result.json与产物哈希校验通过", {
+    await validateMandatoryVideoEvidence(packaged, workspace);
+    await report("QUALITY_CHECK", 78, "result.json、产物哈希与完整版剪辑证据校验通过", {
       schemaAttempts,
       outputCount: Array.isArray(result.outputFiles) ? result.outputFiles.length : 0,
     });

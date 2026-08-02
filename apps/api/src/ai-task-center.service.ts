@@ -1082,6 +1082,20 @@ export class AiTaskCenterService implements OnModuleInit {
           if (assetId) assetIds.add(assetId);
         }
       }
+      if (task.type === "VIDEO" && executionMode === "SCRIPT_ONLY" && text(task.productModel)) {
+        const modelAssets = await this.prisma.asset.findMany({
+          where: {
+            deletedAt: null,
+            kind: { in: ["VIDEO", "IMAGE"] },
+            reviewStatus: "APPROVED",
+            availabilityStatus: "ACTIVE",
+            rightsStatus: { in: ["COMMERCIAL", "EDIT_ONLY"] },
+            products: { some: { product: { modelCode: text(task.productModel) } } },
+          },
+          select: { id: true },
+        });
+        for (const asset of modelAssets) assetIds.add(asset.id);
+      }
     }
     const assets = assetIds.size
       ? await this.prisma.asset.findMany({

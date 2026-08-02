@@ -70,20 +70,18 @@ describe("skill task router", () => {
     });
   });
 
-  it("routes Codex direct full-video tasks straight to the share editing Skill", () => {
-    const shareSkillPath = join(routeOnlyCodexHome, "skills", "video-editing-from-media-library-share", "SKILL.md");
+  it("routes Codex direct full-video tasks through the dispatcher to the full local editing Skill", () => {
     expect(routeTask({
       task: { type: "VIDEO", input: { executionMode: "FULL_VIDEO", codexDirectFullVideo: true } },
       execution: {
         mode: "FULL_VIDEO",
         strategy: "CODEX_FIRST",
-        requiredSkill: "video-editing-from-media-library-share",
+        requiredSkill: "saidian-ai-task-dispatcher",
       },
     }, { ...process.env, CODEX_HOME: routeOnlyCodexHome })).toMatchObject({
-      key: "video-editing-from-media-library-share",
+      key: "saidian-ai-task-dispatcher",
       strategy: "CODEX_SKILL",
-      skillPath: shareSkillPath,
-      fallbackOrder: ["LOCAL_MEDIA_LIBRARY", "FINAL_VIDEO_ONLY"],
+      downstreamSkillName: "video-editing-from-media-library",
     });
   });
 

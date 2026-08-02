@@ -154,23 +154,6 @@ export function routeTask(taskPackage: JsonRecord, env: NodeJS.ProcessEnv = proc
     };
   }
 
-  if (isCodexDirectFullVideo) {
-    assertPackageRoute(
-      execution,
-      "video-editing-from-media-library-share",
-      ["CODEX_SKILL", "CODEX_FIRST"],
-    );
-    return {
-      key: "video-editing-from-media-library-share",
-      taskType: type,
-      executionMode,
-      strategy: "CODEX_SKILL",
-      reason: "Codex 直出成片任务直接使用本地素材库剪辑 Skill，不经过系统任务调度器",
-      fallbackOrder: ["LOCAL_MEDIA_LIBRARY", "FINAL_VIDEO_ONLY"],
-      skillPath: registry()["video-editing-from-media-library-share"],
-    };
-  }
-
   if (type === "VIDEO"
     && isDouyinViralModule
     && ["TOPIC_CARD_BATCH", "FULL_VIDEO", "SCRIPT_ONLY"].includes(executionMode)) {
@@ -216,7 +199,9 @@ export function routeTask(taskPackage: JsonRecord, env: NodeJS.ProcessEnv = proc
       taskType: type,
       executionMode,
       strategy: "CODEX_SKILL",
-      reason: executionMode === "COVER_TITLE"
+      reason: isCodexDirectFullVideo
+        ? "Codex直出成片由赛电调度 Skill 调用本机完整版素材库剪辑 Skill，内部完整制作质检，仅隐藏中间审核界面"
+        : executionMode === "COVER_TITLE"
         ? "VIDEO/COVER_TITLE 由赛电调度 Skill 调用本地素材库剪辑 Skill，再交接封面标题子 Skill"
         : executionMode === "SCRIPT_ONLY"
           ? "VIDEO/SCRIPT_ONLY 由赛电调度 Skill 调用本地素材库剪辑 Skill 的脚本阶段"
