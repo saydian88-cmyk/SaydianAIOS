@@ -23,6 +23,7 @@ const imageAiJobs: AssetJobType[] = ["OCR", "CONTENT_UNDERSTANDING", "TAGGING"];
 const videoJobs: AssetJobType[] = ["PROXY_VIDEO", "KEYFRAMES", "SCENE_SEGMENTATION", "TRANSCRIPTION", "CONTENT_UNDERSTANDING", "TAGGING"];
 const retryMinutes = [1, 5, 30];
 const assetKnowledgeIndexVersion = 4;
+const visualProductValidationPolicyVersion = 1;
 
 type JsonRecord = Record<string, unknown>;
 
@@ -35,12 +36,16 @@ export function isAssetKnowledgeCurrent(input: {
   sha256: string;
   indexVersion: number;
   sourceSnapshot: unknown;
+  kind?: string | null;
 }): boolean {
   const snapshot = input.sourceSnapshot && typeof input.sourceSnapshot === "object" && !Array.isArray(input.sourceSnapshot)
     ? input.sourceSnapshot as JsonRecord
     : {};
+  const needsVisualProductValidation = text(input.kind).toUpperCase() === "VIDEO";
   return input.indexVersion >= assetKnowledgeIndexVersion
-    && text(snapshot.learnedSha256) === input.sha256;
+    && text(snapshot.learnedSha256) === input.sha256
+    && (!needsVisualProductValidation
+      || Number(snapshot.visualProductValidationPolicyVersion || 0) >= visualProductValidationPolicyVersion);
 }
 
 function json(value: unknown): Prisma.InputJsonValue {
@@ -49,6 +54,10 @@ function json(value: unknown): Prisma.InputJsonValue {
 
 function text(value: unknown): string {
   return String(value ?? "").trim();
+}
+
+function normalizedModelCode(value: unknown): string {
+  return text(value).toUpperCase().replace(/[\s_.-]/gu, "");
 }
 
 function hamming(left: string, right: string): number {
@@ -606,8 +615,8 @@ export class AssetAiService {
     const prompt = type === "OCR"
       ? "识别图片中的全部文字。返回JSON：{text,language,blocks:[{text,position}]}. 不要添加解释。"
       : `你是赛电素材库的视觉索引工程师。必须实际查看图片或完整视频画面，为后续AI剪辑建立可长期复用的结构化索引，禁止根据原文件名猜测。
-上传时已由用户关联的产品：${JSON.stringify(knownProducts)}。已关联型号优先作为product_model；画面无法确认的内容必须写入uncertainFields，禁止虚构。
-返回JSON：{"suggestedName":"","summary":"","products":[],"purposes":[],"features":[],"scenes":[],"actions":[],"shotTypes":[],"people":[],"objects":[],"audiences":[],"platforms":[],"visualStyles":[],"orientations":[],"speechTopics":[],"painPoints":[],"moduleSuggestion":"","tags":[],"riskWords":[],"indexConfidence":0.0,"uncertainFields":[]}。
+上传时关联的产品仅是待核对候选，可能错误：${JSON.stringify(knownProducts)}。产品型号只能依据画面中可见的机身、表盘、包装、铭牌、界面或其他可核验视觉证据判断；不得把文件名、上传关联、文件夹、历史标签当作型号证据。画面无法确认准确型号时products必须为空，并把product_model写入uncertainFields；出现多个型号时productModelStatus写MULTI_PRODUCT。禁止虚构。
+返回JSON：{"suggestedName":"","summary":"","products":[{"modelCode":"","visualEvidence":""}],"productModelStatus":"VERIFIED|UNVERIFIED|MULTI_PRODUCT","purposes":[],"features":[],"scenes":[],"actions":[],"shotTypes":[],"people":[],"objects":[],"audiences":[],"platforms":[],"visualStyles":[],"orientations":[],"speechTopics":[],"painPoints":[],"moduleSuggestion":"","tags":[],"riskWords":[],"indexConfidence":0.0,"uncertainFields":[]}。
 必须逐项填写：products产品型号；purposes素材用途；features具体功能；scenes具体环境；actions人物或产品动作；shotTypes景别和机位；people人物；objects关键物体；audiences适用人群；platforms适用平台；visualStyles画面风格；orientations画面方向；speechTopics口播主题；painPoints用户痛点。
 标签必须具体到剪辑AI无需重新看画面就能判断能否使用。禁止只写“功能、演示、产品、人物、场景”等泛词，应写“血压测量、气囊充气、抬臂至心脏高度、表盘数值特写、客厅老人佩戴”等可检索短语。
 summary必须说明主体、动作、功能、场景、景别、画面方向、是否含字幕/口播；视频还要概括画面随时间发生的变化。
@@ -657,21 +666,65 @@ suggestedName必须使用“型号-用途-核心功能或画面”作为基础�
       const existing = await this.prisma.assetTag.findUnique({ where: { assetId_tagId: { assetId, tagId: tag.id } } });
       if (!existing?.locked) await this.prisma.assetTag.upsert({ where: { assetId_tagId: { assetId, tagId: tag.id } }, update: { source: "AI", confidence: indexConfidence, modelVersion: opsConfig.bailian.visionModel }, create: { assetId, tagId: tag.id, source: "AI", confidence: indexConfidence, modelVersion: opsConfig.bailian.visionModel, createdBy: "阿里云百炼" } });
     }
-    const productCodes = asset?.products.map((item) => item.product.modelCode) || [];
+    const detectedProductCodes = labels(result.products);
+    const products = await this.prisma.product.findMany({ select: { id: true, modelCode: true } });
+    const productsByNormalizedCode = new Map(products.map((product) => [normalizedModelCode(product.modelCode), product]));
+    const matchedProducts = Array.from(new Map(
+      detectedProductCodes
+        .map((modelCode) => productsByNormalizedCode.get(normalizedModelCode(modelCode)))
+        .filter((product): product is { id: string; modelCode: string } => Boolean(product))
+        .map((product) => [product.id, product]),
+    ).values());
+    const modelStatus = text(result.productModelStatus).toUpperCase();
+    const verifiedProduct = modelStatus === "MULTI_PRODUCT" || matchedProducts.length !== 1
+      ? undefined
+      : matchedProducts[0];
+    const productValidationStatus = modelStatus === "MULTI_PRODUCT" || matchedProducts.length > 1
+      ? "MULTI_PRODUCT"
+      : verifiedProduct
+        ? "VERIFIED"
+        : "UNVERIFIED";
+    const previousProductCodes = asset?.products.map((item) => item.product.modelCode) || [];
+    const shouldReplaceProductRelation = productValidationStatus === "VERIFIED"
+      && (previousProductCodes.length !== 1
+        || normalizedModelCode(previousProductCodes[0]) !== normalizedModelCode(verifiedProduct?.modelCode));
+    const shouldClearAmbiguousProductRelations = productValidationStatus === "MULTI_PRODUCT" && previousProductCodes.length > 0;
+    if (shouldReplaceProductRelation || shouldClearAmbiguousProductRelations) {
+      await this.prisma.assetProduct.deleteMany({ where: { assetId } });
+      if (verifiedProduct) {
+        await this.prisma.assetProduct.create({
+          data: { assetId, productId: verifiedProduct.id, scope: "MODEL", confidence: indexConfidence, confirmed: false },
+        });
+      }
+    }
+    const productCodes = verifiedProduct ? [verifiedProduct.modelCode] : [];
     const sourceSnapshot = asset?.sourceSnapshot && typeof asset.sourceSnapshot === "object" && !Array.isArray(asset.sourceSnapshot)
       ? asset.sourceSnapshot as JsonRecord
       : {};
     const aiRename = shouldApplyAiRename(sourceSnapshot, asset?.displayName || asset?.fileName || "");
-    const displayName = asset && aiRename
+    const displayName = asset && (aiRename || shouldReplaceProductRelation)
       ? buildAiAssetName(result, productCodes)
       : undefined;
-    const aiIndex = Object.fromEntries(indexFields.map(([namespace, field]) => [namespace, labels(result[field])]));
+    const productVisualEvidence = (Array.isArray(result.products) ? result.products : [])
+      .filter((item): item is JsonRecord => Boolean(item) && typeof item === "object" && !Array.isArray(item))
+      .map((item) => ({ modelCode: text(item.modelCode || item.model || item.name), visualEvidence: text(item.visualEvidence) }))
+      .filter((item) => item.modelCode || item.visualEvidence);
+    const aiIndex = {
+      ...Object.fromEntries(indexFields.map(([namespace, field]) => [namespace, labels(result[field])])),
+      product_model: productCodes,
+      product_model_validation: {
+        status: productValidationStatus,
+        detectedModels: detectedProductCodes,
+        matchedModelCode: verifiedProduct?.modelCode || null,
+        visualEvidence: productVisualEvidence,
+      },
+    };
     const searchText = Array.from(new Set([
       ...productCodes,
       displayName || asset?.displayName || asset?.fileName || "",
       text(result.summary),
       text(result.moduleSuggestion),
-      ...Object.values(aiIndex).flatMap((value) => value),
+      ...Object.entries(aiIndex).flatMap(([key, value]) => key === "product_model_validation" ? [] : Array.isArray(value) ? value : []),
     ].filter(Boolean))).join(" ");
     await this.prisma.asset.update({
       where: { id: assetId },
@@ -690,9 +743,35 @@ suggestedName必须使用“型号-用途-核心功能或画面”作为基础�
           learnedAt: new Date().toISOString(),
           learningProvider: "阿里云百炼",
           knowledgeIndexVersion: assetKnowledgeIndexVersion,
+          visualProductValidationPolicyVersion,
+          productModelValidation: {
+            status: productValidationStatus,
+            detectedModels: detectedProductCodes,
+            previousModels: previousProductCodes,
+            matchedModelCode: verifiedProduct?.modelCode || null,
+            visualEvidence: productVisualEvidence,
+            validatedAt: new Date().toISOString(),
+          },
         }),
       },
     });
+    if (shouldReplaceProductRelation || shouldClearAmbiguousProductRelations) {
+      await this.prisma.auditLog.create({
+        data: {
+          actor: "阿里云AI素材视觉校验",
+          action: "ASSET_PRODUCT_MODEL_RECONCILED",
+          entityType: "Asset",
+          entityId: assetId,
+          before: { productModels: previousProductCodes },
+          after: {
+            validationStatus: productValidationStatus,
+            productModels: productCodes,
+            detectedModels: detectedProductCodes,
+            visualEvidence: productVisualEvidence,
+          },
+        },
+      });
+    }
     if (jobType === "TAGGING" && indexConfidence < 0.75 && asset && asset.indexReviewCount < 1 && asset.kind) {
       await this.prisma.asset.update({ where: { id: assetId }, data: { indexReviewCount: { increment: 1 } } });
       await this.enqueue(assetId, asset.kind, asset.analysisVersion + 1);

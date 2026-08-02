@@ -14,6 +14,7 @@ const indexRoot = join(libraryRoot, ".saidian-system-index");
 const mapPath = join(indexRoot, "system-asset-map.json");
 const statePath = join(indexRoot, "sync-state.json");
 const logPath = join(indexRoot, "sync-report.json");
+const verifiedEditingManifestPath = join(indexRoot, "verified-editing-videos-by-product.json");
 
 if (!token) throw new Error("AI_TASK_RUNNER_TOKEN 未配置");
 
@@ -48,18 +49,39 @@ function strings(value: unknown): string[] {
   return Array.isArray(value) ? value.map(String).map((item) => item.trim()).filter(Boolean) : [];
 }
 
+function productValidationOf(asset: Row): Row {
+  const value = asset.aiIndex?.product_model_validation;
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Row : {};
+}
+
+function verifiedModelOf(asset: Row) {
+  const validation = productValidationOf(asset);
+  if (String(validation.status || "").toUpperCase() !== "VERIFIED") return "";
+  return cleanName(String(validation.matchedModelCode || strings(asset.aiIndex?.product_model)[0] || ""));
+}
+
+function isPackagingAsset(asset: Row) {
+  const purposes = strings(asset.aiIndex?.purpose).join(" ");
+  const scenes = strings(asset.aiIndex?.scene).join(" ");
+  const searchable = `${purposes} ${scenes} ${String(asset.searchText || "")} ${strings(asset.tags).join(" ")}`;
+  return /包装|贴纸|花字|音效|转场|边框|角标|背景|BGM|字体|模板/u.test(searchable);
+}
+
+function isVerifiedEditingVideo(asset: Row) {
+  return asset.kind === "VIDEO" && !isPackagingAsset(asset) && Boolean(verifiedModelOf(asset));
+}
+
 function modelOf(asset: Row) {
-  const learned = strings(asset.aiIndex?.product_model)[0];
+  const learned = verifiedModelOf(asset) || strings(asset.aiIndex?.product_model)[0];
   const related = Array.isArray(asset.products) ? asset.products.map((item: Row) => String(item.product?.modelCode || "")).find(Boolean) : "";
-  return cleanName(learned || related || "通用");
+  return cleanName(learned || related || (asset.kind === "VIDEO" ? "未验证型号" : "通用"));
 }
 
 function destinationOf(asset: Row) {
   const model = modelOf(asset);
   const purposes = strings(asset.aiIndex?.purpose).join(" ");
   const scenes = strings(asset.aiIndex?.scene).join(" ");
-  const searchable = `${purposes} ${scenes} ${String(asset.searchText || "")} ${strings(asset.tags).join(" ")}`;
-  if (/包装|贴纸|花字|音效|转场|边框|角标|背景|BGM|字体|模板/u.test(searchable)) {
+  if (isPackagingAsset(asset)) {
     const category = cleanName(strings(asset.aiIndex?.purpose)[0] || String(asset.kind || "通用"));
     return join(packagingRoot, "系统同步", category);
   }
@@ -156,6 +178,7 @@ async function download(asset: Row, url: string, target: string, byHash: Map<str
 }
 
 async function main() {
+  const syncStartedAt = Date.now();
   await mkdir(indexRoot, { recursive: true });
   const oldState = await readJson(statePath);
   const mapping = await readJson(mapPath);
@@ -246,6 +269,8 @@ async function main() {
           displayName: item.displayName,
           kind: item.kind,
           model: modelOf(item),
+          visualProductValidation: productValidationOf(item),
+          editingEligible: isVerifiedEditingVideo(item),
           aiIndex: item.aiIndex || {},
           searchText: item.searchText || "",
           indexVersion: item.indexVersion || 0,
@@ -257,7 +282,45 @@ async function main() {
     }));
   }
   const report = { syncedAt: new Date().toISOString(), libraryRoot, packagingRoot, changed: changes.length, linked, downloaded, disabled, failed: failures.length, failures };
+  // Preserve mappings created by a local upload while this long-running scan was in progress.
+  const latestMapping = await readJson(mapPath);
+  for (const [id, entry] of Object.entries(latestMapping)) {
+    const syncedAt = Date.parse(String((entry as Row).syncedAt || ""));
+    if (Number.isFinite(syncedAt) && syncedAt >= syncStartedAt) mapping[id] = entry;
+  }
+  const verifiedEditingVideosByProduct = Object.values(mapping)
+    .filter((entry): entry is Row => Boolean(entry) && typeof entry === "object")
+    .filter((entry) => entry.active === true && entry.kind === "VIDEO" && entry.editingEligible === true)
+    .reduce<Record<string, Row[]>>((products, entry) => {
+      const model = cleanName(String(entry.visualProductValidation?.matchedModelCode || entry.model || ""));
+      if (!model || model === "未验证型号" || model === "通用") return products;
+      const rows = products[model] || [];
+      rows.push({
+        systemAssetId: entry.systemAssetId,
+        assetNo: entry.assetNo,
+        displayName: entry.displayName,
+        localPath: entry.localPath,
+        relativePath: entry.relativePath,
+        sha256: entry.sha256,
+        productModel: model,
+        contentDescription: entry.aiIndex?.summary || entry.searchText || "",
+        purpose: entry.aiIndex?.purpose || [],
+        feature: entry.aiIndex?.feature || [],
+        scene: entry.aiIndex?.scene || [],
+        action: entry.aiIndex?.action || [],
+        shotType: entry.aiIndex?.shot_type || [],
+      });
+      products[model] = rows;
+      return products;
+    }, {});
   await writeJsonAtomic(mapPath, mapping);
+  await writeJsonAtomic(verifiedEditingManifestPath, {
+    policyVersion: 1,
+    generatedAt: report.syncedAt,
+    source: "SYSTEM_ASSET_LIBRARY",
+    rule: "Only visually verified, exact-product, active VIDEO editing footage. Packaging, image, audio, unverified and cross-product assets are excluded.",
+    products: verifiedEditingVideosByProduct,
+  });
   await writeJsonAtomic(statePath, { cursor: failures.length ? String(oldState.cursor || "") : cursor, syncedAt: report.syncedAt });
   await writeJsonAtomic(logPath, report);
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);

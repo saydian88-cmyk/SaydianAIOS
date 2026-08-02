@@ -64,4 +64,19 @@ describe("persistent asset knowledge", () => {
       sourceSnapshot: { learnedSha256: "same-content" },
     })).toBe(false);
   });
+
+  it("relearns legacy video indexes once so visual product ownership can be validated", () => {
+    expect(isAssetKnowledgeCurrent({
+      sha256: "same-content",
+      indexVersion: 4,
+      kind: "VIDEO",
+      sourceSnapshot: { learnedSha256: "same-content" },
+    })).toBe(false);
+    expect(isAssetKnowledgeCurrent({
+      sha256: "same-content",
+      indexVersion: 4,
+      kind: "VIDEO",
+      sourceSnapshot: { learnedSha256: "same-content", visualProductValidationPolicyVersion: 1 },
+    })).toBe(true);
+  });
 });
