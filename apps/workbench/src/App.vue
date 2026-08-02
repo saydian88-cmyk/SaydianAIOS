@@ -328,6 +328,9 @@ const packagingPreviewVariant = ref<Row>();
 const packagingPreviewProject = ref<Row>();
 const packagingPreviewUrl = ref("");
 const reviewingPackagingVariantId = ref("");
+const packagingCoverUrls = reactive<Record<string, string>>({});
+const loadingPackagingCoverIds = new Set<string>();
+const failedPackagingCoverIds = new Set<string>();
 const publishLinkVisible = ref(false);
 const publishLinkProject = ref<Row>();
 const publishLinkJob = ref<Row>();
@@ -1325,6 +1328,36 @@ function packagingStatusText(variant: Row) {
 function packagingCoverText(variant: Row) {
   const spec = variant.coverSpec && typeof variant.coverSpec === "object" ? variant.coverSpec as Row : {};
   return String(spec.coverText || spec.cover_text || "").trim();
+}
+
+function packagingHashtags(variant: Row) {
+  const spec = variant.coverSpec && typeof variant.coverSpec === "object" ? variant.coverSpec as Row : {};
+  return Array.isArray(spec.hashtags)
+    ? spec.hashtags.map((tag) => String(tag || "").trim().replace(/^#/, "")).filter(Boolean).slice(0, 5)
+    : [];
+}
+
+function packagingCoverUrl(project: Row, variant: Row) {
+  const key = String(variant.id || "");
+  if (!key || !project?.id || failedPackagingCoverIds.has(key)) return "";
+  if (!packagingCoverUrls[key] && !loadingPackagingCoverIds.has(key)) {
+    loadingPackagingCoverIds.add(key);
+    api<{ url: string }>(`/api/v1/workbench/data-center/video-projects/${project.id}/packaging/${variant.id}/cover-url`)
+      .then((result) => {
+        if (result.url) packagingCoverUrls[key] = result.url;
+      })
+      .catch(() => {
+        // The textual cover placeholder remains available if the image is not ready.
+      })
+      .finally(() => loadingPackagingCoverIds.delete(key));
+  }
+  return packagingCoverUrls[key] || "";
+}
+
+function discardPackagingCoverUrl(variant: Row) {
+  const key = String(variant.id || "");
+  failedPackagingCoverIds.add(key);
+  delete packagingCoverUrls[key];
 }
 
 function activeProjectGenerationTask(project?: Row) {
@@ -3682,18 +3715,22 @@ onBeforeUnmount(() => {
                   />
                   <div v-if="videoFlowStep(taskVideoProjectDetail) === 4 && packagingVariants(taskVideoProjectDetail).length" class="packaging-result-list">
                     <article v-for="variant in packagingVariants(taskVideoProjectDetail)" :key="variant.id" class="packaging-result-card">
-                      <img v-if="variant.coverPath" class="packaging-result-cover" :src="variant.coverPath" :alt="`${variant.title || '视频'}封面`" />
-                      <div>
-                        <el-tag size="small">{{ platformLabel(variant.platform) }}</el-tag>
-                        <el-tag size="small" :type="variant.packagingStatus === 'APPROVED' ? 'success' : variant.packagingStatus === 'RETURNED' ? 'danger' : 'warning'">
-                          {{ packagingStatusText(variant) }}
-                        </el-tag>
-                        <strong>{{ variant.title || '待生成标题' }}</strong>
-                        <p v-if="packagingCoverText(variant)" class="packaging-cover-text">封面文字：{{ packagingCoverText(variant) }}</p>
-                        <p>{{ variant.body || '暂无发布文案' }}</p>
-                        <small v-if="variant.packagingRejectedReason">退回说明：{{ variant.packagingRejectedReason }}</small>
+                      <div class="packaging-result-cover">
+                        <img
+                          v-if="packagingCoverUrl(taskVideoProjectDetail, variant)"
+                          :src="packagingCoverUrl(taskVideoProjectDetail, variant)"
+                          :alt="`${variant.title || '视频'}封面`"
+                          @error="discardPackagingCoverUrl(variant)"
+                        />
+                        <span v-else>{{ packagingCoverText(variant) || '封面生成中' }}</span>
                       </div>
-                      <el-button @click="openPackagingPreview(taskVideoProjectDetail, variant)">预览封面和标题</el-button>
+                      <div class="packaging-result-copy">
+                        <strong>{{ variant.title || '待生成标题' }}</strong>
+                        <div v-if="packagingHashtags(variant).length" class="packaging-cover-meta">
+                          <el-tag v-for="tag in packagingHashtags(variant)" :key="tag" size="small" type="info">#{{ tag }}</el-tag>
+                        </div>
+                      </div>
+                      <el-button @click="openPackagingPreview(taskVideoProjectDetail, variant)">查看封面</el-button>
                     </article>
                   </div>
                 </section>
@@ -4359,18 +4396,22 @@ onBeforeUnmount(() => {
                 <el-empty v-else :image-size="56" description="暂未生成成片" />
                 <div v-if="packagingVariants(project).length" class="packaging-result-list">
                   <article v-for="variant in packagingVariants(project)" :key="variant.id" class="packaging-result-card">
-                    <img v-if="variant.coverPath" class="packaging-result-cover" :src="variant.coverPath" :alt="`${variant.title || '视频'}封面`" />
-                    <div>
-                      <el-tag size="small">{{ platformLabel(variant.platform) }}</el-tag>
-                      <el-tag size="small" :type="variant.packagingStatus === 'APPROVED' ? 'success' : variant.packagingStatus === 'RETURNED' ? 'danger' : 'warning'">
-                        {{ packagingStatusText(variant) }}
-                      </el-tag>
-                      <strong>{{ variant.title || "待生成标题" }}</strong>
-                      <p v-if="packagingCoverText(variant)" class="packaging-cover-text">封面文字：{{ packagingCoverText(variant) }}</p>
-                      <p>{{ variant.body || "暂无发布文案" }}</p>
-                      <small v-if="variant.packagingRejectedReason">退回说明：{{ variant.packagingRejectedReason }}</small>
+                    <div class="packaging-result-cover">
+                      <img
+                        v-if="packagingCoverUrl(project, variant)"
+                        :src="packagingCoverUrl(project, variant)"
+                        :alt="`${variant.title || '视频'}封面`"
+                        @error="discardPackagingCoverUrl(variant)"
+                      />
+                      <span v-else>{{ packagingCoverText(variant) || '封面生成中' }}</span>
                     </div>
-                    <el-button @click="openPackagingPreview(project, variant)">预览封面和标题</el-button>
+                    <div class="packaging-result-copy">
+                      <strong>{{ variant.title || "待生成标题" }}</strong>
+                      <div v-if="packagingHashtags(variant).length" class="packaging-cover-meta">
+                        <el-tag v-for="tag in packagingHashtags(variant)" :key="tag" size="small" type="info">#{{ tag }}</el-tag>
+                      </div>
+                    </div>
+                    <el-button @click="openPackagingPreview(project, variant)">查看封面</el-button>
                   </article>
                 </div>
                 <el-alert
@@ -4888,19 +4929,10 @@ onBeforeUnmount(() => {
     <div v-if="packagingPreviewVariant" class="packaging-preview-dialog">
       <img v-if="packagingPreviewUrl" :src="packagingPreviewUrl" :alt="packagingPreviewVariant.title || '视频封面'" />
       <div>
-        <el-tag>{{ packagingPreviewVariant.platform }}</el-tag>
         <h3>{{ packagingPreviewVariant.title || "待生成标题" }}</h3>
-        <p>{{ packagingPreviewVariant.body || "暂无发布文案" }}</p>
-        <div v-if="packagingPreviewVariant.coverSpec?.hashtags?.length" class="packaging-hashtags">
-          <el-tag v-for="tag in packagingPreviewVariant.coverSpec.hashtags" :key="tag" size="small" type="info">#{{ tag }}</el-tag>
+        <div v-if="packagingHashtags(packagingPreviewVariant).length" class="packaging-hashtags">
+          <el-tag v-for="tag in packagingHashtags(packagingPreviewVariant)" :key="tag" size="small" type="info">#{{ tag }}</el-tag>
         </div>
-        <el-alert
-          v-if="packagingPreviewVariant.packagingRejectedReason"
-          :title="`上次退回说明：${packagingPreviewVariant.packagingRejectedReason}`"
-          type="warning"
-          :closable="false"
-        />
-        <el-alert title="封面、标题和文案分别按平台审核；一个平台退回不会阻塞其他平台。" type="info" :closable="false" />
       </div>
     </div>
     <template #footer>
