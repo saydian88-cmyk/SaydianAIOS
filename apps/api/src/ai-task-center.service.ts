@@ -656,15 +656,27 @@ export class AiTaskCenterService implements OnModuleInit {
     const task = await this.ensureTask(id);
     if (!["FAILED", "RETURNED", "RETRY"].includes(task.status)) throw new BadRequestException("任务当前不能重试");
     const taskInput = object(task.input);
-    const isDirectOutputRecovery = task.type === "VIDEO"
+    const isDirectOutputTask = task.type === "VIDEO"
       && text(taskInput.executionMode).toUpperCase() === "FULL_VIDEO"
-      && taskInput.codexDirectFullVideo === true
-      && !text(taskInput.outputRegistrationRecoveryAttemptedAt);
+      && taskInput.codexDirectFullVideo === true;
+    // The first recovery retry may have been consumed by an older worker that
+    // wrote an invalid result-contract envelope. Allow one final registration-
+    // only retry, never a fresh render and never unlimited retries.
+    const priorRecoveryAttempts = Math.max(
+      0,
+      Number(taskInput.outputRegistrationRecoveryAttempts || 0),
+      text(taskInput.outputRegistrationRecoveryAttemptedAt) ? 1 : 0,
+    );
+    const isDirectOutputRecovery = isDirectOutputTask && priorRecoveryAttempts < 2;
     if (task.retryCount >= task.maxRetries && !isDirectOutputRecovery) {
       throw new BadRequestException("任务已达到最大重试次数");
     }
     const recoveryInput = isDirectOutputRecovery
-      ? json({ ...taskInput, outputRegistrationRecoveryAttemptedAt: new Date().toISOString() })
+      ? json({
+        ...taskInput,
+        outputRegistrationRecoveryAttemptedAt: new Date().toISOString(),
+        outputRegistrationRecoveryAttempts: priorRecoveryAttempts + 1,
+      })
       : undefined;
     const updated = await this.prisma.aiTask.update({
       where: { id },

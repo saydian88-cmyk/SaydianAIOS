@@ -1405,7 +1405,11 @@ async function validateOutputArtifacts(result: JsonRecord, workspace: string) {
 // A completed Codex direct-output task may fail only while registering its MP4
 // with the API. Keep that already-rendered master reusable: the next retry must
 // upload/register it instead of invoking Codex and rendering a second time.
-async function recoverDirectOutputResult(workspace: string, taskPackageValue: JsonRecord) {
+async function recoverDirectOutputResult(
+  workspace: string,
+  taskPackageValue: JsonRecord,
+  execution: JsonRecord,
+) {
   if (!isCodexDirectFullVideoTask(taskPackageValue)) return undefined;
   const outputsRoot = join(workspace, "outputs");
   let names: string[];
@@ -1438,6 +1442,24 @@ async function recoverDirectOutputResult(workspace: string, taskPackageValue: Js
       productModel: String(task.productModel || ""),
       taskMode: "CODEX_DIRECT_FULL_VIDEO",
       finalReviewOnly: true,
+    },
+    // Result-contract validates execution strictly. A registration-only recovery
+    // still needs the same immutable execution envelope as a normal completion.
+    execution: {
+      skill: String(execution.skill || "video-editing-from-media-library-share"),
+      skillVersion: String(execution.skillVersion || "unknown"),
+      skillDigest: String(execution.skillDigest || ""),
+      strategy: String(execution.strategy || "DIRECT_OUTPUT_RECOVERY"),
+      executionMode: String(execution.executionMode || "FULL_VIDEO"),
+      routeReason: String(execution.routeReason || "reuse-existing-direct-output"),
+      fallbackOrder: Array.isArray(execution.fallbackOrder)
+        ? execution.fallbackOrder.map(String)
+        : [],
+      startedAt: String(execution.startedAt || new Date().toISOString()),
+      finishedAt: new Date().toISOString(),
+      durationMs: Math.max(0, Number(execution.durationMs || 0)),
+      resumed: true,
+      schemaAttempts: Math.max(1, Number(execution.schemaAttempts || 1)),
     },
   };
   return validateOutputArtifacts(result, workspace);
@@ -1575,14 +1597,20 @@ async function execute(claimed: JsonRecord) {
         }
       }
       if (!result && resumeDirectOutputUpload) {
-        const recovered = await recoverDirectOutputResult(workspace, packaged);
+        const recovered = await recoverDirectOutputResult(workspace, packaged, {
+          skill: detectedSkill.name,
+          skillVersion: detectedSkill.version,
+          skillDigest: detectedSkill.digest,
+          strategy: detectedSkill.strategy,
+          executionMode: detectedSkill.executionMode,
+          routeReason: detectedSkill.reason,
+          fallbackOrder: detectedSkill.fallbackOrder,
+          startedAt: startedAt.toISOString(),
+          durationMs: 0,
+          schemaAttempts: 1,
+        });
         if (recovered) {
           result = recovered;
-          result.execution = {
-            ...record(result.execution),
-            resumed: true,
-            recoveredOutput: true,
-          };
           await writeJsonAtomic(join(workspace, "result.json"), result);
           await appendExecutionLog(workspace, "RESUME_OUTPUT_RECOVERED", { stage: taskState.stage });
         }
