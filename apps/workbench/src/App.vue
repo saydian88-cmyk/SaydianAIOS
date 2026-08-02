@@ -2659,6 +2659,20 @@ async function openPackagingPreview(project: Row, variant: Row) {
   packagingPreviewVisible.value = true;
 }
 
+async function downloadProjectPackagingCover(project: Row, variant: Row) {
+  const result = await api<{ url: string }>(
+    `/api/v1/workbench/data-center/video-projects/${project.id}/packaging/${variant.id}/cover-url`,
+  );
+  if (!result.url) return ElMessage.warning("封面文件暂不可下载");
+  window.open(result.url, "_blank", "noopener,noreferrer");
+}
+
+async function reviewProjectPackagingDirect(project: Row, variant: Row, approved: boolean) {
+  packagingPreviewProject.value = project;
+  packagingPreviewVariant.value = variant;
+  await reviewProjectPackaging(approved);
+}
+
 async function reviewProjectPackaging(approved: boolean) {
   const project = packagingPreviewProject.value;
   const variant = packagingPreviewVariant.value;
@@ -3673,7 +3687,12 @@ onBeforeUnmount(() => {
 
                 <section v-if="videoFlowStep(taskVideoProjectDetail) === 4 || (videoFlowStep(taskVideoProjectDetail) === 3 && !isCodexDirectVideoProject(taskVideoProjectDetail))" class="task-video-stage-panel">
                   <h4>{{ videoFlowStep(taskVideoProjectDetail) === 3 ? "成片审核" : "封面标题、发布与回传" }}</h4>
-                  <article v-for="job in reviewableVideoRenderJobs(taskVideoProjectDetail)" :key="job.id" class="task-finished-video-row">
+                  <article
+                    v-for="job in reviewableVideoRenderJobs(taskVideoProjectDetail)"
+                    v-if="videoFlowStep(taskVideoProjectDetail) === 3 || !packagingVariants(taskVideoProjectDetail).length"
+                    :key="job.id"
+                    class="task-finished-video-row"
+                  >
                     <div>
                       <strong>{{ job.outputAsset?.displayName || "视频成片" }}</strong>
                       <el-tag size="small" :type="renderStatusType(job)">{{ renderStatusText(job) }}</el-tag>
@@ -3713,25 +3732,63 @@ onBeforeUnmount(() => {
                     :closable="false"
                     show-icon
                   />
-                  <div v-if="videoFlowStep(taskVideoProjectDetail) === 4 && packagingVariants(taskVideoProjectDetail).length" class="packaging-result-list">
-                    <article v-for="variant in packagingVariants(taskVideoProjectDetail)" :key="variant.id" class="packaging-result-card">
-                      <div class="packaging-result-cover">
-                        <img
-                          v-if="packagingCoverUrl(taskVideoProjectDetail, variant)"
-                          :src="packagingCoverUrl(taskVideoProjectDetail, variant)"
-                          :alt="`${variant.title || '视频'}封面`"
-                          @error="discardPackagingCoverUrl(variant)"
-                        />
-                        <span v-else>{{ packagingCoverText(variant) || '封面生成中' }}</span>
-                      </div>
-                      <div class="packaging-result-copy">
-                        <strong>{{ variant.title || '待生成标题' }}</strong>
-                        <div v-if="packagingHashtags(variant).length" class="packaging-cover-meta">
-                          <el-tag v-for="tag in packagingHashtags(variant)" :key="tag" size="small" type="info">#{{ tag }}</el-tag>
+                  <div v-if="videoFlowStep(taskVideoProjectDetail) === 4 && packagingVariants(taskVideoProjectDetail).length" class="video-packaging-result-list">
+                    <template v-for="job in reviewableVideoRenderJobs(taskVideoProjectDetail)" :key="`packaging-${job.id}`">
+                    <article v-if="job.outputAsset" class="video-packaging-result-card">
+                      <button class="video-packaging-video" type="button" @click="openAssetPreview(job.outputAsset, '成片预览')">
+                        <img v-if="job.outputAsset?.thumbnailUrl" :src="job.outputAsset.thumbnailUrl" :alt="job.outputAsset?.displayName || '成片预览'" />
+                        <el-icon v-else><VideoCamera /></el-icon>
+                        <span>预览成片</span>
+                      </button>
+                      <div class="video-packaging-info">
+                        <div v-for="variant in packagingVariants(taskVideoProjectDetail)" :key="variant.id" class="video-packaging-copy">
+                          <button
+                            class="video-packaging-cover"
+                            type="button"
+                            :disabled="!variant.coverPath"
+                            @click="variant.coverPath && openPackagingPreview(taskVideoProjectDetail, variant)"
+                          >
+                            <img
+                              v-if="packagingCoverUrl(taskVideoProjectDetail, variant)"
+                              :src="packagingCoverUrl(taskVideoProjectDetail, variant)"
+                              :alt="`${variant.title || '视频'}封面`"
+                              @error="discardPackagingCoverUrl(variant)"
+                            />
+                            <span v-else>{{ packagingCoverText(variant) || '封面生成中' }}</span>
+                          </button>
+                          <div class="video-packaging-details">
+                            <div class="video-packaging-heading">
+                              <h5>{{ variant.title || '待生成标题' }}</h5>
+                              <el-tag size="small" :type="variant.packagingStatus === 'APPROVED' ? 'success' : variant.packagingStatus === 'RETURNED' ? 'danger' : 'warning'">{{ packagingStatusText(variant) }}</el-tag>
+                            </div>
+                            <div v-if="packagingHashtags(variant).length" class="packaging-cover-meta">
+                              <el-tag v-for="tag in packagingHashtags(variant)" :key="tag" size="small" type="info">#{{ tag }}</el-tag>
+                            </div>
+                            <p v-if="variant.packagingStatus === 'APPROVED'">封面标题已审核通过，可下载文件并回传发布链接。</p>
+                            <p v-else-if="variant.packagingStatus === 'RETURNED'">封面标题已退回，修改说明已同步给生成任务。</p>
+                            <p v-else>点击封面可放大查看；核对后直接审核，无需再打开单独的封面卡。</p>
+                            <div class="video-packaging-actions">
+                              <el-button @click="downloadWorkbenchAsset(job.outputAsset)">下载成片</el-button>
+                              <template v-if="variant.packagingStatus === 'APPROVED'">
+                                <el-button @click="downloadProjectPackagingCover(taskVideoProjectDetail, variant)">下载封面</el-button>
+                                <el-button type="primary" @click="openPublishLink(taskVideoProjectDetail, job)">回传发布链接</el-button>
+                              </template>
+                              <template v-else-if="variant.packagingStatus === 'PENDING_REVIEW'">
+                                <el-button type="danger" plain @click="reviewProjectPackagingDirect(taskVideoProjectDetail, variant, false)">退回并填写原因</el-button>
+                                <el-button type="success" @click="reviewProjectPackagingDirect(taskVideoProjectDetail, variant, true)">审核通过</el-button>
+                              </template>
+                              <el-button
+                                v-else
+                                type="primary"
+                                :loading="generatingPackagingProjectId === taskVideoProjectDetail.id"
+                                @click="generateProjectPackaging(taskVideoProjectDetail, job)"
+                              >重新生成封面和标题</el-button>
+                            </div>
+                          </div>
                         </div>
                       </div>
-                      <el-button @click="openPackagingPreview(taskVideoProjectDetail, variant)">查看封面</el-button>
                     </article>
+                    </template>
                   </div>
                 </section>
               </template>
