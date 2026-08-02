@@ -105,6 +105,10 @@ function assertCodexDirectMasterOutput(result: JsonRecord, taskPackage: JsonReco
     .map(record)
     .filter((item) => String(item.kind || "").toUpperCase() === "VIDEO_MASTER");
   if (masters.length !== 1) {
+    const failure = String(result.summary || "").trim();
+    if (!masters.length && /\bFAILED\b|MATERIAL_GAP_[A-Z_]+/iu.test(failure)) {
+      throw new Error(failure);
+    }
     throw new Error("Codex 直出任务未返回唯一的最终成片（VIDEO_MASTER），任务不能标记成功");
   }
   const masterPath = String(masters[0]?.path || "").toLowerCase();
@@ -674,7 +678,7 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
       "The empty assets, snapshots, and materialBindings arrays are intentional. They do not make this a system AI task and must never cause a system-material whitelist request.",
       "Use saidian-ai-task-dispatcher and then the full local video-editing-from-media-library Skill. Never use the share edition as a quality shortcut.",
       "Read the active local-library configuration and the verified-editing-videos-by-product manifest. Do not download, request, or return any system task assets.",
-      "Use only VIDEO entries whose visual validation is VERIFIED and whose exact productModel equals this task productModel. Never use another product model, unverified media, images, audio, packaging, cover, sticker, transition or template resources as footage.",
+      "Use only VIDEO entries admitted by that manifest. Each entry must be an active approved system asset with a local file mapping and an exact product relation equal to this task productModel. Never use another product model, unverified media, images, audio, packaging, cover, sticker, transition or template resources as footage.",
       "If the local library is not initialized or not ready, fail explicitly with the missing local configuration or index. Do not return a system-task WAITING_INPUT result.",
       "The employee UI only receives the final review node, but internal script, shot plan, material coverage, composition, packaging, audio and delivery QA steps remain mandatory.",
       "Create requirements-check.json, shot-plan.json, composition-qc.json, packaging-qc.json and audio-qc.json in the task workspace with real evidence. Return exactly one real 1080x1920 MP4 VIDEO_MASTER and delivery={taskMode:CODEX_DIRECT_FULL_VIDEO, finalReviewOnly:true}.",

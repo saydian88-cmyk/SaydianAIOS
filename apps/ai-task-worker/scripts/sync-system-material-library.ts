@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { dirname, extname, join, relative, resolve } from "node:path";
 
 type Row = Record<string, any>;
@@ -51,7 +51,21 @@ function strings(value: unknown): string[] {
 
 function productValidationOf(asset: Row): Row {
   const value = asset.aiIndex?.product_model_validation;
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Row : {};
+  const explicit = value && typeof value === "object" && !Array.isArray(value) ? value as Row : {};
+  if (String(explicit.status || "").trim()) return explicit;
+  const relatedModels = Array.from(new Set(
+    (Array.isArray(asset.products) ? asset.products : [])
+      .map((item: Row) => String(item?.product?.modelCode || "").trim())
+      .filter(Boolean),
+  ));
+  return relatedModels.length === 1
+    ? {
+      status: "VERIFIED",
+      matchedModelCode: relatedModels[0],
+      detectedModels: relatedModels,
+      evidenceSource: "SYSTEM_PRODUCT_RELATION",
+    }
+    : explicit;
 }
 
 function verifiedModelOf(asset: Row) {
@@ -99,48 +113,19 @@ function destinationOf(asset: Row) {
   return join(libraryRoot, "其它素材", model);
 }
 
-async function walk(root: string, output: string[] = []) {
-  for (const entry of await readdir(root, { withFileTypes: true })) {
-    if (entry.name === ".saidian-system-index") continue;
-    const path = join(root, entry.name);
-    if (entry.isDirectory()) await walk(path, output);
-    else if (entry.isFile()) output.push(path);
-  }
-  return output;
-}
-
 async function localHashes(existingMap: Row, changes: Row[]) {
   const byHash = new Map<string, string>();
-  const knownPaths = new Set<string>();
-  const desiredSizes = new Set(
-    changes
-      .filter((asset) => asset.usable === true && asset.sha256)
-      .map((asset) => Number(asset.sizeBytes || 0))
-      .filter((size) => Number.isFinite(size) && size > 0),
-  );
+  const desiredHashes = new Set(changes.filter((asset) => asset.usable === true && asset.sha256).map((asset) => String(asset.sha256)));
+  if (!desiredHashes.size) return byHash;
   for (const entry of Object.values(existingMap) as Row[]) {
     const path = String(entry.localPath || "");
-    if (path && String(entry.sha256 || "")) {
+    const sha256 = String(entry.sha256 || "");
+    if (path && desiredHashes.has(sha256)) {
       try {
         if ((await stat(path)).isFile()) {
-          byHash.set(String(entry.sha256), path);
-          knownPaths.add(path);
+          byHash.set(sha256, path);
         }
-      } catch { /* rescan below */ }
-    }
-  }
-  for (const root of [libraryRoot, packagingRoot]) {
-    try {
-      for (const path of await walk(root)) {
-        if (knownPaths.has(path)) continue;
-        const file = await stat(path);
-        if (desiredSizes.size && !desiredSizes.has(file.size)) continue;
-        const buffer = await readFile(path);
-        byHash.set(hash(buffer), path);
-        knownPaths.add(path);
-      }
-    } catch {
-      await mkdir(root, { recursive: true });
+      } catch { /* missing mapped file will be restored below */ }
     }
   }
   return byHash;
@@ -281,7 +266,7 @@ async function main() {
       }
     }));
   }
-  const report = { syncedAt: new Date().toISOString(), libraryRoot, packagingRoot, changed: changes.length, linked, downloaded, disabled, failed: failures.length, failures };
+  const report = { syncedAt: new Date().toISOString(), mode: "INCREMENTAL_CURSOR", fullLocalScan: false, libraryRoot, packagingRoot, changed: changes.length, linked, downloaded, disabled, failed: failures.length, failures };
   // Preserve mappings created by a local upload while this long-running scan was in progress.
   const latestMapping = await readJson(mapPath);
   for (const [id, entry] of Object.entries(latestMapping)) {
@@ -290,7 +275,11 @@ async function main() {
   }
   const verifiedEditingVideosByProduct = Object.values(mapping)
     .filter((entry): entry is Row => Boolean(entry) && typeof entry === "object")
-    .filter((entry) => entry.active === true && entry.kind === "VIDEO" && entry.editingEligible === true)
+    // Older mirrored rows predate product_model_validation, but already carry the
+    // exact model resolved from the system AssetProduct relation. Rebuild the
+    // admission manifest from that durable mapping so an incremental sync cannot
+    // accidentally erase every locally available clip.
+    .filter((entry) => entry.active === true && entry.kind === "VIDEO")
     .reduce<Record<string, Row[]>>((products, entry) => {
       const model = cleanName(String(entry.visualProductValidation?.matchedModelCode || entry.model || ""));
       if (!model || model === "未验证型号" || model === "通用") return products;
