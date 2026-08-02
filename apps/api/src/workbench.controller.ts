@@ -197,8 +197,17 @@ function compileReferenceDirectFullVideoPrompt(project: Record<string, any>, bri
   ].join("\n");
 }
 
-function compileCodexDirectFullVideoPrompt(project: Record<string, any>, brief: Record<string, unknown>) {
+function compileCodexDirectFullVideoPrompt(project: Record<string, any>, brief: Record<string, unknown>, revision: Record<string, unknown> = {}) {
   const prompt = String(brief.additionalPrompt || "").trim();
+  const revisionNote = String(revision.reviewNote || "").trim();
+  const revisionLines = revisionNote ? [
+    "【定向成片修改】本任务不是从零重新创作。必须基于指定的原成片和原任务进行定向修改。",
+    `原 AI 任务：${String(revision.sourceTaskId || "")}`,
+    `原成片素材：${String(revision.sourceMasterName || revision.sourceMasterAssetId || "")}`,
+    `原成片路径：${String(revision.sourceMasterSourcePath || revision.sourceMasterStorageUrl || revision.sourceMasterObjectKey || "")}`,
+    `退回原因：${revisionNote}`,
+    "保持未被退回的脚本结构、画面节奏、可用素材和成片规格；只修复退回原因涉及的画面、文案、配音、节奏或合规问题。完成时必须回传新成片及简短修改说明。",
+  ] : [];
   return [
     "【任务类型】Codex 直出视频（只回传最终成片）",
     `项目编号：${project.productionNo || project.id}`,
@@ -209,6 +218,7 @@ function compileCodexDirectFullVideoPrompt(project: Record<string, any>, brief: 
     "这是本地素材库直出模式：系统不会提供 assets、素材快照、素材 ID 或包装资源。只能读取本地已同步的“当前产品型号 + 视觉校验通过 + 可剪辑 VIDEO”清单；禁止使用其他型号、未校验素材、图片、音频或包装资源作为主镜头。",
     "不得向系统回传中间脚本、镜头、素材匹配或素材绑定；完成时仅回传真实主成片路径、成片元数据和简短审核说明。",
     "当前产品没有足够的已校验视频素材时，必须返回 FAILED，原因写 MATERIAL_GAP_EXACT_PRODUCT；不得用其他型号补位或伪造产品功能、医疗效果或不存在的素材事实。",
+    ...revisionLines,
   ].join("\n");
 }
 
@@ -1278,6 +1288,9 @@ export class WorkbenchController {
     }
     if (!String(project.productModel || "").trim()) throw new ForbiddenException("请选择产品型号");
     if (!String(brief.additionalPrompt || "").trim()) throw new ForbiddenException("请填写 AI 提示词");
+    const revision = factory.directVideoRevision && typeof factory.directVideoRevision === "object"
+      ? factory.directVideoRevision as Record<string, unknown>
+      : {};
     const task = await this.aiTasks.createTask({
       type: "VIDEO",
       title: `${project.topic} · Codex 直出成片`,
@@ -1288,7 +1301,7 @@ export class WorkbenchController {
       sourceType: "VIDEO_FACTORY_PROJECT",
       sourceId: project.id,
       idempotencyKey: `ai-task:video-project:${project.id}:codex-direct:v${project.workflowVersion}`,
-      instructions: compileCodexDirectFullVideoPrompt(project, brief),
+      instructions: compileCodexDirectFullVideoPrompt(project, brief, revision),
       input: {
         executionMode: "FULL_VIDEO",
         codexDirectFullVideo: true,
@@ -1301,6 +1314,7 @@ export class WorkbenchController {
         codexDirectInput: {
           productModel: project.productModel,
           prompt: String(brief.additionalPrompt || "").trim(),
+          ...(Object.keys(revision).length ? { revision } : {}),
           materialPolicy: {
             source: "LOCAL_VERIFIED_EDITING_VIDEOS_BY_PRODUCT",
             exactProductModel: project.productModel,
@@ -1311,6 +1325,7 @@ export class WorkbenchController {
           },
         },
         workflowGuard: { projectId: project.id, workflowVersion: project.workflowVersion, stage: "FULL_VIDEO", allowedProjectStages: ["PROJECT_BRIEF", "EDITING"] },
+        ...(Object.keys(revision).length ? { revision } : {}),
         requiredOutputs: ["master_video", "master_video_path", "review_summary"],
       },
       modelPolicy: { strategy: "CODEX_FIRST", allowExternalGeneration: false, allowFallback: false },
@@ -1650,7 +1665,30 @@ export class WorkbenchController {
     if (render.outputAsset.reviewStatus !== "PENDING") {
       throw new ForbiddenException("该成片已经完成审核，不能重复提交");
     }
-    return this.videoFactory.reviewOutput(outputAssetId, action === "APPROVE", employee.name, note);
+    const currentProject = await this.prisma.contentPlan.findUnique({
+      where: { id },
+      select: { sourceSignals: true },
+    });
+    const factory = Array.isArray(currentProject?.sourceSignals)
+      ? currentProject.sourceSignals.find((signal: any) => signal?.type === "VIDEO_FACTORY") as Record<string, unknown> | undefined
+      : undefined;
+    const codexDirectFullVideo = String(factory?.projectMode || "") === "CODEX_DIRECT_FULL_VIDEO";
+    // A final-video return must also return the AI task that produced it.  Without
+    // this, the asset was marked RETURNED while the task remained PENDING_REVIEW,
+    // leaving the employee project stuck at 100% / "waiting for review".
+    if (action === "RETURN") {
+      const videoAiTaskId = String(factory?.videoAiTaskId || "").trim();
+      if (videoAiTaskId) {
+        await this.aiTasks.review(videoAiTaskId, { action: "RETURN", note }, employee.name);
+      }
+    }
+    const reviewed = await this.videoFactory.reviewOutput(outputAssetId, action === "APPROVE", employee.name, note);
+    if (action === "RETURN" && codexDirectFullVideo) {
+      await this.videoFactory.prepareCodexDirectVideoRevision(id, employee.name);
+      const revisionSubmission = await this.submitCodexDirectFullVideoTask(authorization, id);
+      return { ...revisionSubmission.project, revisionTask: revisionSubmission.task, previousReview: reviewed };
+    }
+    return reviewed;
   }
 
   @Post("data-center/video-projects/:id/similar")

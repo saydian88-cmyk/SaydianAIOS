@@ -1707,6 +1707,84 @@ export class VideoFactoryService {
     return this.project(contentPlanId);
   }
 
+  /**
+   * A returned Codex-direct master must be revised from its existing finished
+   * video.  Preserve the original task, source asset and employee feedback so
+   * the next FULL_VIDEO task is a targeted revision rather than a new project.
+   */
+  async prepareCodexDirectVideoRevision(contentPlanId: string, actor: string) {
+    const plan = await this.prisma.contentPlan.findUnique({
+      where: { id: contentPlanId },
+      include: {
+        videoRenderJobs: {
+          where: { status: "SUCCEEDED", outputAsset: { is: { reviewStatus: "RETURNED" } } },
+          orderBy: { createdAt: "desc" },
+          take: 1,
+          include: {
+            outputAsset: true,
+            qualityChecks: { where: { checkType: "FINAL_REVIEW" }, orderBy: { createdAt: "desc" }, take: 1 },
+          },
+        },
+      },
+    });
+    if (!plan) throw new NotFoundException("智能视频项目不存在");
+    const signals = sourceSignals(plan);
+    const factory = signals.find((signal) => signal.type === "VIDEO_FACTORY") || {};
+    if (String(factory.projectMode || "") !== "CODEX_DIRECT_FULL_VIDEO") {
+      throw new BadRequestException("当前项目不是 Codex 直出视频模式");
+    }
+    const render = plan.videoRenderJobs[0];
+    const asset = render?.outputAsset;
+    if (!render || !asset) throw new BadRequestException("没有可按退回意见修改的成片");
+    const finalReview = render.qualityChecks[0];
+    const findings = Array.isArray(finalReview?.findings) ? finalReview.findings.map(object) : [];
+    const latestReturn = [...findings].reverse().find((finding) => finding.type === "EMPLOYEE_RETURN") || {};
+    const reviewNote = String(latestReturn.message || "请按审核意见修改成片").trim();
+    const previousRevision = object(factory.directVideoRevision);
+    const revision = {
+      revisionNo: number(previousRevision.revisionNo, 0) + 1,
+      sourceTaskId: String(factory.videoAiTaskId || "").trim(),
+      sourceMasterAssetId: asset.id,
+      sourceMasterName: asset.displayName || asset.fileName || asset.assetNo || asset.id,
+      sourceMasterSourcePath: asset.sourcePath || "",
+      sourceMasterStorageUrl: asset.storageUrl || "",
+      sourceMasterObjectKey: asset.objectKey || "",
+      reviewNote,
+      returnedAt: asset.reviewedAt?.toISOString() || new Date().toISOString(),
+      requestedAt: new Date().toISOString(),
+    };
+    const nextSignals = signals.map((signal) => signal.type === "VIDEO_FACTORY"
+      ? {
+        ...signal,
+        previousVideoAiTaskId: String(signal.videoAiTaskId || "").trim(),
+        videoAiTaskId: "",
+        directVideoRevision: revision,
+        lastTaskMode: "FULL_VIDEO",
+      }
+      : signal);
+    await this.prisma.$transaction([
+      this.prisma.contentPlan.update({
+        where: { id: contentPlanId },
+        data: {
+          workflowVersion: { increment: 1 },
+          masterVideoStatus: "PENDING",
+          productionStage: "EDITING",
+          sourceSignals: nextSignals as unknown as Prisma.InputJsonValue,
+        },
+      }),
+      this.prisma.auditLog.create({
+        data: {
+          actor,
+          action: "VIDEO_FACTORY_CODEX_DIRECT_REVISION_SUBMIT",
+          entityType: "ContentPlan",
+          entityId: contentPlanId,
+          after: revision,
+        },
+      }),
+    ]);
+    return this.project(contentPlanId);
+  }
+
   async requestRemoteScriptAfterSystemFailure(contentPlanId: string, actor: string, note = "") {
     const plan = await this.prisma.contentPlan.findUnique({ where: { id: contentPlanId } });
     if (!plan) throw new NotFoundException("智能视频项目不存在");
@@ -4224,6 +4302,7 @@ export class VideoFactoryService {
 
   private projectedProductionStage(row: {
     productionStage?: string | null;
+    sourceSignals?: Prisma.JsonValue;
     videoRenderJobs?: Array<{ status?: string | null; outputAsset?: { reviewStatus?: string | null } | null }>;
     aiTaskOutputs?: Array<{ kind?: string | null; reviewStatus?: string | null; aiTask?: { status?: string | null } | null }>;
   }) {
@@ -4234,7 +4313,14 @@ export class VideoFactoryService {
     const render = row.videoRenderJobs?.[0];
     const master = render?.outputAsset;
     if (master?.reviewStatus === "APPROVED") return "PLATFORM_PACKAGING";
-    if (master?.reviewStatus === "RETURNED") return "READY_TO_EDIT";
+    if (master?.reviewStatus === "RETURNED") {
+      const factory = sourceSignals({ sourceSignals: row.sourceSignals || [] }).find((signal) => signal.type === "VIDEO_FACTORY") || {};
+      const revision = object(factory.directVideoRevision);
+      if (String(factory.projectMode || "") === "CODEX_DIRECT_FULL_VIDEO" && String(revision.requestedAt || "")) {
+        return "FACTORY_GENERATING";
+      }
+      return "READY_TO_EDIT";
+    }
     if (render?.status === "SUCCEEDED" && master) return "VIDEO_REVIEW";
     if (render && ["PENDING", "RUNNING", "RETRY"].includes(String(render.status || ""))) return "FACTORY_GENERATING";
     const taskOutput = row.aiTaskOutputs?.find((output) => output.kind === "VIDEO_MASTER") || row.aiTaskOutputs?.[0];

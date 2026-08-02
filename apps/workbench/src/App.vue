@@ -775,6 +775,7 @@ const videoFlowSteps = [
 function videoFlowStep(project: Row) {
   if (projectWaitingForScripts(project)) return 2;
   const stage = String(project.productionStage || "");
+  if (isCodexDirectVideoProject(project) && codexDirectRevision(project) && ["FACTORY_GENERATING", "EDITING"].includes(stage)) return 3;
   if (["PROJECT_BRIEF", "SCRIPT_GENERATING", "SCRIPT_RETURNED"].includes(stage)) return 2;
   if (["FACTORY_SCRIPT_READY", "SCRIPT_APPROVED", "FACTORY_GENERATING", "MATERIAL_REVIEW", "MATERIAL_RETURNED"].includes(stage)) return 2;
   if (["READY_TO_EDIT", "EDITING", "VIDEO_REVIEW"].includes(stage)) return 3;
@@ -1124,6 +1125,21 @@ function isCodexDirectVideoProject(project: Row) {
   return projectMode(project) === "CODEX_DIRECT_FULL_VIDEO";
 }
 
+function codexDirectRevision(project?: Row) {
+  const signal = project && Array.isArray(project.sourceSignals)
+    ? project.sourceSignals.find((item: Row) => item.type === "VIDEO_FACTORY")
+    : undefined;
+  return signal?.directVideoRevision && typeof signal.directVideoRevision === "object"
+    ? signal.directVideoRevision as Row
+    : undefined;
+}
+
+function codexDirectTaskTitle(project?: Row) {
+  return codexDirectRevision(project)
+    ? "Codex 正在按退回说明修改成片"
+    : "Codex 直出成片中";
+}
+
 function systemScriptConversation(project?: Row) {
   const signal = project && Array.isArray(project.sourceSignals)
     ? project.sourceSignals.find((item: Row) => item.type === "VIDEO_FACTORY")
@@ -1166,7 +1182,10 @@ function codexDirectTaskProgress(project?: Row) {
 
 function codexDirectTaskMessage(project?: Row) {
   const task = activeCodexDirectVideoTask(project);
-  return String(task?.failureReason || task?.progressMessage || "等待远程 Codex 领取直出成片任务");
+  const revision = codexDirectRevision(project);
+  return String(task?.failureReason || task?.progressMessage || (revision
+    ? "等待远程 Codex 领取按退回说明修改成片任务"
+    : "等待远程 Codex 领取直出成片任务"));
 }
 
 function scriptGenerationMessages(project?: Row) {
@@ -2285,7 +2304,9 @@ async function reviewWorkbenchVideo() {
     videoReviewVisible.value = false;
     ElMessage.success(videoReviewForm.action === "APPROVE"
       ? "成片审核通过，可以继续生成封面和标题"
-      : "成片已退回，修改说明已同步到后台优化流程");
+      : isCodexDirectVideoProject(project)
+        ? "成片已退回，已自动交给 Codex 按退回说明修改并生成新版本"
+        : "成片已退回，修改说明已同步到后台优化流程");
     await invalidateDataCenterSection("videoFactory");
     await loadDataCenter(true);
     await refreshTaskVideoProject();
@@ -3378,17 +3399,22 @@ onBeforeUnmount(() => {
 
                 <section v-if="videoFlowStep(taskVideoProjectDetail) === 3" class="task-video-stage-panel">
                   <template v-if="isCodexDirectVideoProject(taskVideoProjectDetail)">
-                    <h4>Codex 直出成片中</h4>
-                    <p>不回传脚本、素材匹配和剪辑细节；这里只展示后台 AI 任务进度。完成后自动进入最终成片审核。</p>
-                    <el-progress :percentage="codexDirectTaskProgress(taskVideoProjectDetail)" :status="codexDirectTaskStatus(taskVideoProjectDetail) === 'FAILED' ? 'exception' : undefined" />
-                    <p class="project-running-message">{{ codexDirectTaskMessage(taskVideoProjectDetail) }}</p>
-                    <el-alert
-                      v-if="codexDirectTaskStatus(taskVideoProjectDetail) === 'FAILED'"
-                      :title="`直出成片失败：${codexDirectTaskMessage(taskVideoProjectDetail)}`"
-                      type="error"
-                      :closable="false"
-                      show-icon
-                    />
+                    <template>
+                      <h4>{{ codexDirectTaskTitle(taskVideoProjectDetail) }}</h4>
+                      <p v-if="codexDirectRevision(taskVideoProjectDetail)">已把原成片、原任务和退回说明交给 Codex 定向修改；会回传新版本供再次审核。</p>
+                      <p v-else>不回传脚本、素材匹配和剪辑细节；这里只展示后台 AI 任务进度。完成后自动进入最终成片审核。</p>
+                      <template v-if="taskVideoProjectDetail.masterVideoStatus !== 'RETURNED' || activeCodexDirectVideoTask(taskVideoProjectDetail)">
+                      <el-progress :percentage="codexDirectTaskProgress(taskVideoProjectDetail)" :status="codexDirectTaskStatus(taskVideoProjectDetail) === 'FAILED' ? 'exception' : undefined" />
+                      <p class="project-running-message">{{ codexDirectTaskMessage(taskVideoProjectDetail) }}</p>
+                      <el-alert
+                        v-if="codexDirectTaskStatus(taskVideoProjectDetail) === 'FAILED'"
+                        :title="`直出成片失败：${codexDirectTaskMessage(taskVideoProjectDetail)}`"
+                        type="error"
+                        :closable="false"
+                        show-icon
+                      />
+                      </template>
+                    </template>
                     <div class="preview-actions">
                       <el-button @click="openSystemScriptConversation(taskVideoProjectDetail)">查看 AI 任务</el-button>
                       <el-button @click="refreshVideoProject(taskVideoProjectDetail.id)">刷新当前项目</el-button>

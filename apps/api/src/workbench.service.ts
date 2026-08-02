@@ -1865,9 +1865,18 @@ export class WorkbenchService {
       PUBLISHING: [4, "发布中", "等待平台发布结果"],
       TRACKING: [4, "发布与数据跟踪", "回传或查看发布链接和数据"],
     };
-    const current = codexDirectFullVideo && stage === "EDITING"
-      ? [3, "Codex 直出成片中", "等待 Codex 回传最终成片，完成后审核"]
-      : state[stage] || [2, "脚本处理中", "进入项目查看处理进度"];
+    const directRevision = factory.directVideoRevision && typeof factory.directVideoRevision === "object"
+      ? factory.directVideoRevision as Record<string, unknown>
+      : undefined;
+    const directVideoReturned = codexDirectFullVideo
+      && (value(project.masterVideoStatus).toUpperCase() === "RETURNED" || stage === "READY_TO_EDIT");
+    const current = codexDirectFullVideo && directRevision && ["EDITING", "FACTORY_GENERATING"].includes(stage)
+      ? [3, "Codex 正在按退回说明修改成片", "等待 Codex 回传修改后的新成片，再次审核"]
+      : directVideoReturned
+        ? [3, "成片已退回", "正在准备按退回说明生成修改版本"]
+        : codexDirectFullVideo && ["EDITING", "FACTORY_GENERATING"].includes(stage)
+        ? [3, "Codex 直出成片中", "等待 Codex 回传最终成片，完成后审核"]
+        : state[stage] || [2, "脚本处理中", "进入项目查看处理进度"];
     return {
       id: project.id,
       productionNo: project.productionNo,

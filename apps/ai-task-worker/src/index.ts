@@ -667,6 +667,8 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
     && taskInput.codexDirectFullVideo === true;
   if (isCodexDirectFullVideo) {
     const directInput = record(taskInput.codexDirectInput);
+    const revision = record(directInput.revision || taskInput.revision);
+    const isRevision = Boolean(String(revision.reviewNote || "").trim());
     const directModeContract = [
       "DIRECT_MODE_CONTRACT: This is a local-library direct-render job.",
       "The empty assets, snapshots, and materialBindings arrays are intentional. They do not make this a system AI task and must never cause a system-material whitelist request.",
@@ -675,6 +677,11 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
       "Use only VIDEO entries whose visual validation is VERIFIED and whose exact productModel equals this task productModel. Never use another product model, unverified media, images, audio, packaging, cover, sticker, transition or template resources as footage.",
       "If the local library is not initialized or not ready, fail explicitly with the missing local configuration or index. Do not return a system-task WAITING_INPUT result.",
       "Return no intermediate script, shot plan, material binding, or review state. Return exactly one real 1080x1920 MP4 VIDEO_MASTER and delivery={taskMode:CODEX_DIRECT_FULL_VIDEO, finalReviewOnly:true}.",
+      ...(isRevision ? [
+        "REVISION_CONTRACT: This is a targeted revision, not a new creative job. Reuse the previous project structure, footage choices, pacing, audio, and output specification wherever they do not conflict with the return reason.",
+        "Locate and reuse the previous task's local final MP4 when it is available. Make only the requested corrections. Do not silently replace the entire concept, product, or video structure.",
+        "Return a new VIDEO_MASTER together with a short modification summary that explicitly maps the return reason to the completed changes.",
+      ] : []),
     ];
     return [
       ...directModeContract,
@@ -687,6 +694,7 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
         productModel: String(directInput.productModel || task.productModel || ""),
         aiPrompt: String(directInput.prompt || ""),
         materialPolicy: record(directInput.materialPolicy),
+        ...(isRevision ? { revision } : {}),
       }, null, 2),
       "若当前型号在 verified-editing-videos-by-product 清单内没有足够的可用视频，立即返回 FAILED，错误码 MATERIAL_GAP_EXACT_PRODUCT；不得跨型号替代或使用包装资源补位。",
       "从脚本、镜头、素材选择到剪辑成片都在本地完成，不回传中间脚本、镜头、素材匹配或审核节点；员工只审核最终成片。",
