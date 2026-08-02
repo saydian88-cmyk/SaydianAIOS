@@ -1568,7 +1568,9 @@ export class AiTaskCenterService implements OnModuleInit {
         metadata,
       }),
     };
-    const asset = existingAsset
+    let asset;
+    try {
+      asset = existingAsset
       ? await this.prisma.asset.update({
         where: { id: existingAsset.id },
         data: assetData,
@@ -1595,6 +1597,10 @@ export class AiTaskCenterService implements OnModuleInit {
           ...(task.productId ? { products: { create: { productId: task.productId, scope: "MODEL", confidence: 1, confirmed: true } } } : {}),
         },
       });
+    } catch (error) {
+      const code = error instanceof Prisma.PrismaClientKnownRequestError ? error.code : "UNKNOWN";
+      throw new BadRequestException(`AI成片素材登记失败（${code}）。成片已保留，可直接重试，无需重新剪辑。`);
+    }
     const outputKind = text(body.kind) || `${kind}_OUTPUT`;
     const existingOutput = await this.prisma.aiTaskOutput.findFirst({
       where: { aiTaskId: id, kind: outputKind, assetId: asset.id },
@@ -1622,19 +1628,24 @@ export class AiTaskCenterService implements OnModuleInit {
         sizeBytes: file.size,
       }),
     };
-    return existingOutput
-      ? this.prisma.aiTaskOutput.update({
-        where: { id: existingOutput.id },
-        data: outputData,
-      })
-      : this.prisma.aiTaskOutput.create({
-        data: {
-          aiTaskId: id,
-          kind: outputKind,
-          reviewStatus: "PENDING",
-          ...outputData,
-        },
-      });
+    try {
+      return existingOutput
+        ? this.prisma.aiTaskOutput.update({
+          where: { id: existingOutput.id },
+          data: outputData,
+        })
+        : this.prisma.aiTaskOutput.create({
+          data: {
+            aiTaskId: id,
+            kind: outputKind,
+            reviewStatus: "PENDING",
+            ...outputData,
+          },
+        });
+    } catch (error) {
+      const code = error instanceof Prisma.PrismaClientKnownRequestError ? error.code : "UNKNOWN";
+      throw new BadRequestException(`AI成片输出登记失败（${code}）。成片已保留，可直接重试，无需重新剪辑。`);
+    }
   }
 
   async runnerOutputMetadata(token: string, taskNo: string, body: JsonRecord) {

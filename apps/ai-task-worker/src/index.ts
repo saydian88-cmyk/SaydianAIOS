@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { execFile, spawn } from "node:child_process";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { basename, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { safeName, sha256, verifySha256 } from "./worker-utils";
@@ -1402,6 +1402,47 @@ async function validateOutputArtifacts(result: JsonRecord, workspace: string) {
   return result;
 }
 
+// A completed Codex direct-output task may fail only while registering its MP4
+// with the API. Keep that already-rendered master reusable: the next retry must
+// upload/register it instead of invoking Codex and rendering a second time.
+async function recoverDirectOutputResult(workspace: string, taskPackageValue: JsonRecord) {
+  if (!isCodexDirectFullVideoTask(taskPackageValue)) return undefined;
+  const outputsRoot = join(workspace, "outputs");
+  let names: string[];
+  try {
+    names = await readdir(outputsRoot);
+  } catch {
+    return undefined;
+  }
+  const masters: Array<{ name: string; size: number }> = [];
+  for (const name of names) {
+    if (extname(name).toLowerCase() !== ".mp4") continue;
+    const info = await stat(join(outputsRoot, name)).catch(() => undefined);
+    if (info?.isFile() && info.size > 0) masters.push({ name, size: info.size });
+  }
+  if (masters.length !== 1) return undefined;
+  const task = record(taskPackageValue.task);
+  const master = masters[0];
+  const result: JsonRecord = {
+    summary: "恢复已生成的 Codex 直出成片，仅重新登记上传结果。",
+    outputFiles: [{
+      path: join("outputs", master.name),
+      kind: "VIDEO_MASTER",
+      title: `${String(task.productModel || "产品")} Codex 直出成片`,
+      metadata: {
+        description: "本地已完成渲染的最终成片，重试时不重新剪辑。",
+        source: "CODEX_DIRECT_OUTPUT_RECOVERY",
+      },
+    }],
+    delivery: {
+      productModel: String(task.productModel || ""),
+      taskMode: "CODEX_DIRECT_FULL_VIDEO",
+      finalReviewOnly: true,
+    },
+  };
+  return validateOutputArtifacts(result, workspace);
+}
+
 async function uploadFile(taskId: string, workspace: string, item: JsonRecord) {
   const requested = String(item.path || "");
   const path = resolve(workspace, requested);
@@ -1462,14 +1503,25 @@ async function execute(claimed: JsonRecord) {
     const fingerprint = packageFingerprint(packaged);
     const previousState = await loadWorkspaceState(workspace);
     const resumeEligible = canResume(previousState, fingerprint, detectedSkill.digest);
-    const taskState: WorkspaceState = resumeEligible && previousState
-      ? previousState
+    // Runtime snapshots can change after an upload failure even when the task
+    // itself and its rendered master have not. Direct-output retries are safe to
+    // resume from the local output stages, provided their saved result/artifact
+    // still validates below.
+    const resumeDirectOutputUpload = isCodexDirectFullVideoTask(packaged)
+      && Boolean(previousState)
+      && ["LOCAL_RENDER", "QUALITY_CHECK", "UPLOADING", "FINALIZING", "COMPLETE"].includes(String(previousState?.stage || ""));
+    const taskState: WorkspaceState = (resumeEligible || resumeDirectOutputUpload) && previousState
+      ? {
+        ...previousState,
+        packageFingerprint: fingerprint,
+        skillDigest: detectedSkill.digest,
+      }
       : freshWorkspaceState(fingerprint, detectedSkill.digest);
     // Preserve the resume decision before progress reporting changes the saved stage.
     // A previous attempt may already have a validated result and only need to retry
     // its upload; rerunning Codex in that case would create a duplicate video.
-    const resumeWithValidatedResult = resumeEligible
-      && ["QUALITY_CHECK", "UPLOADING", "COMPLETE"].includes(String(taskState.stage || ""));
+    const resumeWithValidatedResult = (resumeEligible || resumeDirectOutputUpload)
+      && ["LOCAL_RENDER", "QUALITY_CHECK", "UPLOADING", "FINALIZING", "COMPLETE"].includes(String(taskState.stage || ""));
     state = taskState;
     await saveWorkspaceState(workspace, taskState);
     await appendExecutionLog(workspace, "SKILL_SELECTED", {
@@ -1478,7 +1530,7 @@ async function execute(claimed: JsonRecord) {
       digest: detectedSkill.digest,
       strategy: detectedSkill.strategy,
       executionMode: detectedSkill.executionMode,
-      resumed: resumeEligible,
+      resumed: resumeEligible || resumeDirectOutputUpload,
     });
     await report("SKILL_DETECTED", 15, `已选择 ${detectedSkill.name}`, {
       skillVersion: detectedSkill.version,
@@ -1520,6 +1572,19 @@ async function execute(claimed: JsonRecord) {
           await appendExecutionLog(workspace, "RESUME_REJECTED", {
             reason: error instanceof Error ? error.message : String(error),
           });
+        }
+      }
+      if (!result && resumeDirectOutputUpload) {
+        const recovered = await recoverDirectOutputResult(workspace, packaged);
+        if (recovered) {
+          result = recovered;
+          result.execution = {
+            ...record(result.execution),
+            resumed: true,
+            recoveredOutput: true,
+          };
+          await writeJsonAtomic(join(workspace, "result.json"), result);
+          await appendExecutionLog(workspace, "RESUME_OUTPUT_RECOVERED", { stage: taskState.stage });
         }
       }
     }
