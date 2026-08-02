@@ -127,6 +127,20 @@ function packagingPlatform(value: unknown) {
   return aliases[raw] || aliases[normalized] || raw.toUpperCase();
 }
 
+/**
+ * Older cover-title runners wrote the target platform into the human-readable
+ * description instead of metadata.platform.  Keep accepting that payload so a
+ * successfully generated single-platform cover is not stranded in WAITING_INPUT.
+ */
+function coverOutputPlatform(metadata: unknown) {
+  const row = object(metadata);
+  const explicit = row.platform || row.channel || row.targetPlatform;
+  if (text(explicit)) return packagingPlatform(explicit);
+  const description = text(row.description);
+  const matched = description.match(/\bplatform\s*[=:]\s*([A-Z_]+)/i);
+  return matched?.[1] ? packagingPlatform(matched[1]) : "";
+}
+
 export function videoScriptOutputMetadata(candidates: unknown[]) {
   const normalized = candidates.map(object);
   const selected = normalized.find((candidate) => candidate.selected === true) || normalized[0] || {};
@@ -1175,7 +1189,7 @@ export class AiTaskCenterService implements OnModuleInit {
           ? false
           : modelPolicy.allowExternalGeneration === true,
         requiredSkill: codexDirectFullVideo
-          ? "video-editing-from-media-library-share"
+          ? "saidian-ai-task-dispatcher"
           : task.type === "VIDEO"
           && dedicatedDouyin
           && ["TOPIC_CARD_BATCH", "FULL_VIDEO", "SCRIPT_ONLY"].includes(executionMode)
@@ -1189,7 +1203,7 @@ export class AiTaskCenterService implements OnModuleInit {
               ? "build-health-brand-trust-content"
             : undefined,
         fallbackOrder: codexDirectFullVideo
-          ? ["LOCAL_MEDIA_LIBRARY", "FINAL_VIDEO_ONLY"]
+          ? ["LOCAL_FULL_SKILL", "INTERNAL_SCRIPT_AND_SHOT_PLAN", "MANDATORY_QC", "FINAL_VIDEO_ONLY"]
           : task.type === "VIDEO"
           && executionMode === "FULL_VIDEO"
           ? [
@@ -1875,6 +1889,35 @@ export class AiTaskCenterService implements OnModuleInit {
     return this.task(id);
   }
 
+  /** Replays a completed cover-title payload that was left in WAITING_INPUT by an older runner payload. */
+  async reconcileCoverTitleTask(id: string) {
+    const task = await this.prisma.aiTask.findUnique({ where: { id } });
+    if (!task || text(object(task.input).executionMode) !== "COVER_TITLE") return this.task(id);
+    if (task.status !== "WAITING_INPUT") return this.task(id);
+    const result = object(task.output);
+    if (!Object.keys(result).length) return this.task(id);
+
+    const domain = await this.finalizeDomain(task, result, "system-cover-title-reconcile");
+    const status = domain.status;
+    const progress = status === "WAITING_INPUT"
+      ? Math.min(Math.max(task.progress || 60, 60), 90)
+      : 100;
+    await this.prisma.aiTask.update({
+      where: { id },
+      data: {
+        status,
+        progress,
+        progressMessage: domain.message,
+        finishedAt: ["PENDING_REVIEW", "COMPLETED"].includes(status) ? new Date() : null,
+      },
+    });
+    await this.syncSourceOpsTask(task, status, domain.message);
+    if (status === "PENDING_REVIEW" && task.reviewerEmployeeId) {
+      await this.notify(id, task.reviewerEmployeeId, "AI_TASK_REVIEW", "AI结果等待审核", task.title);
+    }
+    return this.task(id);
+  }
+
   async runnerFail(token: string, id: string, body: JsonRecord) {
     const node = await this.runner(token, text(body.nodeCode));
     const task = await this.ensureRunnerTask(node.nodeCode, id);
@@ -2173,14 +2216,33 @@ export class AiTaskCenterService implements OnModuleInit {
           include: { asset: { select: { storageUrl: true } } },
         });
         const updates = [];
+        const availableVariants = [...plan.variants];
         const usedOutputIds = new Set<string>();
         const skipped: string[] = [];
         for (const [index, item] of packaging.entries()) {
           const platform = packagingPlatform(item.platform || item.channel || item.targetPlatform);
-          const variant = plan.variants.find((candidate) => candidate.platform === platform)
-            || (plan.variants.length === 1 ? plan.variants[0] : undefined);
+          let variant = availableVariants.find((candidate) => candidate.platform === platform)
+            || (availableVariants.length === 1 ? availableVariants[0] : undefined);
+          // Draft video projects deliberately do not carry placeholder platform
+          // variants.  Create the destination record only when the returned
+          // platform is one of the project's declared target platforms.
+          if (!variant && platform && plan.targetPlatforms.includes(platform as IntegrationKind)) {
+            variant = await this.prisma.contentVariant.upsert({
+              where: { contentPlanId_platform: { contentPlanId, platform: platform as IntegrationKind } },
+              create: {
+                contentPlanId,
+                platform: platform as IntegrationKind,
+                title: "待审核标题",
+                body: "",
+                mediaType: "VIDEO",
+                metadata: {},
+              },
+              update: {},
+            });
+            availableVariants.push(variant);
+          }
           const coverOutput = outputs.find((candidate) => !usedOutputIds.has(candidate.id)
-            && packagingPlatform(object(candidate.metadata).platform) === String(variant?.platform || platform))
+            && coverOutputPlatform(candidate.metadata) === String(variant?.platform || platform))
             || (outputs.length === 1 && !usedOutputIds.has(outputs[0].id) ? outputs[0] : undefined)
             || (outputs.length === packaging.length && !usedOutputIds.has(outputs[index]?.id)
               ? outputs[index]
@@ -2220,7 +2282,14 @@ export class AiTaskCenterService implements OnModuleInit {
           }));
           updates.push(this.prisma.aiTaskOutput.update({
             where: { id: coverOutput.id },
-            data: { contentPlanId, reviewStatus: "PENDING" },
+            data: {
+              contentPlanId,
+              reviewStatus: "PENDING",
+              metadata: json({
+                ...object(coverOutput.metadata),
+                platform: String(variant.platform),
+              }),
+            },
           }));
         }
         if (!updates.length) {

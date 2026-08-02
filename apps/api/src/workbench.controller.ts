@@ -1191,6 +1191,19 @@ export class WorkbenchController {
       const revisionSubmission = await this.submitCodexDirectFullVideoTask(authorization, id);
       project = revisionSubmission.project as Record<string, any>;
     }
+    // Cover-title tasks created before platform metadata was normalized may have
+    // already returned a valid result but remained stuck in WAITING_INPUT. Replay
+    // that saved result while the owner refreshes this exact project.
+    const currentFactory = Array.isArray(project.sourceSignals)
+      ? project.sourceSignals.find((signal: Record<string, unknown>) => signal?.type === "VIDEO_FACTORY") as Record<string, unknown> | undefined
+      : undefined;
+    const coverTaskId = String(currentFactory?.coverAiTaskId || "");
+    const coverTask = (Array.isArray(project.activeAiTasks) ? project.activeAiTasks : [])
+      .find((candidate: Record<string, unknown>) => String(candidate.id || "") === coverTaskId);
+    if (coverTask?.status === "WAITING_INPUT") {
+      await this.aiTasks.reconcileCoverTitleTask(coverTaskId);
+      project = await this.videoFactory.project(id) as Record<string, any>;
+    }
     return project;
   }
 
