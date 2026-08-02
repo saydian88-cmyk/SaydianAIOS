@@ -655,22 +655,46 @@ export class AiTaskCenterService implements OnModuleInit {
   async retry(id: string, actor: string) {
     const task = await this.ensureTask(id);
     if (!["FAILED", "RETURNED", "RETRY"].includes(task.status)) throw new BadRequestException("任务当前不能重试");
-    if (task.retryCount >= task.maxRetries) throw new BadRequestException("任务已达到最大重试次数");
+    const taskInput = object(task.input);
+    const isDirectOutputRecovery = task.type === "VIDEO"
+      && text(taskInput.executionMode).toUpperCase() === "FULL_VIDEO"
+      && taskInput.codexDirectFullVideo === true
+      && !text(taskInput.outputRegistrationRecoveryAttemptedAt);
+    if (task.retryCount >= task.maxRetries && !isDirectOutputRecovery) {
+      throw new BadRequestException("任务已达到最大重试次数");
+    }
+    const recoveryInput = isDirectOutputRecovery
+      ? json({ ...taskInput, outputRegistrationRecoveryAttemptedAt: new Date().toISOString() })
+      : undefined;
     const updated = await this.prisma.aiTask.update({
       where: { id },
       data: {
         status: "RETRY",
-        retryCount: { increment: 1 },
+        // This is a one-time recovery path for a direct-output task whose
+        // MP4 was already rendered but could not be registered by the API.
+        // Keep the exhausted count intact: a later worker failure remains
+        // terminal, so this never turns into unlimited retries.
+        ...(isDirectOutputRecovery ? {} : { retryCount: { increment: 1 } }),
+        ...(recoveryInput ? { input: recoveryInput } : {}),
         progress: 0,
-        progressMessage: "等待重新执行",
+        progressMessage: isDirectOutputRecovery
+          ? "正在恢复已生成成片并重新登记，不会重新剪辑"
+          : "等待重新执行",
         failureReason: null,
         lockedAt: null,
         lockedBy: null,
         heartbeatAt: null,
       },
     });
-    await this.syncSourceOpsTask(updated, "RETRY", "正在准备重新执行");
-    await this.audit(actor, "AI_TASK_RETRY", id, { retryCount: task.retryCount + 1 });
+    await this.syncSourceOpsTask(
+      updated,
+      "RETRY",
+      isDirectOutputRecovery ? "正在恢复已生成成片并重新登记，不会重新剪辑" : "正在准备重新执行",
+    );
+    await this.audit(actor, isDirectOutputRecovery ? "AI_TASK_OUTPUT_REGISTRATION_RECOVERY" : "AI_TASK_RETRY", id, {
+      retryCount: isDirectOutputRecovery ? task.retryCount : task.retryCount + 1,
+      recoveryOnly: isDirectOutputRecovery,
+    });
     return updated;
   }
 
