@@ -3348,7 +3348,7 @@ onBeforeUnmount(() => {
                   <span v-if="videoProjectDueText(task)" class="video-project-due">{{ videoProjectDueText(task) }}</span>
                 </div>
               </template>
-              <template v-else>
+              <template v-if="!isVideoProjectTask(task)">
                 <div class="task-meta">
                   <el-tag size="small" :type="statusType(taskStatusCode(task))">{{ taskDisplayStatus(task) }}</el-tag>
                   <span>{{ task.taskNo || "系统任务" }}</span>
@@ -3378,6 +3378,13 @@ onBeforeUnmount(() => {
                 :loading="taskVideoProjectLoading && expandedTaskVideoProjectId === (task.sourceId || task.evidence?.contentPlanId)"
                 @click="openVideoProjectFromTask(task)"
               >{{ videoProjectPrimaryAction(task) }}</el-button>
+              <el-button
+                v-if="isVideoProjectTask(task) && can('CONTENT_SUBMIT')"
+                type="danger"
+                plain
+                :loading="archivingVideoProjectId === (task.sourceId || task.evidence?.contentPlanId)"
+                @click="archiveVideoProject({ id: task.sourceId || task.evidence?.contentPlanId, topic: videoProjectCardTitle(task) })"
+              >删除项目</el-button>
               <template v-else>
                 <el-button @click="openTaskDetail(task)">查看详情</el-button>
                 <el-button v-if="!task.assigneeEmployeeId && task.status === 'OPEN'" type="primary" @click="acceptTask(task)">领取</el-button>

@@ -2038,7 +2038,9 @@ export class WorkbenchService {
       const rightVideoProject = right.sourceType === "VIDEO_PROJECT" || right.category === "VIDEO_PROJECT";
       if (leftVideoProject !== rightVideoProject) return leftVideoProject ? -1 : 1;
       if (leftVideoProject && rightVideoProject) {
-        return (right.updatedAt?.getTime() ?? right.createdAt.getTime()) - (left.updatedAt?.getTime() ?? left.createdAt.getTime());
+        // Video projects are the employee's work queue.  Keep the newest
+        // project at the top even when an older project receives an AI update.
+        return right.createdAt.getTime() - left.createdAt.getTime();
       }
       const priority = (weight[left.priority] ?? 9) - (weight[right.priority] ?? 9);
       if (priority) return priority;

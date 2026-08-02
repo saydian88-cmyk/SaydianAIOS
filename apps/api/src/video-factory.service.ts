@@ -4210,7 +4210,9 @@ export class VideoFactoryService {
         sourceSignals: { array_contains: [{ type: "VIDEO_FACTORY" }] },
         OR: [{ owner: actor }, { createdBy: actor }, { assignedTo: actor }],
       },
-      orderBy: { updatedAt: "desc" },
+      // The project list is a creation queue, not an activity feed: an old
+      // project being retried must not jump ahead of a newly created project.
+      orderBy: { createdAt: "desc" },
       take: 100,
     });
     const now = Date.now();
@@ -4365,7 +4367,9 @@ export class VideoFactoryService {
         aiTaskOutputs: { orderBy: { createdAt: "desc" }, take: 5, include: { aiTask: { select: { taskNo: true, status: true } } } },
         assignedEmployee: true,
       },
-      orderBy: { updatedAt: "desc" },
+      // Keep the newest created project first.  Activity on an older project
+      // must not reshuffle the employee's project queue.
+      orderBy: { createdAt: "desc" },
       skip: paged ? (page - 1) * pageSize : undefined,
       take: paged ? pageSize : 100,
     });

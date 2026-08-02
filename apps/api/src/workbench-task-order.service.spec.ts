@@ -20,6 +20,7 @@ describe("WorkbenchService task ordering", () => {
         priority: "MEDIUM",
         dueAt: null,
         createdAt: new Date("2026-07-30T09:00:00+08:00"),
+        updatedAt: new Date("2026-08-02T10:00:00+08:00"),
       },
       {
         id: "newer-video",
@@ -28,6 +29,7 @@ describe("WorkbenchService task ordering", () => {
         priority: "LOW",
         dueAt: null,
         createdAt: new Date("2026-07-30T10:00:00+08:00"),
+        updatedAt: new Date("2026-07-30T10:01:00+08:00"),
       },
     ]);
 
