@@ -1167,9 +1167,24 @@ export class WorkbenchController {
     @Param("id") id: string,
   ) {
     const employee = this.requirePermission(authorization, "DATA_CENTER_VIEW");
-    const project = await this.videoFactory.project(id) as Record<string, any>;
+    let project = await this.videoFactory.project(id) as Record<string, any>;
     if (project.createdBy !== employee.name && project.owner !== employee.name && project.assignedTo !== employee.name) {
       throw new ForbiddenException("只能查看自己负责的视频项目");
+    }
+    // A few direct-output projects were returned before the revision task link
+    // existed. Recover only this exact legacy state when the owner refreshes it.
+    const factory = Array.isArray(project.sourceSignals)
+      ? project.sourceSignals.find((signal: Record<string, unknown>) => signal?.type === "VIDEO_FACTORY") as Record<string, unknown> | undefined
+      : undefined;
+    const hasReturnedMaster = Array.isArray(project.videoRenderJobs)
+      && project.videoRenderJobs.some((job: Record<string, any>) => job?.status === "SUCCEEDED" && job?.outputAsset?.reviewStatus === "RETURNED");
+    const isLegacyDirectReturn = String(factory?.projectMode || "") === "CODEX_DIRECT_FULL_VIDEO"
+      && hasReturnedMaster
+      && !String((factory?.directVideoRevision as Record<string, unknown> | undefined)?.requestedAt || "");
+    if (isLegacyDirectReturn) {
+      await this.videoFactory.prepareCodexDirectVideoRevision(id, employee.name);
+      const revisionSubmission = await this.submitCodexDirectFullVideoTask(authorization, id);
+      project = revisionSubmission.project as Record<string, any>;
     }
     return project;
   }

@@ -1140,6 +1140,26 @@ function codexDirectTaskTitle(project?: Row) {
     : "Codex 直出成片中";
 }
 
+function codexDirectHasReviewableMaster(project?: Row) {
+  if (!isCodexDirectVideoProject(project || {})) return false;
+  return Array.isArray(project?.videoRenderJobs)
+    && project!.videoRenderJobs.some((job: Row) => job?.status === "SUCCEEDED" && Boolean(job?.outputAsset));
+}
+
+function codexDirectTaskIsRunning(project?: Row) {
+  const task = activeCodexDirectVideoTask(project);
+  if (!task) return false;
+  const status = String(task.status || "");
+  return ["PENDING", "CLAIMED", "RUNNING", "UPLOADING", "QUALITY_CHECK", "RETRY"].includes(status);
+}
+
+function codexDirectShouldShowProgress(project?: Row) {
+  const status = codexDirectTaskStatus(project);
+  return codexDirectTaskIsRunning(project)
+    || status === "FAILED"
+    || !codexDirectHasReviewableMaster(project);
+}
+
 function systemScriptConversation(project?: Row) {
   const signal = project && Array.isArray(project.sourceSignals)
     ? project.sourceSignals.find((item: Row) => item.type === "VIDEO_FACTORY")
@@ -3397,13 +3417,13 @@ onBeforeUnmount(() => {
                   </div>
                 </section>
 
-                <section v-if="videoFlowStep(taskVideoProjectDetail) === 3" class="task-video-stage-panel">
+                <section v-if="videoFlowStep(taskVideoProjectDetail) === 3 && (!isCodexDirectVideoProject(taskVideoProjectDetail) || codexDirectShouldShowProgress(taskVideoProjectDetail))" class="task-video-stage-panel">
                   <template v-if="isCodexDirectVideoProject(taskVideoProjectDetail)">
                     <template>
                       <h4>{{ codexDirectTaskTitle(taskVideoProjectDetail) }}</h4>
                       <p v-if="codexDirectRevision(taskVideoProjectDetail)">已把原成片、原任务和退回说明交给 Codex 定向修改；会回传新版本供再次审核。</p>
                       <p v-else>不回传脚本、素材匹配和剪辑细节；这里只展示后台 AI 任务进度。完成后自动进入最终成片审核。</p>
-                      <template v-if="taskVideoProjectDetail.masterVideoStatus !== 'RETURNED' || activeCodexDirectVideoTask(taskVideoProjectDetail)">
+                      <template v-if="codexDirectShouldShowProgress(taskVideoProjectDetail)">
                       <el-progress :percentage="codexDirectTaskProgress(taskVideoProjectDetail)" :status="codexDirectTaskStatus(taskVideoProjectDetail) === 'FAILED' ? 'exception' : undefined" />
                       <p class="project-running-message">{{ codexDirectTaskMessage(taskVideoProjectDetail) }}</p>
                       <el-alert
@@ -3432,7 +3452,7 @@ onBeforeUnmount(() => {
                   </template>
                 </section>
 
-                <section v-if="videoFlowStep(taskVideoProjectDetail) >= 3" class="task-video-stage-panel">
+                <section v-if="videoFlowStep(taskVideoProjectDetail) >= 3 && (!isCodexDirectVideoProject(taskVideoProjectDetail) || !codexDirectShouldShowProgress(taskVideoProjectDetail))" class="task-video-stage-panel">
                   <h4>{{ videoFlowStep(taskVideoProjectDetail) === 3 ? "成片审核" : "封面标题、发布与回传" }}</h4>
                   <article v-for="job in taskVideoProjectDetail.videoRenderJobs || []" :key="job.id" class="task-finished-video-row">
                     <div>
