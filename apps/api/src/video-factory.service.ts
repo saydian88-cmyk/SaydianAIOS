@@ -1565,10 +1565,10 @@ export class VideoFactoryService {
     const normalizedVideoType = videoType || (codexDirect ? "Codex 直出视频" : "参考视频直出");
     const normalizedKeywords = keywords || (codexDirect ? "Codex 直出" : "参考视频直出");
     const topic = conciseVideoTopic(String(input.topic || (referenceDirect
-      ? "参考视频直出项目"
+      ? `${normalizedProductModel} · 参考直出`
       : codexDirect
-        ? `${normalizedProductModel} Codex 直出视频`
-        : `${normalizedProductModel} 智能视频项目`)));
+        ? `${normalizedProductModel} · Codex直出`
+        : `${normalizedProductModel} · ${normalizedVideoType}${normalizedKeywords ? ` · ${normalizedKeywords}` : ""}`)));
     const brief = {
       ...(input.platform ? { platform } : {}),
       ...(input.voiceoverMode ? { voiceoverMode: String(input.voiceoverMode).toUpperCase() } : {}),

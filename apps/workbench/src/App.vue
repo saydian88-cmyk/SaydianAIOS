@@ -612,6 +612,55 @@ function videoProjectTaskHint(task: Row) {
   return task.projection?.project?.nextAction || task.projection?.nextAction || "进入项目继续处理";
 }
 
+function videoProjectModeLabel(task: Row) {
+  const mode = String(task.projection?.project?.projectMode || "");
+  if (mode === "REFERENCE_DIRECT_FULL_VIDEO") return "参考直出";
+  if (mode === "CODEX_DIRECT_FULL_VIDEO") return "Codex 直出";
+  return "标准项目";
+}
+
+function videoProjectPrimaryAction(task: Row) {
+  const projectId = task.sourceId || task.evidence?.contentPlanId;
+  if (expandedTaskVideoProjectId.value === projectId) return "收起项目";
+  const stage = String(task.projection?.project?.stage || "").toUpperCase();
+  if (["COMPLETED", "PUBLISHED"].includes(String(task.status || "").toUpperCase())) return "查看项目";
+  if (stage === "VIDEO_REVIEW") return "审核成片";
+  if ([
+    "FACTORY_SCRIPT_READY",
+    "SCRIPT_APPROVED",
+    "MATERIAL_REVIEW",
+    "MATERIAL_RETURNED",
+    "READY_TO_EDIT",
+    "PACKAGING_REVIEW",
+    "READY_TO_PUBLISH",
+    "TRACKING",
+  ].includes(stage)) return "处理项目";
+  return "查看进度";
+}
+
+function videoProjectCardTitle(task: Row) {
+  const project = task.projection?.project || {};
+  const model = String(project.productModel || "").trim() || "未标注产品";
+  const mode = String(project.projectMode || "");
+  if (mode === "REFERENCE_DIRECT_FULL_VIDEO") return `${model} · 参考直出`;
+  if (mode === "CODEX_DIRECT_FULL_VIDEO") return `${model} · Codex直出`;
+  const videoType = String(project.videoType || "").trim() || "智能视频";
+  const rawTopic = String(project.topic || task.title || "").trim();
+  const genericTopic = !rawTopic || rawTopic === `${model} 智能视频项目` || rawTopic === `${model} · ${videoType}`;
+  const topic = genericTopic ? String(project.keywords || "").trim() : rawTopic;
+  if (topic && topic.includes(" · ")) return topic;
+  return [model, videoType, topic || (project.createdAt ? formatTime(project.createdAt) : "未命名")].filter(Boolean).join(" · ");
+}
+
+function videoProjectDueText(task: Row) {
+  if (!task.dueAt) return "";
+  const dueAt = new Date(task.dueAt);
+  if (Number.isNaN(dueAt.getTime())) return "";
+  const remain = dueAt.getTime() - Date.now();
+  if (remain > 24 * 60 * 60 * 1000) return "";
+  return remain < 0 ? `已逾期 ${formatTime(task.dueAt)}` : `截止 ${formatTime(task.dueAt)}`;
+}
+
 function compactNumber(value?: number | string) {
   const number = Number(value || 0);
   if (number >= 100_000_000) return `${(number / 100_000_000).toFixed(1)}亿`;
@@ -1143,7 +1192,19 @@ function codexDirectTaskTitle(project?: Row) {
 function codexDirectHasReviewableMaster(project?: Row) {
   if (!isCodexDirectVideoProject(project || {})) return false;
   return Array.isArray(project?.videoRenderJobs)
-    && project!.videoRenderJobs.some((job: Row) => job?.status === "SUCCEEDED" && Boolean(job?.outputAsset));
+    && project!.videoRenderJobs.some((job: Row) => (
+      job?.status === "SUCCEEDED"
+      && Boolean(job?.outputAsset)
+      && ["PENDING", "APPROVED"].includes(String(job.outputAsset?.reviewStatus || "PENDING"))
+    ));
+}
+
+function reviewableVideoRenderJobs(project?: Row) {
+  const jobs = Array.isArray(project?.videoRenderJobs) ? project!.videoRenderJobs : [];
+  if (!isCodexDirectVideoProject(project || {})) return jobs;
+  // A returned master is only the source for Codex's revision.  It must not
+  // remain in the active review area or suppress the revision progress panel.
+  return jobs.filter((job: Row) => job?.outputAsset?.reviewStatus !== "RETURNED");
 }
 
 function codexDirectTaskIsRunning(project?: Row) {
@@ -2304,6 +2365,12 @@ function openVideoReview(project: Row, job: Row, action: "APPROVE" | "RETURN") {
   videoReviewJob.value = job;
   videoReviewForm.action = action;
   videoReviewForm.note = "";
+  // Passing a finished video needs no extra employee input.  The review API
+  // advances the project into cover/title and publishing in the same action.
+  if (action === "APPROVE") {
+    void reviewWorkbenchVideo();
+    return;
+  }
   videoReviewVisible.value = true;
 }
 
@@ -3227,24 +3294,36 @@ onBeforeUnmount(() => {
               @change="(checked: boolean) => toggleTaskSelection(task, checked)"
             />
             <div class="task-main">
-              <div class="task-meta">
-                <el-tag v-if="isVideoProjectTask(task)" size="small" type="primary">视频项目任务</el-tag>
-                <el-tag size="small" :type="statusType(taskStatusCode(task))">{{ taskDisplayStatus(task) }}</el-tag>
-                <span>{{ task.taskNo || "系统任务" }}</span>
-                <span>{{ roleLabels[task.requiredRoleCode] || categoryLabels[task.category] || "业务任务" }}</span>
-                <span v-if="task.projection?.currentPhase">{{ task.projection.currentPhase }}</span>
-                <span>截止 {{ formatTime(task.dueAt) }}</span>
-              </div>
-              <h4>{{ task.title }}</h4>
-              <div v-if="isVideoProjectTask(task)" class="video-task-identifiers">
-                <span>{{ task.projection?.project?.productionNo || "项目编号待生成" }}</span>
-                <span>{{ task.projection?.project?.productModel || "通用产品" }}</span>
-                <span>{{ task.projection?.project?.videoType || "未标注视频类型" }}</span>
-                <span v-if="task.projection?.project?.keywords">关键词：{{ task.projection.project.keywords }}</span>
-                <span v-if="task.projection?.project?.platform">{{ platformLabel(task.projection.project.platform) }}</span>
-                <span v-if="task.projection?.project?.createdAt">创建于 {{ formatTime(task.projection.project.createdAt) }}</span>
-              </div>
-              <p class="task-summary">{{ taskCardSummary(task) }}</p>
+              <template v-if="isVideoProjectTask(task)">
+                <div class="video-project-card-meta">
+                  <el-tag size="small" :type="statusType(taskStatusCode(task))">{{ taskDisplayStatus(task) }}</el-tag>
+                  <el-tag v-if="videoProjectModeLabel(task)" size="small" type="info">{{ videoProjectModeLabel(task) }}</el-tag>
+                </div>
+                <h4
+                  class="video-project-card-title"
+                  role="button"
+                  tabindex="0"
+                  @click="openVideoProjectFromTask(task)"
+                  @keydown.enter.prevent="openVideoProjectFromTask(task)"
+                >{{ videoProjectCardTitle(task) }}</h4>
+                <div class="video-task-identifiers">
+                  <span v-if="task.projection?.project?.productModel">{{ task.projection.project.productModel }}</span>
+                  <span v-if="task.projection?.project?.videoType">{{ task.projection.project.videoType }}</span>
+                  <span v-if="task.projection?.project?.createdAt">创建于 {{ formatTime(task.projection.project.createdAt) }}</span>
+                  <span v-if="videoProjectDueText(task)" class="video-project-due">{{ videoProjectDueText(task) }}</span>
+                </div>
+              </template>
+              <template v-else>
+                <div class="task-meta">
+                  <el-tag size="small" :type="statusType(taskStatusCode(task))">{{ taskDisplayStatus(task) }}</el-tag>
+                  <span>{{ task.taskNo || "系统任务" }}</span>
+                  <span>{{ roleLabels[task.requiredRoleCode] || categoryLabels[task.category] || "业务任务" }}</span>
+                  <span v-if="task.projection?.currentPhase">{{ task.projection.currentPhase }}</span>
+                  <span>截止 {{ formatTime(task.dueAt) }}</span>
+                </div>
+                <h4>{{ task.title }}</h4>
+                <p class="task-summary">{{ taskCardSummary(task) }}</p>
+              </template>
               <template v-if="isVideoProjectTask(task)">
                 <div class="video-task-steps" :aria-label="`当前进行到第 ${videoProjectTaskStep(task)} 步`">
                   <span
@@ -3255,23 +3334,25 @@ onBeforeUnmount(() => {
                 </div>
                 <p class="video-task-next"><b>现在需要：</b>{{ videoProjectTaskHint(task) }}</p>
               </template>
-              <p v-if="task.returnReason" class="return-note">修改要求：{{ task.returnReason }}</p>
+              <p v-if="!isVideoProjectTask(task) && task.returnReason" class="return-note">修改要求：{{ task.returnReason }}</p>
             </div>
             <div class="task-actions">
-              <el-button @click="openTaskDetail(task)">查看详情</el-button>
               <el-button
                 v-if="isVideoProjectTask(task)"
                 type="primary"
                 :loading="taskVideoProjectLoading && expandedTaskVideoProjectId === (task.sourceId || task.evidence?.contentPlanId)"
                 @click="openVideoProjectFromTask(task)"
-              >{{ expandedTaskVideoProjectId === (task.sourceId || task.evidence?.contentPlanId) ? "收起项目" : "继续处理项目" }}</el-button>
-              <el-button v-if="!task.assigneeEmployeeId && task.status === 'OPEN'" type="primary" @click="acceptTask(task)">领取</el-button>
-              <el-button v-if="!isAiContentTask(task) && task.assigneeEmployeeId === user.id && ['ACCEPTED','RETURNED'].includes(task.status)" type="primary" @click="startTask(task)">开始</el-button>
-              <el-button v-if="!isAiContentTask(task) && task.assigneeEmployeeId === user.id && ['ACCEPTED','IN_PROGRESS','RETURNED'].includes(task.status)" @click="openSubmit(task)">提交成果</el-button>
-              <el-button v-if="task.sourceType === 'SELF_CREATED' && (!isAiContentTask(task) || task.status === 'ACCEPTED') && !['COMPLETED','CANCELLED','VERIFIED'].includes(task.status)" @click="openSelfTaskEdit(task)">修改</el-button>
-              <el-button v-if="task.sourceType === 'SELF_CREATED' && !['COMPLETED','CANCELLED','VERIFIED'].includes(task.status)" type="danger" plain @click="cancelOwnedTask(task)">取消任务</el-button>
-              <el-button v-if="task.sourceType === 'SELF_CREATED' && task.status === 'CANCELLED'" @click="openSelfTaskCopy(task)">复制再次添加</el-button>
-              <el-button v-if="task.sourceType === 'SELF_CREATED' && task.status === 'CANCELLED'" type="danger" plain :loading="trashingTaskId === task.id" @click="trashCancelledTask(task)">删除</el-button>
+              >{{ videoProjectPrimaryAction(task) }}</el-button>
+              <template v-else>
+                <el-button @click="openTaskDetail(task)">查看详情</el-button>
+                <el-button v-if="!task.assigneeEmployeeId && task.status === 'OPEN'" type="primary" @click="acceptTask(task)">领取</el-button>
+                <el-button v-if="!isAiContentTask(task) && task.assigneeEmployeeId === user.id && ['ACCEPTED','RETURNED'].includes(task.status)" type="primary" @click="startTask(task)">开始</el-button>
+                <el-button v-if="!isAiContentTask(task) && task.assigneeEmployeeId === user.id && ['ACCEPTED','IN_PROGRESS','RETURNED'].includes(task.status)" @click="openSubmit(task)">提交成果</el-button>
+                <el-button v-if="task.sourceType === 'SELF_CREATED' && (!isAiContentTask(task) || task.status === 'ACCEPTED') && !['COMPLETED','CANCELLED','VERIFIED'].includes(task.status)" @click="openSelfTaskEdit(task)">修改</el-button>
+                <el-button v-if="task.sourceType === 'SELF_CREATED' && !['COMPLETED','CANCELLED','VERIFIED'].includes(task.status)" type="danger" plain @click="cancelOwnedTask(task)">取消任务</el-button>
+                <el-button v-if="task.sourceType === 'SELF_CREATED' && task.status === 'CANCELLED'" @click="openSelfTaskCopy(task)">复制再次添加</el-button>
+                <el-button v-if="task.sourceType === 'SELF_CREATED' && task.status === 'CANCELLED'" type="danger" plain :loading="trashingTaskId === task.id" @click="trashCancelledTask(task)">删除</el-button>
+              </template>
             </div>
             <section
               v-if="isVideoProjectTask(task) && expandedTaskVideoProjectId === (task.sourceId || task.evidence?.contentPlanId)"
@@ -3285,11 +3366,19 @@ onBeforeUnmount(() => {
                     <h3>{{ videoFlowSteps[videoFlowStep(taskVideoProjectDetail) - 1] }}</h3>
                     <p>{{ videoProjectTaskHint(task) }}</p>
                     <div class="video-project-version-strip">
-                      <el-tag size="small">{{ taskVideoProjectDetail.productionNo || taskVideoProjectDetail.id }}</el-tag>
                       <el-tag size="small" type="info">项目版本 v{{ taskVideoProjectDetail.workflowVersion || 1 }}</el-tag>
                       <el-tag size="small" type="success">{{ videoProjectStageLabel(taskVideoProjectDetail.productionStage) }}</el-tag>
                       <span>后续任务只使用当前已审核版本；旧版本任务会自动停止，不会覆盖新结果。</span>
                     </div>
+                    <details class="video-project-more-info">
+                      <summary>更多信息</summary>
+                      <div>
+                        <span v-if="task.projection?.project?.keywords">关键词：{{ task.projection.project.keywords }}</span>
+                        <span v-if="task.projection?.project?.platform">发布平台：{{ task.projection.project.platform }}</span>
+                        <span>项目模式：{{ videoProjectModeLabel(task) || "标准智能项目" }}</span>
+                        <span>项目编号：{{ taskVideoProjectDetail.productionNo || taskVideoProjectDetail.id }}</span>
+                      </div>
+                    </details>
                   </div>
                   <el-button
                     @click="refreshTaskVideoProject"
@@ -3454,7 +3543,7 @@ onBeforeUnmount(() => {
 
                 <section v-if="videoFlowStep(taskVideoProjectDetail) >= 3 && (!isCodexDirectVideoProject(taskVideoProjectDetail) || !codexDirectShouldShowProgress(taskVideoProjectDetail))" class="task-video-stage-panel">
                   <h4>{{ videoFlowStep(taskVideoProjectDetail) === 3 ? "成片审核" : "封面标题、发布与回传" }}</h4>
-                  <article v-for="job in taskVideoProjectDetail.videoRenderJobs || []" :key="job.id" class="task-finished-video-row">
+                  <article v-for="job in reviewableVideoRenderJobs(taskVideoProjectDetail)" :key="job.id" class="task-finished-video-row">
                     <div>
                       <strong>{{ job.outputAsset?.displayName || "视频成片" }}</strong>
                       <el-tag size="small" :type="renderStatusType(job)">{{ renderStatusText(job) }}</el-tag>
@@ -5111,7 +5200,7 @@ onBeforeUnmount(() => {
 
   <el-dialog
     v-model="videoReviewVisible"
-    :title="videoReviewForm.action === 'APPROVE' ? '审核通过成片' : '退回成片修改'"
+    title="退回成片修改"
     width="min(620px, 94vw)"
     destroy-on-close
   >
@@ -5125,22 +5214,22 @@ onBeforeUnmount(() => {
       <el-form-item label="成片">
         <strong>{{ videoReviewJob?.outputAsset?.displayName || videoReviewJob?.outputAsset?.fileName || "当前成片" }}</strong>
       </el-form-item>
-      <el-form-item :label="videoReviewForm.action === 'RETURN' ? '退回说明（必填）' : '审核说明（可选）'">
+      <el-form-item label="退回说明（必填）">
         <el-input
           v-model="videoReviewForm.note"
           type="textarea"
           :rows="5"
-          :placeholder="videoReviewForm.action === 'RETURN' ? '请具体说明需要修改的字幕、配音、画面、节奏、产品展示或 CTA 等问题' : '可填写确认意见'"
+          placeholder="请具体说明需要修改的字幕、配音、画面、节奏、产品展示或 CTA 等问题"
         />
       </el-form-item>
     </el-form>
     <template #footer>
       <el-button @click="videoReviewVisible = false">取消</el-button>
       <el-button
-        :type="videoReviewForm.action === 'APPROVE' ? 'success' : 'danger'"
+        type="danger"
         :loading="Boolean(reviewingVideoAssetId)"
         @click="reviewWorkbenchVideo"
-      >{{ videoReviewForm.action === "APPROVE" ? "确认通过" : "确认退回并同步说明" }}</el-button>
+      >确认退回并同步说明</el-button>
     </template>
   </el-dialog>
 

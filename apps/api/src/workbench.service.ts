@@ -326,7 +326,27 @@ export class WorkbenchService {
       },
       include: this.taskInclude(),
     });
-    if (existing) return existing;
+    if (existing) {
+      // The employee task is the stable entry point for a video project.  Keep
+      // it in sync when a returned master creates a new revision task, instead
+      // of leaving the card to describe the prior render attempt.
+      const existingEvidence = object(existing.evidence);
+      return this.prisma.opsTask.update({
+        where: { id: existing.id },
+        data: {
+          title: project.topic || existing.title,
+          evidence: {
+            ...existingEvidence,
+            taskType: "VIDEO_PROJECT",
+            contentPlanId: project.id,
+            productionNo: project.productionNo || value(existingEvidence.productionNo) || null,
+            projectStage: project.productionStage || value(existingEvidence.projectStage) || "PROJECT_BRIEF",
+            projectPath: `/data-center/video-projects/${project.id}`,
+          } as Prisma.InputJsonValue,
+        },
+        include: this.taskInclude(),
+      });
+    }
     return this.createTask({
       title: project.topic || "视频项目",
       description: `员工新建视频项目后自动形成。项目编号：${project.productionNo || project.id}。脚本生成任务已自动提交，请进入项目查看当前阶段并处理待办事项。`,
@@ -1881,10 +1901,13 @@ export class WorkbenchService {
       id: project.id,
       productionNo: project.productionNo,
       productModel: project.productModel || null,
+      projectMode: value(factory.projectMode) || "SINGLE_SCRIPT_SYSTEM_FIRST",
+      topic: project.topic || null,
       platform: Array.isArray(project.targetPlatforms) ? project.targetPlatforms[0] || null : null,
       videoType: value(brief.videoType) || null,
       keywords: value(brief.keywords) || null,
       createdAt: project.createdAt || null,
+      updatedAt: project.updatedAt || null,
       stage,
       step: current[0],
       displayStatus: current[1],
@@ -2005,6 +2028,7 @@ export class WorkbenchService {
     priority: string;
     dueAt: Date | null;
     createdAt: Date;
+    updatedAt?: Date;
     sourceType?: string | null;
     category?: string | null;
   }>(tasks: T[]): T[] {
@@ -2014,7 +2038,7 @@ export class WorkbenchService {
       const rightVideoProject = right.sourceType === "VIDEO_PROJECT" || right.category === "VIDEO_PROJECT";
       if (leftVideoProject !== rightVideoProject) return leftVideoProject ? -1 : 1;
       if (leftVideoProject && rightVideoProject) {
-        return right.createdAt.getTime() - left.createdAt.getTime();
+        return (right.updatedAt?.getTime() ?? right.createdAt.getTime()) - (left.updatedAt?.getTime() ?? left.createdAt.getTime());
       }
       const priority = (weight[left.priority] ?? 9) - (weight[right.priority] ?? 9);
       if (priority) return priority;

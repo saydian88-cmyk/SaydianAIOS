@@ -373,6 +373,14 @@ main { grid-column: 2; width: min(1240px, calc(100% - 48px)); margin: 24px auto;
 }
 .video-task-identifiers { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
 .video-task-identifiers span { max-width: 260px; overflow: hidden; padding: 3px 8px; border: 1px solid #e7e2da; border-radius: 999px; color: #676f6b; background: #faf9f6; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.video-task-identifiers .video-project-due { color: #b54708; border-color: #f4d7a1; background: #fff8eb; }
+.video-project-card-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.video-project-card-title { cursor: pointer; }
+.video-project-card-title:hover { color: #2d80d8; }
+.video-project-card-title:focus-visible { outline: 2px solid #409eff; outline-offset: 3px; border-radius: 4px; }
+.video-project-more-info { margin-top: 9px; color: #66736e; font-size: 12px; }
+.video-project-more-info summary { width: max-content; cursor: pointer; color: #427a69; }
+.video-project-more-info > div { display: flex; flex-wrap: wrap; gap: 6px 14px; padding-top: 8px; }
 .shot-binding-detail b { color: #27453d; }
 .shot-task-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 .locked-shot-upload { margin-bottom: 14px; }

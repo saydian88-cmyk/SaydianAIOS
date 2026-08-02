@@ -1286,7 +1286,17 @@ export class WorkbenchController {
       skipPaidBudget: true,
     }, employee.name) as Record<string, any>;
     await this.videoFactory.attachRemoteTask(id, task.id, "FULL_VIDEO", employee.name);
-    return { project: await this.videoFactory.project(id), task };
+    const submittedProject = await this.videoFactory.project(id) as Record<string, any>;
+    await this.workbench.ensureVideoProjectTask(
+      { employeeId: employee.employeeId, name: employee.name },
+      {
+        id: submittedProject.id,
+        productionNo: submittedProject.productionNo,
+        topic: submittedProject.topic,
+        productionStage: submittedProject.productionStage,
+      },
+    );
+    return { project: submittedProject, task };
   }
 
   private async submitCodexDirectFullVideoTask(authorization: string | undefined, id: string) {
@@ -1348,7 +1358,17 @@ export class WorkbenchController {
       skipPaidBudget: true,
     }, employee.name) as Record<string, any>;
     await this.videoFactory.attachRemoteTask(id, task.id, "FULL_VIDEO", employee.name);
-    return { project: await this.videoFactory.project(id), task };
+    const submittedProject = await this.videoFactory.project(id) as Record<string, any>;
+    await this.workbench.ensureVideoProjectTask(
+      { employeeId: employee.employeeId, name: employee.name },
+      {
+        id: submittedProject.id,
+        productionNo: submittedProject.productionNo,
+        topic: submittedProject.topic,
+        productionStage: submittedProject.productionStage,
+      },
+    );
+    return { project: submittedProject, task };
   }
 
   @Post("data-center/video-projects/:id/script-transfer-to-codex")
