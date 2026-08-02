@@ -199,6 +199,7 @@ function compileReferenceDirectFullVideoPrompt(project: Record<string, any>, bri
 
 function compileCodexDirectFullVideoPrompt(project: Record<string, any>, brief: Record<string, unknown>, revision: Record<string, unknown> = {}) {
   const prompt = String(brief.additionalPrompt || "").trim();
+  const directCreativeMode = /无口播|纯音乐|卡点/u.test(prompt) ? "NO_VOICE_VIDEO" : "FULL_VIDEO";
   const revisionNote = String(revision.reviewNote || "").trim();
   const revisionLines = revisionNote ? [
     "【定向成片修改】本任务不是从零重新创作。必须基于指定的原成片和原任务进行定向修改。",
@@ -213,9 +214,13 @@ function compileCodexDirectFullVideoPrompt(project: Record<string, any>, brief: 
     `项目编号：${project.productionNo || project.id}`,
     `产品型号：${project.productModel || "未提供"}`,
     `用户 AI 提示词：${prompt}`,
+    `内部创作模式：${directCreativeMode}`,
     "请直接完成：脚本 → 素材匹配 → 剪辑 → 9:16 成片。中间脚本、镜头、素材匹配、剪辑进度均不回传系统；仅在最终成片完成或任务失败时回传。",
     "无需脚本审核、无需素材补全确认，员工只审核最终成片。",
-    "这是本地素材库直出模式：系统不会提供 assets、素材快照、素材 ID 或包装资源。只能读取本地已同步的“当前产品型号 + 视觉校验通过 + 可剪辑 VIDEO”清单；禁止使用其他型号、未校验素材、图片、音频或包装资源作为主镜头。",
+    "这是本地素材库直出模式：系统不会提供主画面 assets、素材快照或素材绑定。主画面只能读取本地已同步的“当前产品型号 + 视觉校验通过 + 可剪辑 VIDEO”清单；禁止使用其他型号、未校验素材、图片、音频或包装资源作为主镜头。包装阶段必须按完整版 Skill 使用本机包装资源库，包装资源只能用于 BGM、音效、贴纸、花字、字体和特效层。",
+    ...(directCreativeMode === "NO_VOICE_VIDEO" ? [
+      "这是无口播卡点视频，必须完整执行 no-voice-beat-editing.md：先选择真实 BGM 并生成节拍表，再按动作、构图和重拍设计逐切点转场；不得用程序生成的正弦音、蜂鸣或占位节拍代替 BGM。",
+    ] : []),
     "不得向系统回传中间脚本、镜头、素材匹配或素材绑定；完成时仅回传真实主成片路径、成片元数据和简短审核说明。",
     "当前产品没有足够的已校验视频素材时，必须返回 FAILED，原因写 MATERIAL_GAP_EXACT_PRODUCT；不得用其他型号补位或伪造产品功能、医疗效果或不存在的素材事实。",
     ...revisionLines,
@@ -1334,6 +1339,8 @@ export class WorkbenchController {
     const revision = factory.directVideoRevision && typeof factory.directVideoRevision === "object"
       ? factory.directVideoRevision as Record<string, unknown>
       : {};
+    const directPrompt = String(brief.additionalPrompt || "").trim();
+    const directCreativeMode = /无口播|纯音乐|卡点/u.test(directPrompt) ? "NO_VOICE_VIDEO" : "FULL_VIDEO";
     const task = await this.aiTasks.createTask({
       type: "VIDEO",
       title: `${project.topic} · Codex 直出成片`,
@@ -1356,14 +1363,16 @@ export class WorkbenchController {
         skillName: "video-editing-from-media-library-share",
         codexDirectInput: {
           productModel: project.productModel,
-          prompt: String(brief.additionalPrompt || "").trim(),
+          prompt: directPrompt,
+          creativeMode: directCreativeMode,
           ...(Object.keys(revision).length ? { revision } : {}),
           materialPolicy: {
             source: "LOCAL_VERIFIED_EDITING_VIDEOS_BY_PRODUCT",
             exactProductModel: project.productModel,
             allowCrossProduct: false,
             allowUnverified: false,
-            allowPackaging: false,
+            allowPackaging: true,
+            packagingUse: "PACKAGING_ONLY_NOT_PRIMARY_FOOTAGE",
             allowedKinds: ["VIDEO"],
           },
         },

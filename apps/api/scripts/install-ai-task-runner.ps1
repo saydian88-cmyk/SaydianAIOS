@@ -4,6 +4,7 @@ param(
   [string]$NodeCode = "windows-codex-01",
   [string]$TaskName = "Saydian AI Task Runner",
   [string]$CodexExecutable = "codex.cmd",
+  [string]$PythonExecutable = "python.exe",
   [switch]$ValidateOnly
 )
 
@@ -18,6 +19,13 @@ $resolvedPnpm = (Get-Command pnpm.cmd -ErrorAction Stop).Source
 $resolvedCodex = (Get-Command $CodexExecutable -ErrorAction Stop).Source
 $resolvedFfmpeg = (Get-Command ffmpeg.exe -ErrorAction Stop).Source
 $resolvedFfprobe = (Get-Command ffprobe.exe -ErrorAction Stop).Source
+$resolvedPython = (Get-Command $PythonExecutable -ErrorAction SilentlyContinue).Source
+if (-not $resolvedPython) {
+  $resolvedPython = Get-ChildItem -LiteralPath (Join-Path $env:USERPROFILE ".cache\codex-runtimes") -Recurse -Filter "python.exe" -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.FullName -match "dependencies\\python\\python\.exe$" } |
+    Select-Object -ExpandProperty FullName -First 1
+}
+if (-not $resolvedPython) { throw "Python executable is required for video Skill validators" }
 $codexHome = [Environment]::GetEnvironmentVariable("CODEX_HOME", "Process")
 if (-not $codexHome) { $codexHome = [Environment]::GetEnvironmentVariable("CODEX_HOME", "User") }
 if (-not $codexHome) { throw "CODEX_HOME is not configured" }
@@ -58,6 +66,7 @@ $lines = @(
   "CODEX_EXECUTABLE=$resolvedCodex"
   "FFMPEG_EXECUTABLE=$resolvedFfmpeg"
   "FFPROBE_EXECUTABLE=$resolvedFfprobe"
+  "AI_TASK_PYTHON_EXECUTABLE=$resolvedPython"
 )
 Set-Content -LiteralPath $configPath -Value $lines -Encoding UTF8
 

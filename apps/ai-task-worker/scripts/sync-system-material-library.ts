@@ -85,6 +85,13 @@ function isVerifiedEditingVideo(asset: Row) {
   return asset.kind === "VIDEO" && !isPackagingAsset(asset) && Boolean(verifiedModelOf(asset));
 }
 
+function hasKnownVariantConflict(entry: Row, model: string) {
+  const searchable = `${String(entry.displayName || "")} ${String(entry.localPath || "")} ${String(entry.relativePath || "")}`;
+  if (/^W8Ultra$/iu.test(model) && /(?:W8U|W8Ultra)[-_ ]?R(?:\b|[-_ ])/iu.test(searchable)) return true;
+  if (/^W8Ultra-R$/iu.test(model) && !/(?:W8U|W8Ultra)[-_ ]?R(?:\b|[-_ ])/iu.test(searchable)) return true;
+  return false;
+}
+
 function modelOf(asset: Row) {
   const learned = verifiedModelOf(asset) || strings(asset.aiIndex?.product_model)[0];
   const related = Array.isArray(asset.products) ? asset.products.map((item: Row) => String(item.product?.modelCode || "")).find(Boolean) : "";
@@ -283,6 +290,7 @@ async function main() {
     .reduce<Record<string, Row[]>>((products, entry) => {
       const model = cleanName(String(entry.visualProductValidation?.matchedModelCode || entry.model || ""));
       if (!model || model === "未验证型号" || model === "通用") return products;
+      if (hasKnownVariantConflict(entry, model)) return products;
       const rows = products[model] || [];
       rows.push({
         systemAssetId: entry.systemAssetId,

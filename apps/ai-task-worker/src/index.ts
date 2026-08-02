@@ -2,7 +2,7 @@ import "dotenv/config";
 import { execFile, spawn } from "node:child_process";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
-import { basename, extname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { safeName, sha256, verifySha256 } from "./worker-utils";
 import {
   detectSkill,
@@ -45,6 +45,7 @@ const materialSyncMs = Math.max(60_000, Number(process.env.AI_TASK_MATERIAL_SYNC
 const codexExecutable = String(process.env.CODEX_EXECUTABLE || (process.platform === "win32" ? "codex.cmd" : "codex"));
 const ffmpegExecutable = String(process.env.FFMPEG_EXECUTABLE || "ffmpeg");
 const ffprobeExecutable = String(process.env.FFPROBE_EXECUTABLE || "ffprobe");
+const pythonExecutable = String(process.env.AI_TASK_PYTHON_EXECUTABLE || process.env.PYTHON_EXECUTABLE || "python");
 const execFileAsync = promisify(execFile);
 const systemMaterialRoot = join(workRoot, "system-material-library");
 const systemMaterialAssetsRoot = join(systemMaterialRoot, "assets");
@@ -671,6 +672,7 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
     && taskInput.codexDirectFullVideo === true;
   if (isCodexDirectFullVideo) {
     const directInput = record(taskInput.codexDirectInput);
+    const creativeMode = String(directInput.creativeMode || "FULL_VIDEO").toUpperCase();
     const revision = record(directInput.revision || taskInput.revision);
     const isRevision = Boolean(String(revision.reviewNote || "").trim());
     const directModeContract = [
@@ -681,7 +683,16 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
       "Use only VIDEO entries admitted by that manifest. Each entry must be an active approved system asset with a local file mapping and an exact product relation equal to this task productModel. Never use another product model, unverified media, images, audio, packaging, cover, sticker, transition or template resources as footage.",
       "If the local library is not initialized or not ready, fail explicitly with the missing local configuration or index. Do not return a system-task WAITING_INPUT result.",
       "The employee UI only receives the final review node, but internal script, shot plan, material coverage, composition, packaging, audio and delivery QA steps remain mandatory.",
-      "Create requirements-check.json, shot-plan.json, composition-qc.json, packaging-qc.json and audio-qc.json in the task workspace with real evidence. Return exactly one real 1080x1920 MP4 VIDEO_MASTER and delivery={taskMode:CODEX_DIRECT_FULL_VIDEO, finalReviewOnly:true}.",
+      "Packaging is mandatory. Use F:\\包装资源包 and its learned packaging index for BGM, SFX, stickers, typography and effects; packaging resources may never be used as primary footage.",
+      "Create requirements-check.json, shot-plan.json, composition-qc.json, packaging-qc.json, audio-qc.json, transition-qc.json and render-evidence.json in the task workspace with real evidence. All three official Python validators must actually pass. Return exactly one real 1080x1920 MP4 VIDEO_MASTER and delivery={taskMode:CODEX_DIRECT_FULL_VIDEO, finalReviewOnly:true}.",
+      "Use the exact schemas required by the official validators: requirements-check.json must use a requirements array; shot-plan.json must use the full Skill shot-plan schema including a visual_reference object; composition-qc.json must use a non-empty videos array. Run the validators instead of inventing substitute schemas.",
+      "render-evidence.json must identify the HyperFrames project and contain successful doctor, lint, validate, inspect and render command records with non-empty log files. A plain FFmpeg concat is not the full editing Skill and must not be delivered.",
+      "transition-qc.json must contain cuts with one item for every non-first shot. Each cut requires beforeSeconds>=0.6, afterSeconds>=0.6, a non-empty observation, the actual transition name and passed=true only after viewing the rendered cut.",
+      ...(creativeMode === "NO_VOICE_VIDEO" ? [
+        "NO_VOICE_VIDEO_CONTRACT: Fully execute references/no-voice-beat-editing.md. Choose a real licensed BGM from the local packaging library first, create a real beat map, and edit visuals against its sections and accent beats.",
+        "Do not synthesize sine waves, beeps or placeholder rhythm audio. For every cut, preview at least 0.6 seconds on both sides and record the observed motion, composition, scale, direction, color and chosen transition in transition-qc.json.",
+        "audio-qc.json must contain bgm.sourcePath pointing to the real local BGM and beatMap.downbeats as a non-empty array.",
+      ] : []),
       ...(isRevision ? [
         "REVISION_CONTRACT: This is a targeted revision, not a new creative job. Reuse the previous project structure, footage choices, pacing, audio, and output specification wherever they do not conflict with the return reason.",
         "Locate and reuse the previous task's local final MP4 when it is available. Make only the requested corrections. Do not silently replace the entire concept, product, or video structure.",
@@ -698,6 +709,7 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
         taskId: String(task.id || ""),
         productModel: String(directInput.productModel || task.productModel || ""),
         aiPrompt: String(directInput.prompt || ""),
+        creativeMode,
         materialPolicy: record(directInput.materialPolicy),
         ...(isRevision ? { revision } : {}),
       }, null, 2),
@@ -1450,16 +1462,24 @@ async function validateOutputArtifacts(result: JsonRecord, workspace: string) {
   return result;
 }
 
-async function validateMandatoryVideoEvidence(taskPackageValue: JsonRecord, workspace: string) {
+async function validateMandatoryVideoEvidence(
+  taskPackageValue: JsonRecord,
+  workspace: string,
+  detectedSkill: DetectedSkill,
+) {
   const task = record(taskPackageValue.task);
   const execution = record(taskPackageValue.execution);
   if (String(task.type || "") !== "VIDEO" || !["FULL_VIDEO", "SIMILAR_VIDEO", "NO_VOICE_VIDEO"].includes(String(execution.mode || ""))) return;
+  const direct = isCodexDirectFullVideoTask(taskPackageValue);
+  const directInput = record(record(task.input).codexDirectInput);
+  const creativeMode = String(directInput.creativeMode || "FULL_VIDEO").toUpperCase();
   const requiredFiles = [
     "requirements-check.json",
     "shot-plan.json",
     "composition-qc.json",
     "packaging-qc.json",
     "audio-qc.json",
+    ...(direct ? ["transition-qc.json", "render-evidence.json"] : []),
   ];
   for (const file of requiredFiles) {
     const path = join(workspace, file);
@@ -1478,6 +1498,86 @@ async function validateMandatoryVideoEvidence(taskPackageValue: JsonRecord, work
   if (!rows.length) throw new Error("requirements-check.json 没有逐项验收记录");
   const failed = rows.filter((item) => item.applicable !== false && item.passed !== true);
   if (failed.length) throw new Error(`完整版剪辑Skill仍有未通过要求：${failed.map((item) => String(item.id || "unknown")).join("、")}`);
+
+  if (!direct) return;
+  const downstreamSkillPath = String(detectedSkill.downstreamSkillPath || "").trim();
+  if (!downstreamSkillPath) throw new Error("完整版剪辑Skill路径缺失，无法执行官方质检器");
+  const skillRoot = dirname(downstreamSkillPath);
+  const runValidator = async (script: string, args: string[]) => {
+    try {
+      await execFileAsync(pythonExecutable, [join(skillRoot, "scripts", script), ...args], {
+        cwd: workspace,
+        timeout: 120_000,
+        windowsHide: true,
+        maxBuffer: 4 * 1024 * 1024,
+      });
+    } catch (error) {
+      const detail = error && typeof error === "object"
+        ? String((error as { stderr?: unknown; stdout?: unknown; message?: unknown }).stderr
+          || (error as { stdout?: unknown }).stdout
+          || (error as { message?: unknown }).message
+          || "")
+        : String(error);
+      throw new Error(`完整版剪辑Skill官方质检失败（${script}）：${detail.slice(0, 800)}`);
+    }
+  };
+  await runValidator("validate_hard_requirements.py", [
+    "--check", join(workspace, "requirements-check.json"),
+    "--stage", "final",
+    "--video-type", creativeMode === "NO_VOICE_VIDEO" ? "no_voice" : "voice",
+  ]);
+  await runValidator("validate_shot_plan.py", [join(workspace, "shot-plan.json")]);
+  await runValidator("validate_rendered_composition.py", [join(workspace, "composition-qc.json")]);
+
+  const shotPlan = record(await readJson<JsonRecord>(join(workspace, "shot-plan.json")));
+  const videos = Array.isArray(shotPlan.videos) ? shotPlan.videos.map(record) : [];
+  const shots = videos.flatMap((video) => Array.isArray(video.shots) ? video.shots.map(record) : []);
+  const productModel = String(task.productModel || directInput.productModel || "").trim();
+  if (/^W8Ultra$/iu.test(productModel)) {
+    const conflicts = shots.filter((shot) => /(?:W8U|W8Ultra)[-_ ]?R(?:\b|[-_ ])/iu.test(String(shot.source || "")));
+    if (conflicts.length) throw new Error("精确型号校验失败：W8Ultra 成片混入 W8Ultra-R/W8U-R 素材");
+  }
+
+  const transitions = record(await readJson<JsonRecord>(join(workspace, "transition-qc.json")));
+  const cuts = Array.isArray(transitions.cuts) ? transitions.cuts.map(record) : [];
+  if (cuts.length !== Math.max(0, shots.length - videos.length)) {
+    throw new Error("transition-qc.json 未逐一覆盖全部剪辑点");
+  }
+  const invalidCuts = cuts.filter((cut) => Number(cut.beforeSeconds || 0) < 0.6
+    || Number(cut.afterSeconds || 0) < 0.6
+    || cut.passed !== true
+    || !String(cut.observation || "").trim()
+    || !String(cut.transition || "").trim());
+  if (invalidCuts.length) throw new Error("逐切点自然度质检未通过或缺少前后0.6秒真实观察证据");
+
+  const renderEvidence = record(await readJson<JsonRecord>(join(workspace, "render-evidence.json")));
+  if (String(renderEvidence.engine || "").toUpperCase() !== "HYPERFRAMES") {
+    throw new Error("直出成片未使用完整版Skill规定的 HyperFrames 渲染链");
+  }
+  const commands = Array.isArray(renderEvidence.commands) ? renderEvidence.commands.map(record) : [];
+  for (const name of ["doctor", "lint", "validate", "inspect", "render"]) {
+    const command = commands.find((item) => String(item.name || "").toLowerCase() === name);
+    if (!command || Number(command.exitCode) !== 0) throw new Error(`HyperFrames ${name} 未真实通过`);
+    const logPath = resolve(workspace, String(command.logPath || ""));
+    const logRelative = relative(workspace, logPath);
+    if (!String(command.logPath || "") || logRelative.startsWith("..") || isAbsolute(logRelative)) {
+      throw new Error(`HyperFrames ${name} 日志路径无效`);
+    }
+    const info = await stat(logPath).catch(() => undefined);
+    if (!info?.isFile() || info.size < 10) throw new Error(`HyperFrames ${name} 缺少非空执行日志`);
+  }
+
+  if (creativeMode === "NO_VOICE_VIDEO") {
+    const audioQc = record(await readJson<JsonRecord>(join(workspace, "audio-qc.json")));
+    const bgm = record(audioQc.bgm);
+    const beatMap = record(audioQc.beatMap);
+    if (!String(bgm.sourcePath || "").trim() || !Array.isArray(beatMap.downbeats) || !beatMap.downbeats.length) {
+      throw new Error("无口播成片缺少本地真实BGM路径或有效节拍表");
+    }
+    if (/sine|beep|placeholder|程序化|占位/iu.test(`${String(bgm.sourcePath || "")} ${String(bgm.description || "")}`)) {
+      throw new Error("无口播成片禁止使用正弦音、蜂鸣或程序化占位音轨代替BGM");
+    }
+  }
 }
 
 // A completed Codex direct-output task may fail only while registering its MP4
@@ -1753,7 +1853,7 @@ async function execute(claimed: JsonRecord) {
       await writeJsonAtomic(join(workspace, "result.json"), result);
     }
 
-    await validateMandatoryVideoEvidence(packaged, workspace);
+    await validateMandatoryVideoEvidence(packaged, workspace, detectedSkill);
     await report("QUALITY_CHECK", 78, "result.json、产物哈希与完整版剪辑证据校验通过", {
       schemaAttempts,
       outputCount: Array.isArray(result.outputFiles) ? result.outputFiles.length : 0,

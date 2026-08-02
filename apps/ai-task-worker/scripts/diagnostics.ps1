@@ -14,6 +14,7 @@ $checks = @(
   @{ Name = "Codex"; Command = "codex.cmd"; Config = "CODEX_EXECUTABLE" },
   @{ Name = "FFmpeg"; Command = "ffmpeg.exe"; Config = "FFMPEG_EXECUTABLE" },
   @{ Name = "FFprobe"; Command = "ffprobe.exe"; Config = "FFPROBE_EXECUTABLE" }
+  @{ Name = "Python"; Command = "python.exe"; Config = "AI_TASK_PYTHON_EXECUTABLE" }
 )
 
 foreach ($check in $checks) {
