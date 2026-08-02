@@ -249,6 +249,13 @@ export class WorkbenchService {
       : {};
     const scope = value(query.scope).toUpperCase();
     const taskType = value(query.taskType).toUpperCase();
+    const paginated = value(query.paginated) === "1";
+    const pageSize = Math.min(Math.max(Number(query.pageSize) || 5, 1), 50);
+    const requestedPage = Math.max(Number(query.page) || 1, 1);
+    // The employee task page opens as a work queue, not as an archive.  Only
+    // apply this view when the user has not explicitly selected a status,
+    // task type, or another scope.
+    const defaultWorkQueue = value(query.defaultWorkQueue) === "1" && !status && !taskType && scope === "MINE";
     const typeFilter = taskType === "VIDEO_PROJECT"
       ? { OR: [{ sourceType: "VIDEO_PROJECT" }, { category: "VIDEO_PROJECT" }] }
       : taskType === "IMAGE_PROJECT"
@@ -286,7 +293,24 @@ export class WorkbenchService {
       orderBy: [{ dueAt: "asc" }, { createdAt: "desc" }],
       take: 200,
     });
-    return this.attachTaskProjections(this.sortTasks(rows));
+    const projected = await this.attachTaskProjections(this.sortTasks(rows));
+    const visible = defaultWorkQueue
+      ? projected.filter((task: any) => {
+          const isVideoProject = task.sourceType === "VIDEO_PROJECT" || task.category === "VIDEO_PROJECT";
+          if (isVideoProject) return !task.projection?.project?.hasReturnedPublishLink;
+          return !["COMPLETED", "VERIFIED", "CANCELLED"].includes(value(task.status).toUpperCase());
+        })
+      : projected;
+    if (!paginated) return visible;
+    const total = visible.length;
+    const page = Math.min(requestedPage, Math.max(Math.ceil(total / pageSize), 1));
+    const offset = (page - 1) * pageSize;
+    return {
+      items: visible.slice(offset, offset + pageSize),
+      total,
+      page,
+      pageSize,
+    };
   }
 
   async createSelfTask(session: SessionPayload, body: Record<string, unknown>) {
@@ -1867,6 +1891,8 @@ export class WorkbenchService {
       : {};
     const brief = object(factory.brief);
     const codexDirectFullVideo = value(factory.projectMode) === "CODEX_DIRECT_FULL_VIDEO";
+    const hasReturnedPublishLink = Array.isArray(project.variants)
+      && project.variants.some((variant: Record<string, unknown>) => Boolean(value(variant.manualPublishUrl)));
     const state: Record<string, [number, string, string]> = {
       PROJECT_BRIEF: [2, "脚本与素材准备中", "等待系统 AI 生成脚本并完成逐句素材匹配"],
       SCRIPT_GENERATING: [2, "脚本与素材准备中", "等待脚本和逐句素材匹配完成"],
@@ -1888,9 +1914,22 @@ export class WorkbenchService {
     const directRevision = factory.directVideoRevision && typeof factory.directVideoRevision === "object"
       ? factory.directVideoRevision as Record<string, unknown>
       : undefined;
+    // A newly returned master is authoritative.  The revision marker is only
+    // workflow context for the in-flight Codex task and must never hide a
+    // reviewable replacement video behind the old “修改中” message.
+    const reviewableMaster = Array.isArray(project.videoRenderJobs)
+      && project.videoRenderJobs.some((job: Record<string, unknown>) => {
+        const asset = object(job.outputAsset);
+        const reviewStatus = value(asset.reviewStatus).toUpperCase();
+        return value(job.status).toUpperCase() === "SUCCEEDED"
+          && Object.keys(asset).length > 0
+          && !["APPROVED", "RETURNED"].includes(reviewStatus);
+      });
     const directVideoReturned = codexDirectFullVideo
       && (value(project.masterVideoStatus).toUpperCase() === "RETURNED" || stage === "READY_TO_EDIT");
-    const current = codexDirectFullVideo && directRevision && ["EDITING", "FACTORY_GENERATING"].includes(stage)
+    const current = reviewableMaster
+      ? [3, "成片待审核", "预览成片并审核或填写原因退回"]
+      : codexDirectFullVideo && directRevision && ["EDITING", "FACTORY_GENERATING"].includes(stage)
       ? [3, "Codex 正在按退回说明修改成片", "等待 Codex 回传修改后的新成片，再次审核"]
       : directVideoReturned
         ? [3, "成片已退回", "正在准备按退回说明生成修改版本"]
@@ -1908,6 +1947,7 @@ export class WorkbenchService {
       keywords: value(brief.keywords) || null,
       createdAt: project.createdAt || null,
       updatedAt: project.updatedAt || null,
+      hasReturnedPublishLink,
       stage,
       step: current[0],
       displayStatus: current[1],
@@ -1957,10 +1997,17 @@ export class WorkbenchService {
             id: true,
             productionNo: true,
             productionStage: true,
+            masterVideoStatus: true,
             productModel: true,
             targetPlatforms: true,
             sourceSignals: true,
             createdAt: true,
+            variants: { select: { manualPublishUrl: true } },
+            videoRenderJobs: {
+              orderBy: { createdAt: "desc" },
+              take: 4,
+              select: { status: true, outputAsset: { select: { reviewStatus: true } } },
+            },
           },
         })
       : [];

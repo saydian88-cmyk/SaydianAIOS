@@ -53,6 +53,9 @@ const tasks = ref<Row[]>([]);
 const taskScope = ref("MINE");
 const taskStatus = ref("");
 const taskType = ref("");
+const taskPage = ref(1);
+const taskPageSize = 5;
+const taskTotal = ref(0);
 const selectedTaskIds = ref<string[]>([]);
 const bulkDeletingTasks = ref(false);
 const taskDetailVisible = ref(false);
@@ -918,14 +921,39 @@ async function recreateSystemOutput() {
 async function loadTasks() {
   loading.value = true;
   try {
-    const parameters = new URLSearchParams({ scope: taskScope.value });
+    const parameters = new URLSearchParams({
+      scope: taskScope.value,
+      paginated: "1",
+      page: String(taskPage.value),
+      pageSize: String(taskPageSize),
+    });
     if (taskStatus.value) parameters.set("status", taskStatus.value);
     if (taskType.value) parameters.set("taskType", taskType.value);
-    tasks.value = await api<Row[]>(`/api/v1/workbench/tasks?${parameters.toString()}`);
+    if (taskScope.value === "MINE" && !taskStatus.value && !taskType.value) parameters.set("defaultWorkQueue", "1");
+    const response = await api<Row[] | { items: Row[]; total: number; page: number; pageSize: number }>(`/api/v1/workbench/tasks?${parameters.toString()}`);
+    if (Array.isArray(response)) {
+      tasks.value = response;
+      taskTotal.value = response.length;
+    } else {
+      tasks.value = response.items || [];
+      taskTotal.value = Number(response.total) || 0;
+      taskPage.value = Number(response.page) || 1;
+    }
     selectedTaskIds.value = selectedTaskIds.value.filter((id) => tasks.value.some((task) => task.id === id && task.sourceType === "SELF_CREATED" && task.status === "CANCELLED"));
   } finally {
     loading.value = false;
   }
+}
+
+async function resetTaskPage() {
+  taskPage.value = 1;
+  selectedTaskIds.value = [];
+  await loadTasks();
+}
+
+async function changeTaskPage(page: number) {
+  taskPage.value = page;
+  await loadTasks();
 }
 
 function collaborationRoleLabel(employee: Row) {
@@ -1267,6 +1295,10 @@ function coverTitleTaskIsRunning(project?: Row) {
   return ["PENDING", "CLAIMED", "RUNNING", "QUALITY_CHECK", "UPLOADING", "RETRY"].includes(coverTitleTaskStatus(project));
 }
 
+function coverTitleTaskNeedsAttention(project?: Row) {
+  return ["FAILED", "WAITING_INPUT", "CANCELLED"].includes(coverTitleTaskStatus(project));
+}
+
 function coverTitleTaskProgress(project?: Row) {
   return Math.max(0, Math.min(100, Number(activeCoverTitleTask(project)?.progress || 0)));
 }
@@ -1282,6 +1314,17 @@ function coverTitleTaskMessage(project?: Row) {
 function packagingVariants(project?: Row) {
   return (Array.isArray(project?.variants) ? project!.variants : [])
     .filter((variant: Row) => Boolean(variant.coverPath || variant.packagingStatus === "PENDING_REVIEW" || variant.packagingStatus === "APPROVED" || variant.packagingStatus === "RETURNED"));
+}
+
+function packagingStatusText(variant: Row) {
+  if (variant.packagingStatus === "APPROVED") return "封面标题已通过";
+  if (variant.packagingStatus === "RETURNED") return "封面标题已退回";
+  return "封面标题待审核";
+}
+
+function packagingCoverText(variant: Row) {
+  const spec = variant.coverSpec && typeof variant.coverSpec === "object" ? variant.coverSpec as Row : {};
+  return String(spec.coverText || spec.cover_text || "").trim();
 }
 
 function activeProjectGenerationTask(project?: Row) {
@@ -3281,14 +3324,14 @@ onBeforeUnmount(() => {
       <template v-else-if="active === 'tasks'">
         <section class="toolbar section-card">
           <div class="task-toolbar-filters">
-            <el-segmented v-model="taskScope" :options="[{label:'我的任务',value:'MINE'},{label:'可领取',value:'AVAILABLE'},{label:'全部相关',value:'ALL'}]" @change="loadTasks" />
-            <el-select v-model="taskStatus" clearable placeholder="全部状态" @change="loadTasks">
+            <el-segmented v-model="taskScope" :options="[{label:'我的任务',value:'MINE'},{label:'可领取',value:'AVAILABLE'},{label:'全部相关',value:'ALL'}]" @change="resetTaskPage" />
+            <el-select v-model="taskStatus" clearable placeholder="全部状态" @change="resetTaskPage">
               <el-option label="待完成" value="TODO" />
               <el-option label="待审核" value="PENDING_REVIEW" />
               <el-option label="已完成" value="DONE" />
               <el-option label="已取消" value="CANCELLED" />
             </el-select>
-            <el-select v-model="taskType" clearable placeholder="全部任务类型" @change="loadTasks">
+            <el-select v-model="taskType" clearable placeholder="全部任务类型" @change="resetTaskPage">
               <el-option label="视频项目任务" value="VIDEO_PROJECT" />
               <el-option label="图文项目任务" value="IMAGE_PROJECT" />
               <el-option label="软文项目任务" value="ARTICLE_PROJECT" />
@@ -3613,7 +3656,7 @@ onBeforeUnmount(() => {
                         type="primary"
                         :loading="generatingPackagingProjectId === taskVideoProjectDetail.id"
                         @click="generateProjectPackaging(taskVideoProjectDetail, job)"
-                      >{{ coverTitleTaskStatus(taskVideoProjectDetail) === 'FAILED' || packagingVariants(taskVideoProjectDetail).length ? '重新生成封面和标题' : '生成封面和标题' }}</el-button>
+                      >{{ coverTitleTaskNeedsAttention(taskVideoProjectDetail) || packagingVariants(taskVideoProjectDetail).length ? '重新提交封面和标题' : '生成封面和标题' }}</el-button>
                       <el-button
                         v-if="job.outputAsset?.reviewStatus === 'APPROVED' && ['READY_TO_PUBLISH', 'PUBLISHING', 'TRACKING'].includes(String(taskVideoProjectDetail.productionStage || ''))"
                         @click="openPublishLink(taskVideoProjectDetail, job)"
@@ -3631,20 +3674,22 @@ onBeforeUnmount(() => {
                     </div>
                   </section>
                   <el-alert
-                    v-if="videoFlowStep(taskVideoProjectDetail) === 4 && coverTitleTaskStatus(taskVideoProjectDetail) === 'FAILED'"
-                    :title="`封面和标题生成失败：${coverTitleTaskMessage(taskVideoProjectDetail)}`"
-                    type="error"
+                    v-if="videoFlowStep(taskVideoProjectDetail) === 4 && coverTitleTaskNeedsAttention(taskVideoProjectDetail)"
+                    :title="`封面标题尚未写入项目：${coverTitleTaskMessage(taskVideoProjectDetail)}`"
+                    type="warning"
                     :closable="false"
                     show-icon
                   />
                   <div v-if="videoFlowStep(taskVideoProjectDetail) === 4 && packagingVariants(taskVideoProjectDetail).length" class="packaging-result-list">
                     <article v-for="variant in packagingVariants(taskVideoProjectDetail)" :key="variant.id" class="packaging-result-card">
+                      <img v-if="variant.coverPath" class="packaging-result-cover" :src="variant.coverPath" :alt="`${variant.title || '视频'}封面`" />
                       <div>
                         <el-tag size="small">{{ platformLabel(variant.platform) }}</el-tag>
                         <el-tag size="small" :type="variant.packagingStatus === 'APPROVED' ? 'success' : variant.packagingStatus === 'RETURNED' ? 'danger' : 'warning'">
-                          {{ variant.packagingStatus === 'APPROVED' ? '封面标题已通过' : variant.packagingStatus === 'RETURNED' ? '封面标题已退回' : '封面标题待审核' }}
+                          {{ packagingStatusText(variant) }}
                         </el-tag>
                         <strong>{{ variant.title || '待生成标题' }}</strong>
+                        <p v-if="packagingCoverText(variant)" class="packaging-cover-text">封面文字：{{ packagingCoverText(variant) }}</p>
                         <p>{{ variant.body || '暂无发布文案' }}</p>
                         <small v-if="variant.packagingRejectedReason">退回说明：{{ variant.packagingRejectedReason }}</small>
                       </div>
@@ -3655,6 +3700,17 @@ onBeforeUnmount(() => {
               </template>
             </section>
           </article>
+          <div v-if="taskTotal > taskPageSize" class="task-list-pagination">
+            <el-pagination
+              small
+              background
+              layout="total, prev, pager, next"
+              :current-page="taskPage"
+              :page-size="taskPageSize"
+              :total="taskTotal"
+              @current-change="changeTaskPage"
+            />
+          </div>
           <el-empty v-if="!tasks.length" description="没有符合条件的任务" />
         </section>
       </template>
@@ -4301,14 +4357,16 @@ onBeforeUnmount(() => {
                   </article>
                 </div>
                 <el-empty v-else :image-size="56" description="暂未生成成片" />
-                <div v-if="project.variants?.some((variant: Row) => variant.coverPath)" class="packaging-result-list">
-                  <article v-for="variant in project.variants.filter((item: Row) => item.coverPath)" :key="variant.id" class="packaging-result-card">
+                <div v-if="packagingVariants(project).length" class="packaging-result-list">
+                  <article v-for="variant in packagingVariants(project)" :key="variant.id" class="packaging-result-card">
+                    <img v-if="variant.coverPath" class="packaging-result-cover" :src="variant.coverPath" :alt="`${variant.title || '视频'}封面`" />
                     <div>
-                      <el-tag size="small">{{ variant.platform }}</el-tag>
+                      <el-tag size="small">{{ platformLabel(variant.platform) }}</el-tag>
                       <el-tag size="small" :type="variant.packagingStatus === 'APPROVED' ? 'success' : variant.packagingStatus === 'RETURNED' ? 'danger' : 'warning'">
-                        {{ variant.packagingStatus === "APPROVED" ? "包装已通过" : variant.packagingStatus === "RETURNED" ? "包装已退回" : "待包装审核" }}
+                        {{ packagingStatusText(variant) }}
                       </el-tag>
                       <strong>{{ variant.title || "待生成标题" }}</strong>
+                      <p v-if="packagingCoverText(variant)" class="packaging-cover-text">封面文字：{{ packagingCoverText(variant) }}</p>
                       <p>{{ variant.body || "暂无发布文案" }}</p>
                       <small v-if="variant.packagingRejectedReason">退回说明：{{ variant.packagingRejectedReason }}</small>
                     </div>

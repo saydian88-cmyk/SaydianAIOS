@@ -5,6 +5,7 @@ import { readdir, stat } from "node:fs/promises";
 import { basename, extname, relative, resolve, sep } from "node:path";
 import { opsConfig } from "../src/config";
 import { OssStorageService } from "../src/oss-storage.service";
+import { recordUploadedAssetMappings } from "./local-system-asset-map";
 
 type Category =
   | "BGM"
@@ -103,7 +104,17 @@ async function send(records: Array<Record<string, unknown>>, actor: string) {
       }
     }
   }
-  return result;
+  const mappedAssets: Array<Record<string, unknown>> = [];
+  for (const assetId of assetIds) {
+    const assetResponse = await fetch(`${baseUrl}/api/v1/brand-data/assets/${encodeURIComponent(assetId)}`, {
+      headers,
+      signal: AbortSignal.timeout(120_000),
+    });
+    if (!assetResponse.ok) throw new Error(`读取品牌素材 ${assetId} 以建立本地映射失败（HTTP ${assetResponse.status}）`);
+    mappedAssets.push(await assetResponse.json() as Record<string, unknown>);
+  }
+  const localMapping = await recordUploadedAssetMappings(mappedAssets);
+  return { ...result, localMapping };
 }
 
 async function main() {

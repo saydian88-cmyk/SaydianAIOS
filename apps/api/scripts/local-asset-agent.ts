@@ -5,6 +5,7 @@ import { readFile, readdir, stat } from "node:fs/promises";
 import { extname, relative, resolve, sep } from "node:path";
 import { opsConfig } from "../src/config";
 import { OssStorageService } from "../src/oss-storage.service";
+import { recordUploadedAssetMappings } from "./local-system-asset-map";
 
 const extensions = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".mp4", ".mov", ".mkv", ".webm", ".avi", ".mp3", ".wav", ".m4a", ".aac", ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".md"]);
 const images = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"]);
@@ -96,6 +97,16 @@ async function send(records: Array<Record<string, unknown>>, actor: string) {
       }
     }
   }
+  const mappedAssets: Array<Record<string, unknown>> = [];
+  for (const assetId of assetIds) {
+    const assetResponse = await fetch(`${baseUrl}/api/v1/brand-data/assets/${encodeURIComponent(assetId)}`, {
+      headers,
+      signal: AbortSignal.timeout(120_000),
+    });
+    if (!assetResponse.ok) throw new Error(`读取素材 ${assetId} 以建立本地映射失败（HTTP ${assetResponse.status}）`);
+    mappedAssets.push(await assetResponse.json() as Record<string, unknown>);
+  }
+  const localMapping = await recordUploadedAssetMappings(mappedAssets);
   const analysis: Array<{ assetId: string; ok: boolean; status: number; result: unknown }> = [];
   for (const assetId of assetIds) {
     const analyzeResponse = await fetch(`${baseUrl}/api/v1/brand-data/assets/${encodeURIComponent(assetId)}/reanalyze`, {
@@ -107,7 +118,7 @@ async function send(records: Array<Record<string, unknown>>, actor: string) {
     analysis.push({ assetId, ok: analyzeResponse.ok, status: analyzeResponse.status, result: analyzeResult });
     if (!analyzeResponse.ok) throw new Error(`素材 ${assetId} 提交百炼分析失败（HTTP ${analyzeResponse.status}）`);
   }
-  return { ...result, analysis };
+  return { ...result, analysis, localMapping };
 }
 
 async function main() {

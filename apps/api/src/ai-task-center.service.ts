@@ -107,6 +107,26 @@ function strings(value: unknown): string[] {
   return Array.isArray(value) ? value.map(text).filter(Boolean) : [];
 }
 
+/** Accept the platform labels returned by a skill while persisting the system enum. */
+function packagingPlatform(value: unknown) {
+  const raw = text(value);
+  const normalized = raw.toUpperCase().replace(/[\s_-]+/g, "");
+  const aliases: Record<string, string> = {
+    "抖音": "DOUYIN",
+    DOUYIN: "DOUYIN",
+    TIKTOK: "TIKTOK",
+    "小红书": "XIAOHONGSHU",
+    XIAOHONGSHU: "XIAOHONGSHU",
+    "B站": "BILIBILI",
+    BILIBILI: "BILIBILI",
+    "快手": "KUAISHOU",
+    KUAISHOU: "KUAISHOU",
+    "视频号": "WECHAT_CHANNELS",
+    WECHATCHANNELS: "WECHAT_CHANNELS",
+  };
+  return aliases[raw] || aliases[normalized] || raw.toUpperCase();
+}
+
 export function videoScriptOutputMetadata(candidates: unknown[]) {
   const normalized = candidates.map(object);
   const selected = normalized.find((candidate) => candidate.selected === true) || normalized[0] || {};
@@ -2128,9 +2148,19 @@ export class AiTaskCenterService implements OnModuleInit {
       }
       if (executionMode === "COVER_TITLE") {
         const contentPlanId = text(taskInput.existingContentPlanId);
-        const packaging = Array.isArray(result.packaging) ? result.packaging.map(object) : [];
+        const packagingSource = Array.isArray(result.packaging)
+          ? result.packaging
+          : Array.isArray(result.platformPackaging)
+            ? result.platformPackaging
+            : Array.isArray(result.platformTitles)
+              ? result.platformTitles
+              : [];
+        const packaging = packagingSource.map(object);
         if (!contentPlanId || !packaging.length) {
-          return { status: "WAITING_INPUT" as AiTaskStatus, message: "Codex未返回可回写的封面标题结果" };
+          return {
+            status: "WAITING_INPUT" as AiTaskStatus,
+            message: "封面标题任务已回传，但缺少按平台组织的标题与封面文案结果，未写入项目。请检查 AI 任务返回的 packaging 字段后重新提交。",
+          };
         }
         const plan = await this.prisma.contentPlan.findUnique({
           where: { id: contentPlanId },
@@ -2140,22 +2170,38 @@ export class AiTaskCenterService implements OnModuleInit {
         const outputs = await this.prisma.aiTaskOutput.findMany({
           where: { aiTaskId: task.id, assetId: { not: null }, mimeType: { startsWith: "image/" } },
           orderBy: { createdAt: "desc" },
+          include: { asset: { select: { storageUrl: true } } },
         });
         const updates = [];
-        for (const item of packaging) {
-          const platform = text(item.platform).toUpperCase();
-          const variant = plan.variants.find((candidate) => candidate.platform === platform);
-          const coverOutput = outputs.find((candidate) => text(object(candidate.metadata).platform).toUpperCase() === platform)
-            || (outputs.length === 1 ? outputs[0] : undefined);
-          if (!variant || !coverOutput?.url || !text(item.title) || !text(item.coverText)) continue;
+        const usedOutputIds = new Set<string>();
+        const skipped: string[] = [];
+        for (const [index, item] of packaging.entries()) {
+          const platform = packagingPlatform(item.platform || item.channel || item.targetPlatform);
+          const variant = plan.variants.find((candidate) => candidate.platform === platform)
+            || (plan.variants.length === 1 ? plan.variants[0] : undefined);
+          const coverOutput = outputs.find((candidate) => !usedOutputIds.has(candidate.id)
+            && packagingPlatform(object(candidate.metadata).platform) === String(variant?.platform || platform))
+            || (outputs.length === 1 && !usedOutputIds.has(outputs[0].id) ? outputs[0] : undefined)
+            || (outputs.length === packaging.length && !usedOutputIds.has(outputs[index]?.id)
+              ? outputs[index]
+              : undefined);
+          const title = text(item.title || item.titleZh || item.platformTitle);
+          const body = text(item.body || item.copy || item.description || item.publishCopy);
+          const coverText = text(item.coverText || item.cover_text || item.coverTextZh || item.cover_title || object(item.cover).text);
+          const coverUrl = coverOutput?.url || coverOutput?.asset?.storageUrl || "";
+          if (!variant || !coverOutput?.assetId || !coverUrl || !title || !coverText) {
+            skipped.push(platform || `第${index + 1}项`);
+            continue;
+          }
+          usedOutputIds.add(coverOutput.id);
           updates.push(this.prisma.contentVariant.update({
             where: { id: variant.id },
             data: {
-              title: text(item.title),
-              body: text(item.body),
-              coverPath: coverOutput.url,
+              title,
+              body,
+              coverPath: coverUrl,
               coverSpec: json({
-                coverText: text(item.coverText),
+                coverText,
                 hashtags: strings(item.hashtags),
                 contentFingerprint: text(item.contentFingerprint),
                 compliance: object(item.compliance),
@@ -2178,14 +2224,24 @@ export class AiTaskCenterService implements OnModuleInit {
           }));
         }
         if (!updates.length) {
-          return { status: "WAITING_INPUT" as AiTaskStatus, message: "封面文件未按平台登记，无法回写项目" };
+          const detail = [
+            packaging.length ? `收到${packaging.length}条平台结果` : "未收到平台结果",
+            outputs.length ? `已登记${outputs.length}张封面文件` : "未登记封面文件",
+            skipped.length ? `未能匹配：${skipped.join("、")}` : "",
+          ].filter(Boolean).join("；");
+          return { status: "WAITING_INPUT" as AiTaskStatus, message: `封面标题结果未能写入项目。${detail}` };
         }
         updates.push(this.prisma.contentPlan.update({
           where: { id: contentPlanId },
           data: { productionStage: "PACKAGING_REVIEW" },
         }));
         await this.prisma.$transaction(updates);
-        return { status: "PENDING_REVIEW" as AiTaskStatus, message: "封面和标题已回传，等待用户审核" };
+        return {
+          status: "PENDING_REVIEW" as AiTaskStatus,
+          message: skipped.length
+            ? `已写入${Math.floor((updates.length - 1) / 2)}个平台封面标题；其余${skipped.length}个平台需重新生成。`
+            : "封面和标题已回传，等待用户审核",
+        };
       }
       const existingContentPlanId = text(taskInput.existingContentPlanId);
       const directCodexFullVideo = executionMode === "FULL_VIDEO" && taskInput.codexDirectFullVideo === true;
@@ -2207,6 +2263,19 @@ export class AiTaskCenterService implements OnModuleInit {
         const project = await this.prisma.contentPlan.findUnique({ where: { id: existingContentPlanId } });
         if (!project) return { status: "WAITING_INPUT" as AiTaskStatus, message: "关联视频项目不存在" };
         const renderJob = await this.videoFactory.registerLocalMaster(project.id, masterOutput.assetId, task.id, actor);
+        const currentSignals = Array.isArray(project.sourceSignals)
+          ? project.sourceSignals.map(object)
+          : [];
+        const nextSignals = currentSignals.map((signal) => signal.type === "VIDEO_FACTORY"
+          ? {
+            ...signal,
+            // The revision has delivered a new master. Keep a small audit
+            // trail but remove the active marker so all projections show the
+            // video review instead of a stale “Codex 修改中” state.
+            directVideoRevision: undefined,
+            lastCompletedDirectVideoRevision: signal.directVideoRevision || undefined,
+          }
+          : signal);
         await this.prisma.$transaction([
           this.prisma.contentAsset.upsert({
             where: { contentPlanId_assetId_role: { contentPlanId: project.id, assetId: masterOutput.assetId, role: "VIDEO_FACTORY_MASTER" } },
@@ -2215,7 +2284,11 @@ export class AiTaskCenterService implements OnModuleInit {
           }),
           this.prisma.contentPlan.update({
             where: { id: project.id },
-            data: { masterVideoStatus: "READY_FOR_REVIEW", productionStage: "VIDEO_REVIEW" },
+            data: {
+              masterVideoStatus: "READY_FOR_REVIEW",
+              productionStage: "VIDEO_REVIEW",
+              sourceSignals: json(nextSignals),
+            },
           }),
           this.prisma.aiTaskOutput.update({
             where: { id: masterOutput.id },

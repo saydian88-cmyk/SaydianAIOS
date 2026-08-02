@@ -4312,7 +4312,18 @@ export class VideoFactoryService {
     if (["PACKAGING_REVIEW", "READY_TO_PUBLISH", "PUBLISHING", "TRACKING"].includes(persistedStage)) {
       return persistedStage;
     }
-    const render = row.videoRenderJobs?.[0];
+    // A returned historical master can remain on the project while Codex
+    // uploads its replacement. Prefer the newest reviewable output instead
+    // of letting that old returned asset force the whole project back to
+    // “修改中”.
+    const renders = row.videoRenderJobs || [];
+    const render = renders.find((item) => {
+      const reviewStatus = String(item.outputAsset?.reviewStatus || "").toUpperCase();
+      return String(item.status || "").toUpperCase() === "SUCCEEDED"
+        && Boolean(item.outputAsset)
+        && !["APPROVED", "RETURNED"].includes(reviewStatus);
+    }) || renders.find((item) => ["PENDING", "RUNNING", "RETRY"].includes(String(item.status || "").toUpperCase()))
+      || renders[0];
     const master = render?.outputAsset;
     if (master?.reviewStatus === "APPROVED") return "PLATFORM_PACKAGING";
     if (master?.reviewStatus === "RETURNED") {

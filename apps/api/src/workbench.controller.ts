@@ -300,6 +300,11 @@ export class WorkbenchController {
         })),
         revisionFeedback: returned,
         requiredOutputs: ["platform_titles", "cover_images", "title_workbook", "content_fingerprint", "compliance_report"],
+        resultContract: {
+          packaging: "每个目标平台一条，包含 platform、title、body、coverText、hashtags、contentFingerprint、compliance",
+          outputFiles: "每个平台上传一张 JPG 封面，kind=COVER_IMAGE，metadata.platform 必须等于目标平台枚举值",
+          platformEnum: project.targetPlatforms,
+        },
       },
       modelPolicy: { strategy: "CODEX_FIRST", allowExternalGeneration: false, allowFallback: false },
       estimatedCost: 0,
