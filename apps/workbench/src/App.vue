@@ -2702,6 +2702,7 @@ async function reviewProjectPackaging(approved: boolean) {
     ElMessage.success(approved ? "封面和标题审核通过，可以进入发布环节" : "已退回并同步修改说明");
     await invalidateDataCenterSection("videoFactory");
     await loadDataCenter(true);
+    await refreshTaskVideoProject();
   } finally {
     reviewingPackagingVariantId.value = "";
   }
