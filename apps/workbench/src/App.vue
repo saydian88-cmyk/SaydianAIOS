@@ -1249,6 +1249,41 @@ function activeCodexDirectVideoTask(project?: Row) {
     .find((task: Row) => String(task.id) === taskId);
 }
 
+function activeCoverTitleTask(project?: Row) {
+  const signal = project && Array.isArray(project.sourceSignals)
+    ? project.sourceSignals.find((item: Row) => item.type === "VIDEO_FACTORY")
+    : undefined;
+  const taskId = String(signal?.coverAiTaskId || "");
+  if (!taskId) return undefined;
+  return (Array.isArray(project?.activeAiTasks) ? project?.activeAiTasks : [])
+    .find((task: Row) => String(task.id) === taskId);
+}
+
+function coverTitleTaskStatus(project?: Row) {
+  return String(activeCoverTitleTask(project)?.status || "");
+}
+
+function coverTitleTaskIsRunning(project?: Row) {
+  return ["PENDING", "CLAIMED", "RUNNING", "QUALITY_CHECK", "UPLOADING", "RETRY"].includes(coverTitleTaskStatus(project));
+}
+
+function coverTitleTaskProgress(project?: Row) {
+  return Math.max(0, Math.min(100, Number(activeCoverTitleTask(project)?.progress || 0)));
+}
+
+function coverTitleTaskMessage(project?: Row) {
+  const task = activeCoverTitleTask(project);
+  if (!task) return "尚未提交封面和标题生成任务";
+  return String(task.progressMessage || task.failureReason || (
+    coverTitleTaskIsRunning(project) ? "等待封面和标题任务处理" : "等待封面和标题结果回传"
+  ));
+}
+
+function packagingVariants(project?: Row) {
+  return (Array.isArray(project?.variants) ? project!.variants : [])
+    .filter((variant: Row) => Boolean(variant.coverPath || variant.packagingStatus === "PENDING_REVIEW" || variant.packagingStatus === "APPROVED" || variant.packagingStatus === "RETURNED"));
+}
+
 function activeProjectGenerationTask(project?: Row) {
   return activeCodexDirectVideoTask(project) || activeRemoteScriptTask(project);
 }
@@ -2459,12 +2494,12 @@ async function generateProjectPackaging(project: Row, job: Row) {
   if (!job.outputAsset?.id || generatingPackagingProjectId.value) return;
   generatingPackagingProjectId.value = project.id;
   try {
-    await post(`/api/v1/workbench/data-center/video-projects/${project.id}/packaging`, {
+    const result = await post<{ project?: Row }>(`/api/v1/workbench/data-center/video-projects/${project.id}/packaging`, {
       outputAssetId: job.outputAsset.id,
     });
-    ElMessage.success("封面标题 AI 任务已提交，完成后会自动进入审核");
+    if (result.project) applyRefreshedVideoProject(result.project);
+    ElMessage.success("封面标题任务已提交，当前项目会显示生成进度");
     await invalidateDataCenterSection("videoFactory");
-    await loadDataCenter(true);
     await refreshTaskVideoProject();
   } finally {
     generatingPackagingProjectId.value = "";
@@ -3506,13 +3541,12 @@ onBeforeUnmount(() => {
                   </div>
                 </section>
 
-                <section v-if="videoFlowStep(taskVideoProjectDetail) === 3 && (!isCodexDirectVideoProject(taskVideoProjectDetail) || codexDirectShouldShowProgress(taskVideoProjectDetail))" class="task-video-stage-panel">
+                <section v-if="videoFlowStep(taskVideoProjectDetail) === 3" class="task-video-stage-panel">
                   <template v-if="isCodexDirectVideoProject(taskVideoProjectDetail)">
-                    <template>
+                    <template v-if="codexDirectShouldShowProgress(taskVideoProjectDetail)">
                       <h4>{{ codexDirectTaskTitle(taskVideoProjectDetail) }}</h4>
                       <p v-if="codexDirectRevision(taskVideoProjectDetail)">已把原成片、原任务和退回说明交给 Codex 定向修改；会回传新版本供再次审核。</p>
                       <p v-else>不回传脚本、素材匹配和剪辑细节；这里只展示后台 AI 任务进度。完成后自动进入最终成片审核。</p>
-                      <template v-if="codexDirectShouldShowProgress(taskVideoProjectDetail)">
                       <el-progress :percentage="codexDirectTaskProgress(taskVideoProjectDetail)" :status="codexDirectTaskStatus(taskVideoProjectDetail) === 'FAILED' ? 'exception' : undefined" />
                       <p class="project-running-message">{{ codexDirectTaskMessage(taskVideoProjectDetail) }}</p>
                       <el-alert
@@ -3522,12 +3556,25 @@ onBeforeUnmount(() => {
                         :closable="false"
                         show-icon
                       />
-                      </template>
+                      <div class="preview-actions">
+                        <el-button @click="openSystemScriptConversation(taskVideoProjectDetail)">查看 AI 任务</el-button>
+                        <el-button @click="refreshVideoProject(taskVideoProjectDetail.id)">刷新当前项目</el-button>
+                      </div>
                     </template>
-                    <div class="preview-actions">
-                      <el-button @click="openSystemScriptConversation(taskVideoProjectDetail)">查看 AI 任务</el-button>
-                      <el-button @click="refreshVideoProject(taskVideoProjectDetail.id)">刷新当前项目</el-button>
-                    </div>
+                    <template v-else>
+                      <h4>成片审核</h4>
+                      <article v-for="job in reviewableVideoRenderJobs(taskVideoProjectDetail)" :key="job.id" class="task-finished-video-row">
+                        <div>
+                          <strong>{{ job.outputAsset?.displayName || "视频成片" }}</strong>
+                          <el-tag size="small" :type="renderStatusType(job)">{{ renderStatusText(job) }}</el-tag>
+                        </div>
+                        <div class="preview-actions">
+                          <el-button v-if="job.outputAsset" @click="openAssetPreview(job.outputAsset, '成片预览')">预览成片</el-button>
+                          <el-button v-if="job.status === 'SUCCEEDED' && job.outputAsset?.reviewStatus === 'PENDING'" type="success" @click="openVideoReview(taskVideoProjectDetail, job, 'APPROVE')">审核通过</el-button>
+                          <el-button v-if="job.status === 'SUCCEEDED' && job.outputAsset?.reviewStatus === 'PENDING'" type="danger" plain @click="openVideoReview(taskVideoProjectDetail, job, 'RETURN')">退回并填写原因</el-button>
+                        </div>
+                      </article>
+                    </template>
                   </template>
                   <template v-else>
                     <h4>{{ taskVideoProjectDetail.productionStage === "READY_TO_EDIT" ? "素材齐全，可以生成视频" : "视频生成中" }}</h4>
@@ -3541,7 +3588,7 @@ onBeforeUnmount(() => {
                   </template>
                 </section>
 
-                <section v-if="videoFlowStep(taskVideoProjectDetail) >= 3 && (!isCodexDirectVideoProject(taskVideoProjectDetail) || !codexDirectShouldShowProgress(taskVideoProjectDetail))" class="task-video-stage-panel">
+                <section v-if="videoFlowStep(taskVideoProjectDetail) === 4 || (videoFlowStep(taskVideoProjectDetail) === 3 && !isCodexDirectVideoProject(taskVideoProjectDetail))" class="task-video-stage-panel">
                   <h4>{{ videoFlowStep(taskVideoProjectDetail) === 3 ? "成片审核" : "封面标题、发布与回传" }}</h4>
                   <article v-for="job in reviewableVideoRenderJobs(taskVideoProjectDetail)" :key="job.id" class="task-finished-video-row">
                     <div>
@@ -3554,10 +3601,49 @@ onBeforeUnmount(() => {
                         <el-button type="success" @click="openVideoReview(taskVideoProjectDetail, job, 'APPROVE')">审核通过</el-button>
                         <el-button type="danger" plain @click="openVideoReview(taskVideoProjectDetail, job, 'RETURN')">退回并填写原因</el-button>
                       </template>
-                      <el-button v-if="job.outputAsset?.reviewStatus === 'APPROVED'" type="primary" @click="generateProjectPackaging(taskVideoProjectDetail, job)">生成封面和标题</el-button>
-                      <el-button v-if="job.outputAsset?.reviewStatus === 'APPROVED'" @click="openPublishLink(taskVideoProjectDetail, job)">回传发布链接</el-button>
+                      <el-button
+                        v-if="job.outputAsset?.reviewStatus === 'APPROVED' && !coverTitleTaskIsRunning(taskVideoProjectDetail) && coverTitleTaskStatus(taskVideoProjectDetail) !== 'PENDING_REVIEW'"
+                        type="primary"
+                        :loading="generatingPackagingProjectId === taskVideoProjectDetail.id"
+                        @click="generateProjectPackaging(taskVideoProjectDetail, job)"
+                      >{{ coverTitleTaskStatus(taskVideoProjectDetail) === 'FAILED' || packagingVariants(taskVideoProjectDetail).length ? '重新生成封面和标题' : '生成封面和标题' }}</el-button>
+                      <el-button
+                        v-if="job.outputAsset?.reviewStatus === 'APPROVED' && ['READY_TO_PUBLISH', 'PUBLISHING', 'TRACKING'].includes(String(taskVideoProjectDetail.productionStage || ''))"
+                        @click="openPublishLink(taskVideoProjectDetail, job)"
+                      >回传发布链接</el-button>
                     </div>
                   </article>
+                  <section v-if="videoFlowStep(taskVideoProjectDetail) === 4 && coverTitleTaskIsRunning(taskVideoProjectDetail)" class="project-running-panel">
+                    <h4>封面和标题生成中</h4>
+                    <p>已提交封面标题任务，完成后会在这里显示封面、标题和审核入口。</p>
+                    <el-progress :percentage="coverTitleTaskProgress(taskVideoProjectDetail)" />
+                    <p class="project-running-message">{{ coverTitleTaskMessage(taskVideoProjectDetail) }}</p>
+                    <div class="preview-actions">
+                      <el-button @click="openSystemScriptConversation(taskVideoProjectDetail)">查看 AI 任务</el-button>
+                      <el-button @click="refreshTaskVideoProject">刷新当前项目</el-button>
+                    </div>
+                  </section>
+                  <el-alert
+                    v-if="videoFlowStep(taskVideoProjectDetail) === 4 && coverTitleTaskStatus(taskVideoProjectDetail) === 'FAILED'"
+                    :title="`封面和标题生成失败：${coverTitleTaskMessage(taskVideoProjectDetail)}`"
+                    type="error"
+                    :closable="false"
+                    show-icon
+                  />
+                  <div v-if="videoFlowStep(taskVideoProjectDetail) === 4 && packagingVariants(taskVideoProjectDetail).length" class="packaging-result-list">
+                    <article v-for="variant in packagingVariants(taskVideoProjectDetail)" :key="variant.id" class="packaging-result-card">
+                      <div>
+                        <el-tag size="small">{{ platformLabel(variant.platform) }}</el-tag>
+                        <el-tag size="small" :type="variant.packagingStatus === 'APPROVED' ? 'success' : variant.packagingStatus === 'RETURNED' ? 'danger' : 'warning'">
+                          {{ variant.packagingStatus === 'APPROVED' ? '封面标题已通过' : variant.packagingStatus === 'RETURNED' ? '封面标题已退回' : '封面标题待审核' }}
+                        </el-tag>
+                        <strong>{{ variant.title || '待生成标题' }}</strong>
+                        <p>{{ variant.body || '暂无发布文案' }}</p>
+                        <small v-if="variant.packagingRejectedReason">退回说明：{{ variant.packagingRejectedReason }}</small>
+                      </div>
+                      <el-button @click="openPackagingPreview(taskVideoProjectDetail, variant)">预览封面和标题</el-button>
+                    </article>
+                  </div>
                 </section>
               </template>
             </section>
