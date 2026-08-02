@@ -1465,6 +1465,11 @@ async function execute(claimed: JsonRecord) {
     const taskState: WorkspaceState = resumeEligible && previousState
       ? previousState
       : freshWorkspaceState(fingerprint, detectedSkill.digest);
+    // Preserve the resume decision before progress reporting changes the saved stage.
+    // A previous attempt may already have a validated result and only need to retry
+    // its upload; rerunning Codex in that case would create a duplicate video.
+    const resumeWithValidatedResult = resumeEligible
+      && ["QUALITY_CHECK", "UPLOADING", "COMPLETE"].includes(String(taskState.stage || ""));
     state = taskState;
     await saveWorkspaceState(workspace, taskState);
     await appendExecutionLog(workspace, "SKILL_SELECTED", {
@@ -1496,7 +1501,7 @@ async function execute(claimed: JsonRecord) {
     const startedAt = new Date();
     let result: JsonRecord | undefined;
     let schemaAttempts = 1;
-    if (resumeEligible && ["QUALITY_CHECK", "UPLOADING", "COMPLETE"].includes(String(taskState.stage || ""))) {
+    if (resumeWithValidatedResult) {
       const savedResult = await readJson<JsonRecord>(join(workspace, "result.json"));
       if (savedResult) {
         try {

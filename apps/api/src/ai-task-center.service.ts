@@ -1578,6 +1578,10 @@ export class AiTaskCenterService implements OnModuleInit {
           sourceKey,
           sourceType: "AI_GENERATED",
           ...assetData,
+          // AI outputs have no source evidence records at creation time. The field is
+          // still required by the Asset model, and leaving it out makes a successful
+          // OSS upload fail while registering the result for review.
+          evidenceIds: [],
           assetNo: `AST-AI-${dateKey().replace(/-/g, "")}-${randomBytes(3).toString("hex").toUpperCase()}`,
           level: "AI_GENERATED",
           productScope: task.productId || task.productModel ? "MODEL" : "UNKNOWN",
