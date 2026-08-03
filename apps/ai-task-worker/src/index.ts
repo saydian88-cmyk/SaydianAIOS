@@ -1985,6 +1985,10 @@ async function execute(claimed: JsonRecord) {
   const task = claimed.task as JsonRecord;
   const taskId = String(task.id || "");
   const taskNo = String(task.taskNo || taskId);
+  const initialTaskInput = record(task.input);
+  const directOutputTask = String(task.type || "") === "VIDEO"
+    && String(initialTaskInput.executionMode || "").toUpperCase() === "FULL_VIDEO"
+    && (initialTaskInput.codexDirectFullVideo === true || initialTaskInput.referenceDirectFullVideo === true);
   const timeoutSeconds = Math.max(60, Number((claimed.policy as JsonRecord)?.timeoutSeconds || 1200));
   const workspace = join(workRoot, taskNo.replace(/[^a-zA-Z0-9_-]/g, "-"));
   await ensureTaskWorkspace(workspace);
@@ -2007,11 +2011,13 @@ async function execute(claimed: JsonRecord) {
   };
   try {
     await appendExecutionLog(workspace, "TASK_START", { taskId, taskNo, runnerVersion });
-    await report("PACKAGE", 10, "正在下载任务快照和已审核素材");
+    await report("PACKAGE", 10, directOutputTask
+      ? "正在准备直出任务包和本机剪辑环境"
+      : "正在准备任务快照和已审核输入");
     const packageValue = await taskPackage(taskId);
     const route = routeTask(packageValue);
     const detectedSkill = await detectSkill(route);
-    currentSkill = detectedSkill.name;
+    currentSkill = detectedSkill.downstreamSkillName || detectedSkill.name;
     const packaged = await downloadInputs(packageValue, workspace);
     await writeJsonAtomic(join(workspace, "task.json"), record(packaged.task));
     const fingerprint = packageFingerprint(packaged);
@@ -2059,13 +2065,16 @@ async function execute(claimed: JsonRecord) {
     await saveWorkspaceState(workspace, taskState);
     await appendExecutionLog(workspace, "SKILL_SELECTED", {
       skill: detectedSkill.name,
+      downstreamSkill: detectedSkill.downstreamSkillName || "",
       version: detectedSkill.version,
       digest: detectedSkill.digest,
       strategy: detectedSkill.strategy,
       executionMode: detectedSkill.executionMode,
       resumed: resumeEligible || resumeDirectOutputUpload,
     });
-    await report("SKILL_DETECTED", 15, `已选择 ${detectedSkill.name}`, {
+    await report("SKILL_DETECTED", 15, detectedSkill.downstreamSkillName
+      ? `调度完成，已转交 ${detectedSkill.downstreamSkillName}`
+      : `已选择 ${detectedSkill.name}`, {
       skillVersion: detectedSkill.version,
       strategy: detectedSkill.strategy,
       executionMode: detectedSkill.executionMode,
@@ -2131,7 +2140,9 @@ async function execute(claimed: JsonRecord) {
     }
 
     if (!result) {
-      await report("CODEX", 25, `正在使用 ${detectedSkill.name} 生成结构化结果`, {
+      await report("CODEX", 25, directOutputTask
+        ? `正在由 ${detectedSkill.downstreamSkillName || "video-editing-from-media-library"} 自主创作并制作成片`
+        : `正在由 ${detectedSkill.downstreamSkillName || detectedSkill.name} 执行当前任务阶段`, {
         skillVersion: detectedSkill.version,
         assetCount: Array.isArray(packaged.assets) ? packaged.assets.length : 0,
       });
