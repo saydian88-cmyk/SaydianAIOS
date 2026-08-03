@@ -66,6 +66,7 @@ const executionRepairSkillPath = resolve(String(
   || "G:\\codex\\xcodeplace\\CodexHome\\skills\\saidian-ai-task-execution-repair\\SKILL.md",
 ));
 const maxInternalRepairs = Math.max(1, Number(process.env.AI_TASK_MAX_INTERNAL_REPAIRS || 3));
+const maxConcurrentTasks = Math.max(1, Number(process.env.AI_TASK_MAX_CONCURRENT_TASKS || 2));
 let lastMaterialSyncAt = 0;
 let materialSyncInFlight: Promise<void> | undefined;
 
@@ -2430,8 +2431,13 @@ async function main() {
   // Material indexing must never delay task claiming. This is especially
   // important for Codex direct-output jobs, which do not consume assets.
   syncSystemMaterialIndexInBackground(true);
+  const activeTasks = new Map<string, Promise<void>>();
   for (;;) {
     try {
+      if (activeTasks.size >= maxConcurrentTasks) {
+        await Promise.race(activeTasks.values());
+        continue;
+      }
       const claimed = await api<JsonRecord>("/api/v1/ai-tasks/runner/claim", {
         method: "POST",
         body: JSON.stringify({
@@ -2442,8 +2448,20 @@ async function main() {
           supportedExecutionModes: ["IMAGE_POST"],
         }),
       });
-      if (claimed.task) await execute(claimed);
-      else {
+      if (claimed.task) {
+        const claimedTask = record(claimed.task);
+        const taskId = String(claimedTask.id || claimedTask.taskNo || `task-${Date.now()}`);
+        const execution = execute(claimed)
+          .catch((error) => {
+            process.stderr.write(`${new Date().toISOString()} ${taskId} ${error instanceof Error ? error.message : String(error)}\n`);
+          })
+          .finally(() => activeTasks.delete(taskId));
+        activeTasks.set(taskId, execution);
+        // Give the API a brief moment to persist the lock before looking for a
+        // different task type. Server-side per-type concurrency remains the
+        // authority; this only removes the worker's accidental global lock.
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 500));
+      } else {
         syncSystemMaterialIndexInBackground();
         await new Promise((resolvePromise) => setTimeout(resolvePromise, pollMs));
       }
