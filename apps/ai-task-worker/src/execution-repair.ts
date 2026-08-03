@@ -18,7 +18,7 @@ export interface RepairDecision {
 }
 
 const patterns: Array<[RepairCategory, RegExp]> = [
-  ["HYPERFRAMES_RUNTIME", /\b(?:gsap|hyperframes|cdn|npm)\b.*\b(?:unavailable|missing|load|runtime|install|validate)\b|\b(?:unavailable|missing|load|runtime|install|validate)\b.*\b(?:gsap|hyperframes|cdn|npm)\b/i],
+  ["HYPERFRAMES_RUNTIME", /gsap|hyperframes/i],
   ["CODEX_RUNTIME", /codex.*(?:idle timeout|executable|spawn|interrupted)|(?:idle timeout|executable|spawn).*codex/i],
   ["RESULT_CONTRACT", /result\.json|schema|must have required property|additional properties|video_master/i],
   ["RENDER_EVIDENCE", /render evidence|production-plan|shot-plan|validator|ffmpeg|ffprobe/i],
