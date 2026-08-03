@@ -1551,6 +1551,25 @@ function projectMode(project: Row) {
   return String(factory?.projectMode || "");
 }
 
+function projectReferenceVideoUrl(project?: Row) {
+  const factory = project && Array.isArray(project.sourceSignals)
+    ? project.sourceSignals.find((item: Row) => item.type === "VIDEO_FACTORY")
+    : undefined;
+  return String(factory?.brief?.referenceVideoUrl || factory?.brief?.reference || factory?.referenceVideoUrl || "").trim();
+}
+
+function openProjectReferenceVideo(project: Row) {
+  const referenceUrl = projectReferenceVideoUrl(project);
+  if (!referenceUrl) return ElMessage.warning("当前项目没有可查看的参考视频链接");
+  try {
+    const parsed = new URL(referenceUrl);
+    if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error("unsupported protocol");
+    window.open(parsed.toString(), "_blank", "noopener,noreferrer");
+  } catch {
+    ElMessage.warning("参考视频链接无效，请在项目信息中核对");
+  }
+}
+
 function isCodexDirectVideoProject(project: Row) {
   return projectMode(project) === "CODEX_DIRECT_FULL_VIDEO";
 }
@@ -3960,6 +3979,10 @@ onBeforeUnmount(() => {
                       </div>
                     </details>
                   </div>
+                  <el-button
+                    v-if="projectMode(taskVideoProjectDetail) === 'REFERENCE_DIRECT_FULL_VIDEO'"
+                    @click="openProjectReferenceVideo(taskVideoProjectDetail)"
+                  >查看参考视频</el-button>
                   <el-button
                     @click="refreshTaskVideoProject"
                   >刷新</el-button>
