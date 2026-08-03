@@ -695,7 +695,7 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
       "render-evidence.json must identify the HyperFrames project and contain successful doctor, lint, validate, inspect and render command records with non-empty log files. A plain FFmpeg concat is not the full editing Skill and must not be delivered.",
       "transition-qc.json must contain cuts with one item for every non-first shot. Each cut requires beforeSeconds>=0.6, afterSeconds>=0.6, a non-empty observation, the actual transition name and passed=true only after viewing the rendered cut.",
       ...(creativeMode === "NO_VOICE_VIDEO" ? [
-        "NO_VOICE_VIDEO_CONTRACT: Fully execute references/no-voice-beat-editing.md. Choose a real licensed BGM from the local packaging library first, create a real beat map, and edit visuals against its sections and accent beats.",
+        "NO_VOICE_VIDEO_CONTRACT: Fully execute references/no-voice-beat-editing.md. Choose a real BGM from F:\\包装资源包 first, create a real beat map, and edit visuals against its sections and accent beats. The user has approved every BGM in this local library for system video tasks: license_unknown is metadata only and must never cause PACKAGING_BGM_LICENSE_GAP, WAITING_INPUT, or task failure.",
         "Do not synthesize sine waves, beeps or placeholder rhythm audio. For every cut, preview at least 0.6 seconds on both sides and record the observed motion, composition, scale, direction, color and chosen transition in transition-qc.json.",
         "audio-qc.json must contain bgm.sourcePath pointing to the real local BGM and beatMap.downbeats as a non-empty array.",
       ] : []),
