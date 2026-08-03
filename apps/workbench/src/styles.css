@@ -938,8 +938,61 @@ main { grid-column: 2; width: min(1240px, calc(100% - 48px)); margin: 24px auto;
 }
 
 .image-project-required-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
+
+.image-project-form .image-project-required-grid .el-form-item,
+.image-project-form .image-project-optional-grid .el-form-item {
+  display: block;
+}
+
+.image-project-form .image-project-required-grid .el-form-item__label,
+.image-project-form .image-project-optional-grid .el-form-item__label {
+  display: block;
+  width: 100%;
+  padding: 0 0 7px;
+  text-align: left;
+  line-height: 1.35;
+}
+
+.image-project-form .image-project-required-grid .el-form-item__content,
+.image-project-form .image-project-optional-grid .el-form-item__content {
+  display: block;
+  width: 100%;
+}
+
+.image-viral-topic-section {
+  margin: 12px 0;
+  padding: 14px 16px;
+  border: 1px solid #dfeaf7;
+  border-radius: 14px;
+  background: #fbfdff;
+}
+
+.image-viral-topic-section > header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 10px;
+}
+
+.image-viral-topic-section > header span { color: #7d8790; font-size: 13px; }
+.image-viral-topic-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.image-viral-topic {
+  display: inline-flex;
+  max-width: 100%;
+  gap: 6px;
+  align-items: center;
+  padding: 7px 10px;
+  border: 1px solid #cfe0f5;
+  border-radius: 999px;
+  color: #2d80d8;
+  background: #fff;
+  cursor: pointer;
+}
+.image-viral-topic b { font-size: 13px; }
+.image-viral-topic span { overflow: hidden; color: #6c7980; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.image-viral-topic:hover { border-color: #409eff; background: #f2f8ff; }
 
 .image-project-workspace {
   min-height: 360px;
@@ -1003,6 +1056,10 @@ main { grid-column: 2; width: min(1240px, calc(100% - 48px)); margin: 24px auto;
   .image-project-required-grid,
   .image-result-layout,
   .image-publish-record { grid-template-columns: 1fr; }
+}
+
+@media (min-width: 761px) and (max-width: 1100px) {
+  .image-project-required-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 760px) {

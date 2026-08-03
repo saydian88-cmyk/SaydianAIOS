@@ -1076,6 +1076,11 @@ export class AiTaskCenterService implements OnModuleInit {
     const codexDirectFullVideo = task.type === "VIDEO"
       && executionMode === "FULL_VIDEO"
       && input.codexDirectFullVideo === true;
+    const imagePostProject = task.type === "IMAGE"
+      && executionMode === "IMAGE_POST"
+      && (text(task.sourceType).toUpperCase() === "IMAGE_PROJECT"
+        || text(input.sourceType).toUpperCase() === "IMAGE_PROJECT"
+        || Boolean(input.imageProjectId));
     const assetIds = new Set<string>();
     if (!codexDirectFullVideo) {
       for (const snapshot of task.inputSnapshots || []) {
@@ -1215,7 +1220,9 @@ export class AiTaskCenterService implements OnModuleInit {
             && ["FULL_VIDEO", "SCRIPT_ONLY", "SIMILAR_VIDEO", "NO_VOICE_VIDEO", "COVER_TITLE"].includes(executionMode)
             ? "saidian-ai-task-dispatcher"
           : task.type === "IMAGE"
-            ? "imagegen"
+            ? (imagePostProject
+              ? "saidian-ai-task-dispatcher"
+              : "imagegen")
             : task.type === "ARTICLE"
               ? "build-health-brand-trust-content"
             : undefined,
@@ -1231,6 +1238,7 @@ export class AiTaskCenterService implements OnModuleInit {
             "RESHOOT_OPS_TASK",
           ]
           : undefined,
+        downstreamSkill: imagePostProject ? "saidian-douyin-image-posts" : undefined,
         videoModelRouting: dedicatedDouyin
           ? {
             policyVersion: "douyin-viral-v1",
@@ -2662,7 +2670,8 @@ export class AiTaskCenterService implements OnModuleInit {
     }
     if (task.type === "IMAGE") {
       const input = object(task.input);
-      if (text(task.sourceType) === "IMAGE_PROJECT" && text(input.executionMode).toUpperCase() === "IMAGE_POST") {
+      if ((text(task.sourceType) === "IMAGE_PROJECT" || text(input.sourceType) === "IMAGE_PROJECT" || Boolean(input.imageProjectId))
+        && text(input.executionMode).toUpperCase() === "IMAGE_POST") {
         const contentPlanId = text(task.sourceId || input.imageProjectId);
         const plan = contentPlanId
           ? await this.prisma.contentPlan.findUnique({ where: { id: contentPlanId }, include: { variants: true } })

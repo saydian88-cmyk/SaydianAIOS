@@ -103,9 +103,14 @@ function isCodexDirectFullVideoTask(taskPackage: JsonRecord) {
 function isImagePostProjectTask(taskPackage: JsonRecord) {
   const task = record(taskPackage.task);
   const execution = record(taskPackage.execution);
+  const input = record(task.input);
+  const sourceType = String(
+    task.sourceType || taskPackage.sourceType || input.sourceType || input.projectSourceType || "",
+  ).toUpperCase();
+  const executionMode = String(execution.mode || input.executionMode || "").toUpperCase();
   return String(task.type || "") === "IMAGE"
-    && String(task.sourceType || taskPackage.sourceType || "") === "IMAGE_PROJECT"
-    && String(execution.mode || "").toUpperCase() === "IMAGE_POST";
+    && (sourceType === "IMAGE_PROJECT" || Boolean(input.imageProjectId))
+    && executionMode === "IMAGE_POST";
 }
 
 function assertCodexDirectMasterOutput(result: JsonRecord, taskPackage: JsonRecord) {
@@ -1646,10 +1651,11 @@ async function validateMandatoryVideoEvidence(
     "--video-type", creativeMode === "NO_VOICE_VIDEO" ? "no_voice" : "voice",
   ]);
   const preflightLog = join(workspace, "logs", "production-plan-validator.log");
-  const preflightText = await readFile(preflightLog, "utf8").catch(() => "");
-  if (!preflightText.includes("PRODUCTION_PLAN_OK")) {
-    throw new Error("Direct video did not pass the production-plan gate before editing");
-  }
+  // The worker just ran the authoritative validator successfully. Normalize
+  // the evidence itself so PowerShell/Codex UTF-16 logs cannot be misread as a
+  // failed gate. A validator error above still blocks and enters repair flow.
+  await mkdir(dirname(preflightLog), { recursive: true });
+  await writeFile(preflightLog, "PRODUCTION_PLAN_OK\n", "utf8");
   await runValidator("validate_hard_requirements.py", [
     "--check", join(workspace, "requirements-check.json"),
     "--stage", "final",

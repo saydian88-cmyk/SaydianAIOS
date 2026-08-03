@@ -85,6 +85,20 @@ describe("skill task router", () => {
     });
   });
 
+  it("routes an image project when legacy rows only retain the project signal in input", () => {
+    expect(routeTask({
+      task: { type: "IMAGE", input: { imageProjectId: "image-project-1", executionMode: "IMAGE_POST" } },
+      execution: {
+        mode: "IMAGE_POST",
+        strategy: "CODEX_SKILL",
+        requiredSkill: "saidian-ai-task-dispatcher",
+      },
+    }, { ...process.env, CODEX_HOME: routeOnlyCodexHome })).toMatchObject({
+      key: "saidian-ai-task-dispatcher",
+      downstreamSkillName: "saidian-douyin-image-posts",
+    });
+  });
+
   it("routes Codex direct full-video tasks through the dispatcher to the full local editing Skill", () => {
     expect(routeTask({
       task: { type: "VIDEO", input: { executionMode: "FULL_VIDEO", codexDirectFullVideo: true } },

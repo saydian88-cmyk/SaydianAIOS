@@ -355,7 +355,7 @@ const creatingImageProject = ref(false);
 const imageProjectVisible = ref(false);
 const taskImageProjectLoading = ref(false);
 const activeImageProjectId = ref("");
-const taskImageProjectDetail = ref<Row>();
+const taskImageProjectDetail = ref<Row>({});
 const imageProjectPreviewVisible = ref(false);
 const imageProjectForm = reactive({
   productModel: "",
@@ -1214,6 +1214,20 @@ function imageSuggestionsForType(type: string) {
   return suggestions[type] || { audiences: [defaults.audience], hooks: [defaults.hook] };
 }
 
+function imageViralTopicsForType(type: string) {
+  const suggestions = imageSuggestionsForType(type);
+  return suggestions.hooks.map((hook, index) => ({
+    hook,
+    audience: suggestions.audiences[index % suggestions.audiences.length] || imageDefaultsForType(type).audience,
+  }));
+}
+
+function applyImageViralTopic(topic: { hook: string; audience: string }) {
+  imageProjectForm.hook = topic.hook;
+  imageProjectForm.audience = topic.audience;
+  syncImageProjectRequirement();
+}
+
 function buildImageProjectRequirement() {
   const form = imageProjectForm;
   const clauses = [
@@ -1301,7 +1315,6 @@ async function refreshImageProject() {
   taskImageProjectLoading.value = true;
   try {
     taskImageProjectDetail.value = await api<Row>(`/api/v1/workbench/image-projects/${activeImageProjectId.value}`);
-    await loadTasks();
     ElMessage.success("当前项目已刷新");
   } finally {
     taskImageProjectLoading.value = false;
@@ -3677,7 +3690,7 @@ onBeforeUnmount(() => {
                 <h4 class="video-project-card-title" role="button" tabindex="0" @click="openImageProjectFromTask(task)" @keydown.enter.prevent="openImageProjectFromTask(task)">{{ imageProjectCardTitle(task) }}</h4>
                 <div class="video-task-identifiers">
                   <span v-if="task.projection?.project?.productModel">{{ task.projection.project.productModel }}</span>
-                  <span v-if="task.projection?.project?.imageType">{{ task.projection.project.imageType }}</span>
+                  <span v-if="task.projection?.project?.imageType || task.projection?.project?.videoType">{{ task.projection?.project?.imageType || task.projection?.project?.videoType }}</span>
                   <span v-if="task.projection?.project?.createdAt">创建于 {{ formatTime(task.projection.project.createdAt) }}</span>
                 </div>
               </template>
@@ -3741,6 +3754,58 @@ onBeforeUnmount(() => {
                 <el-button v-if="task.sourceType === 'SELF_CREATED' && task.status === 'CANCELLED'" type="danger" plain :loading="trashingTaskId === task.id" @click="trashCancelledTask(task)">删除</el-button>
               </template>
             </div>
+            <section
+              v-if="isImageProjectTask(task) && imageProjectVisible && activeImageProjectId === (task.sourceId || task.evidence?.contentPlanId)"
+              v-loading="taskImageProjectLoading"
+              class="task-video-workspace task-image-workspace"
+            >
+              <template v-if="taskImageProjectDetail">
+                <header class="task-video-workspace-head">
+                  <div>
+                    <small>当前阶段 {{ imageProjectTaskStep(task) }}/3</small>
+                    <h3>{{ imageFlowSteps[imageProjectTaskStep(task) - 1] }}</h3>
+                    <p>{{ imageProjectTaskHint(task) }}</p>
+                  </div>
+                  <el-button @click="refreshImageProject">刷新当前项目</el-button>
+                </header>
+                <nav class="task-video-stage-tabs" aria-label="图文项目阶段">
+                  <button
+                    v-for="(step, index) in imageFlowSteps"
+                    :key="step"
+                    type="button"
+                    :class="{ active: imageProjectTaskStep(task) === index + 1, done: imageProjectTaskStep(task) > index + 1 }"
+                  >{{ index + 1 }} {{ step }}</button>
+                </nav>
+                <section v-if="['IMAGE_GENERATING', 'IMAGE_RETURNED'].includes(taskImageProjectDetail.productionStage)" class="task-video-stage-panel">
+                  <el-empty :description="taskImageProjectDetail.productionStage === 'IMAGE_RETURNED' ? '正在按退回意见重新生成图文与文案' : '图文制作 Skill 正在生成图文、标题、标签和发布文案'" />
+                </section>
+                <template v-else-if="taskImageProjectDetail.productionStage === 'IMAGE_REVIEW'">
+                  <section class="image-result-layout">
+                    <div class="image-page-list">
+                      <article v-for="(page, index) in imageProjectPages(taskImageProjectDetail)" :key="page.id || index" class="image-page-card">
+                        <img v-if="imageProjectPageUrl(page)" :src="imageProjectPageUrl(page)" :alt="page.title || `第${index + 1}页`" />
+                        <div v-else><el-tag size="small">第 {{ index + 1 }} 页</el-tag><strong>{{ page.title || `第${index + 1}页图文` }}</strong><p>{{ page.copy || page.description || '图文内容已生成' }}</p></div>
+                      </article>
+                    </div>
+                    <div class="image-copy-panels">
+                      <section><header><strong>标题与标签</strong><el-button size="small" @click="copyTaskContent(`${imageProjectVariant(taskImageProjectDetail).title || ''}\n${imageProjectTags(taskImageProjectDetail).map((tag: string) => `#${tag}`).join(' ')}`, '标题与标签')">复制</el-button></header><h4>{{ imageProjectVariant(taskImageProjectDetail).title }}</h4><el-tag v-for="tag in imageProjectTags(taskImageProjectDetail)" :key="tag" size="small">#{{ tag }}</el-tag></section>
+                      <section><header><strong>发布文案</strong><el-button size="small" @click="copyTaskContent(imageProjectCopy(taskImageProjectDetail), '发布文案')">复制</el-button></header><p>{{ imageProjectCopy(taskImageProjectDetail) || '发布文案已随图文生成' }}</p></section>
+                    </div>
+                  </section>
+                  <div class="preview-actions"><el-button @click="imageProjectPreviewVisible = true">预览图文</el-button><el-button type="danger" plain @click="reviewImageProject(false)">退回并填写原因</el-button><el-button type="success" @click="reviewImageProject(true)">图文审核通过</el-button></div>
+                </template>
+                <template v-else>
+                  <section class="image-result-layout published">
+                    <div class="image-page-list"><article v-for="(page, index) in imageProjectPages(taskImageProjectDetail)" :key="page.id || index" class="image-page-card"><img v-if="imageProjectPageUrl(page)" :src="imageProjectPageUrl(page)" :alt="page.title || `第${index + 1}页`" /><div v-else><strong>{{ page.title || `第${index + 1}页图文` }}</strong></div></article></div>
+                    <div class="image-copy-panels"><section><header><strong>标题与标签</strong><el-button size="small" @click="copyTaskContent(`${imageProjectVariant(taskImageProjectDetail).title || ''}\n${imageProjectTags(taskImageProjectDetail).map((tag: string) => `#${tag}`).join(' ')}`, '标题与标签')">复制</el-button></header><h4>{{ imageProjectVariant(taskImageProjectDetail).title }}</h4><el-tag v-for="tag in imageProjectTags(taskImageProjectDetail)" :key="tag" size="small">#{{ tag }}</el-tag></section><section><header><strong>发布文案</strong><el-button size="small" @click="copyTaskContent(imageProjectCopy(taskImageProjectDetail), '发布文案')">复制</el-button></header><p>{{ imageProjectCopy(taskImageProjectDetail) }}</p></section></div>
+                  </section>
+                  <div class="image-publish-form">
+                    <div v-for="(record, index) in imagePublishRecords" :key="index" class="image-publish-record"><el-select v-model="record.platform"><el-option v-for="item in publishPlatformOptions" :key="item.value" :label="item.label" :value="item.value" /></el-select><el-input v-model="record.remoteUrl" placeholder="粘贴已发布图文链接" /></div>
+                    <el-button @click="addImagePublishRecord">添加一个发布平台</el-button><el-button @click="imageProjectPreviewVisible = true">预览并下载图文</el-button><el-button type="primary" @click="saveImagePublishLinks">回传发布链接</el-button>
+                  </div>
+                </template>
+              </template>
+            </section>
             <section
               v-if="isVideoProjectTask(task) && expandedTaskVideoProjectId === (task.sourceId || task.evidence?.contentPlanId)"
               v-loading="taskVideoProjectLoading"
@@ -5293,6 +5358,18 @@ onBeforeUnmount(() => {
           </el-form-item>
         </div>
       </section>
+      <section class="image-viral-topic-section">
+        <header><strong>常见爆款选题</strong><span>按当前图文类型推荐，点击即可填入主钩子和目标人群</span></header>
+        <div class="image-viral-topic-list">
+          <button
+            v-for="topic in imageViralTopicsForType(imageProjectForm.imageType)"
+            :key="`${topic.hook}-${topic.audience}`"
+            type="button"
+            class="image-viral-topic"
+            @click="applyImageViralTopic(topic)"
+          ><b>{{ topic.hook }}</b><span>{{ topic.audience }}</span></button>
+        </div>
+      </section>
       <section class="prototype-form-section">
         <header><strong>可选创作信息</strong><span>竞品、补充创意或额外提示会自动写入任务要求</span></header>
         <div class="prototype-optional-grid image-project-optional-grid">
@@ -5312,7 +5389,7 @@ onBeforeUnmount(() => {
     </template>
   </el-dialog>
 
-  <el-dialog v-model="imageProjectVisible" :title="taskImageProjectDetail?.topic || '图文项目'" width="min(1120px, 96vw)" destroy-on-close>
+  <el-dialog v-if="false" v-model="imageProjectVisible" :title="taskImageProjectDetail?.topic || '图文项目'" width="min(1120px, 96vw)" destroy-on-close>
     <div v-if="taskImageProjectDetail" class="task-video-stage-panel image-project-workspace" v-loading="taskImageProjectLoading">
       <header class="task-video-workspace-head">
         <div>

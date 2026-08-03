@@ -1029,6 +1029,7 @@ export class WorkbenchController {
       sourceType: "IMAGE_PROJECT", sourceId: plan.id,
       idempotencyKey: `ai-task:image-project:${plan.id}:v1`, instructions: requirement,
       input: {
+        sourceType: "IMAGE_PROJECT",
         executionMode: "IMAGE_POST",
         skillName: "saidian-douyin-image-posts",
         imageProjectId: plan.id,
@@ -1090,7 +1091,7 @@ export class WorkbenchController {
       })).trim();
       const materialRoots = ["F:\\赛电品牌素材库\\图片素材", "F:\\赛电品牌素材库\\产品规格书"];
       if (projectBrief.imageType === "对比类" || projectBrief.competitor) materialRoots.push("F:\\赛电品牌素材库\\图文制作资源\\竞品产品图");
-      await this.aiTasks.createTask({ type: "IMAGE", title: `${project.topic} 图文修改`, platform: "DOUYIN", productModel: project.productModel, ownerEmployeeId: employee.employeeId, reviewerEmployeeId: employee.employeeId, sourceType: "IMAGE_PROJECT", sourceId: id, idempotencyKey: `ai-task:image-project:${id}:return:${project.workflowVersion + 1}`, instructions: `${requirement}\n\n请仅根据以下审核意见修改现有图文：${note}`, input: { executionMode: "IMAGE_POST", skillName: "saidian-douyin-image-posts", imageProjectId: id, requirement, projectPrompt: requirement, finalEmployeePrompt: requirement, prompt: requirement, brief: projectBrief, materialRoots, revisionOf: id, revisionFeedback: note }, modelPolicy: { strategy: "CODEX_FIRST", allowExternalGeneration: false, allowFallback: false }, estimatedCost: 0, skipPaidBudget: true }, employee.name);
+      await this.aiTasks.createTask({ type: "IMAGE", title: `${project.topic} 图文修改`, platform: "DOUYIN", productModel: project.productModel, ownerEmployeeId: employee.employeeId, reviewerEmployeeId: employee.employeeId, sourceType: "IMAGE_PROJECT", sourceId: id, idempotencyKey: `ai-task:image-project:${id}:return:${project.workflowVersion + 1}`, instructions: `${requirement}\n\n请仅根据以下审核意见修改现有图文：${note}`, input: { sourceType: "IMAGE_PROJECT", executionMode: "IMAGE_POST", skillName: "saidian-douyin-image-posts", imageProjectId: id, requirement, projectPrompt: requirement, finalEmployeePrompt: requirement, prompt: requirement, brief: projectBrief, materialRoots, revisionOf: id, revisionFeedback: note }, modelPolicy: { strategy: "CODEX_FIRST", allowExternalGeneration: false, allowFallback: false }, estimatedCost: 0, skipPaidBudget: true }, employee.name);
     }
     return this.imageProject(authorization, id);
   }

@@ -128,9 +128,13 @@ export function routeTask(taskPackage: JsonRecord, env: NodeJS.ProcessEnv = proc
   };
   const type = String(task.type || taskPackage.type || "").trim().toUpperCase();
   const taskInput = object(task.input);
-  const sourceType = String(task.sourceType || taskPackage.sourceType || "").trim().toUpperCase();
+  const sourceType = String(
+    task.sourceType || taskPackage.sourceType || taskInput.sourceType || taskInput.projectSourceType || "",
+  ).trim().toUpperCase();
+  const isImagePostProject = type === "IMAGE"
+    && (sourceType === "IMAGE_PROJECT" || Boolean(taskInput.imageProjectId));
   const executionMode = String(
-    execution.mode || taskInput.executionMode || (type === "VIDEO" ? "FULL_VIDEO" : sourceType === "IMAGE_PROJECT" ? "IMAGE_POST" : "DEFAULT"),
+    execution.mode || taskInput.executionMode || (type === "VIDEO" ? "FULL_VIDEO" : isImagePostProject ? "IMAGE_POST" : "DEFAULT"),
   ).trim().toUpperCase();
   const isDouyinViralModule = String(taskInput.factoryModule || "").trim().toUpperCase() === "DOUYIN_VIRAL";
   const isCodexDirectFullVideo = type === "VIDEO"
@@ -138,7 +142,7 @@ export function routeTask(taskPackage: JsonRecord, env: NodeJS.ProcessEnv = proc
     && taskInput.codexDirectFullVideo === true;
   const registry = () => skillRegistry(env);
 
-  if (type === "IMAGE" && sourceType === "IMAGE_PROJECT" && executionMode === "IMAGE_POST") {
+  if (isImagePostProject && executionMode === "IMAGE_POST") {
     assertPackageRoute(
       execution,
       "saidian-ai-task-dispatcher",
