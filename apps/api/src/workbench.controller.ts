@@ -1667,9 +1667,16 @@ export class WorkbenchController {
     const candidateShots = Array.isArray(selectedCandidate.shots) ? selectedCandidate.shots : [];
     const finalMaterialBindings = materialBindings.map((binding: Record<string, unknown>, index: number) => ({
       ...binding,
-      lineId: String((candidateShots[index] as Record<string, unknown> | undefined)?.lineId || binding.lineId || ""),
+      // Older scripts did not persist a lineId for every sentence.  The
+      // prepared material bindings do have a stable line id, so preserve it
+      // instead of rejecting an otherwise complete project at auto-submit.
+      lineId: String((candidateShots[index] as Record<string, unknown> | undefined)?.lineId
+        || binding.lineId
+        || `line_${String(index + 1).padStart(2, "0")}`),
     }));
-    const candidateLineIds = new Set(candidateShots.map((shot: Record<string, unknown>) => String(shot.lineId || "")));
+    const candidateLineIds = new Set(candidateShots.map((shot: Record<string, unknown>, index: number) => String(
+      shot.lineId || `line_${String(index + 1).padStart(2, "0")}`,
+    )));
     const bindingLineIds = new Set(finalMaterialBindings.map((binding: Record<string, unknown>) => String(binding.lineId || "")));
     if (candidateLineIds.size !== bindingLineIds.size
       || [...candidateLineIds].some((lineId) => !lineId || !bindingLineIds.has(lineId))) {

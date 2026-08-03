@@ -2455,13 +2455,15 @@ async function reviewProjectScript(project: Row, approved: boolean, candidateInd
   }
   reviewingScriptProjectId.value = project.id;
   try {
-    await post(`/api/v1/workbench/data-center/video-projects/${project.id}/script-review`, {
+    const result = await post<Row>(`/api/v1/workbench/data-center/video-projects/${project.id}/script-review`, {
       action: approved ? "APPROVE" : "RETURN",
       note,
       candidateIndex,
     });
     ElMessage.success(approved
-      ? "脚本审核通过，可以补齐缺失素材"
+      ? result.autoSubmittedVideoTask
+        ? "脚本与素材已确认，已自动提交视频生成任务"
+        : "脚本审核通过，请处理缺失素材"
       : "Codex 脚本已退回，系统已按修改原因提交重写任务");
     await invalidateDataCenterSection("videoFactory");
     await loadDataCenter(true);
