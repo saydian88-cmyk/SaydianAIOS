@@ -1947,13 +1947,32 @@ async function execute(claimed: JsonRecord) {
     const fingerprint = packageFingerprint(packaged);
     const previousState = await loadWorkspaceState(workspace);
     const resumeEligible = canResume(previousState, fingerprint, detectedSkill.digest);
+    // A manual/API recovery retry adds bookkeeping fields to the task input and
+    // therefore changes its package fingerprint. Detect the already-rendered
+    // master from authoritative local evidence before consulting the saved
+    // stage, otherwise a prior failed retry can reset the stage to CODEX and
+    // accidentally trigger a second edit.
+    const directRecoveryResult = await recoverDirectOutputResult(workspace, packaged, {
+      skill: detectedSkill.name,
+      skillVersion: detectedSkill.version,
+      skillDigest: detectedSkill.digest,
+      strategy: detectedSkill.strategy,
+      executionMode: detectedSkill.executionMode,
+      routeReason: detectedSkill.reason,
+      fallbackOrder: detectedSkill.fallbackOrder,
+      startedAt: new Date().toISOString(),
+      durationMs: 0,
+      schemaAttempts: 1,
+    });
     // Runtime snapshots can change after an upload failure even when the task
     // itself and its rendered master have not. Direct-output retries are safe to
     // resume from the local output stages, provided their saved result/artifact
     // still validates below.
     const resumeDirectOutputUpload = isCodexDirectFullVideoTask(packaged)
-      && Boolean(previousState)
-      && ["LOCAL_RENDER", "QUALITY_CHECK", "UPLOADING", "FINALIZING", "COMPLETE"].includes(String(previousState?.stage || ""));
+      && (Boolean(directRecoveryResult) || (
+        Boolean(previousState)
+        && ["LOCAL_RENDER", "QUALITY_CHECK", "UPLOADING", "FINALIZING", "COMPLETE"].includes(String(previousState?.stage || ""))
+      ));
     const taskState: WorkspaceState = (resumeEligible || resumeDirectOutputUpload) && previousState
       ? {
         ...previousState,
@@ -2021,7 +2040,7 @@ async function execute(claimed: JsonRecord) {
         }
       }
       if (!result && resumeDirectOutputUpload) {
-        const recovered = await recoverDirectOutputResult(workspace, packaged, {
+        const recovered = directRecoveryResult || await recoverDirectOutputResult(workspace, packaged, {
           skill: detectedSkill.name,
           skillVersion: detectedSkill.version,
           skillDigest: detectedSkill.digest,
