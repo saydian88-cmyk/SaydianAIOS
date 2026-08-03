@@ -1940,7 +1940,15 @@ async function validateMandatoryVideoEvidence(
   }
   for (const name of ["doctor", "lint", "validate", "inspect", "render"]) {
     const command = commands.find((item) => String(item.name || "").toLowerCase() === name);
-    const commandPassed = command && (Number(command.exitCode) === 0 || command.success === true);
+    // Downstream Skills historically emit `passed`, while some producers use
+    // `success` or the raw process `exitCode`. They are equivalent evidence
+    // fields in the render contract; rejecting `passed: true` causes a fully
+    // rendered and validated master to be reported as failed at callback time.
+    const commandPassed = command && (
+      Number(command.exitCode) === 0
+      || command.success === true
+      || command.passed === true
+    );
     if (!commandPassed) throw new Error(`HyperFrames ${name} 未真实通过`);
     const commandLogPath = String(command.logPath || command.log || "");
     const logPath = resolve(workspace, commandLogPath);
