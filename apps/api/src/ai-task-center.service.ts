@@ -711,8 +711,11 @@ export class AiTaskCenterService implements OnModuleInit {
     const isLegacyImageRoutingFailure = task.sourceType === "IMAGE_PROJECT"
       && task.type === "IMAGE"
       && /requiredSkill|fixed route|固定路由|imagegen/i.test(failureReason);
+    // Two recovery attempts may already have been consumed by a stale worker
+    // that was still running the pre-IMAGE_POST router. Keep one final bounded
+    // attempt so the repaired envelope can be claimed by the upgraded worker.
     const isImageProjectRoutingRecovery = isLegacyImageRoutingFailure
-      && priorImageRoutingRecoveryAttempts < 2;
+      && priorImageRoutingRecoveryAttempts < 3;
     if (task.retryCount >= task.maxRetries && !isDirectOutputRecovery && !isImageProjectRoutingRecovery) {
       throw new BadRequestException("任务已达到最大重试次数");
     }

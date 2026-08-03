@@ -131,6 +131,55 @@ describe("AiTaskCenterService", () => {
     }));
   });
 
+  it("allows a final bounded image-project routing recovery after two stale-worker attempts", async () => {
+    const task = {
+      id: "ai-image-final-recovery",
+      taskNo: "AIT-IMAGE-FINAL-RECOVERY",
+      status: "FAILED",
+      type: "IMAGE",
+      sourceType: "IMAGE_PROJECT",
+      sourceId: "image-project-final-recovery",
+      input: {
+        imageProjectRoutingRecoveryAttempts: 2,
+        imageProjectRoutingRecoveryAttemptedAt: "2026-08-03T07:30:00.000Z",
+      },
+      retryCount: 3,
+      maxRetries: 3,
+      failureReason: "requiredSkill=saidian-ai-task-dispatcher 与固定路由 imagegen 不一致",
+    };
+    const update = vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({
+      ...task,
+      ...data,
+    }));
+    const service = new AiTaskCenterService(
+      {
+        aiTask: { findUnique: vi.fn().mockResolvedValue(task), update },
+        aiTaskOutput: { findFirst: vi.fn().mockResolvedValue(null) },
+        opsTask: { findUnique: vi.fn().mockResolvedValue(null) },
+        auditLog: { create: vi.fn().mockResolvedValue({}) },
+      } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await service.retry(task.id, "employee-1");
+
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        status: "RETRY",
+        input: expect.objectContaining({
+          executionMode: "IMAGE_POST",
+          sourceType: "IMAGE_PROJECT",
+          imageProjectId: "image-project-final-recovery",
+          imageProjectRoutingRecoveryAttempts: 3,
+        }),
+      }),
+    }));
+  });
+
   it("closes obsolete reshoot tasks after local masters are registered", async () => {
     const prisma = {
       aiTaskPolicy: { upsert: vi.fn().mockResolvedValue({}) },
