@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildBailianEditingVideoContext, validateBailianVideoScriptResult } from "./bailian-video-script-policy";
-import { isCompleteVideoCandidate, type AiVideoCandidate } from "./ai-content.service";
+import { AiContentService, isCompleteVideoCandidate, type AiVideoCandidate } from "./ai-content.service";
 
 function candidate(overrides: Partial<AiVideoCandidate> = {}): AiVideoCandidate {
   return {
@@ -91,6 +91,33 @@ function candidateWithDistinctVideoBindings() {
 }
 
 describe("Bailian video-script material gate", () => {
+  it("internally rewrites a failed style draft instead of exposing the first failure", async () => {
+    const service = new AiContentService() as any;
+    const invalid = structuredClone(candidateWithDistinctVideoBindings()) as any;
+    invalid.scriptPackage.styleChecks.templateQuestionCheck = false;
+    const valid = candidateWithDistinctVideoBindings();
+    const prompts: string[] = [];
+    service.callJson = async (prompt: string) => {
+      prompts.push(prompt);
+      return { candidates: [prompts.length === 1 ? invalid : valid] };
+    };
+
+    const result = await service.generateVideoCandidates({
+      exactCount: 1,
+      assets: [1, 2, 3].map((index) => ({
+        id: `video-${index}`,
+        kind: "VIDEO",
+        purpose: "EDITING_FOOTAGE",
+        indexNeedsReview: false,
+      })),
+    });
+
+    expect(result).toHaveLength(1);
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain("上一版不得提交");
+    expect(prompts[1]).toContain("templateQuestionCheck");
+  });
+
   it("sends only editing-footage videos to Bailian", () => {
     const context = buildBailianEditingVideoContext({
       assets: [

@@ -1352,6 +1352,7 @@ async function runCodex(
   workspace: string,
   timeoutSeconds: number,
   schemaAttempt = 1,
+  internalCorrection = "",
 ) {
   const task = record(taskPackage.task);
   const execution = record(taskPackage.execution);
@@ -1415,7 +1416,10 @@ async function runCodex(
       if (code === 0) resolvePromise();
       else reject(new Error(stderr || stdout || `Codex退出码 ${code}`));
     });
-    child.stdin.end(prompt(taskPackage, detectedSkill));
+    const correctionInstruction = internalCorrection
+      ? `\nINTERNAL_CORRECTION_REQUIRED: The previous draft was not submitted to the user. Rewrite it now and fix every issue below before returning. Do not merely change check flags; the actual script, hook, rhythm, material bindings and ending must comply.\n${internalCorrection}\n`
+      : "";
+    child.stdin.end(`${prompt(taskPackage, detectedSkill)}${correctionInstruction}`);
     });
   } finally {
     await writeFile(join(workspace, "logs", `codex-${schemaAttempt}.stdout.log`), stdout, "utf8");
@@ -1843,19 +1847,25 @@ async function execute(claimed: JsonRecord) {
         skillVersion: detectedSkill.version,
         assetCount: Array.isArray(packaged.assets) ? packaged.assets.length : 0,
       });
+      let internalCorrection = "";
       const generated = await runWithSchemaRetry(
         async (schemaAttempt) => {
           await appendExecutionLog(workspace, "CODEX_ATTEMPT", { schemaAttempt });
-          return runCodex(packaged, detectedSkill, workspace, timeoutSeconds, schemaAttempt);
+          return runCodex(packaged, detectedSkill, workspace, timeoutSeconds, schemaAttempt, internalCorrection);
         },
         (candidate) => {
-          validateResult(candidate, schema);
-          if (String(packagedTask.type || "") === "VIDEO" && String(execution.mode || "") === "SCRIPT_ONLY") {
-            validateVideoScriptMaterialIds(candidate, Array.isArray(packaged.assets) ? packaged.assets : []);
+          try {
+            validateResult(candidate, schema);
+            if (String(packagedTask.type || "") === "VIDEO" && String(execution.mode || "") === "SCRIPT_ONLY") {
+              validateVideoScriptMaterialIds(candidate, Array.isArray(packaged.assets) ? packaged.assets : []);
+            }
+          } catch (error) {
+            internalCorrection = error instanceof Error ? error.message : String(error);
+            throw error;
           }
           return candidate;
         },
-        2,
+        3,
       );
       result = generated.result;
       schemaAttempts = generated.attempts;

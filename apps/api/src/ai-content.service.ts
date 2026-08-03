@@ -180,6 +180,13 @@ export class AiContentService {
 
   async generateVideoCandidates(context: JsonRecord): Promise<AiVideoCandidate[]> {
     const bailianContext = buildBailianEditingVideoContext(context);
+    const correctionAttempt = Math.max(0, Math.round(Number(context.internalCorrectionAttempt) || 0));
+    const correctionErrors = Array.isArray(context.internalCorrectionErrors)
+      ? context.internalCorrectionErrors.map(text).filter(Boolean)
+      : [];
+    const correctionPolicy = correctionErrors.length
+      ? `这是内部第${correctionAttempt + 1}次修正。上一版不得提交，必须逐项改写并在返回前自行复查：\n- ${correctionErrors.join("\n- ")}\n不要只把styleChecks改成true；正文、钩子、节奏、动作、结尾和素材绑定必须实际满足。`
+      : "首次生成前先在内部完成网感、素材、合规和结构自检；任何一项不满足时先自行改写，全部满足后才返回，禁止把未通过项交给用户。";
     const exactCount = Math.max(1, Math.min(3, Math.round(Number(context.exactCount) || 3)));
     const hasGenerationMode = Object.prototype.hasOwnProperty.call(context, "generationMode");
     const hasContentRestrictionMode = Object.prototype.hasOwnProperty.call(context, "contentRestrictionMode");
@@ -209,6 +216,7 @@ ${assetPolicy}
 ${restrictionPolicy}
 ${voiceoverPolicy}
 ${userScriptPolicy}
+${correctionPolicy}
 每个候选必须含15秒和30秒中英文完整脚本、Hook、节奏化镜头大纲、字幕/CTA思路、标题、封面文案和标签，并生成scriptPackage结构化执行脚本。
 严禁只返回一句Hook或把Hook重复当作正文。outline至少3段；zh15至少40个汉字并包含开场、核心内容和结尾引导；zh30至少70个汉字并包含开场、场景或痛点、产品或功能展示、结果或价值、结尾引导。无口播模式也必须给出逐段画面字幕和动作节奏。
 scriptPackage必须包含：
@@ -360,6 +368,13 @@ assetIds必须等于所有shotRequirements.matchedVideoAssetIds去重后的并�
       validateBailianVideoScriptResult(row, bailianContext).map((error) => `候选${index + 1}：${error}`),
     );
     if (policyErrors.length) {
+      if (correctionAttempt < 2) {
+        return this.generateVideoCandidates({
+          ...context,
+          internalCorrectionAttempt: correctionAttempt + 1,
+          internalCorrectionErrors: policyErrors,
+        });
+      }
       throw new Error(`AI返回的视频脚本未通过素材门禁：${policyErrors.join("；")}`);
     }
     return candidates;
