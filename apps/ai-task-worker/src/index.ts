@@ -2087,8 +2087,10 @@ async function execute(claimed: JsonRecord) {
     // Preserve the resume decision before progress reporting changes the saved stage.
     // A previous attempt may already have a validated result and only need to retry
     // its upload; rerunning Codex in that case would create a duplicate video.
-    const resumeWithValidatedResult = (resumeEligible || resumeDirectOutputUpload)
-      && ["LOCAL_RENDER", "QUALITY_CHECK", "UPLOADING", "FINALIZING", "COMPLETE"].includes(String(taskState.stage || ""));
+    const resumeWithValidatedResult = Boolean(directRecoveryResult) || (
+      (resumeEligible || resumeDirectOutputUpload)
+      && ["LOCAL_RENDER", "QUALITY_CHECK", "UPLOADING", "FINALIZING", "COMPLETE"].includes(String(taskState.stage || ""))
+    );
     state = taskState;
     await saveWorkspaceState(workspace, taskState);
     await appendExecutionLog(workspace, "SKILL_SELECTED", {
