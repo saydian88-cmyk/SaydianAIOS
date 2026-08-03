@@ -167,8 +167,16 @@ function isImagePostProjectTask(taskPackage: JsonRecord) {
     task.sourceType || taskPackage.sourceType || input.sourceType || input.projectSourceType || "",
   ).toUpperCase();
   const executionMode = String(execution.mode || input.executionMode || "").toUpperCase();
+  const requiredSkill = String(execution.requiredSkill || "").trim();
   return String(task.type || "") === "IMAGE"
-    && (sourceType === "IMAGE_PROJECT" || Boolean(input.imageProjectId))
+    && (
+      sourceType === "IMAGE_PROJECT"
+      || Boolean(input.imageProjectId)
+      || executionMode === "IMAGE_POST"
+      || requiredSkill === "saidian-ai-task-dispatcher"
+      || requiredSkill === String(process.env.AI_TASK_IMAGE_POST_SKILL_NAME || "saidian-douyin-image-posts").trim()
+      || requiredSkill === "saidian-douyin-image-posts"
+    )
     && executionMode === "IMAGE_POST";
 }
 

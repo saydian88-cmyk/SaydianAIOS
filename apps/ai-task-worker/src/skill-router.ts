@@ -131,10 +131,19 @@ export function routeTask(taskPackage: JsonRecord, env: NodeJS.ProcessEnv = proc
   const sourceType = String(
     task.sourceType || taskPackage.sourceType || taskInput.sourceType || taskInput.projectSourceType || "",
   ).trim().toUpperCase();
+  const requestedExecutionMode = String(execution.mode || taskInput.executionMode || "").trim().toUpperCase();
+  const requiredSkill = String(execution.requiredSkill || "").trim();
   const isImagePostProject = type === "IMAGE"
-    && (sourceType === "IMAGE_PROJECT" || Boolean(taskInput.imageProjectId));
+    && (
+      sourceType === "IMAGE_PROJECT"
+      || Boolean(taskInput.imageProjectId)
+      || requestedExecutionMode === "IMAGE_POST"
+      || requiredSkill === "saidian-ai-task-dispatcher"
+      || requiredSkill === imagePostSkillName(env)
+      || requiredSkill === "saidian-douyin-image-posts"
+    );
   const executionMode = String(
-    execution.mode || taskInput.executionMode || (type === "VIDEO" ? "FULL_VIDEO" : isImagePostProject ? "IMAGE_POST" : "DEFAULT"),
+    requestedExecutionMode || (type === "VIDEO" ? "FULL_VIDEO" : isImagePostProject ? "IMAGE_POST" : "DEFAULT"),
   ).trim().toUpperCase();
   const isDouyinViralModule = String(taskInput.factoryModule || "").trim().toUpperCase() === "DOUYIN_VIRAL";
   const isCodexDirectFullVideo = type === "VIDEO"
