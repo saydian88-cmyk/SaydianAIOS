@@ -1902,6 +1902,28 @@ async function recoverDirectOutputResult(
   const preflightLog = await readFile(join(workspace, "logs", "production-plan-validator.log"), "utf8").catch(() => "");
   if (!preflightPlan?.isFile() || !preflightLog.includes("PRODUCTION_PLAN_OK")) return undefined;
   const outputsRoot = join(workspace, "outputs");
+  const savedResult = await readJson<JsonRecord>(join(workspace, "result.json"));
+  const savedOutputs = Array.isArray(savedResult?.outputFiles) ? savedResult.outputFiles.map(record) : [];
+  const savedMaster = savedOutputs.find((item) => String(item.kind || "").toUpperCase() === "VIDEO_MASTER");
+  if (savedMaster) {
+    const requested = String(savedMaster.path || "");
+    const absolute = resolve(workspace, requested);
+    const relativePath = relative(workspace, absolute);
+    const info = await stat(absolute).catch(() => undefined);
+    if (requested && !relativePath.startsWith("..") && !isAbsolute(relativePath) && info?.isFile() && info.size > 0) {
+      const recovered = {
+        ...savedResult,
+        outputFiles: [{ ...savedMaster, path: relativePath }],
+        execution: {
+          ...record(savedResult?.execution),
+          ...execution,
+          resumed: true,
+          finishedAt: new Date().toISOString(),
+        },
+      };
+      return validateOutputArtifacts(recovered, workspace);
+    }
+  }
   let names: string[];
   try {
     names = await readdir(outputsRoot);
@@ -1914,11 +1936,12 @@ async function recoverDirectOutputResult(
     const info = await stat(join(outputsRoot, name)).catch(() => undefined);
     if (info?.isFile() && info.size > 0) masters.push({ name, size: info.size });
   }
-  if (masters.length !== 1) return undefined;
+  if (!masters.length) return undefined;
   const task = record(taskPackageValue.task);
   const taskInput = record(task.input);
   const referenceDirect = taskInput.referenceDirectFullVideo === true;
-  const master = masters[0];
+  const master = masters.find((item) => /video[_-]?master/iu.test(item.name))
+    || [...masters].sort((left, right) => right.size - left.size)[0];
   const result: JsonRecord = {
     summary: "恢复已生成的 Codex 直出成片，仅重新登记上传结果。",
     outputFiles: [{
