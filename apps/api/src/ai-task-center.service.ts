@@ -710,10 +710,9 @@ export class AiTaskCenterService implements OnModuleInit {
     const failureReason = text(task.failureReason);
     const isLegacyImageRoutingFailure = task.sourceType === "IMAGE_PROJECT"
       && task.type === "IMAGE"
-      && text(taskInput.executionMode).toUpperCase() === "IMAGE_POST"
       && /requiredSkill|fixed route|固定路由|imagegen/i.test(failureReason);
     const isImageProjectRoutingRecovery = isLegacyImageRoutingFailure
-      && priorImageRoutingRecoveryAttempts < 1;
+      && priorImageRoutingRecoveryAttempts < 2;
     if (task.retryCount >= task.maxRetries && !isDirectOutputRecovery && !isImageProjectRoutingRecovery) {
       throw new BadRequestException("任务已达到最大重试次数");
     }
@@ -726,6 +725,14 @@ export class AiTaskCenterService implements OnModuleInit {
       : isImageProjectRoutingRecovery
         ? json({
           ...taskInput,
+          // Older image-project tasks were created before the IMAGE_POST
+          // execution envelope was persisted.  Merely putting the same input
+          // back in the queue makes the package builder fall back to the
+          // generic IMAGE/imagegen route, so repair the envelope before the
+          // task can be claimed again.
+          executionMode: "IMAGE_POST",
+          sourceType: "IMAGE_PROJECT",
+          imageProjectId: text(taskInput.imageProjectId) || text(task.sourceId),
           imageProjectRoutingRecoveryAttemptedAt: new Date().toISOString(),
           imageProjectRoutingRecoveryAttempts: priorImageRoutingRecoveryAttempts + 1,
         })
