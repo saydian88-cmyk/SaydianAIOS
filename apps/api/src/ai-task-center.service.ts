@@ -1073,9 +1073,29 @@ export class AiTaskCenterService implements OnModuleInit {
     const modelPolicy = object(task.modelPolicy);
     const dedicatedDouyin = text(input.factoryModule).toUpperCase() === "DOUYIN_VIRAL";
     const executionMode = text(input.executionMode).toUpperCase() || (task.type === "VIDEO" ? "FULL_VIDEO" : "DEFAULT");
+    const localLibraryCodexTask = text(input.executionClass).toUpperCase() === "CODEX_SKILL"
+      && text(input.skillName).toLowerCase() === "video-editing-from-media-library";
     const codexDirectFullVideo = task.type === "VIDEO"
       && executionMode === "FULL_VIDEO"
-      && input.codexDirectFullVideo === true;
+      && (input.codexDirectFullVideo === true || localLibraryCodexTask);
+    const existingDirectInput = object(input.codexDirectInput);
+    const projectBrief = object(input.projectBrief);
+    const packageInput = codexDirectFullVideo
+      ? {
+        executionMode: "FULL_VIDEO",
+        executionClass: "CODEX_SKILL",
+        skillName: "video-editing-from-media-library",
+        codexDirectFullVideo: true,
+        codexDirectInput: {
+          productModel: text(existingDirectInput.productModel) || text(task.productModel),
+          prompt: text(existingDirectInput.prompt)
+            || text(input.aiPrompt)
+            || text(projectBrief.additionalPrompt)
+            || text(projectBrief.prompt),
+          creativeMode: text(existingDirectInput.creativeMode) || text(input.creativeMode) || "FULL_VIDEO",
+        },
+      }
+      : input;
     const imagePostProject = task.type === "IMAGE"
       && executionMode === "IMAGE_POST"
       && (text(task.sourceType).toUpperCase() === "IMAGE_PROJECT"
@@ -1165,12 +1185,12 @@ export class AiTaskCenterService implements OnModuleInit {
         taskNo: task.taskNo,
         type: task.type,
         title: task.title,
-        instructions: task.instructions,
+        instructions: codexDirectFullVideo ? "" : task.instructions,
         platform: task.platform,
         productModel: task.productModel,
         sourceType: task.sourceType,
         sourceId: task.sourceId,
-        input,
+        input: packageInput,
         modelPolicy,
       },
       snapshots: (codexDirectFullVideo ? [] : task.inputSnapshots || []).map((snapshot) => ({

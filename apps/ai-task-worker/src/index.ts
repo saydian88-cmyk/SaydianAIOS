@@ -154,9 +154,11 @@ function isCodexDirectFullVideoTask(taskPackage: JsonRecord) {
   const task = record(taskPackage.task);
   const execution = record(taskPackage.execution);
   const input = record(task.input);
+  const localLibraryCodexTask = String(input.executionClass || "").toUpperCase() === "CODEX_SKILL"
+    && String(input.skillName || "").toLowerCase() === "video-editing-from-media-library";
   return String(task.type || "") === "VIDEO"
     && String(execution.mode || "").toUpperCase() === "FULL_VIDEO"
-    && input.codexDirectFullVideo === true;
+    && (input.codexDirectFullVideo === true || localLibraryCodexTask);
 }
 
 function isImagePostProjectTask(taskPackage: JsonRecord) {
@@ -823,7 +825,8 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
       "Use saidian-ai-task-dispatcher and then the full local video-editing-from-media-library Skill. Never use the share edition as a quality shortcut.",
       "MANDATORY_SKILL_PATH: G:\\codex\\xcodeplace\\CodexHome\\skills\\video-editing-from-media-library\\SKILL.md. Read and execute this exact full local Skill. The dispatcher only routes the task and the share edition is forbidden for this local direct render.",
       "Read the active local-library configuration and the verified-editing-videos-by-product manifest. Do not download, request, or return any system task assets.",
-      "Use only VIDEO entries admitted by that manifest. Each entry must be an active approved system asset with a local file mapping and an exact product relation equal to this task productModel. Never use another product model, unverified media, images, audio, packaging, cover, sticker, transition or template resources as footage.",
+      "The full editing Skill must independently learn, search and select VIDEO footage from the complete local library. The dispatcher must not preselect footage, create a candidate whitelist, or require system materialBindings. Use exact-product verified local VIDEO entries and never use another product model, unverified media, images, audio, packaging, cover, sticker, transition or template resources as primary footage.",
+      "DIRECT_CONTINUOUS_EXECUTION: Do not stop for user approval of the script, shot plan, material selection, production plan, packaging, or any other intermediate artifact. Create and validate those artifacts internally, repair any correctable issue, continue directly through rendering, and return only the final VIDEO_MASTER for user review.",
       "If the local library is not initialized or not ready, fail explicitly with the missing local configuration or index. Do not return a system-task WAITING_INPUT result.",
       "The employee UI only receives the final review node, but internal script, shot plan, material coverage, composition, packaging, audio and delivery QA steps remain mandatory.",
       "EXECUTION_FIRST_CONTRACT: Follow every editing requirement while producing the video; post-render validation is only the final safety net. Before creating or modifying the final HyperFrames composition or starting any render, write production-plan.json and pass the full Skill script validate_direct_production_plan.py. Save PRODUCTION_PLAN_OK to logs/production-plan-validator.log.",
