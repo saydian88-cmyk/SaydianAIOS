@@ -872,6 +872,8 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
       `The configured real Python executable is ${pythonExecutable}. Use this exact executable for every Python validator; do not rely on the Windows Store python alias or conclude that Python is missing before testing this path.`,
       "Use the exact schemas required by the official validators: requirements-check.json must use a requirements array; shot-plan.json must use the full Skill shot-plan schema including a visual_reference object; composition-qc.json must use a non-empty videos array. Run the validators instead of inventing substitute schemas.",
       "render-evidence.json must identify the HyperFrames project and contain successful doctor, lint, validate, inspect and render command records with non-empty log files. A plain FFmpeg concat is not the full editing Skill and must not be delivered.",
+      "RERENDER_GATE: After the first real MP4 is rendered, freeze the composition and run post-render QA. Start another render only when a QA record explicitly has passed=false and records the failed check ID, affected time range, corrective action, new version, and renderReason referencing that check. If QA passed, preserve the first master and proceed directly to evidence packaging and return; never rerender merely to improve logs, rename output, localize dependencies, or make an unrequested subjective refinement.",
+      "Never create, inject, or substitute an incomplete GSAP shim, proxy timeline, or ad-hoc animation runtime. Use the installed validated HyperFrames animation dependency. Every render must record renderReason=INITIAL_RENDER or the exact failed QA ID; without it, a second render is forbidden.",
       "transition-qc.json must contain cuts with one item for every non-first shot. Each cut requires beforeSeconds>=0.6, afterSeconds>=0.6, a non-empty observation, the actual transition name and passed=true only after viewing the rendered cut.",
       ...(creativeMode === "NO_VOICE_VIDEO" ? [
         "NO_VOICE_VIDEO_CONTRACT: Fully execute references/no-voice-beat-editing.md. Choose a real BGM from F:\\包装资源包 first, create a real beat map, and edit visuals against its sections and accent beats. The user has approved every BGM in this local library for system video tasks: license_unknown is metadata only and must never cause PACKAGING_BGM_LICENSE_GAP, WAITING_INPUT, or task failure.",
@@ -1855,16 +1857,19 @@ async function validateMandatoryVideoEvidence(
   if (planInfo.mtimeMs > renderEvidenceInfo.mtimeMs) {
     throw new Error("Production-plan gate must complete before render evidence is created");
   }
-  if (String(renderEvidence.engine || "").toUpperCase() !== "HYPERFRAMES") {
+  const commands = Array.isArray(renderEvidence.commands) ? renderEvidence.commands.map(record) : [];
+  const inferredHyperframes = /hyperframes/iu.test(`${String(renderEvidence.project || "")} ${commands.map((item) => String(item.command || "")).join(" ")}`);
+  if (String(renderEvidence.engine || "").toUpperCase() !== "HYPERFRAMES" && !inferredHyperframes) {
     throw new Error("直出成片未使用完整版Skill规定的 HyperFrames 渲染链");
   }
-  const commands = Array.isArray(renderEvidence.commands) ? renderEvidence.commands.map(record) : [];
   for (const name of ["doctor", "lint", "validate", "inspect", "render"]) {
     const command = commands.find((item) => String(item.name || "").toLowerCase() === name);
-    if (!command || Number(command.exitCode) !== 0) throw new Error(`HyperFrames ${name} 未真实通过`);
-    const logPath = resolve(workspace, String(command.logPath || ""));
+    const commandPassed = command && (Number(command.exitCode) === 0 || command.success === true);
+    if (!commandPassed) throw new Error(`HyperFrames ${name} 未真实通过`);
+    const commandLogPath = String(command.logPath || command.log || "");
+    const logPath = resolve(workspace, commandLogPath);
     const logRelative = relative(workspace, logPath);
-    if (!String(command.logPath || "") || logRelative.startsWith("..") || isAbsolute(logRelative)) {
+    if (!commandLogPath || logRelative.startsWith("..") || isAbsolute(logRelative)) {
       throw new Error(`HyperFrames ${name} 日志路径无效`);
     }
     const info = await stat(logPath).catch(() => undefined);
