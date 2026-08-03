@@ -79,6 +79,53 @@ describe("AiTaskCenterService", () => {
     })).toBe("");
   });
 
+  it("allows one exhausted legacy image-project routing recovery", async () => {
+    const task = {
+      id: "ai-image-1",
+      taskNo: "AIT-IMAGE-1",
+      status: "FAILED",
+      type: "IMAGE",
+      sourceType: "IMAGE_PROJECT",
+      sourceId: "image-project-1",
+      input: { executionMode: "IMAGE_POST" },
+      retryCount: 3,
+      maxRetries: 3,
+      failureReason: "requiredSkill=saidian-ai-task-dispatcher 与固定路由 imagegen 不一致",
+    };
+    const update = vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({
+      ...task,
+      ...data,
+    }));
+    const auditCreate = vi.fn().mockResolvedValue({});
+    const service = new AiTaskCenterService(
+      {
+        aiTask: { findUnique: vi.fn().mockResolvedValue(task), update },
+        aiTaskOutput: { findFirst: vi.fn().mockResolvedValue(null) },
+        opsTask: { findUnique: vi.fn().mockResolvedValue(null) },
+        auditLog: { create: auditCreate },
+      } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await service.retry(task.id, "employee-1");
+
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        status: "RETRY",
+        progressMessage: "正在使用修复后的图文制作路由重新执行",
+        input: expect.objectContaining({ imageProjectRoutingRecoveryAttempts: 1 }),
+      }),
+    }));
+    expect(update.mock.calls[0]?.[0].data).not.toHaveProperty("retryCount");
+    expect(auditCreate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ action: "AI_TASK_IMAGE_ROUTING_RECOVERY" }),
+    }));
+  });
+
   it("closes obsolete reshoot tasks after local masters are registered", async () => {
     const prisma = {
       aiTaskPolicy: { upsert: vi.fn().mockResolvedValue({}) },

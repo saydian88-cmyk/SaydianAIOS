@@ -702,7 +702,19 @@ export class AiTaskCenterService implements OnModuleInit {
       text(taskInput.outputRegistrationRecoveryAttemptedAt) ? 1 : 0,
     );
     const isDirectOutputRecovery = isDirectOutputTask && priorRecoveryAttempts < 2;
-    if (task.retryCount >= task.maxRetries && !isDirectOutputRecovery) {
+    const priorImageRoutingRecoveryAttempts = Math.max(
+      0,
+      Number(taskInput.imageProjectRoutingRecoveryAttempts || 0),
+      text(taskInput.imageProjectRoutingRecoveryAttemptedAt) ? 1 : 0,
+    );
+    const failureReason = text(task.failureReason);
+    const isLegacyImageRoutingFailure = task.sourceType === "IMAGE_PROJECT"
+      && task.type === "IMAGE"
+      && text(taskInput.executionMode).toUpperCase() === "IMAGE_POST"
+      && /requiredSkill|fixed route|固定路由|imagegen/i.test(failureReason);
+    const isImageProjectRoutingRecovery = isLegacyImageRoutingFailure
+      && priorImageRoutingRecoveryAttempts < 1;
+    if (task.retryCount >= task.maxRetries && !isDirectOutputRecovery && !isImageProjectRoutingRecovery) {
       throw new BadRequestException("任务已达到最大重试次数");
     }
     const recoveryInput = isDirectOutputRecovery
@@ -711,7 +723,13 @@ export class AiTaskCenterService implements OnModuleInit {
         outputRegistrationRecoveryAttemptedAt: new Date().toISOString(),
         outputRegistrationRecoveryAttempts: priorRecoveryAttempts + 1,
       })
-      : undefined;
+      : isImageProjectRoutingRecovery
+        ? json({
+          ...taskInput,
+          imageProjectRoutingRecoveryAttemptedAt: new Date().toISOString(),
+          imageProjectRoutingRecoveryAttempts: priorImageRoutingRecoveryAttempts + 1,
+        })
+        : undefined;
     const updated = await this.prisma.aiTask.update({
       where: { id },
       data: {
@@ -720,12 +738,14 @@ export class AiTaskCenterService implements OnModuleInit {
         // MP4 was already rendered but could not be registered by the API.
         // Keep the exhausted count intact: a later worker failure remains
         // terminal, so this never turns into unlimited retries.
-        ...(isDirectOutputRecovery ? {} : { retryCount: { increment: 1 } }),
+        ...(isDirectOutputRecovery || isImageProjectRoutingRecovery ? {} : { retryCount: { increment: 1 } }),
         ...(recoveryInput ? { input: recoveryInput } : {}),
         progress: 0,
         progressMessage: isDirectOutputRecovery
           ? "正在恢复已生成成片并重新登记，不会重新剪辑"
-          : "等待重新执行",
+          : isImageProjectRoutingRecovery
+            ? "正在使用修复后的图文制作路由重新执行"
+            : "等待重新执行",
         failureReason: null,
         lockedAt: null,
         lockedBy: null,
@@ -735,12 +755,26 @@ export class AiTaskCenterService implements OnModuleInit {
     await this.syncSourceOpsTask(
       updated,
       "RETRY",
-      isDirectOutputRecovery ? "正在恢复已生成成片并重新登记，不会重新剪辑" : "正在准备重新执行",
+      isDirectOutputRecovery
+        ? "正在恢复已生成成片并重新登记，不会重新剪辑"
+        : isImageProjectRoutingRecovery
+          ? "正在使用修复后的图文制作路由重新执行"
+          : "正在准备重新执行",
     );
-    await this.audit(actor, isDirectOutputRecovery ? "AI_TASK_OUTPUT_REGISTRATION_RECOVERY" : "AI_TASK_RETRY", id, {
-      retryCount: isDirectOutputRecovery ? task.retryCount : task.retryCount + 1,
-      recoveryOnly: isDirectOutputRecovery,
-    });
+    await this.audit(
+      actor,
+      isDirectOutputRecovery
+        ? "AI_TASK_OUTPUT_REGISTRATION_RECOVERY"
+        : isImageProjectRoutingRecovery
+          ? "AI_TASK_IMAGE_ROUTING_RECOVERY"
+          : "AI_TASK_RETRY",
+      id,
+      {
+        retryCount: isDirectOutputRecovery || isImageProjectRoutingRecovery ? task.retryCount : task.retryCount + 1,
+        recoveryOnly: isDirectOutputRecovery || isImageProjectRoutingRecovery,
+        imageProjectRoutingRecovery: isImageProjectRoutingRecovery,
+      },
+    );
     return updated;
   }
 
