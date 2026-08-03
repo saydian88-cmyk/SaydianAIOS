@@ -358,6 +358,7 @@ const deletingImageProjectId = ref("");
 const activeImageProjectId = ref("");
 const taskImageProjectDetail = ref<Row>({});
 const imageProjectPreviewVisible = ref(false);
+const imageProjectPreviewIndex = ref(0);
 const imageProjectForm = reactive({
   productModel: "",
   imageType: "送礼类",
@@ -676,6 +677,20 @@ function imageProjectPages(project?: Row) {
 
 function imageProjectPageUrl(page: Row) {
   return String(page.downloadUrl || page.imageUrl || page.fileUrl || page.storageUrl || page.url || "");
+}
+
+const imageProjectPreviewPages = computed(() => imageProjectPages(taskImageProjectDetail.value));
+const currentImageProjectPreviewPage = computed(() => imageProjectPreviewPages.value[imageProjectPreviewIndex.value]);
+
+function openImageProjectPreview() {
+  imageProjectPreviewIndex.value = 0;
+  imageProjectPreviewVisible.value = true;
+}
+
+function changeImageProjectPreviewPage(direction: number) {
+  const nextIndex = imageProjectPreviewIndex.value + direction;
+  if (nextIndex < 0 || nextIndex >= imageProjectPreviewPages.value.length) return;
+  imageProjectPreviewIndex.value = nextIndex;
 }
 
 function imageProjectVariant(project?: Row) {
@@ -3939,7 +3954,7 @@ onBeforeUnmount(() => {
                       <section><header><strong>发布文案</strong><el-button size="small" @click="copyTaskContent(imageProjectCopy(taskImageProjectDetail), '发布文案')">复制</el-button></header><p>{{ imageProjectCopy(taskImageProjectDetail) || '发布文案已随图文生成' }}</p></section>
                     </div>
                   </section>
-                  <div class="preview-actions"><el-button @click="imageProjectPreviewVisible = true">预览图文</el-button><el-button @click="downloadAllImageProjectPages(taskImageProjectDetail)">一键下载全部</el-button><el-button type="danger" plain @click="reviewImageProject(false)">退回并填写原因</el-button><el-button type="success" @click="reviewImageProject(true)">图文审核通过</el-button></div>
+                  <div class="preview-actions"><el-button @click="openImageProjectPreview">预览图文</el-button><el-button @click="downloadAllImageProjectPages(taskImageProjectDetail)">一键下载全部</el-button><el-button type="danger" plain @click="reviewImageProject(false)">退回并填写原因</el-button><el-button type="success" @click="reviewImageProject(true)">图文审核通过</el-button></div>
                 </template>
                 <template v-else>
                   <section class="image-result-layout published">
@@ -3948,7 +3963,7 @@ onBeforeUnmount(() => {
                   </section>
                   <div class="image-publish-form">
                     <div v-for="(record, index) in imagePublishRecords" :key="index" class="image-publish-record"><el-select v-model="record.platform"><el-option v-for="item in publishPlatformOptions" :key="item.value" :label="item.label" :value="item.value" /></el-select><el-input v-model="record.remoteUrl" placeholder="粘贴已发布图文链接" /></div>
-                    <el-button @click="addImagePublishRecord">添加一个发布平台</el-button><el-button @click="downloadAllImageProjectPages(taskImageProjectDetail)">一键下载全部</el-button><el-button @click="imageProjectPreviewVisible = true">预览图文</el-button><el-button type="primary" @click="saveImagePublishLinks">回传发布链接</el-button>
+                    <el-button @click="addImagePublishRecord">添加一个发布平台</el-button><el-button @click="downloadAllImageProjectPages(taskImageProjectDetail)">一键下载全部</el-button><el-button @click="openImageProjectPreview">预览图文</el-button><el-button type="primary" @click="saveImagePublishLinks">回传发布链接</el-button>
                   </div>
                 </template>
               </template>
@@ -5542,7 +5557,7 @@ onBeforeUnmount(() => {
           </div>
         </section>
         <div class="preview-actions">
-          <el-button @click="imageProjectPreviewVisible = true">预览图文</el-button>
+          <el-button @click="openImageProjectPreview">预览图文</el-button>
           <el-button @click="downloadAllImageProjectPages(taskImageProjectDetail)">一键下载全部</el-button>
           <el-button type="danger" plain @click="reviewImageProject(false)">退回并填写原因</el-button>
           <el-button type="success" @click="reviewImageProject(true)">图文审核通过</el-button>
@@ -5557,7 +5572,7 @@ onBeforeUnmount(() => {
           <div v-for="(record, index) in imagePublishRecords" :key="index" class="image-publish-record"><el-select v-model="record.platform"><el-option v-for="item in publishPlatformOptions" :key="item.value" :label="item.label" :value="item.value" /></el-select><el-input v-model="record.remoteUrl" placeholder="粘贴已发布图文链接" /></div>
           <el-button @click="addImagePublishRecord">添加一个发布平台</el-button>
           <el-button @click="downloadAllImageProjectPages(taskImageProjectDetail)">一键下载全部</el-button>
-          <el-button @click="imageProjectPreviewVisible = true">预览并下载图文</el-button>
+          <el-button @click="openImageProjectPreview">预览并下载图文</el-button>
           <el-button type="primary" @click="saveImagePublishLinks">回传发布链接</el-button>
         </div>
       </template>
@@ -5565,9 +5580,47 @@ onBeforeUnmount(() => {
     <template #footer><el-button @click="imageProjectVisible = false">关闭</el-button></template>
   </el-dialog>
 
-  <el-dialog v-model="imageProjectPreviewVisible" title="图文预览" width="min(960px, 96vw)">
-    <div class="image-preview-grid"><article v-for="(page, index) in imageProjectPages(taskImageProjectDetail)" :key="page.id || index" class="image-page-card"><img v-if="imageProjectPageUrl(page)" :src="imageProjectPageUrl(page)" :alt="page.title || `第${index + 1}页`" /><div v-else><strong>{{ page.title || `第 ${index + 1} 页图文` }}</strong><p>{{ page.copy || page.description }}</p></div><a v-if="imageProjectPageUrl(page)" :href="imageProjectPageUrl(page)" target="_blank" download>下载本页</a></article></div>
-    <template #footer><el-button @click="downloadAllImageProjectPages(taskImageProjectDetail)">一键下载全部</el-button><el-button type="primary" @click="imageProjectPreviewVisible = false">完成预览</el-button></template>
+  <el-dialog v-model="imageProjectPreviewVisible" title="图文预览" width="min(760px, 96vw)" class="image-preview-dialog">
+    <div v-if="currentImageProjectPreviewPage" class="image-preview-viewer">
+      <button
+        class="image-preview-nav image-preview-nav-prev"
+        type="button"
+        aria-label="上一张"
+        :disabled="imageProjectPreviewIndex === 0"
+        @click="changeImageProjectPreviewPage(-1)"
+      >‹</button>
+      <div class="image-preview-stage">
+        <img
+          v-if="imageProjectPageUrl(currentImageProjectPreviewPage)"
+          :src="imageProjectPageUrl(currentImageProjectPreviewPage)"
+          :alt="currentImageProjectPreviewPage.title || `第${imageProjectPreviewIndex + 1}页`"
+        />
+        <div v-else class="image-preview-fallback">
+          <strong>{{ currentImageProjectPreviewPage.title || `第 ${imageProjectPreviewIndex + 1} 页图文` }}</strong>
+          <p>{{ currentImageProjectPreviewPage.copy || currentImageProjectPreviewPage.description }}</p>
+        </div>
+      </div>
+      <button
+        class="image-preview-nav image-preview-nav-next"
+        type="button"
+        aria-label="下一张"
+        :disabled="imageProjectPreviewIndex >= imageProjectPreviewPages.length - 1"
+        @click="changeImageProjectPreviewPage(1)"
+      >›</button>
+      <div class="image-preview-counter">{{ imageProjectPreviewIndex + 1 }} / {{ imageProjectPreviewPages.length }}</div>
+    </div>
+    <el-empty v-else description="暂无可预览的图文" />
+    <template #footer>
+      <a
+        v-if="currentImageProjectPreviewPage && imageProjectPageUrl(currentImageProjectPreviewPage)"
+        class="image-preview-download"
+        :href="imageProjectPageUrl(currentImageProjectPreviewPage)"
+        target="_blank"
+        download
+      >下载本页</a>
+      <el-button @click="downloadAllImageProjectPages(taskImageProjectDetail)">一键下载全部</el-button>
+      <el-button type="primary" @click="imageProjectPreviewVisible = false">完成预览</el-button>
+    </template>
   </el-dialog>
 
   <el-dialog v-model="newVideoProjectVisible" title="新建智能视频项目" width="min(980px, 96vw)" destroy-on-close>
