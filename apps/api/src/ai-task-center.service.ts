@@ -964,28 +964,6 @@ export class AiTaskCenterService implements OnModuleInit {
   async claimRunner(token: string, body: JsonRecord) {
     const node = await this.runner(token, text(body.nodeCode));
     await this.releaseStaleTasks();
-    // Recover direct videos that were completed but falsely rejected because
-    // a UTF-16 production-plan log was read as UTF-8 by an older worker.
-    // The current worker reruns the authoritative validator and normalizes the
-    // evidence, so no employee retry is required.
-    await this.prisma.aiTask.updateMany({
-      where: {
-        status: "FAILED",
-        type: "VIDEO",
-        failureReason: { contains: "Direct video did not pass the production-plan gate before editing" },
-      },
-      data: {
-        status: "RETRY",
-        retryCount: 0,
-        progress: 0,
-        progressMessage: "正在恢复已生成成片并重新完成内部校验",
-        failureReason: null,
-        finishedAt: null,
-        lockedBy: null,
-        lockedAt: null,
-        heartbeatAt: null,
-      },
-    });
     const capabilities = node.capabilities.length ? node.capabilities as AiTaskType[] : taskTypes;
     const tasks = await this.prisma.aiTask.findMany({
       where: {
