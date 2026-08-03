@@ -1394,6 +1394,18 @@ async function refreshImageProject() {
   }
 }
 
+async function retryImageProject() {
+  if (!activeImageProjectId.value) return;
+  taskImageProjectLoading.value = true;
+  try {
+    taskImageProjectDetail.value = await post<Row>(`/api/v1/workbench/image-projects/${activeImageProjectId.value}/retry`, {});
+    ElMessage.success("已重新提交图文生成任务");
+    await loadTasks();
+  } finally {
+    taskImageProjectLoading.value = false;
+  }
+}
+
 async function reviewImageProject(approve: boolean) {
   if (!activeImageProjectId.value) return;
   let reason = "";
@@ -3887,6 +3899,11 @@ onBeforeUnmount(() => {
                     </div>
                     <el-progress :percentage="imageProjectAiTaskProgress(taskImageProjectDetail)" :status="imageProjectAiTask(taskImageProjectDetail)?.status === 'FAILED' ? 'exception' : undefined" />
                     <p class="project-running-message">{{ imageProjectAiTaskMessage(taskImageProjectDetail) }}</p>
+                    <el-button
+                      v-if="imageProjectAiTask(taskImageProjectDetail)?.status === 'FAILED'"
+                      type="primary"
+                      @click="retryImageProject"
+                    >重新执行</el-button>
                   </template>
                   <el-alert v-else title="图文 AI 任务正在登记，稍后可点击“刷新当前项目”查看进度。" type="info" :closable="false" show-icon />
                 </section>

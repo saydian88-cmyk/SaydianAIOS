@@ -1066,6 +1066,31 @@ export class WorkbenchController {
     return { ...project, aiTask, requirement: object((Array.isArray(project.sourceSignals) ? project.sourceSignals[0] : {}) as object).brief ? object(object((project.sourceSignals as any)[0]).brief).requirement : "" };
   }
 
+  @Post("image-projects/:id/retry")
+  async retryImageProject(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+  ) {
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    const project = await this.prisma.contentPlan.findFirst({
+      where: { id, kind: "SHORT_POST", assignedEmployeeId: employee.employeeId, productionStage: { not: "IMAGE_ARCHIVED" } },
+      select: { id: true },
+    });
+    if (!project) throw new ForbiddenException("图文项目不存在、已删除或无权处理");
+
+    const task = await this.prisma.aiTask.findFirst({
+      where: { sourceType: "IMAGE_PROJECT", sourceId: id },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, status: true },
+    });
+    if (!task) throw new BadRequestException("该图文项目尚未登记 AI 任务");
+    if (!["FAILED", "RETURNED", "RETRY"].includes(task.status)) {
+      throw new BadRequestException("当前图文任务不是可重试状态");
+    }
+    await this.aiTasks.retry(task.id, employee.name);
+    return this.imageProject(authorization, id);
+  }
+
   @Delete("image-projects/:id")
   async deleteImageProject(
     @Headers("authorization") authorization: string | undefined,
