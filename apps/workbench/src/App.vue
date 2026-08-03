@@ -370,7 +370,7 @@ const imageProjectForm = reactive({
 });
 const imageRequirementEdited = ref(false);
 const imagePublishRecords = ref<Array<{ platform: string; remoteUrl: string }>>([{ platform: "DOUYIN", remoteUrl: "" }]);
-const imageProjectTypes = ["送礼类", "种草类", "避坑类", "补盲类", "测评类", "教程类", "对比类"];
+const imageProjectTypes = ["送礼类", "种草类", "避坑类", "科普类", "实拍类", "测评类", "教程类", "对比类"];
 const lockedShotUpload = ref<Row>();
 const videoScriptMode = ref("AUTO");
 const videoScriptRestriction = ref("NORMAL");
@@ -684,7 +684,27 @@ function imageProjectVariant(project?: Row) {
 
 function imageProjectTags(project?: Row) {
   const metadata = imageProjectVariant(project).metadata || {};
-  return Array.isArray(metadata.tags) ? metadata.tags : [];
+  return Array.isArray(metadata.tags)
+    ? metadata.tags.map((tag: unknown) => String(tag || "").trim().replace(/^#+/, "")).filter(Boolean)
+    : [];
+}
+
+function downloadAllImageProjectPages(project?: Row) {
+  const pages = imageProjectPages(project).filter((page: Row) => imageProjectPageUrl(page));
+  if (!pages.length) return ElMessage.warning("暂无可下载的图文");
+  pages.forEach((page: Row, index: number) => {
+    window.setTimeout(() => {
+      const anchor = document.createElement("a");
+      anchor.href = imageProjectPageUrl(page);
+      anchor.download = `${project?.productModel || "图文"}-${index + 1}.png`;
+      anchor.target = "_blank";
+      anchor.rel = "noopener";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+    }, index * 180);
+  });
+  ElMessage.success(`已开始下载全部 ${pages.length} 张图文`);
 }
 
 function imageProjectCopy(project?: Row) {
@@ -1208,7 +1228,8 @@ function imageDefaultsForType(type: string) {
     "送礼类": { audience: "给爸妈挑健康手表的人", hook: "给爸妈买前先看" },
     "种草类": { audience: "正在挑选智能手表的人", hook: "真实体验怎么样" },
     "避坑类": { audience: "第一次买健康手表的人", hook: "买前先避开这几个坑" },
-    "补盲类": { audience: "对功能还不了解的人", hook: "很多人都忽略了这一点" },
+    "科普类": { audience: "对功能还不了解的人", hook: "很多人都忽略了这一点" },
+    "实拍类": { audience: "想看真实使用过程的人", hook: "真实操作给你看" },
     "测评类": { audience: "正在比较同类产品的人", hook: "实测后再说值不值得" },
     "教程类": { audience: "刚拿到产品的用户", hook: "这几个功能这样用更方便" },
     "对比类": { audience: "正在横向比较产品的人", hook: "高血压人群买前先看" },
@@ -1222,7 +1243,8 @@ function imageSuggestionsForType(type: string) {
     "送礼类": { audiences: ["给爸妈挑健康手表的人", "想送父母实用礼物的人", "给长辈准备节日礼物的人"], hooks: ["给爸妈买前先看", "送父母礼物别只看外观", "真正实用的健康礼物怎么选"] },
     "种草类": { audiences: ["正在挑选智能手表的人", "重视日常健康管理的人", "想换一块更实用手表的人"], hooks: ["真实体验怎么样", "这类手表到底值不值得买", "用了以后才知道的方便"] },
     "避坑类": { audiences: ["第一次买健康手表的人", "给父母买手表的人", "担心买错功能的人"], hooks: ["买前先避开这几个坑", "别只看参数，这点更重要", "给父母买表最容易忽略什么"] },
-    "补盲类": { audiences: ["对功能还不了解的人", "刚开始关注健康手表的人", "想看懂日常使用场景的人"], hooks: ["很多人都忽略了这一点", "这个功能其实这样用", "别把它只当普通手表"] },
+    "科普类": { audiences: ["对功能还不了解的人", "刚开始关注健康手表的人", "想看懂日常使用场景的人"], hooks: ["很多人都忽略了这一点", "这个功能其实这样用", "别把它只当普通手表"] },
+    "实拍类": { audiences: ["想看真实使用过程的人", "准备购买前看操作的人", "关注产品实际效果的人"], hooks: ["真实操作给你看", "不讲参数直接实拍", "从佩戴到使用完整拍一遍"] },
     "测评类": { audiences: ["正在比较同类产品的人", "想看真实使用感受的人", "准备下单前做功课的人"], hooks: ["实测后再说值不值得", "连续使用后真实感受", "这几个细节很关键"] },
     "教程类": { audiences: ["刚拿到产品的用户", "需要帮父母设置手表的人", "想快速上手功能的人"], hooks: ["这几个功能这样用更方便", "新手先学会这一步", "三分钟看懂日常操作"] },
     "对比类": { audiences: ["正在横向比较产品的人", "高血压人群购前对比的人", "想看核心功能差异的人"], hooks: ["高血压人群买前先看", "横向对比后差别在哪", "别只比价格，先比这些"] },
@@ -1326,7 +1348,7 @@ async function createImageProject() {
     const project = result.project || result;
     activeImageProjectId.value = project.id;
     taskImageProjectDetail.value = project;
-    imageProjectVisible.value = true;
+    imageProjectVisible.value = false;
     ElMessage.success("图文项目已创建，正在生成图文和文案");
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : "图文项目创建失败");
@@ -1533,6 +1555,10 @@ function isCodexDirectVideoProject(project: Row) {
   return projectMode(project) === "CODEX_DIRECT_FULL_VIDEO";
 }
 
+function isCodexOnlyVideoProject(project: Row) {
+  return ["CODEX_DIRECT_FULL_VIDEO", "REFERENCE_DIRECT_FULL_VIDEO"].includes(projectMode(project));
+}
+
 function codexDirectRevision(project?: Row) {
   const signal = project && Array.isArray(project.sourceSignals)
     ? project.sourceSignals.find((item: Row) => item.type === "VIDEO_FACTORY")
@@ -1598,7 +1624,7 @@ function activeRemoteScriptTask(project?: Row) {
 }
 
 function activeCodexDirectVideoTask(project?: Row) {
-  if (!isCodexDirectVideoProject(project || {})) return undefined;
+  if (!isCodexOnlyVideoProject(project || {})) return undefined;
   const signal = project && Array.isArray(project.sourceSignals)
     ? project.sourceSignals.find((item: Row) => item.type === "VIDEO_FACTORY")
     : undefined;
@@ -1732,7 +1758,7 @@ function scriptGenerationMessages(project?: Row) {
   const progress = Math.max(0, Math.min(100, Number(task.progress || 0)));
   const status = String(task.status || "PENDING");
   const progressText = String(task.progressMessage || task.failureReason || "等待远程 Codex 领取任务");
-  const direct = isCodexDirectVideoProject(project || {});
+  const direct = isCodexOnlyVideoProject(project || {});
   return [
     { role: "SYSTEM", provider: "CODEX", status: "SUBMITTED", at: task.createdAt, content: `${direct ? "已提交远程 Codex 直出成片任务" : "已提交远程 Codex 脚本任务"} ${task.taskNo || ""}`.trim() },
     { role: "CODEX", provider: "CODEX", status, at: task.updatedAt || task.startedAt || task.finishedAt, content: `${progressText}${["COMPLETED", "FAILED", "CANCELLED"].includes(status) ? "" : `（${progress}%）`}` },
@@ -1740,12 +1766,12 @@ function scriptGenerationMessages(project?: Row) {
 }
 
 function scriptGenerationDialogTitle(project?: Row) {
-  if (isCodexDirectVideoProject(project || {})) return "Codex 直出成片任务进度";
+  if (isCodexOnlyVideoProject(project || {})) return projectMode(project || {}) === "REFERENCE_DIRECT_FULL_VIDEO" ? "Codex 参考直出任务进度" : "Codex 直出成片任务进度";
   return activeRemoteScriptTask(project) ? "Codex 脚本任务进度" : "系统与百炼生成记录";
 }
 
 function scriptGenerationDialogHint(project?: Row) {
-  if (isCodexDirectVideoProject(project || {})) {
+  if (isCodexOnlyVideoProject(project || {})) {
     return "仅展示直出成片 AI 任务的真实状态、进度和失败原因；不会回传脚本、素材匹配或剪辑过程。点击“只刷新当前项目”只更新本项目。";
   }
   return activeRemoteScriptTask(project)
@@ -2076,7 +2102,6 @@ async function openSelfTask() {
     recurrenceDueTime: "23:59",
   });
   selfTaskVisible.value = true;
-  await ensureContentTaskOptions();
 }
 
 async function openSelfTaskEdit(task: Row) {
@@ -2107,7 +2132,6 @@ async function openSelfTaskEdit(task: Row) {
     recurrenceDueTime: "23:59",
   });
   selfTaskVisible.value = true;
-  await ensureContentTaskOptions();
 }
 
 async function openSelfTaskCopy(task: Row) {
@@ -2249,31 +2273,16 @@ function taskAttachments(task?: Row) {
 }
 
 async function createSelfTask() {
-  if (!selfTaskForm.productId) return ElMessage.warning("请选择产品");
-  if (!selfTaskForm.keywordId) return ElMessage.warning("请选择智能关键词");
   if (!selfTaskForm.title.trim()) return ElMessage.warning("请填写任务标题");
   creatingSelfTask.value = true;
   try {
-    const category = selfTaskForm.contentType === "IMAGE"
-      ? "CONTENT_IMAGE"
-      : selfTaskForm.contentType === "ARTICLE"
-        ? "CONTENT_ARTICLE"
-        : "CONTENT_VIDEO";
     const payload = {
       ...selfTaskForm,
-      category,
-      evidence: {
-        contentType: selfTaskForm.contentType,
-        keywordId: selfTaskForm.keywordId || null,
-        targetAudience: selfTaskForm.targetAudience || null,
-        corePain: selfTaskForm.corePain || null,
-        recommendedScene: selfTaskForm.recommendedScene || null,
-        hook: selfTaskForm.hook || null,
-        executionMode: selfTaskForm.executionMode,
-        materialStrategy: selfTaskForm.materialStrategy,
-        sourceKeywordIds: selfTaskForm.sourceKeywordIds,
-        sourceExternalVideoIds: selfTaskForm.sourceExternalVideoIds,
-      },
+      category: "GENERAL",
+      contentType: "GENERAL",
+      productId: null,
+      keywordId: null,
+      evidence: {},
     };
     if (editingSelfTaskId.value) {
       await api(`/api/v1/workbench/tasks/${editingSelfTaskId.value}`, {
@@ -2281,7 +2290,7 @@ async function createSelfTask() {
         body: JSON.stringify(payload),
       });
     } else {
-      await post("/api/v1/workbench/task-creation/submit-ai", payload);
+      await post("/api/v1/workbench/tasks", payload);
     }
     selfTaskVisible.value = false;
     taskScope.value = "MINE";
@@ -2453,9 +2462,10 @@ async function createVideoFactoryProject() {
     } else {
       await loadTasks();
     }
-    createdVideoProjectDialogId.value = createdProject.id;
+    createdVideoProjectDialogId.value = "";
     expandedTaskVideoProjectId.value = createdProject.id;
     taskVideoProjectDetail.value = createdProject;
+    newVideoProjectVisible.value = false;
     ElMessage.success("视频项目已创建，已自动进入脚本处理");
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : "视频项目创建失败，请稍后重试");
@@ -3744,19 +3754,8 @@ onBeforeUnmount(() => {
             <el-button v-if="selectedTaskIds.length" type="danger" :loading="bulkDeletingTasks" @click="bulkTrashCancelledTasks">批量删除（{{ selectedTaskIds.length }}）</el-button>
             <el-button @click="openTaskRecycleBin">任务回收站</el-button>
             <el-button @click="openSelfTask">新建普通任务</el-button>
-            <el-button-group>
-              <el-button type="primary" @click="openNewVideoProjectDialog">快速新建视频项目</el-button>
-              <el-dropdown trigger="click" @command="quickCreateProject">
-                <el-button type="primary" aria-label="选择项目类型">⌄</el-button>
-                <template #dropdown>
-                  <el-dropdown-menu>
-                    <el-dropdown-item command="VIDEO">新建视频项目</el-dropdown-item>
-                    <el-dropdown-item command="IMAGE">新建图文项目</el-dropdown-item>
-                    <el-dropdown-item command="ARTICLE">新建软文项目（待完善）</el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
-            </el-button-group>
+            <el-button type="primary" @click="openNewVideoProjectDialog">快速新建视频项目</el-button>
+            <el-button type="primary" plain @click="openNewImageProjectDialog">快速新建图文项目</el-button>
           </div>
         </section>
         <section class="section-card task-list">
@@ -3920,7 +3919,7 @@ onBeforeUnmount(() => {
                       <section><header><strong>发布文案</strong><el-button size="small" @click="copyTaskContent(imageProjectCopy(taskImageProjectDetail), '发布文案')">复制</el-button></header><p>{{ imageProjectCopy(taskImageProjectDetail) || '发布文案已随图文生成' }}</p></section>
                     </div>
                   </section>
-                  <div class="preview-actions"><el-button @click="imageProjectPreviewVisible = true">预览图文</el-button><el-button type="danger" plain @click="reviewImageProject(false)">退回并填写原因</el-button><el-button type="success" @click="reviewImageProject(true)">图文审核通过</el-button></div>
+                  <div class="preview-actions"><el-button @click="imageProjectPreviewVisible = true">预览图文</el-button><el-button @click="downloadAllImageProjectPages(taskImageProjectDetail)">一键下载全部</el-button><el-button type="danger" plain @click="reviewImageProject(false)">退回并填写原因</el-button><el-button type="success" @click="reviewImageProject(true)">图文审核通过</el-button></div>
                 </template>
                 <template v-else>
                   <section class="image-result-layout published">
@@ -3929,7 +3928,7 @@ onBeforeUnmount(() => {
                   </section>
                   <div class="image-publish-form">
                     <div v-for="(record, index) in imagePublishRecords" :key="index" class="image-publish-record"><el-select v-model="record.platform"><el-option v-for="item in publishPlatformOptions" :key="item.value" :label="item.label" :value="item.value" /></el-select><el-input v-model="record.remoteUrl" placeholder="粘贴已发布图文链接" /></div>
-                    <el-button @click="addImagePublishRecord">添加一个发布平台</el-button><el-button @click="imageProjectPreviewVisible = true">预览并下载图文</el-button><el-button type="primary" @click="saveImagePublishLinks">回传发布链接</el-button>
+                    <el-button @click="addImagePublishRecord">添加一个发布平台</el-button><el-button @click="downloadAllImageProjectPages(taskImageProjectDetail)">一键下载全部</el-button><el-button @click="imageProjectPreviewVisible = true">预览图文</el-button><el-button type="primary" @click="saveImagePublishLinks">回传发布链接</el-button>
                   </div>
                 </template>
               </template>
@@ -5159,45 +5158,6 @@ onBeforeUnmount(() => {
 
   <el-dialog v-model="selfTaskVisible" :title="editingSelfTaskId ? '修改我的任务' : copyingSelfTask ? '复制并再次添加' : '新建我的任务'" width="min(620px, 92vw)">
     <el-form label-position="top">
-      <el-form-item label="内容任务类型" required>
-        <el-radio-group v-model="selfTaskForm.contentType">
-          <el-radio-button value="SHORT_VIDEO">短视频</el-radio-button>
-          <el-radio-button value="IMAGE">图片</el-radio-button>
-          <el-radio-button value="ARTICLE">软文</el-radio-button>
-        </el-radio-group>
-      </el-form-item>
-      <div class="team-form-row">
-        <el-form-item label="产品" required>
-          <el-select v-model="selfTaskForm.productId" filterable placeholder="选择产品">
-            <el-option v-for="item in contentTaskOptions.products || []" :key="item.id" :label="`${item.modelCode} · ${item.name}`" :value="item.id" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="平台">
-          <el-select v-model="selfTaskForm.platform"><el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" /><el-option label="全平台" value="ALL" /></el-select>
-        </el-form-item>
-      </div>
-      <el-form-item label="智能关键词（可选）">
-        <el-select v-model="selfTaskForm.keywordId" clearable filterable placeholder="可选择关键词辅助生成选题">
-          <el-option v-for="item in filteredTaskKeywords" :key="item.id" :label="`${item.keyword} · ${item.grade || 'C'}级 · ${Math.round(Number(item.opportunityScore || 0))}分`" :value="item.id" />
-        </el-select>
-      </el-form-item>
-      <el-button class="suggest-task-button" type="primary" plain :loading="generatingTaskSuggestion" @click="generateTaskSuggestion">智能生成选题、推荐与提示</el-button>
-      <div class="team-form-row">
-        <el-form-item label="目标用户"><el-input v-model="selfTaskForm.targetAudience" placeholder="例如：为父母选购健康手表的子女" /></el-form-item>
-        <el-form-item label="核心痛点"><el-input v-model="selfTaskForm.corePain" placeholder="例如：入口多，不清楚如何查看数据" /></el-form-item>
-      </div>
-      <div class="team-form-row">
-        <el-form-item label="推荐场景"><el-input v-model="selfTaskForm.recommendedScene" placeholder="例如：家庭首次连接与日常查看" /></el-form-item>
-        <el-form-item label="Hook（可选）"><el-input v-model="selfTaskForm.hook" placeholder="例如：界面很多，先分清这三类入口" /></el-form-item>
-      </div>
-      <div v-if="selfTaskForm.contentType === 'SHORT_VIDEO'" class="team-form-row">
-        <el-form-item label="视频任务模式">
-          <el-select v-model="selfTaskForm.executionMode"><el-option label="生成完整视频" value="FULL_VIDEO" /><el-option label="仅生成脚本" value="SCRIPT_ONLY" /></el-select>
-        </el-form-item>
-        <el-form-item label="素材策略">
-          <el-select v-model="selfTaskForm.materialStrategy"><el-option label="优先使用已审核真实素材" value="REAL_ASSET_FIRST" /><el-option label="仅使用指定素材" value="ASSIGNED_ONLY" /></el-select>
-        </el-form-item>
-      </div>
       <el-form-item label="任务标题" required><el-input v-model="selfTaskForm.title" placeholder="例如：整理本周待拍视频清单" /></el-form-item>
       <el-form-item label="任务说明"><TaskRichTextEditor v-model="selfTaskForm.descriptionDocument" placeholder="填写需要完成的具体工作" /></el-form-item>
       <el-form-item label="期望结果"><TaskRichTextEditor v-model="selfTaskForm.expectedResultDocument" placeholder="填写完成标准或交付内容" /></el-form-item>
@@ -5210,7 +5170,6 @@ onBeforeUnmount(() => {
           <div class="date-shortcuts"><el-button size="small" @click="quickDue(selfTaskForm, 'TODAY')">今日</el-button><el-button size="small" @click="quickDue(selfTaskForm, 'WEEK')">本周内</el-button></div>
         </el-form-item>
       </div>
-      <el-alert v-if="!editingSelfTaskId" title="提交后会同步进入总管理后台 AI任务中心，由Codex处理；审核后的成果会回到本任务详情。" type="info" :closable="false" show-icon />
     </el-form>
     <template #footer><el-button @click="selfTaskVisible = false">取消</el-button><el-button type="primary" :loading="creatingSelfTask" @click="createSelfTask">{{ editingSelfTaskId ? "保存修改" : copyingSelfTask ? "确认再次添加" : "添加到我的任务" }}</el-button></template>
   </el-dialog>
@@ -5560,6 +5519,7 @@ onBeforeUnmount(() => {
         </section>
         <div class="preview-actions">
           <el-button @click="imageProjectPreviewVisible = true">预览图文</el-button>
+          <el-button @click="downloadAllImageProjectPages(taskImageProjectDetail)">一键下载全部</el-button>
           <el-button type="danger" plain @click="reviewImageProject(false)">退回并填写原因</el-button>
           <el-button type="success" @click="reviewImageProject(true)">图文审核通过</el-button>
         </div>
@@ -5572,6 +5532,7 @@ onBeforeUnmount(() => {
         <div class="image-publish-form">
           <div v-for="(record, index) in imagePublishRecords" :key="index" class="image-publish-record"><el-select v-model="record.platform"><el-option v-for="item in publishPlatformOptions" :key="item.value" :label="item.label" :value="item.value" /></el-select><el-input v-model="record.remoteUrl" placeholder="粘贴已发布图文链接" /></div>
           <el-button @click="addImagePublishRecord">添加一个发布平台</el-button>
+          <el-button @click="downloadAllImageProjectPages(taskImageProjectDetail)">一键下载全部</el-button>
           <el-button @click="imageProjectPreviewVisible = true">预览并下载图文</el-button>
           <el-button type="primary" @click="saveImagePublishLinks">回传发布链接</el-button>
         </div>
@@ -5582,7 +5543,7 @@ onBeforeUnmount(() => {
 
   <el-dialog v-model="imageProjectPreviewVisible" title="图文预览" width="min(960px, 96vw)">
     <div class="image-preview-grid"><article v-for="(page, index) in imageProjectPages(taskImageProjectDetail)" :key="page.id || index" class="image-page-card"><img v-if="imageProjectPageUrl(page)" :src="imageProjectPageUrl(page)" :alt="page.title || `第${index + 1}页`" /><div v-else><strong>{{ page.title || `第 ${index + 1} 页图文` }}</strong><p>{{ page.copy || page.description }}</p></div><a v-if="imageProjectPageUrl(page)" :href="imageProjectPageUrl(page)" target="_blank" download>下载本页</a></article></div>
-    <template #footer><el-button @click="imageProjectPreviewVisible = false">完成预览</el-button></template>
+    <template #footer><el-button @click="downloadAllImageProjectPages(taskImageProjectDetail)">一键下载全部</el-button><el-button type="primary" @click="imageProjectPreviewVisible = false">完成预览</el-button></template>
   </el-dialog>
 
   <el-dialog v-model="newVideoProjectVisible" title="新建智能视频项目" width="min(980px, 96vw)" destroy-on-close>
