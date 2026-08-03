@@ -501,6 +501,7 @@ const statusLabels: Record<string, string> = {
   PENDING_REVIEW: "成果待审核",
   RETRY: "重试中",
   FAILED: "执行失败",
+  SUCCEEDED: "已完成",
 };
 const priorityLabels: Record<string, string> = {
   URGENT: "紧急",
@@ -688,6 +689,20 @@ function imageProjectTags(project?: Row) {
 function imageProjectCopy(project?: Row) {
   const metadata = imageProjectVariant(project).metadata || {};
   return String(metadata.publishCopy || imageProjectVariant(project).body || "");
+}
+
+function imageProjectAiTask(project?: Row): Row | undefined {
+  return project?.aiTask && typeof project.aiTask === "object" ? project.aiTask as Row : undefined;
+}
+
+function imageProjectAiTaskProgress(project?: Row) {
+  return Math.max(0, Math.min(100, Number(imageProjectAiTask(project)?.progress || 0)));
+}
+
+function imageProjectAiTaskMessage(project?: Row) {
+  const task = imageProjectAiTask(project);
+  if (task?.failureReason) return String(task.failureReason);
+  return String(task?.progressMessage || "图文制作 Skill 正在生成图文、标题、标签和发布文案。");
 }
 
 function videoProjectTaskStep(task: Row) {
@@ -1181,7 +1196,7 @@ async function quickCreateProject(command: string) {
     return;
   }
   if (command === "IMAGE") {
-    openNewImageProjectDialog();
+    await openNewImageProjectDialog();
     return;
   }
   ElMessage.info("软文项目稍后完善");
@@ -1225,6 +1240,10 @@ function imageViralTopicsForType(type: string) {
 function applyImageViralTopic(topic: { hook: string; audience: string }) {
   imageProjectForm.hook = topic.hook;
   imageProjectForm.audience = topic.audience;
+  // Selecting a recommended topic is an explicit choice. It should refresh
+  // the generated task requirement even if the employee had looked at it
+  // before, otherwise the worker receives the old topic by mistake.
+  imageRequirementEdited.value = false;
   syncImageProjectRequirement();
 }
 
@@ -1246,6 +1265,12 @@ function syncImageProjectRequirement() {
   if (!imageRequirementEdited.value) imageProjectForm.requirement = buildImageProjectRequirement();
 }
 
+function markImageRequirementEdited() {
+  // Only the editable task-requirement box opts the employee into preserving
+  // their custom wording. Other form fields keep regenerating the preview.
+  imageRequirementEdited.value = true;
+}
+
 function changeImageProjectType() {
   const defaults = imageDefaultsForType(imageProjectForm.imageType);
   imageProjectForm.audience = defaults.audience;
@@ -1253,7 +1278,15 @@ function changeImageProjectType() {
   syncImageProjectRequirement();
 }
 
-function openNewImageProjectDialog() {
+async function openNewImageProjectDialog() {
+  try {
+    // This entry can be opened directly from the employee task page, before
+    // the data-center cache has loaded. Fetch the current product catalogue
+    // first so the mandatory product selector never opens as “No data”.
+    await ensureContentTaskOptions();
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "产品型号加载失败，请稍后重试");
+  }
   const defaults = imageDefaultsForType("送礼类");
   Object.assign(imageProjectForm, {
     productModel: productOptions.value[0]?.modelCode || "",
@@ -1276,7 +1309,17 @@ async function createImageProject() {
   }
   creatingImageProject.value = true;
   try {
-    const result = await post<Row>("/api/v1/workbench/image-projects", { ...imageProjectForm });
+    // Submit exactly the requirement the employee sees. This also makes a
+    // selected viral topic, product, audience, hook or optional input reach
+    // the image-production Skill instead of leaving an earlier draft behind.
+    const requirement = imageRequirementEdited.value
+      ? imageProjectForm.requirement.trim()
+      : buildImageProjectRequirement();
+    imageProjectForm.requirement = requirement;
+    const result = await post<Row>("/api/v1/workbench/image-projects", {
+      ...imageProjectForm,
+      requirement,
+    });
     newImageProjectVisible.value = false;
     await loadTasks();
     const project = result.project || result;
@@ -1521,6 +1564,24 @@ function activeCodexDirectVideoTask(project?: Row) {
   if (!taskId) return undefined;
   return (Array.isArray(project?.activeAiTasks) ? project?.activeAiTasks : [])
     .find((task: Row) => String(task.id) === taskId);
+}
+
+function activeProjectVideoTask(project?: Row) {
+  const signal = project && Array.isArray(project.sourceSignals)
+    ? project.sourceSignals.find((item: Row) => item.type === "VIDEO_FACTORY")
+    : undefined;
+  const taskId = String(signal?.videoAiTaskId || "");
+  if (!taskId) return undefined;
+  return (Array.isArray(project?.activeAiTasks) ? project?.activeAiTasks : [])
+    .find((task: Row) => String(task.id) === taskId);
+}
+
+function projectVideoTaskProgress(project?: Row) {
+  return Math.max(0, Math.min(100, Number(activeProjectVideoTask(project)?.progress || 0)));
+}
+
+function projectVideoTaskMessage(project?: Row) {
+  return String(activeProjectVideoTask(project)?.progressMessage || "远程节点正在按已确认脚本和素材生成视频。");
 }
 
 function activeCoverTitleTask(project?: Row) {
@@ -2691,7 +2752,7 @@ function renderStatusType(job: Row) {
 
 function projectReadyToRender(project: Row) {
   return Boolean(
-    ["READY_TO_EDIT", "EDITING"].includes(project.productionStage)
+    project.productionStage === "READY_TO_EDIT"
     && project.videoShots?.length
     && project.videoShots.every((shot: Row) => shot.status === "DONE" && shot.selectedAssetId),
   );
@@ -3777,7 +3838,17 @@ onBeforeUnmount(() => {
                   >{{ index + 1 }} {{ step }}</button>
                 </nav>
                 <section v-if="['IMAGE_GENERATING', 'IMAGE_RETURNED'].includes(taskImageProjectDetail.productionStage)" class="task-video-stage-panel">
-                  <el-empty :description="taskImageProjectDetail.productionStage === 'IMAGE_RETURNED' ? '正在按退回意见重新生成图文与文案' : '图文制作 Skill 正在生成图文、标题、标签和发布文案'" />
+                  <h4>{{ taskImageProjectDetail.productionStage === 'IMAGE_RETURNED' ? '图文正在按意见修改' : '图文与文案生成中' }}</h4>
+                  <p>{{ taskImageProjectDetail.productionStage === 'IMAGE_RETURNED' ? '图文制作 Skill 正在根据退回意见生成修改版本。' : '图文制作 Skill 正在生成图文、标题、标签和发布文案。' }}</p>
+                  <template v-if="imageProjectAiTask(taskImageProjectDetail)">
+                    <div class="project-running-task-meta">
+                      <el-tag size="small" type="info">AI 任务 {{ imageProjectAiTask(taskImageProjectDetail)?.taskNo || '已提交' }}</el-tag>
+                      <el-tag size="small" :type="imageProjectAiTask(taskImageProjectDetail)?.status === 'FAILED' ? 'danger' : imageProjectAiTask(taskImageProjectDetail)?.status === 'SUCCEEDED' ? 'success' : 'warning'">{{ statusLabels[String(imageProjectAiTask(taskImageProjectDetail)?.status || '')] || imageProjectAiTask(taskImageProjectDetail)?.status }}</el-tag>
+                    </div>
+                    <el-progress :percentage="imageProjectAiTaskProgress(taskImageProjectDetail)" :status="imageProjectAiTask(taskImageProjectDetail)?.status === 'FAILED' ? 'exception' : undefined" />
+                    <p class="project-running-message">{{ imageProjectAiTaskMessage(taskImageProjectDetail) }}</p>
+                  </template>
+                  <el-alert v-else title="图文 AI 任务正在登记，稍后可点击“刷新当前项目”查看进度。" type="info" :closable="false" show-icon />
                 </section>
                 <template v-else-if="taskImageProjectDetail.productionStage === 'IMAGE_REVIEW'">
                   <section class="image-result-layout">
@@ -4001,7 +4072,19 @@ onBeforeUnmount(() => {
                       :loading="renderingProjectId === taskVideoProjectDetail.id"
                       @click="renderWorkbenchProject(taskVideoProjectDetail)"
                     >素材齐全，提交视频生成任务</el-button>
-                    <p v-else>远程节点正在按已确认脚本、素材路径、有效时间段和画面事实剪辑，完成后会自动进入成片审核。</p>
+                    <template v-else>
+                      <p>远程节点正在按已确认脚本、素材路径、有效时间段和画面事实剪辑，完成后会自动进入成片审核。</p>
+                      <el-progress
+                        v-if="activeProjectVideoTask(taskVideoProjectDetail)"
+                        :percentage="projectVideoTaskProgress(taskVideoProjectDetail)"
+                        :status="activeProjectVideoTask(taskVideoProjectDetail)?.status === 'FAILED' ? 'exception' : undefined"
+                      />
+                      <p v-if="activeProjectVideoTask(taskVideoProjectDetail)" class="project-running-message">{{ projectVideoTaskMessage(taskVideoProjectDetail) }}</p>
+                      <div class="preview-actions">
+                        <el-button @click="openSystemScriptConversation(taskVideoProjectDetail)">查看 AI 任务</el-button>
+                        <el-button @click="refreshTaskVideoProject">刷新当前项目</el-button>
+                      </div>
+                    </template>
                   </template>
                 </section>
 
@@ -5380,7 +5463,7 @@ onBeforeUnmount(() => {
       </section>
       <section class="prototype-form-section image-task-requirement">
         <header><strong>提交给图文制作 Skill 的任务要求</strong><span>仅提交这段内容，可直接修改</span></header>
-        <el-input v-model="imageProjectForm.requirement" type="textarea" :rows="3" @input="imageRequirementEdited = true" />
+        <el-input v-model="imageProjectForm.requirement" type="textarea" :rows="3" @input="markImageRequirementEdited" />
       </section>
     </div>
     <template #footer>

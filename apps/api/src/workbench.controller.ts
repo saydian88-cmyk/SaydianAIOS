@@ -1397,12 +1397,25 @@ export class WorkbenchController {
       const scriptSubmission = await this.submitVideoScriptTask(authorization, id);
       return { ...scriptSubmission.project, scriptTask: scriptSubmission.task };
     }
-    return this.videoFactory.generateProject(id, {
+    const preparedProject = await this.videoFactory.generateProject(id, {
       candidateIndex: Number.isFinite(candidateIndex) ? candidateIndex : 0,
       routingMode: "AUTO",
       allowFallback: false,
       prepareOnly: true,
     }, employee.name);
+    // The script was approved and every sentence already has an approved
+    // material binding.  There is no employee action left between script
+    // approval and video generation, so submit the render task immediately.
+    // Keeping this on the server also makes the flow reliable when the user
+    // closes or refreshes the page at exactly this point.
+    if (String((preparedProject as Record<string, unknown>).productionStage || "") === "READY_TO_EDIT") {
+      const videoSubmission = await this.submitRemoteVideoTask(authorization, id);
+      return {
+        ...videoSubmission.project,
+        autoSubmittedVideoTask: videoSubmission.task,
+      };
+    }
+    return preparedProject;
   }
 
   private async submitReferenceDirectFullVideoTask(authorization: string | undefined, id: string) {
@@ -1622,7 +1635,7 @@ export class WorkbenchController {
     }
     const project = await this.videoFactory.project(id) as Record<string, any>;
     if (project.createdBy !== employee.name) throw new ForbiddenException("只能提交自己创建的视频项目");
-    if (!["READY_TO_EDIT", "EDITING"].includes(String(project.productionStage))) {
+    if (String(project.productionStage) !== "READY_TO_EDIT") {
       throw new ForbiddenException("素材尚未由用户确认");
     }
     await this.videoFactory.assertMaterialsApproved(id);
