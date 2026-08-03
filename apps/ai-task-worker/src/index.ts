@@ -46,6 +46,7 @@ const codexExecutable = String(process.env.CODEX_EXECUTABLE || (process.platform
 const ffmpegExecutable = String(process.env.FFMPEG_EXECUTABLE || "ffmpeg");
 const ffprobeExecutable = String(process.env.FFPROBE_EXECUTABLE || "ffprobe");
 const pythonExecutable = String(process.env.AI_TASK_PYTHON_EXECUTABLE || process.env.PYTHON_EXECUTABLE || "python");
+const codexIdleTimeoutSeconds = Math.max(120, Number(process.env.AI_TASK_CODEX_IDLE_TIMEOUT_SECONDS || 480));
 const execFileAsync = promisify(execFile);
 const systemMaterialRoot = join(workRoot, "system-material-library");
 const systemMaterialAssetsRoot = join(systemMaterialRoot, "assets");
@@ -1471,24 +1472,53 @@ async function runCodex(
       windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"],
     });
+    let settled = false;
+    let idleTimer: NodeJS.Timeout;
+    const terminateTree = async () => {
+      if (!child.pid) return;
+      if (process.platform === "win32") {
+        await execFileAsync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], {
+          windowsHide: true,
+        }).catch(() => undefined);
+      } else {
+        child.kill("SIGKILL");
+      }
+    };
+    const failOnce = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearTimeout(idleTimer);
+      void terminateTree().finally(() => reject(error));
+    };
+    const resetIdleTimer = () => {
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        failOnce(new Error(`Codex长时间无输出（${codexIdleTimeoutSeconds}秒），已终止进程树并准备重试`));
+      }, codexIdleTimeoutSeconds * 1_000);
+    };
     const timer = setTimeout(() => {
-      child.kill();
-      reject(new Error(`Codex执行超时（${timeoutSeconds}秒）`));
+      failOnce(new Error(`Codex执行超时（${timeoutSeconds}秒），已终止进程树`));
     }, timeoutSeconds * 1_000);
+    resetIdleTimer();
     child.stderr.on("data", (chunk) => {
+      resetIdleTimer();
       stderr += chunk.toString();
       if (stderr.length > 200_000) stderr = stderr.slice(-200_000);
     });
     child.stdout.on("data", (chunk) => {
+      resetIdleTimer();
       stdout += chunk.toString();
       if (stdout.length > 200_000) stdout = stdout.slice(-200_000);
     });
     child.on("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
+      failOnce(error);
     });
     child.on("exit", (code) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
+      clearTimeout(idleTimer);
       if (code === 0) resolvePromise();
       else reject(new Error(stderr || stdout || `Codex退出码 ${code}`));
     });
