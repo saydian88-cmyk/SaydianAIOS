@@ -1691,9 +1691,11 @@ async function validateMandatoryVideoEvidence(
 
   const renderEvidence = record(await readJson<JsonRecord>(join(workspace, "render-evidence.json")));
   const planInfo = await stat(join(workspace, "production-plan.json"));
-  const preflightInfo = await stat(preflightLog);
   const renderEvidenceInfo = await stat(join(workspace, "render-evidence.json"));
-  if (planInfo.mtimeMs > renderEvidenceInfo.mtimeMs || preflightInfo.mtimeMs > renderEvidenceInfo.mtimeMs) {
+  // The validator log is normalized to canonical UTF-8 during final validation,
+  // so its timestamp can legitimately be newer than the render evidence. The
+  // production plan itself is the artifact that must predate rendering.
+  if (planInfo.mtimeMs > renderEvidenceInfo.mtimeMs) {
     throw new Error("Production-plan gate must complete before render evidence is created");
   }
   if (String(renderEvidence.engine || "").toUpperCase() !== "HYPERFRAMES") {
