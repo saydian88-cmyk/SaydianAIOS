@@ -30,6 +30,11 @@ import {
   writeJsonAtomic,
   type WorkspaceState,
 } from "./workspace-state";
+import {
+  classifyExecutionFailure,
+  repairHyperFramesRuntime,
+  type RepairCategory,
+} from "./execution-repair";
 
 function record(value: unknown): JsonRecord {
   return value && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : {};
@@ -56,6 +61,11 @@ const systemMaterialStatePath = join(systemMaterialRoot, "sync-state.json");
 const localMediaLibraryRoot = resolve(String(process.env.AI_TASK_LOCAL_MEDIA_LIBRARY || "F:\\赛电品牌素材库"));
 const localSystemMaterialMapPath = join(localMediaLibraryRoot, ".saidian-system-index", "system-asset-map.json");
 const bundledGsapPath = require.resolve("gsap/dist/gsap.min.js");
+const executionRepairSkillPath = resolve(String(
+  process.env.AI_TASK_EXECUTION_REPAIR_SKILL_PATH
+  || "G:\\codex\\xcodeplace\\CodexHome\\skills\\saidian-ai-task-execution-repair\\SKILL.md",
+));
+const maxInternalRepairs = Math.max(1, Number(process.env.AI_TASK_MAX_INTERNAL_REPAIRS || 3));
 let lastMaterialSyncAt = 0;
 let materialSyncInFlight: Promise<void> | undefined;
 
@@ -69,6 +79,56 @@ async function prepareHyperFramesRuntime(workspace: string) {
   await mkdir(runtimeDir, { recursive: true });
   await copyFile(bundledGsapPath, runtimePath);
   return runtimePath;
+}
+
+interface ExecutionRepairState {
+  attempts: Record<string, number>;
+  lastCategory?: RepairCategory;
+  lastReason?: string;
+  lastAction?: string;
+  updatedAt?: string;
+}
+
+async function loadExecutionRepairState(workspace: string) {
+  return (await readJson<ExecutionRepairState>(join(workspace, "execution-repair.json"))) || { attempts: {} };
+}
+
+async function attemptExecutionRepair(workspace: string, message: string) {
+  const decision = classifyExecutionFailure(message);
+  if (!decision.recoverable) return { repaired: false, decision, exhausted: false };
+  const repairState = await loadExecutionRepairState(workspace);
+  const previousAttempts = Number(repairState.attempts[decision.fingerprint] || 0);
+  if (previousAttempts >= maxInternalRepairs) return { repaired: false, decision, exhausted: true };
+
+  const attempt = previousAttempts + 1;
+  await appendExecutionLog(workspace, "REPAIR_START", {
+    category: decision.category,
+    fingerprint: decision.fingerprint,
+    attempt,
+    repairSkill: executionRepairSkillPath,
+  });
+  let action = "resume-from-existing-checkpoint";
+  if (decision.category === "HYPERFRAMES_RUNTIME") {
+    const runtimeRepair = await repairHyperFramesRuntime(workspace, bundledGsapPath);
+    action = runtimeRepair.changed
+      ? "localized-official-gsap-and-rewrote-project-reference"
+      : "verified-local-official-gsap-runtime";
+  }
+  const nextState: ExecutionRepairState = {
+    attempts: { ...repairState.attempts, [decision.fingerprint]: attempt },
+    lastCategory: decision.category,
+    lastReason: decision.reason,
+    lastAction: action,
+    updatedAt: new Date().toISOString(),
+  };
+  await writeJsonAtomic(join(workspace, "execution-repair.json"), nextState);
+  await appendExecutionLog(workspace, "REPAIR_APPLIED", {
+    category: decision.category,
+    fingerprint: decision.fingerprint,
+    attempt,
+    action,
+  });
+  return { repaired: true, decision, exhausted: false, action, attempt };
 }
 
 /**
@@ -2040,6 +2100,7 @@ async function execute(claimed: JsonRecord) {
   if (videoRenderTask) await prepareHyperFramesRuntime(workspace);
   let currentSkill = "";
   let state: WorkspaceState | undefined;
+  let retryInternally = false;
   const heartbeat = setInterval(() => {
     void api(`/api/v1/ai-tasks/runner/tasks/${taskId}/heartbeat`, {
       method: "POST",
@@ -2194,7 +2255,16 @@ async function execute(claimed: JsonRecord) {
         skillVersion: detectedSkill.version,
         assetCount: Array.isArray(packaged.assets) ? packaged.assets.length : 0,
       });
-      let internalCorrection = "";
+      const repairState = await loadExecutionRepairState(workspace);
+      let internalCorrection = repairState.lastReason
+        ? [
+          `Execution recovery is active under ${executionRepairSkillPath}.`,
+          `The previous internal run was not submitted. Repair category: ${repairState.lastCategory || "UNKNOWN"}.`,
+          `Failure: ${repairState.lastReason}`,
+          `Applied action: ${repairState.lastAction || "resume-from-existing-checkpoint"}.`,
+          "Continue the original downstream Skill from valid artifacts. Do not weaken validation or fabricate success.",
+        ].join("\n")
+        : "";
       const generated = await runWithSchemaRetry(
         async (schemaAttempt) => {
           await appendExecutionLog(workspace, "CODEX_ATTEMPT", { schemaAttempt });
@@ -2310,6 +2380,27 @@ async function execute(claimed: JsonRecord) {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Codex执行失败";
     process.stderr.write(`${new Date().toISOString()} ${taskNo} ${message}\n`);
+    const recovery = await attemptExecutionRepair(workspace, message).catch((repairError) => ({
+      repaired: false,
+      exhausted: false,
+      action: undefined,
+      attempt: undefined,
+      decision: classifyExecutionFailure(
+        `${message}\nRepair failed: ${repairError instanceof Error ? repairError.message : String(repairError)}`,
+      ),
+    }));
+    if (recovery.repaired) {
+      retryInternally = true;
+      await appendExecutionLog(workspace, "REPAIR_RESUME", {
+        category: recovery.decision.category,
+        action: recovery.action,
+        internalAttempt: recovery.attempt,
+      }).catch(() => undefined);
+      await checkpoint(taskId, "RECOVERING", state?.stage === "UPLOADING" ? 85 : 25, "正在自动恢复执行环境并继续制作", {
+        currentSkill,
+        internalRecovery: true,
+      }).catch(() => undefined);
+    } else {
     await appendExecutionLog(workspace, "TASK_FAILED", {
       skill: currentSkill || "未探测",
       error: message,
@@ -2327,9 +2418,11 @@ async function execute(claimed: JsonRecord) {
         },
       }),
     }).catch(() => undefined);
+    }
   } finally {
     clearInterval(heartbeat);
   }
+  if (retryInternally) await execute(claimed);
 }
 
 async function main() {
