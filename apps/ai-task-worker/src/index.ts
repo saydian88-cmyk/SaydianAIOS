@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { execFile, spawn } from "node:child_process";
+import type { Dirent } from "node:fs";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
@@ -42,7 +43,7 @@ const workRoot = resolve(String(process.env.AI_TASK_WORKDIR || join(process.cwd(
 const pollMs = Math.max(2_000, Number(process.env.AI_TASK_POLL_MS || 60_000));
 const heartbeatMs = Math.max(10_000, Number(process.env.AI_TASK_HEARTBEAT_MS || 30_000));
 const materialSyncMs = Math.max(60_000, Number(process.env.AI_TASK_MATERIAL_SYNC_MS || 5 * 60_000));
-const codexExecutable = String(process.env.CODEX_EXECUTABLE || (process.platform === "win32" ? "codex.cmd" : "codex"));
+const configuredCodexExecutable = String(process.env.CODEX_EXECUTABLE || (process.platform === "win32" ? "codex.cmd" : "codex"));
 const ffmpegExecutable = String(process.env.FFMPEG_EXECUTABLE || "ffmpeg");
 const ffprobeExecutable = String(process.env.FFPROBE_EXECUTABLE || "ffprobe");
 const pythonExecutable = String(process.env.AI_TASK_PYTHON_EXECUTABLE || process.env.PYTHON_EXECUTABLE || "python");
@@ -56,6 +57,63 @@ const localMediaLibraryRoot = resolve(String(process.env.AI_TASK_LOCAL_MEDIA_LIB
 const localSystemMaterialMapPath = join(localMediaLibraryRoot, ".saidian-system-index", "system-asset-map.json");
 let lastMaterialSyncAt = 0;
 let materialSyncInFlight: Promise<void> | undefined;
+
+/**
+ * Codex Desktop updates replace the versioned executable beneath LocalAppData.
+ * A runner.env written by a previous version can therefore point at a file that
+ * disappeared between two task polls. Resolve the configured path at execution
+ * time and, on Windows, recover to the newest installed Codex executable.
+ */
+async function resolveCodexExecutable() {
+  const configured = configuredCodexExecutable.trim();
+  if (!isAbsolute(configured)) return configured;
+
+  try {
+    const configuredStat = await stat(configured);
+    if (configuredStat.isFile()) return configured;
+  } catch {
+    // Continue to the current Codex Desktop installation below.
+  }
+
+  if (process.platform !== "win32") {
+    throw new Error(`Configured Codex executable is unavailable: ${configured}`);
+  }
+
+  const binRoot = join(String(process.env.LOCALAPPDATA || ""), "OpenAI", "Codex", "bin");
+  if (!String(process.env.LOCALAPPDATA || "").trim()) {
+    throw new Error(`Configured Codex executable is unavailable: ${configured}`);
+  }
+
+  const candidates: Array<{ path: string; modifiedAt: number }> = [];
+  const visit = async (directory: string): Promise<void> => {
+    let entries: Dirent[];
+    try {
+      entries = await readdir(directory, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const entryPath = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        await visit(entryPath);
+        continue;
+      }
+      if (!entry.isFile() || entry.name.toLowerCase() !== "codex.exe") continue;
+      try {
+        const entryStat = await stat(entryPath);
+        candidates.push({ path: entryPath, modifiedAt: entryStat.mtimeMs });
+      } catch {
+        // A concurrent Desktop update can remove an entry while it is scanned.
+      }
+    }
+  };
+  await visit(binRoot);
+  candidates.sort((left, right) => right.modifiedAt - left.modifiedAt);
+  const recovered = candidates[0]?.path;
+  if (recovered) return recovered;
+
+  throw new Error(`Configured Codex executable is unavailable and no current Codex Desktop executable was found: ${configured}`);
+}
 
 if (!runnerToken) {
   throw new Error("AI_TASK_RUNNER_TOKEN 未配置");
@@ -1445,6 +1503,7 @@ async function runCodex(
     isImagePostProjectTask(taskPackage),
   )), null, 2), "utf8");
   await writeFile(join(workspace, "task.json"), JSON.stringify(task, null, 2), "utf8");
+  const resolvedCodexExecutable = await resolveCodexExecutable();
   const args = [
     "exec", "--ephemeral", "--skip-git-repo-check", "--output-schema", schemaPath, "--json",
     "--sandbox", "workspace-write", "-c", "approval_policy=\"never\"",
@@ -1465,10 +1524,10 @@ async function runCodex(
         String(process.env.PATH || ""),
       ].filter(Boolean).join(process.platform === "win32" ? ";" : ":"),
     };
-    const child = spawn(codexExecutable, args, {
+    const child = spawn(resolvedCodexExecutable, args, {
       cwd: workspace,
       env: childEnv,
-      shell: process.platform === "win32" && /\.(cmd|bat)$/i.test(codexExecutable),
+      shell: process.platform === "win32" && /\.(cmd|bat)$/i.test(resolvedCodexExecutable),
       windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"],
     });
