@@ -679,10 +679,15 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
       "DIRECT_MODE_CONTRACT: This is a local-library direct-render job.",
       "The empty assets, snapshots, and materialBindings arrays are intentional. They do not make this a system AI task and must never cause a system-material whitelist request.",
       "Use saidian-ai-task-dispatcher and then the full local video-editing-from-media-library Skill. Never use the share edition as a quality shortcut.",
+      "MANDATORY_SKILL_PATH: G:\\codex\\xcodeplace\\CodexHome\\skills\\video-editing-from-media-library\\SKILL.md. Read and execute this exact full local Skill. The dispatcher only routes the task and the share edition is forbidden for this local direct render.",
       "Read the active local-library configuration and the verified-editing-videos-by-product manifest. Do not download, request, or return any system task assets.",
       "Use only VIDEO entries admitted by that manifest. Each entry must be an active approved system asset with a local file mapping and an exact product relation equal to this task productModel. Never use another product model, unverified media, images, audio, packaging, cover, sticker, transition or template resources as footage.",
       "If the local library is not initialized or not ready, fail explicitly with the missing local configuration or index. Do not return a system-task WAITING_INPUT result.",
       "The employee UI only receives the final review node, but internal script, shot plan, material coverage, composition, packaging, audio and delivery QA steps remain mandatory.",
+      "EXECUTION_FIRST_CONTRACT: Follow every editing requirement while producing the video; post-render validation is only the final safety net. Before creating or modifying the final HyperFrames composition or starting any render, write production-plan.json and pass the full Skill script validate_direct_production_plan.py. Save PRODUCTION_PLAN_OK to logs/production-plan-validator.log.",
+      "Lock exact admitted footage for every spoken beat, a semantically justified transition per cut, clean one/two-line captions without a large dark rectangle, real packaging-library graphic nodes, actual voice identity, audio policy, and visual semantic/compliance checks. Fix the plan before editing if preflight blocks it.",
+      "For a 15-30 second voice video use at least three real sticker/icon/motion-graphic/product-callout nodes; text callouts alone are insufficient. With at least three cuts, do not use one transition type everywhere. Base every cut on adjacent motion, composition, scale, direction and color.",
+      "For the default first voice-video version, do not add BGM unless the user explicitly requested it. Record the actual voiceName or voiceId. Never use unrelated numeric health-result or comparison footage as generic product visuals.",
       "Packaging is mandatory. Use F:\\包装资源包 and its learned packaging index for BGM, SFX, stickers, typography and effects; packaging resources may never be used as primary footage.",
       "Create requirements-check.json, shot-plan.json, composition-qc.json, packaging-qc.json, audio-qc.json, transition-qc.json and render-evidence.json in the task workspace with real evidence. All three official Python validators must actually pass. Return exactly one real 1080x1920 MP4 VIDEO_MASTER and delivery={taskMode:CODEX_DIRECT_FULL_VIDEO, finalReviewOnly:true}.",
       `The configured real Python executable is ${pythonExecutable}. Use this exact executable for every Python validator; do not rely on the Windows Store python alias or conclude that Python is missing before testing this path.`,
@@ -1486,6 +1491,7 @@ async function validateMandatoryVideoEvidence(
   const directInput = record(record(task.input).codexDirectInput);
   const creativeMode = String(directInput.creativeMode || "FULL_VIDEO").toUpperCase();
   const requiredFiles = [
+    ...(direct ? ["production-plan.json"] : []),
     "requirements-check.json",
     "shot-plan.json",
     "composition-qc.json",
@@ -1513,6 +1519,9 @@ async function validateMandatoryVideoEvidence(
 
   if (!direct) return;
   const downstreamSkillPath = String(detectedSkill.downstreamSkillPath || "").trim();
+  if (basename(dirname(downstreamSkillPath)).toLowerCase() !== "video-editing-from-media-library") {
+    throw new Error(`Local direct render requires the full video-editing-from-media-library Skill, got: ${downstreamSkillPath}`);
+  }
   if (!downstreamSkillPath) throw new Error("完整版剪辑Skill路径缺失，无法执行官方质检器");
   const skillRoot = dirname(downstreamSkillPath);
   const runValidator = async (script: string, args: string[]) => {
@@ -1533,6 +1542,15 @@ async function validateMandatoryVideoEvidence(
       throw new Error(`完整版剪辑Skill官方质检失败（${script}）：${detail.slice(0, 800)}`);
     }
   };
+  await runValidator("validate_direct_production_plan.py", [
+    join(workspace, "production-plan.json"),
+    "--video-type", creativeMode === "NO_VOICE_VIDEO" ? "no_voice" : "voice",
+  ]);
+  const preflightLog = join(workspace, "logs", "production-plan-validator.log");
+  const preflightText = await readFile(preflightLog, "utf8").catch(() => "");
+  if (!preflightText.includes("PRODUCTION_PLAN_OK")) {
+    throw new Error("Direct video did not pass the production-plan gate before editing");
+  }
   await runValidator("validate_hard_requirements.py", [
     "--check", join(workspace, "requirements-check.json"),
     "--stage", "final",
@@ -1562,7 +1580,17 @@ async function validateMandatoryVideoEvidence(
     || !String(cut.transition || "").trim());
   if (invalidCuts.length) throw new Error("逐切点自然度质检未通过或缺少前后0.6秒真实观察证据");
 
+  if (cuts.length >= 3 && new Set(cuts.map((cut) => String(cut.transition || "").trim().toLowerCase())).size === 1) {
+    throw new Error("Three or more cuts may not all use the same mechanical transition");
+  }
+
   const renderEvidence = record(await readJson<JsonRecord>(join(workspace, "render-evidence.json")));
+  const planInfo = await stat(join(workspace, "production-plan.json"));
+  const preflightInfo = await stat(preflightLog);
+  const renderEvidenceInfo = await stat(join(workspace, "render-evidence.json"));
+  if (planInfo.mtimeMs > renderEvidenceInfo.mtimeMs || preflightInfo.mtimeMs > renderEvidenceInfo.mtimeMs) {
+    throw new Error("Production-plan gate must complete before render evidence is created");
+  }
   if (String(renderEvidence.engine || "").toUpperCase() !== "HYPERFRAMES") {
     throw new Error("直出成片未使用完整版Skill规定的 HyperFrames 渲染链");
   }
