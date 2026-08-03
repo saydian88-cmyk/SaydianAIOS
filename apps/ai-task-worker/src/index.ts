@@ -965,8 +965,8 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
         `下游视频Skill路径：${detectedSkill.downstreamSkillPath || "未配置"}。必须完整读取并遵循其素材只读、镜头连续性、内容禁止库、质检和交付规则。`,
         `系统任务素材模式已启用；health_content_allowed=${execution.healthContentAllowed !== false ? "true" : "false"}。`,
         executionMode === "SCRIPT_ONLY"
-          ? "SCRIPT_ONLY必须检索完整本机素材索引，并通过system-asset-map.json把实际选中素材反查为系统ID；不得限制为任务包前30条。"
-          : "FULL_VIDEO及其他成片阶段只使用用户已确认的完整materialBindings，禁止临时换材或截断绑定列表。",
+          ? "SCRIPT_ONLY由下游剪辑 Skill 及其脚本子 Skill 检索完整本机素材索引，并通过system-asset-map.json把实际选中素材反查为系统ID；调度 Skill 不检索、不选材，不得把输入限制为任务包前30条。"
+          : "标准 FULL_VIDEO 及其他绑定型成片阶段由调度 Skill 原样转交用户已确认的完整materialBindings，再由下游剪辑 Skill 执行；调度 Skill 禁止临时选材、换材或截断绑定列表。",
         "主时间线只能使用真实视频素材。图片、详情图和产品图只能作为绑定underlying_shot_id的短时辅助层，禁止图片轮播、静态图推拉或无关镜头补时长。",
         "每个功能镜头必须有直接对应画面；任何reshoot缺口都要停止受影响成片渲染，并输出明确补拍清单。",
         executionMode === "COVER_TITLE"
@@ -986,14 +986,23 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
         : "脚本、画面、配音、包装和质检均以视频 Skill 的硬性规则为准；系统提示只能在不冲突时补充方向。",
     ].join("\n")
     : "";
+  const videoDispatcherBoundary = type === "VIDEO"
+    ? [
+      "GLOBAL_DISPATCH_BOUNDARY：saidian-ai-task-dispatcher 在所有视频模式中只负责识别阶段、验证流程状态、原样转交输入、调用下游 Skill、上报进度、上传回传以及幂等恢复。",
+      "调度 Skill 禁止写或修改脚本、设计 Hook/镜头/包装、检索或选择素材、决定素材入出点、生成创作候选，且不得把自己的创作结果混入下游输入。",
+      "SCRIPT_ONLY 的脚本与逐句选材由下游剪辑 Skill 及其脚本子 Skill 完成；标准 FULL_VIDEO 只把用户已确认的脚本和素材绑定原样交给下游；Codex/参考视频直出由下游剪辑 Skill 自主构思与选材；相似复剪、无口播和封面标题也全部由对应下游 Skill 作创作决定。",
+      "任务包中的素材、绑定、索引和成片只构成下游 Skill 的输入或事实边界，不授予调度 Skill 创作或选材权限；未来新增视频模式也继承本边界。",
+    ].join("\n")
+    : "";
   return [
     "你是赛电总管理后台AI任务中心的Codex执行器。",
     skillInstruction,
     instructions[type] || "按输入快照完成任务。",
     requiredVideoSkill,
+    videoDispatcherBoundary,
     videoInstructionPriority,
     "必须以提供的JSON快照为事实边界；缺失数据明确写未配置或缺失，不编造数据、认证、费用和执行结果。",
-    "优先使用已审核真实素材。VIDEO脚本生成必须先按产品、功能、动作、场景和景别检索完整本机素材索引，再围绕命中的真实VIDEO素材写逐句脚本；每个已覆盖镜头必须通过matchedVideoAssetIds或selectedAssetIds回传system-asset-map.json中的具体系统素材ID。不得把已存在但未回传ID的素材算作已覆盖，也不得为了写更宽泛的文案而忽略已有素材。只有检索后确实不存在直接对应视频时才写清missingReason、alternativePlan和missingAssets，不得拿文件顺序代替镜头匹配。",
+    "下游视频 Skill 必须优先使用已审核真实素材。VIDEO脚本生成由下游 Skill 按产品、功能、动作、场景和景别检索完整本机素材索引，再围绕命中的真实VIDEO素材写逐句脚本；每个已覆盖镜头必须通过matchedVideoAssetIds或selectedAssetIds回传system-asset-map.json中的具体系统素材ID。调度 Skill 不执行这些创作与选材动作。不得把已存在但未回传ID的素材算作已覆盖，也不得为了写更宽泛的文案而忽略已有素材。只有下游 Skill 检索后确实不存在直接对应视频时才写清missingReason、alternativePlan和missingAssets，不得拿文件顺序代替镜头匹配。",
     `固定回退顺序：${detectedSkill.fallbackOrder.join(" -> ")}。`,
     "输出必须符合output schema。outputFiles只能引用当前任务工作区内真实存在的文件。",
     `任务包JSON：\n${JSON.stringify(taskPackage, null, 2)}`,
