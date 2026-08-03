@@ -1629,6 +1629,9 @@ async function recoverDirectOutputResult(
   execution: JsonRecord,
 ) {
   if (!isCodexDirectFullVideoTask(taskPackageValue)) return undefined;
+  const preflightPlan = await stat(join(workspace, "production-plan.json")).catch(() => undefined);
+  const preflightLog = await readFile(join(workspace, "logs", "production-plan-validator.log"), "utf8").catch(() => "");
+  if (!preflightPlan?.isFile() || !preflightLog.includes("PRODUCTION_PLAN_OK")) return undefined;
   const outputsRoot = join(workspace, "outputs");
   let names: string[];
   try {
