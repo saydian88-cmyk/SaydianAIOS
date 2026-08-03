@@ -24,6 +24,7 @@ import { AuthService } from "./auth.service";
 import { AiTaskCenterService } from "./ai-task-center.service";
 import { BrandDataService } from "./brand-data.service";
 import { ContentService } from "./content.service";
+import { OssStorageService } from "./oss-storage.service";
 import { PrismaService } from "./prisma.service";
 import { SmartKeywordService } from "./smart-keyword.service";
 import { VideoFactoryService } from "./video-factory.service";
@@ -254,6 +255,7 @@ export class WorkbenchController {
     private readonly aiTasks: AiTaskCenterService,
     private readonly brandData: BrandDataService,
     private readonly content: ContentService,
+    private readonly ossStorage: OssStorageService,
     private readonly prisma: PrismaService,
     private readonly smartKeywords: SmartKeywordService,
     private readonly viralTrend: ViralTrendService,
@@ -270,6 +272,44 @@ export class WorkbenchController {
       throw new ForbiddenException("当前岗位没有此数据中心权限");
     }
     return employee;
+  }
+
+  private async imageProjectVariantsWithDownloadUrls(variants: Record<string, any>[]) {
+    const pages = variants.flatMap((variant) => {
+      const metadata = object(variant.metadata);
+      return Array.isArray(metadata.pages) ? metadata.pages.map(object) : [];
+    });
+    const assetIds = [...new Set(pages.map((page) => String(page.imageAssetId || "").trim()).filter(Boolean))];
+    const assets = assetIds.length
+      ? await this.prisma.asset.findMany({
+        where: { id: { in: assetIds } },
+        select: { id: true, objectKey: true },
+      })
+      : [];
+    const objectKeyByAssetId = new Map(assets.map((asset) => [asset.id, asset.objectKey || ""]));
+
+    return variants.map((variant) => {
+      const metadata = object(variant.metadata);
+      if (!Array.isArray(metadata.pages)) return variant;
+      return {
+        ...variant,
+        metadata: {
+          ...metadata,
+          pages: metadata.pages.map((rawPage: unknown) => {
+            const page = object(rawPage);
+            const storedUrl = String(page.imageUrl || page.storageUrl || page.fileUrl || page.url || "").trim();
+            const objectKeyFromUrl = /^oss:\/\/[^/]+\/(.+)$/u.exec(storedUrl)?.[1] || "";
+            const objectKey = objectKeyByAssetId.get(String(page.imageAssetId || "").trim()) || objectKeyFromUrl;
+            if (!objectKey) return page;
+            try {
+              return { ...page, downloadUrl: this.ossStorage.signedDownloadUrl(objectKey) };
+            } catch {
+              return page;
+            }
+          }),
+        },
+      };
+    });
   }
 
   private async submitCoverTitleTask(id: string, outputAssetId: string, employee: { employeeId?: string | null; name: string }) {
@@ -1063,7 +1103,8 @@ export class WorkbenchController {
     });
     if (!project) throw new ForbiddenException("图文项目不存在或无权查看");
     const aiTask = await this.prisma.aiTask.findFirst({ where: { sourceType: "IMAGE_PROJECT", sourceId: id }, orderBy: { createdAt: "desc" }, include: { outputs: { orderBy: { createdAt: "desc" } } } });
-    return { ...project, aiTask, requirement: object((Array.isArray(project.sourceSignals) ? project.sourceSignals[0] : {}) as object).brief ? object(object((project.sourceSignals as any)[0]).brief).requirement : "" };
+    const variants = await this.imageProjectVariantsWithDownloadUrls(project.variants as Record<string, any>[]);
+    return { ...project, variants, aiTask, requirement: object((Array.isArray(project.sourceSignals) ? project.sourceSignals[0] : {}) as object).brief ? object(object((project.sourceSignals as any)[0]).brief).requirement : "" };
   }
 
   @Post("image-projects/:id/retry")

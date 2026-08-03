@@ -675,7 +675,7 @@ function imageProjectPages(project?: Row) {
 }
 
 function imageProjectPageUrl(page: Row) {
-  return String(page.imageUrl || page.downloadUrl || page.fileUrl || page.storageUrl || page.url || "");
+  return String(page.downloadUrl || page.imageUrl || page.fileUrl || page.storageUrl || page.url || "");
 }
 
 function imageProjectVariant(project?: Row) {
