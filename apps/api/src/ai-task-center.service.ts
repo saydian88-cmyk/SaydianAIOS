@@ -1049,7 +1049,12 @@ export class AiTaskCenterService implements OnModuleInit {
         childDependencies: { none: { parentTask: { status: { not: "COMPLETED" } } } },
       },
       orderBy: [{ priority: "asc" }, { dueAt: "asc" }, { createdAt: "asc" }],
-      take: 20,
+      // Filtering by node routing, execution mode and per-type concurrency is
+      // performed below. A small pre-filter limit lets a queue full of VIDEO
+      // jobs that are temporarily at concurrency capacity starve later IMAGE
+      // jobs forever. Scan a bounded but sufficiently broad window so other
+      // supported task types can still be claimed.
+      take: 200,
     });
     for (const candidate of tasks) {
       if (!runnerCanClaimTask(candidate, body.supportedExecutionModes)) continue;
