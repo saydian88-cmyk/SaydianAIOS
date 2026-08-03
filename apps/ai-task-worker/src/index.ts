@@ -685,6 +685,7 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
       "The employee UI only receives the final review node, but internal script, shot plan, material coverage, composition, packaging, audio and delivery QA steps remain mandatory.",
       "Packaging is mandatory. Use F:\\包装资源包 and its learned packaging index for BGM, SFX, stickers, typography and effects; packaging resources may never be used as primary footage.",
       "Create requirements-check.json, shot-plan.json, composition-qc.json, packaging-qc.json, audio-qc.json, transition-qc.json and render-evidence.json in the task workspace with real evidence. All three official Python validators must actually pass. Return exactly one real 1080x1920 MP4 VIDEO_MASTER and delivery={taskMode:CODEX_DIRECT_FULL_VIDEO, finalReviewOnly:true}.",
+      `The configured real Python executable is ${pythonExecutable}. Use this exact executable for every Python validator; do not rely on the Windows Store python alias or conclude that Python is missing before testing this path.`,
       "Use the exact schemas required by the official validators: requirements-check.json must use a requirements array; shot-plan.json must use the full Skill shot-plan schema including a visual_reference object; composition-qc.json must use a non-empty videos array. Run the validators instead of inventing substitute schemas.",
       "render-evidence.json must identify the HyperFrames project and contain successful doctor, lint, validate, inspect and render command records with non-empty log files. A plain FFmpeg concat is not the full editing Skill and must not be delivered.",
       "transition-qc.json must contain cuts with one item for every non-first shot. Each cut requires beforeSeconds>=0.6, afterSeconds>=0.6, a non-empty observation, the actual transition name and passed=true only after viewing the rendered cut.",
@@ -1370,9 +1371,20 @@ async function runCodex(
   let stderr = "";
   try {
     await new Promise<void>((resolvePromise, reject) => {
+    const childEnv = {
+      ...process.env,
+      AI_TASK_PYTHON_EXECUTABLE: pythonExecutable,
+      PYTHON_EXECUTABLE: pythonExecutable,
+      PATH: [
+        dirname(pythonExecutable),
+        dirname(ffmpegExecutable),
+        dirname(ffprobeExecutable),
+        String(process.env.PATH || ""),
+      ].filter(Boolean).join(process.platform === "win32" ? ";" : ":"),
+    };
     const child = spawn(codexExecutable, args, {
       cwd: workspace,
-      env: process.env,
+      env: childEnv,
       shell: process.platform === "win32" && /\.(cmd|bat)$/i.test(codexExecutable),
       windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"],

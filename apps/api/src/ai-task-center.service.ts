@@ -1000,7 +1000,10 @@ export class AiTaskCenterService implements OnModuleInit {
         where: {
           type: candidate.type,
           status: { in: ["CLAIMED", "RUNNING", "QUALITY_CHECK", "UPLOADING"] },
-          lockedBy: { not: null },
+          // Concurrency is a per-runner capacity limit. A colleague's node
+          // processing another VIDEO task must not block a smart-video task
+          // that is explicitly routed to this dedicated node.
+          lockedBy: node.nodeCode,
         },
       });
       if (running >= policy.maxConcurrency) continue;

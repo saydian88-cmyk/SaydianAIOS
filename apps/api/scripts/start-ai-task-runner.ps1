@@ -28,7 +28,15 @@ $pnpmExecutable = $env:PNPM_EXECUTABLE
 if (-not $pnpmExecutable -or -not (Test-Path -LiteralPath $pnpmExecutable)) {
   throw "PNPM_EXECUTABLE is not configured"
 }
-$env:PATH = "$(Split-Path -Parent $pnpmExecutable);$(Split-Path -Parent $env:CODEX_EXECUTABLE);$env:PATH"
+$runtimePathParts = @(
+  (Split-Path -Parent $pnpmExecutable)
+  (Split-Path -Parent $env:CODEX_EXECUTABLE)
+  (Split-Path -Parent $env:AI_TASK_PYTHON_EXECUTABLE)
+  (Split-Path -Parent $env:FFMPEG_EXECUTABLE)
+  (Split-Path -Parent $env:FFPROBE_EXECUTABLE)
+) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Container) } | Select-Object -Unique
+$env:PATH = (($runtimePathParts + @($env:PATH)) -join ";")
+$env:PYTHON_EXECUTABLE = $env:AI_TASK_PYTHON_EXECUTABLE
 $runnerLog = Join-Path $configRoot "runner.log"
 $runnerErrorLog = Join-Path $configRoot "runner-error.log"
 
