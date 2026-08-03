@@ -3754,8 +3754,9 @@ onBeforeUnmount(() => {
             <el-button v-if="selectedTaskIds.length" type="danger" :loading="bulkDeletingTasks" @click="bulkTrashCancelledTasks">批量删除（{{ selectedTaskIds.length }}）</el-button>
             <el-button @click="openTaskRecycleBin">任务回收站</el-button>
             <el-button @click="openSelfTask">新建普通任务</el-button>
-            <el-button type="primary" @click="openNewVideoProjectDialog">快速新建视频项目</el-button>
-            <el-button type="primary" plain @click="openNewImageProjectDialog">快速新建图文项目</el-button>
+            <el-button type="primary" @click="openNewVideoProjectDialog">新建视频项目</el-button>
+            <el-button type="primary" plain @click="openNewImageProjectDialog">新建图文项目</el-button>
+            <el-button type="primary" plain @click="quickCreateProject('ARTICLE')">新建软文项目</el-button>
           </div>
         </section>
         <section class="section-card task-list">
