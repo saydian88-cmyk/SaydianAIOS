@@ -1544,8 +1544,20 @@ async function runCodex(
     const terminateTree = async () => {
       if (!child.pid) return;
       if (process.platform === "win32") {
-        await execFileAsync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], {
+        // Do not use taskkill /T here. In the packaged Windows runtime the
+        // Codex process can share a job/console with its worker parent, and /T
+        // has terminated the worker as well. Resolve descendants explicitly
+        // and stop leaves first, never walking through ParentProcessId.
+        const processTreeScript = [
+          `$rootPid=${child.pid}`,
+          "$all=Get-CimInstance Win32_Process",
+          "$ids=@($rootPid)",
+          "do{$before=$ids.Count;$children=$all|Where-Object{$ids -contains $_.ParentProcessId}|Select-Object -ExpandProperty ProcessId;$ids=@($ids+$children|Select-Object -Unique)}while($ids.Count -gt $before)",
+          "$ids|Sort-Object -Descending|ForEach-Object{Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue}",
+        ].join(";");
+        await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", processTreeScript], {
           windowsHide: true,
+          timeout: 10_000,
         }).catch(() => undefined);
       } else {
         child.kill("SIGKILL");
@@ -1556,7 +1568,10 @@ async function runCodex(
       settled = true;
       clearTimeout(timer);
       clearTimeout(idleTimer);
-      void terminateTree().finally(() => reject(error));
+      void Promise.race([
+        terminateTree(),
+        new Promise<void>((resolveTimeout) => setTimeout(resolveTimeout, 10_000)),
+      ]).finally(() => reject(error));
     };
     const resetIdleTimer = () => {
       clearTimeout(idleTimer);
