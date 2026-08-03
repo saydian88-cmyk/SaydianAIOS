@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import {
   AiTaskCenterService,
+  aiTaskExecutionMode,
   aiTaskTargetNodeCode,
+  runnerCanClaimTask,
   videoScriptOutputMetadata,
 } from "./ai-task-center.service";
 
@@ -77,6 +79,31 @@ describe("AiTaskCenterService", () => {
       sourceType: "WORKBENCH_CONTENT_REQUEST",
       input: { executionMode: "ARTICLE" },
     })).toBe("");
+  });
+
+  it("classifies image projects as IMAGE_POST business tasks", () => {
+    expect(aiTaskExecutionMode({
+      type: "IMAGE",
+      sourceType: "IMAGE_PROJECT",
+      input: {},
+    })).toBe("IMAGE_POST");
+    expect(aiTaskExecutionMode({
+      type: "IMAGE",
+      sourceType: "WORKBENCH_CONTENT_REQUEST",
+      input: { executionMode: "DEFAULT" },
+    })).toBe("DEFAULT");
+  });
+
+  it("prevents legacy imagegen runners from claiming image-project tasks", () => {
+    const imageProject = {
+      type: "IMAGE",
+      sourceType: "IMAGE_PROJECT",
+      input: { executionMode: "IMAGE_POST", imageProjectId: "image-project-1" },
+    };
+    expect(runnerCanClaimTask(imageProject, undefined)).toBe(false);
+    expect(runnerCanClaimTask(imageProject, ["DEFAULT"])).toBe(false);
+    expect(runnerCanClaimTask(imageProject, ["IMAGE_POST"])).toBe(true);
+    expect(runnerCanClaimTask({ type: "IMAGE", input: { executionMode: "DEFAULT" } }, undefined)).toBe(true);
   });
 
   it("repairs the execution envelope during exhausted legacy image-project routing recovery", async () => {

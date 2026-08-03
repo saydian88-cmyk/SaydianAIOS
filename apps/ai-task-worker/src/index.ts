@@ -2323,7 +2323,13 @@ async function main() {
     try {
       const claimed = await api<JsonRecord>("/api/v1/ai-tasks/runner/claim", {
         method: "POST",
-        body: JSON.stringify({ nodeCode, version: runnerVersion }),
+        body: JSON.stringify({
+          nodeCode,
+          version: runnerVersion,
+          // IMAGE_POST is intentionally opt-in. The API uses this declaration
+          // to keep image-project jobs away from legacy generic imagegen nodes.
+          supportedExecutionModes: ["IMAGE_POST"],
+        }),
       });
       if (claimed.task) await execute(claimed);
       else {

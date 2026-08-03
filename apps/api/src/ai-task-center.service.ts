@@ -83,6 +83,39 @@ export function aiTaskTargetNodeCode(task: {
   return task.sourceType === "VIDEO_FACTORY_PROJECT" ? smartVideoPrimaryNodeCode : "";
 }
 
+export function aiTaskExecutionMode(task: {
+  type?: string | null;
+  sourceType?: string | null;
+  sourceId?: string | null;
+  input?: Prisma.JsonValue | JsonRecord | null;
+}) {
+  const input = object(task.input);
+  const explicitMode = text(input.executionMode).toUpperCase();
+  const inputSourceType = text(input.sourceType).toUpperCase();
+  const sourceType = text(task.sourceType).toUpperCase();
+  if (text(task.type).toUpperCase() === "IMAGE" && (
+    explicitMode === "IMAGE_POST"
+    || sourceType === "IMAGE_PROJECT"
+    || inputSourceType === "IMAGE_PROJECT"
+    || Boolean(text(input.imageProjectId))
+  )) return "IMAGE_POST";
+  return explicitMode || "DEFAULT";
+}
+
+export function runnerCanClaimTask(
+  task: Parameters<typeof aiTaskExecutionMode>[0],
+  supportedExecutionModes: unknown,
+) {
+  // IMAGE_POST is a separate business task type. It must only be claimed by a
+  // runner that explicitly advertises the dispatcher/image-post capability.
+  // Legacy imagegen runners only know the coarse IMAGE enum and therefore must
+  // never receive an image-project task.
+  if (aiTaskExecutionMode(task) !== "IMAGE_POST") return true;
+  return strings(supportedExecutionModes)
+    .map((item) => item.toUpperCase())
+    .includes("IMAGE_POST");
+}
+
 function normalizeTaskOutputSizes<T>(task: T): T {
   const source = object(task);
   if (!Array.isArray(source.outputs)) return task;
@@ -1019,6 +1052,7 @@ export class AiTaskCenterService implements OnModuleInit {
       take: 20,
     });
     for (const candidate of tasks) {
+      if (!runnerCanClaimTask(candidate, body.supportedExecutionModes)) continue;
       const targetNodeCode = aiTaskTargetNodeCode(candidate);
       if (targetNodeCode && targetNodeCode !== node.nodeCode.toLowerCase()) continue;
       const staleReason = await this.videoProjectTaskStaleReason(candidate);

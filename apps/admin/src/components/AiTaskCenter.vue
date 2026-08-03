@@ -129,6 +129,15 @@ function typeLabel(value: string) {
   return taskTypes.find(([type]) => type === value)?.[1] || value;
 }
 
+function taskTypeLabel(task: Row) {
+  const sourceType = String(task?.sourceType || task?.input?.sourceType || "").toUpperCase();
+  const executionMode = String(task?.input?.executionMode || "").toUpperCase();
+  if (task?.type === "IMAGE" && (sourceType === "IMAGE_PROJECT" || executionMode === "IMAGE_POST")) {
+    return "图文生成";
+  }
+  return typeLabel(task?.type);
+}
+
 function statusLabel(value: string) {
   const labels: Row = {
     PENDING: "待处理", WAITING_CONFIRMATION: "待确认", CLAIMED: "已领取", RUNNING: "处理中",
@@ -567,7 +576,7 @@ onMounted(load);
 
       <el-table :data="visibleTasks" stripe>
         <el-table-column prop="taskNo" label="任务编号" min-width="180" />
-        <el-table-column label="类型" width="110"><template #default="{ row }">{{ typeLabel(row.type) }}</template></el-table-column>
+        <el-table-column label="类型" width="110"><template #default="{ row }">{{ taskTypeLabel(row) }}</template></el-table-column>
         <el-table-column prop="title" label="任务" min-width="220" show-overflow-tooltip />
         <el-table-column label="平台" width="120"><template #default="{ row }">{{ platformLabel(row.platform) }}</template></el-table-column>
         <el-table-column label="状态" width="110"><template #default="{ row }"><el-tag :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag></template></el-table-column>
@@ -744,7 +753,7 @@ onMounted(load);
         <el-descriptions :column="2" border>
           <el-descriptions-item label="任务编号">{{ detail.taskNo }}</el-descriptions-item>
           <el-descriptions-item label="状态">{{ statusLabel(detail.status) }}</el-descriptions-item>
-          <el-descriptions-item label="类型">{{ typeLabel(detail.type) }}</el-descriptions-item>
+          <el-descriptions-item label="类型">{{ taskTypeLabel(detail) }}</el-descriptions-item>
           <el-descriptions-item v-if="detail.input?.executionClass === 'EXTERNAL_PAID'" label="外部模型费用">预计 ¥{{ Number(detail.estimatedCost || 0).toFixed(2) }} / 实际 ¥{{ Number(detail.actualCost || 0).toFixed(2) }}</el-descriptions-item>
           <el-descriptions-item v-else label="执行方式">{{ detail.input?.executionClass === "ANALYSIS" ? "本地Codex分析" : "本地Codex Skill" }}</el-descriptions-item>
           <el-descriptions-item label="平台">{{ platformLabel(detail.platform) }}</el-descriptions-item>
