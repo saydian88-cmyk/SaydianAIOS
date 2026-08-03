@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { execFile, spawn } from "node:child_process";
 import type { Dirent } from "node:fs";
-import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { safeName, sha256, verifySha256 } from "./worker-utils";
@@ -55,8 +55,21 @@ const systemMaterialIndexPath = join(systemMaterialRoot, "material-index.json");
 const systemMaterialStatePath = join(systemMaterialRoot, "sync-state.json");
 const localMediaLibraryRoot = resolve(String(process.env.AI_TASK_LOCAL_MEDIA_LIBRARY || "F:\\赛电品牌素材库"));
 const localSystemMaterialMapPath = join(localMediaLibraryRoot, ".saidian-system-index", "system-asset-map.json");
+const bundledGsapPath = require.resolve("gsap/dist/gsap.min.js");
 let lastMaterialSyncAt = 0;
 let materialSyncInFlight: Promise<void> | undefined;
+
+async function prepareHyperFramesRuntime(workspace: string) {
+  const source = await stat(bundledGsapPath).catch(() => undefined);
+  if (!source?.isFile() || source.size < 10_000) {
+    throw new Error(`Bundled official GSAP runtime is unavailable: ${bundledGsapPath}`);
+  }
+  const runtimeDir = join(workspace, ".runtime", "hyperframes");
+  const runtimePath = join(runtimeDir, "gsap-3.14.2.min.js");
+  await mkdir(runtimeDir, { recursive: true });
+  await copyFile(bundledGsapPath, runtimePath);
+  return runtimePath;
+}
 
 /**
  * Codex Desktop updates replace the versioned executable beneath LocalAppData.
@@ -833,6 +846,7 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
       "Do not stop for employee approval of an internal script, shot plan, footage selection, production plan or packaging. Create and validate all mandatory Skill artifacts internally, repair correctable issues, render, and return only the final VIDEO_MASTER for employee review.",
       "The empty assets and snapshots arrays are intentional. Never request system materialBindings and never treat them as a whitelist.",
       "Create and validate the full evidence set required by the editing Skill, including production-plan, hard-requirements, shot-plan, composition, packaging, audio, transition and HyperFrames render evidence. A plain FFmpeg concat is not an acceptable finished video.",
+      "OFFLINE_HYPERFRAMES_RUNTIME: The runner has preinstalled the official GSAP 3.14.2 file at .runtime/hyperframes/gsap-3.14.2.min.js in the task workspace. Copy that exact official file into the HyperFrames project or reference it with the correct project-relative path before validate/render. Do not use npm/CDN, and do not create a shim or substitute runtime.",
       ...(isRevision ? [
         "REFERENCE_REVISION_CONTRACT: Reuse the original reference video, its original audio, the previous finished video and the previous editing structure. Apply only the employee's return reason, then render a new version.",
       ] : []),
@@ -874,6 +888,7 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
       "render-evidence.json must identify the HyperFrames project and contain successful doctor, lint, validate, inspect and render command records with non-empty log files. A plain FFmpeg concat is not the full editing Skill and must not be delivered.",
       "RERENDER_GATE: After the first real MP4 is rendered, freeze the composition and run post-render QA. Start another render only when a QA record explicitly has passed=false and records the failed check ID, affected time range, corrective action, new version, and renderReason referencing that check. If QA passed, preserve the first master and proceed directly to evidence packaging and return; never rerender merely to improve logs, rename output, localize dependencies, or make an unrequested subjective refinement.",
       "Never create, inject, or substitute an incomplete GSAP shim, proxy timeline, or ad-hoc animation runtime. Use the installed validated HyperFrames animation dependency. Every render must record renderReason=INITIAL_RENDER or the exact failed QA ID; without it, a second render is forbidden.",
+      "OFFLINE_HYPERFRAMES_RUNTIME: The runner has preinstalled the official GSAP 3.14.2 file at .runtime/hyperframes/gsap-3.14.2.min.js in the task workspace. Copy that exact official file into the HyperFrames project or reference it with the correct project-relative path before validate/render. Do not use npm/CDN, and do not create a shim or substitute runtime.",
       "transition-qc.json must contain cuts with one item for every non-first shot. Each cut requires beforeSeconds>=0.6, afterSeconds>=0.6, a non-empty observation, the actual transition name and passed=true only after viewing the rendered cut.",
       ...(creativeMode === "NO_VOICE_VIDEO" ? [
         "NO_VOICE_VIDEO_CONTRACT: Fully execute references/no-voice-beat-editing.md. Choose a real BGM from F:\\包装资源包 first, create a real beat map, and edit visuals against its sections and accent beats. The user has approved every BGM in this local library for system video tasks: license_unknown is metadata only and must never cause PACKAGING_BGM_LICENSE_GAP, WAITING_INPUT, or task failure.",
@@ -2020,6 +2035,9 @@ async function execute(claimed: JsonRecord) {
   const timeoutSeconds = Math.max(60, Number((claimed.policy as JsonRecord)?.timeoutSeconds || 1200));
   const workspace = join(workRoot, taskNo.replace(/[^a-zA-Z0-9_-]/g, "-"));
   await ensureTaskWorkspace(workspace);
+  const videoRenderTask = String(task.type || "") === "VIDEO"
+    && ["FULL_VIDEO", "SIMILAR_VIDEO", "NO_VOICE_VIDEO"].includes(String(initialTaskInput.executionMode || "").toUpperCase());
+  if (videoRenderTask) await prepareHyperFramesRuntime(workspace);
   let currentSkill = "";
   let state: WorkspaceState | undefined;
   const heartbeat = setInterval(() => {
