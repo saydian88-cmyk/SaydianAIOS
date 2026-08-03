@@ -2661,6 +2661,111 @@ export class AiTaskCenterService implements OnModuleInit {
       return { status: "PENDING_REVIEW" as AiTaskStatus, message: "软文已进入线上内容审核" };
     }
     if (task.type === "IMAGE") {
+      const input = object(task.input);
+      if (text(task.sourceType) === "IMAGE_PROJECT" && text(input.executionMode).toUpperCase() === "IMAGE_POST") {
+        const contentPlanId = text(task.sourceId || input.imageProjectId);
+        const plan = contentPlanId
+          ? await this.prisma.contentPlan.findUnique({ where: { id: contentPlanId }, include: { variants: true } })
+          : null;
+        if (!plan) return { status: "WAITING_INPUT" as AiTaskStatus, message: "图文项目不存在，无法写入图文制作结果" };
+
+        const imagePost = object(result.imagePost || result.imageProject || result);
+        const uploadedImages = await this.prisma.aiTaskOutput.findMany({
+          where: {
+            aiTaskId: task.id,
+            assetId: { not: null },
+            mimeType: { startsWith: "image/" },
+          },
+          orderBy: { createdAt: "asc" },
+          include: { asset: { select: { storageUrl: true } } },
+        });
+        const outputFileName = (value: string) => value.replace(/\\/g, "/").split("/").pop() || value;
+        const outputForPage = (page: JsonRecord, index: number) => {
+          const requestedPath = text(page.outputFile || page.file || page.filePath || page.path);
+          const requestedName = outputFileName(requestedPath);
+          return uploadedImages.find((output) => {
+            const metadata = object(output.metadata);
+            const savedPath = text(metadata.workspaceOutputPath || metadata.outputFile || metadata.filePath || metadata.path);
+            return Boolean(requestedPath) && (
+              savedPath === requestedPath
+              || outputFileName(savedPath) === requestedName
+              || outputFileName(output.title) === requestedName
+            );
+          }) || (uploadedImages.length === 1 ? uploadedImages[0] : uploadedImages[index]);
+        };
+        const pages = Array.isArray(imagePost.pages)
+          ? imagePost.pages.map(object).filter((item) => text(item.title || item.pageTitle || item.text)).map((page, index) => {
+            const output = outputForPage(page, index);
+            return {
+              ...page,
+              imageUrl: text(output?.url || output?.asset?.storageUrl),
+              imageAssetId: text(output?.assetId),
+              outputFile: text(page.outputFile || page.file || page.filePath || object(output?.metadata).workspaceOutputPath),
+            };
+          })
+          : [];
+        const title = text(imagePost.title || imagePost.postTitle || imagePost.topic) || plan.topic;
+        const publishCopy = text(imagePost.publishCopy || imagePost.body || imagePost.copy || imagePost.caption);
+        const tags = strings(imagePost.tags || imagePost.hashtags || imagePost.labels);
+        if (!pages.length && !publishCopy && !title) {
+          return { status: "WAITING_INPUT" as AiTaskStatus, message: "图文制作任务已返回，但缺少图文页、标题或发布文案" };
+        }
+        const previous = plan.variants.find((variant) => variant.platform === "DOUYIN");
+        const metadata = {
+          ...object(previous?.metadata),
+          pages,
+          tags,
+          publishCopy,
+          imageProjectTaskId: task.id,
+          generatedAt: new Date().toISOString(),
+        };
+        await this.prisma.$transaction([
+          this.prisma.contentVariant.upsert({
+            where: { contentPlanId_platform: { contentPlanId: plan.id, platform: "DOUYIN" } },
+            create: {
+              contentPlanId: plan.id,
+              platform: "DOUYIN",
+              title,
+              body: publishCopy,
+              mediaType: "IMAGE_POST",
+              metadata: json(metadata),
+              status: "PENDING_APPROVAL",
+            },
+            update: {
+              title,
+              body: publishCopy,
+              mediaType: "IMAGE_POST",
+              metadata: json(metadata),
+              status: "PENDING_APPROVAL",
+            },
+          }),
+          this.prisma.contentPlan.update({
+            where: { id: plan.id },
+            data: {
+              topic: title || plan.topic,
+              productionStage: "IMAGE_REVIEW",
+              status: "PENDING_APPROVAL",
+              rejectedReason: null,
+            },
+          }),
+        ]);
+        const existingOutput = await this.prisma.aiTaskOutput.findFirst({
+          where: { aiTaskId: task.id, kind: "IMAGE_PROJECT_RESULT", contentPlanId: plan.id },
+        });
+        if (!existingOutput) {
+          await this.prisma.aiTaskOutput.create({
+            data: {
+              aiTaskId: task.id,
+              kind: "IMAGE_PROJECT_RESULT",
+              title,
+              contentPlanId: plan.id,
+              reviewStatus: "PENDING",
+              metadata: json({ pages, tags, publishCopy }),
+            },
+          });
+        }
+        return { status: "PENDING_REVIEW" as AiTaskStatus, message: "图文、标题、发布文案和标签已回传，等待审核" };
+      }
       const outputCount = await this.prisma.aiTaskOutput.count({ where: { aiTaskId: task.id, assetId: { not: null } } });
       if (!outputCount) {
         const brief = object(result.imageBrief);

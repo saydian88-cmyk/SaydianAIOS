@@ -9,6 +9,7 @@ export type SkillKey =
   | "build-health-brand-trust-content"
   | "saydian-douyin-viral-video-generator"
   | "saidian-ai-task-dispatcher"
+  | "saidian-douyin-image-posts"
   | "video-editing-from-media-library-share"
   | "legacy-codex";
 
@@ -69,6 +70,10 @@ export function skillRegistry(env: NodeJS.ProcessEnv = process.env): Record<Excl
       env.AI_TASK_DISPATCHER_SKILL_PATH
       || join(home, "skills", "saidian-ai-task-dispatcher", "SKILL.md"),
     )),
+    "saidian-douyin-image-posts": resolve(String(
+      env.AI_TASK_IMAGE_POST_SKILL_PATH
+      || join(home, "skills", "saidian-douyin-image-posts", "SKILL.md"),
+    )),
     "video-editing-from-media-library-share": resolve(String(
       env.AI_TASK_DIRECT_VIDEO_SKILL_PATH
       || join(home, "skills", "video-editing-from-media-library-share", "SKILL.md"),
@@ -86,6 +91,10 @@ function videoSkillPath(env: NodeJS.ProcessEnv) {
 
 function videoSkillName(env: NodeJS.ProcessEnv) {
   return String(env.AI_TASK_VIDEO_SKILL_NAME || "video-editing-from-media-library").trim();
+}
+
+function imagePostSkillName(env: NodeJS.ProcessEnv) {
+  return String(env.AI_TASK_IMAGE_POST_SKILL_NAME || "saidian-douyin-image-posts").trim();
 }
 
 function assertPackageRoute(
@@ -119,14 +128,35 @@ export function routeTask(taskPackage: JsonRecord, env: NodeJS.ProcessEnv = proc
   };
   const type = String(task.type || taskPackage.type || "").trim().toUpperCase();
   const taskInput = object(task.input);
+  const sourceType = String(task.sourceType || taskPackage.sourceType || "").trim().toUpperCase();
   const executionMode = String(
-    execution.mode || taskInput.executionMode || (type === "VIDEO" ? "FULL_VIDEO" : "DEFAULT"),
+    execution.mode || taskInput.executionMode || (type === "VIDEO" ? "FULL_VIDEO" : sourceType === "IMAGE_PROJECT" ? "IMAGE_POST" : "DEFAULT"),
   ).trim().toUpperCase();
   const isDouyinViralModule = String(taskInput.factoryModule || "").trim().toUpperCase() === "DOUYIN_VIRAL";
   const isCodexDirectFullVideo = type === "VIDEO"
     && executionMode === "FULL_VIDEO"
     && taskInput.codexDirectFullVideo === true;
   const registry = () => skillRegistry(env);
+
+  if (type === "IMAGE" && sourceType === "IMAGE_PROJECT" && executionMode === "IMAGE_POST") {
+    assertPackageRoute(
+      execution,
+      "saidian-ai-task-dispatcher",
+      ["CODEX_SKILL", "CODEX_FIRST"],
+      [imagePostSkillName(env), "saidian-douyin-image-posts"],
+    );
+    return {
+      key: "saidian-ai-task-dispatcher",
+      taskType: type,
+      executionMode,
+      strategy: "CODEX_SKILL",
+      reason: "IMAGE/IMAGE_PROJECT 由赛电调度 Skill 自动调用图文制作 Skill，生成整组图文、标题、标签与发布文案",
+      fallbackOrder: ["SAIDIAN_DOUYIN_IMAGE_POSTS", "WAITING_INPUT"],
+      skillPath: registry()["saidian-ai-task-dispatcher"],
+      downstreamSkillName: imagePostSkillName(env),
+      downstreamSkillPath: registry()["saidian-douyin-image-posts"],
+    };
+  }
 
   if (type === "IMAGE") {
     assertPackageRoute(execution, "imagegen", ["CODEX_SKILL"]);

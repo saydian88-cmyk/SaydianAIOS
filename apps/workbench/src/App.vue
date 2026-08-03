@@ -350,6 +350,26 @@ const activeVideoProject = computed(() => (dataCenter.videoProjects || []).find(
 const expandedTaskVideoProjectId = ref("");
 const taskVideoProjectDetail = ref<Row>();
 const taskVideoProjectLoading = ref(false);
+const newImageProjectVisible = ref(false);
+const creatingImageProject = ref(false);
+const imageProjectVisible = ref(false);
+const taskImageProjectLoading = ref(false);
+const activeImageProjectId = ref("");
+const taskImageProjectDetail = ref<Row>();
+const imageProjectPreviewVisible = ref(false);
+const imageProjectForm = reactive({
+  productModel: "",
+  imageType: "送礼类",
+  audience: "给爸妈挑健康手表的人",
+  hook: "给爸妈买前先看",
+  competitor: "",
+  creativeIntent: "",
+  additionalPrompt: "",
+  requirement: "",
+});
+const imageRequirementEdited = ref(false);
+const imagePublishRecords = ref<Array<{ platform: string; remoteUrl: string }>>([{ platform: "DOUYIN", remoteUrl: "" }]);
+const imageProjectTypes = ["送礼类", "种草类", "避坑类", "补盲类", "测评类", "教程类", "对比类"];
 const lockedShotUpload = ref<Row>();
 const videoScriptMode = ref("AUTO");
 const videoScriptRestriction = ref("NORMAL");
@@ -608,6 +628,66 @@ function taskStatusCode(task: Row) {
 
 function isVideoProjectTask(task: Row) {
   return task.sourceType === "VIDEO_PROJECT" || task.category === "VIDEO_PROJECT";
+}
+
+function isImageProjectTask(task: Row) {
+  return task.sourceType === "IMAGE_PROJECT" || task.category === "IMAGE_PROJECT";
+}
+
+const imageFlowSteps = ["项目创建", "图文与文案生成、审核", "发布与回传"];
+
+function imageProjectTaskStep(task: Row) {
+  return Number(task.projection?.project?.step || 1);
+}
+
+function imageProjectTaskHint(task: Row) {
+  return task.projection?.project?.nextAction || task.projection?.nextAction || "进入项目继续处理";
+}
+
+function imageProjectPrimaryAction(task: Row) {
+  const projectId = task.sourceId || task.evidence?.contentPlanId;
+  if (imageProjectVisible.value && activeImageProjectId.value === projectId) return "收起项目";
+  const stage = String(task.projection?.project?.stage || "").toUpperCase();
+  if (stage === "IMAGE_PUBLISHED" || ["COMPLETED", "PUBLISHED"].includes(String(task.status || "").toUpperCase())) return "查看项目";
+  if (stage === "IMAGE_REVIEW") return "审核图文";
+  if (["IMAGE_GENERATING", "IMAGE_RETURNED"].includes(stage)) return "查看进度";
+  return "处理项目";
+}
+
+function imageProjectModeLabel(task: Row) {
+  return "图文项目";
+}
+
+function imageProjectCardTitle(task: Row) {
+  const project = task.projection?.project || {};
+  const model = String(project.productModel || "").trim() || "未标注产品";
+  const imageType = String(project.imageType || project.videoType || "图文").trim();
+  const topic = String(project.topic || task.title || "").trim();
+  const normalized = topic.replace(/^.+?·\s*/u, "");
+  return `${model} · ${imageType} · ${normalized || formatTime(project.createdAt || task.createdAt)}`;
+}
+
+function imageProjectPages(project?: Row) {
+  const metadata = project?.variants?.[0]?.metadata || project?.imagePost || {};
+  return Array.isArray(metadata.pages) ? metadata.pages : Array.isArray(project?.pages) ? project.pages : [];
+}
+
+function imageProjectPageUrl(page: Row) {
+  return String(page.imageUrl || page.downloadUrl || page.fileUrl || page.storageUrl || page.url || "");
+}
+
+function imageProjectVariant(project?: Row) {
+  return (project?.variants || []).find((item: Row) => String(item.platform || "").toUpperCase() === "DOUYIN") || project?.variants?.[0] || {};
+}
+
+function imageProjectTags(project?: Row) {
+  const metadata = imageProjectVariant(project).metadata || {};
+  return Array.isArray(metadata.tags) ? metadata.tags : [];
+}
+
+function imageProjectCopy(project?: Row) {
+  const metadata = imageProjectVariant(project).metadata || {};
+  return String(metadata.publishCopy || imageProjectVariant(project).body || "");
 }
 
 function videoProjectTaskStep(task: Row) {
@@ -1100,7 +1180,157 @@ async function quickCreateProject(command: string) {
     await openNewVideoProjectDialog();
     return;
   }
-  ElMessage.info(command === "IMAGE" ? "图文项目稍后完善" : "软文项目稍后完善");
+  if (command === "IMAGE") {
+    openNewImageProjectDialog();
+    return;
+  }
+  ElMessage.info("软文项目稍后完善");
+}
+
+function imageDefaultsForType(type: string) {
+  const defaults: Record<string, { audience: string; hook: string }> = {
+    "送礼类": { audience: "给爸妈挑健康手表的人", hook: "给爸妈买前先看" },
+    "种草类": { audience: "正在挑选智能手表的人", hook: "真实体验怎么样" },
+    "避坑类": { audience: "第一次买健康手表的人", hook: "买前先避开这几个坑" },
+    "补盲类": { audience: "对功能还不了解的人", hook: "很多人都忽略了这一点" },
+    "测评类": { audience: "正在比较同类产品的人", hook: "实测后再说值不值得" },
+    "教程类": { audience: "刚拿到产品的用户", hook: "这几个功能这样用更方便" },
+    "对比类": { audience: "正在横向比较产品的人", hook: "高血压人群买前先看" },
+  };
+  return defaults[type] || defaults["送礼类"];
+}
+
+function imageSuggestionsForType(type: string) {
+  const defaults = imageDefaultsForType(type);
+  const suggestions: Record<string, { audiences: string[]; hooks: string[] }> = {
+    "送礼类": { audiences: ["给爸妈挑健康手表的人", "想送父母实用礼物的人", "给长辈准备节日礼物的人"], hooks: ["给爸妈买前先看", "送父母礼物别只看外观", "真正实用的健康礼物怎么选"] },
+    "种草类": { audiences: ["正在挑选智能手表的人", "重视日常健康管理的人", "想换一块更实用手表的人"], hooks: ["真实体验怎么样", "这类手表到底值不值得买", "用了以后才知道的方便"] },
+    "避坑类": { audiences: ["第一次买健康手表的人", "给父母买手表的人", "担心买错功能的人"], hooks: ["买前先避开这几个坑", "别只看参数，这点更重要", "给父母买表最容易忽略什么"] },
+    "补盲类": { audiences: ["对功能还不了解的人", "刚开始关注健康手表的人", "想看懂日常使用场景的人"], hooks: ["很多人都忽略了这一点", "这个功能其实这样用", "别把它只当普通手表"] },
+    "测评类": { audiences: ["正在比较同类产品的人", "想看真实使用感受的人", "准备下单前做功课的人"], hooks: ["实测后再说值不值得", "连续使用后真实感受", "这几个细节很关键"] },
+    "教程类": { audiences: ["刚拿到产品的用户", "需要帮父母设置手表的人", "想快速上手功能的人"], hooks: ["这几个功能这样用更方便", "新手先学会这一步", "三分钟看懂日常操作"] },
+    "对比类": { audiences: ["正在横向比较产品的人", "高血压人群购前对比的人", "想看核心功能差异的人"], hooks: ["高血压人群买前先看", "横向对比后差别在哪", "别只比价格，先比这些"] },
+  };
+  return suggestions[type] || { audiences: [defaults.audience], hooks: [defaults.hook] };
+}
+
+function buildImageProjectRequirement() {
+  const form = imageProjectForm;
+  const clauses = [
+    `用图文制作 skill，做一组赛电${form.productModel}${form.imageType}图文`,
+    form.audience.trim() ? `面向${form.audience.trim()}` : "",
+    form.hook.trim() ? `主钩子是“${form.hook.trim()}”` : "",
+    form.competitor.trim() ? `对比对象为${form.competitor.trim()}` : "",
+    form.creativeIntent.trim() ? form.creativeIntent.trim() : "",
+    form.additionalPrompt.trim() ? form.additionalPrompt.trim() : "",
+    "可以放注册证，但不要露内部型号。",
+  ].filter(Boolean);
+  return clauses.join("，");
+}
+
+function syncImageProjectRequirement() {
+  if (!imageRequirementEdited.value) imageProjectForm.requirement = buildImageProjectRequirement();
+}
+
+function changeImageProjectType() {
+  const defaults = imageDefaultsForType(imageProjectForm.imageType);
+  imageProjectForm.audience = defaults.audience;
+  imageProjectForm.hook = defaults.hook;
+  syncImageProjectRequirement();
+}
+
+function openNewImageProjectDialog() {
+  const defaults = imageDefaultsForType("送礼类");
+  Object.assign(imageProjectForm, {
+    productModel: productOptions.value[0]?.modelCode || "",
+    imageType: "送礼类",
+    audience: defaults.audience,
+    hook: defaults.hook,
+    competitor: "",
+    creativeIntent: "",
+    additionalPrompt: "",
+    requirement: "",
+  });
+  imageRequirementEdited.value = false;
+  syncImageProjectRequirement();
+  newImageProjectVisible.value = true;
+}
+
+async function createImageProject() {
+  if (!imageProjectForm.productModel || !imageProjectForm.imageType || !imageProjectForm.audience.trim() || !imageProjectForm.hook.trim()) {
+    return ElMessage.warning("请填写产品型号、图文类型、目标人群/场景和主钩子方向");
+  }
+  creatingImageProject.value = true;
+  try {
+    const result = await post<Row>("/api/v1/workbench/image-projects", { ...imageProjectForm });
+    newImageProjectVisible.value = false;
+    await loadTasks();
+    const project = result.project || result;
+    activeImageProjectId.value = project.id;
+    taskImageProjectDetail.value = project;
+    imageProjectVisible.value = true;
+    ElMessage.success("图文项目已创建，正在生成图文和文案");
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "图文项目创建失败");
+  } finally {
+    creatingImageProject.value = false;
+  }
+}
+
+async function openImageProjectFromTask(task: Row) {
+  const projectId = task.sourceId || task.evidence?.contentPlanId;
+  if (!projectId) return ElMessage.warning("该任务未关联图文项目");
+  if (imageProjectVisible.value && activeImageProjectId.value === projectId) {
+    imageProjectVisible.value = false;
+    return;
+  }
+  taskImageProjectLoading.value = true;
+  try {
+    taskImageProjectDetail.value = await api<Row>(`/api/v1/workbench/image-projects/${projectId}`);
+    activeImageProjectId.value = projectId;
+    imageProjectVisible.value = true;
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "图文项目加载失败");
+  } finally {
+    taskImageProjectLoading.value = false;
+  }
+}
+
+async function refreshImageProject() {
+  if (!activeImageProjectId.value) return;
+  taskImageProjectLoading.value = true;
+  try {
+    taskImageProjectDetail.value = await api<Row>(`/api/v1/workbench/image-projects/${activeImageProjectId.value}`);
+    await loadTasks();
+    ElMessage.success("当前项目已刷新");
+  } finally {
+    taskImageProjectLoading.value = false;
+  }
+}
+
+async function reviewImageProject(approve: boolean) {
+  if (!activeImageProjectId.value) return;
+  let reason = "";
+  if (!approve) {
+    try {
+      const answer = await ElMessageBox.prompt("请说明需要修改的内容", "退回图文", { inputType: "textarea", inputValidator: (value) => value?.trim() ? true : "请填写退回原因" });
+      reason = answer.value;
+    } catch { return; }
+  }
+  await post<Row>(`/api/v1/workbench/image-projects/${activeImageProjectId.value}/review`, { action: approve ? "APPROVE" : "RETURN", reason });
+  await refreshImageProject();
+}
+
+function addImagePublishRecord() {
+  imagePublishRecords.value.push({ platform: "DOUYIN", remoteUrl: "" });
+}
+
+async function saveImagePublishLinks() {
+  if (!activeImageProjectId.value) return;
+  const records = imagePublishRecords.value.filter((item) => item.remoteUrl.trim());
+  if (!records.length) return ElMessage.warning("请至少填写一个发布链接");
+  await post<Row>(`/api/v1/workbench/image-projects/${activeImageProjectId.value}/publish-links`, { records });
+  await refreshImageProject();
 }
 
 function editableCandidateLines(candidate: Row) {
@@ -3403,7 +3633,7 @@ onBeforeUnmount(() => {
                 <template #dropdown>
                   <el-dropdown-menu>
                     <el-dropdown-item command="VIDEO">新建视频项目</el-dropdown-item>
-                    <el-dropdown-item command="IMAGE">新建图文项目（待完善）</el-dropdown-item>
+                    <el-dropdown-item command="IMAGE">新建图文项目</el-dropdown-item>
                     <el-dropdown-item command="ARTICLE">新建软文项目（待完善）</el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
@@ -3439,7 +3669,19 @@ onBeforeUnmount(() => {
                   <span v-if="videoProjectDueText(task)" class="video-project-due">{{ videoProjectDueText(task) }}</span>
                 </div>
               </template>
-              <template v-if="!isVideoProjectTask(task)">
+              <template v-else-if="isImageProjectTask(task)">
+                <div class="video-project-card-meta">
+                  <el-tag size="small" :type="statusType(taskStatusCode(task))">{{ taskDisplayStatus(task) }}</el-tag>
+                  <el-tag size="small" type="info">{{ imageProjectModeLabel(task) }}</el-tag>
+                </div>
+                <h4 class="video-project-card-title" role="button" tabindex="0" @click="openImageProjectFromTask(task)" @keydown.enter.prevent="openImageProjectFromTask(task)">{{ imageProjectCardTitle(task) }}</h4>
+                <div class="video-task-identifiers">
+                  <span v-if="task.projection?.project?.productModel">{{ task.projection.project.productModel }}</span>
+                  <span v-if="task.projection?.project?.imageType">{{ task.projection.project.imageType }}</span>
+                  <span v-if="task.projection?.project?.createdAt">创建于 {{ formatTime(task.projection.project.createdAt) }}</span>
+                </div>
+              </template>
+              <template v-else>
                 <div class="task-meta">
                   <el-tag size="small" :type="statusType(taskStatusCode(task))">{{ taskDisplayStatus(task) }}</el-tag>
                   <span>{{ task.taskNo || "系统任务" }}</span>
@@ -3460,7 +3702,13 @@ onBeforeUnmount(() => {
                 </div>
                 <p class="video-task-next"><b>现在需要：</b>{{ videoProjectTaskHint(task) }}</p>
               </template>
-              <p v-if="!isVideoProjectTask(task) && task.returnReason" class="return-note">修改要求：{{ task.returnReason }}</p>
+              <template v-else-if="isImageProjectTask(task)">
+                <div class="video-task-steps" :aria-label="`当前进行到第 ${imageProjectTaskStep(task)} 步`">
+                  <span v-for="(step, index) in imageFlowSteps" :key="step" :class="{ active: imageProjectTaskStep(task) === index + 1, done: imageProjectTaskStep(task) > index + 1 }">{{ index + 1 }} {{ step }}</span>
+                </div>
+                <p class="video-task-next"><b>现在需要：</b>{{ imageProjectTaskHint(task) }}</p>
+              </template>
+              <p v-else-if="task.returnReason" class="return-note">修改要求：{{ task.returnReason }}</p>
             </div>
             <div class="task-actions">
               <el-button
@@ -3476,6 +3724,12 @@ onBeforeUnmount(() => {
                 :loading="archivingVideoProjectId === (task.sourceId || task.evidence?.contentPlanId)"
                 @click="archiveVideoProject({ id: task.sourceId || task.evidence?.contentPlanId, topic: videoProjectCardTitle(task) })"
               >删除项目</el-button>
+              <el-button
+                v-else-if="isImageProjectTask(task)"
+                type="primary"
+                :loading="taskImageProjectLoading && activeImageProjectId === (task.sourceId || task.evidence?.contentPlanId)"
+                @click="openImageProjectFromTask(task)"
+              >{{ imageProjectPrimaryAction(task) }}</el-button>
               <template v-else>
                 <el-button @click="openTaskDetail(task)">查看详情</el-button>
                 <el-button v-if="!task.assigneeEmployeeId && task.status === 'OPEN'" type="primary" @click="acceptTask(task)">领取</el-button>
@@ -5009,6 +5263,109 @@ onBeforeUnmount(() => {
         @click="reviewProjectPackaging(true)"
       >包装审核通过</el-button>
     </template>
+  </el-dialog>
+
+  <el-dialog v-model="newImageProjectVisible" title="新建图文项目" width="min(920px, 96vw)" destroy-on-close>
+    <div class="prototype-project-form image-project-form">
+      <el-alert title="填写图文制作要求后创建项目。系统会生成图文初稿、标题、标签和发布文案，员工只需审核；所有内容都会自动保存。" type="info" :closable="false" />
+      <section class="prototype-form-section">
+        <header><strong>必填信息</strong><span>产品型号、图文类型、目标人群/场景和主钩子方向为必填项</span></header>
+        <div class="prototype-required-grid image-project-required-grid">
+          <el-form-item label="产品型号" required>
+            <el-select v-model="imageProjectForm.productModel" filterable placeholder="搜索或选择产品型号" @change="syncImageProjectRequirement">
+              <el-option v-for="product in productOptions" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="图文类型" required>
+            <el-select v-model="imageProjectForm.imageType" filterable allow-create default-first-option @change="changeImageProjectType">
+              <el-option v-for="item in imageProjectTypes" :key="item" :label="item" :value="item" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="目标人群/场景" required>
+            <el-select v-model="imageProjectForm.audience" filterable allow-create default-first-option placeholder="选择或填写目标人群/场景" @change="syncImageProjectRequirement">
+              <el-option v-for="item in imageSuggestionsForType(imageProjectForm.imageType).audiences" :key="item" :label="item" :value="item" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="主钩子方向" required>
+            <el-select v-model="imageProjectForm.hook" filterable allow-create default-first-option placeholder="选择或填写主钩子方向" @change="syncImageProjectRequirement">
+              <el-option v-for="item in imageSuggestionsForType(imageProjectForm.imageType).hooks" :key="item" :label="item" :value="item" />
+            </el-select>
+          </el-form-item>
+        </div>
+      </section>
+      <section class="prototype-form-section">
+        <header><strong>可选创作信息</strong><span>竞品、补充创意或额外提示会自动写入任务要求</span></header>
+        <div class="prototype-optional-grid image-project-optional-grid">
+          <el-form-item label="竞品或对比对象"><el-input v-model="imageProjectForm.competitor" placeholder="如 D2、小米 H1E" @input="syncImageProjectRequirement" /></el-form-item>
+          <el-form-item label="补充创意"><el-input v-model="imageProjectForm.creativeIntent" placeholder="如最后一页放送礼选择建议" @input="syncImageProjectRequirement" /></el-form-item>
+          <el-form-item class="wide" label="补充 AI 提示词"><el-input v-model="imageProjectForm.additionalPrompt" type="textarea" :rows="3" placeholder="填写希望加强或避免的表达；未填写时由图文 Skill 自行创作" @input="syncImageProjectRequirement" /></el-form-item>
+        </div>
+      </section>
+      <section class="prototype-form-section image-task-requirement">
+        <header><strong>提交给图文制作 Skill 的任务要求</strong><span>仅提交这段内容，可直接修改</span></header>
+        <el-input v-model="imageProjectForm.requirement" type="textarea" :rows="3" @input="imageRequirementEdited = true" />
+      </section>
+    </div>
+    <template #footer>
+      <el-button @click="newImageProjectVisible = false">取消</el-button>
+      <el-button type="primary" :loading="creatingImageProject" @click="createImageProject">创建项目并生成图文</el-button>
+    </template>
+  </el-dialog>
+
+  <el-dialog v-model="imageProjectVisible" :title="taskImageProjectDetail?.topic || '图文项目'" width="min(1120px, 96vw)" destroy-on-close>
+    <div v-if="taskImageProjectDetail" class="task-video-stage-panel image-project-workspace" v-loading="taskImageProjectLoading">
+      <header class="task-video-workspace-head">
+        <div>
+          <small>当前阶段 {{ imageProjectTaskStep({ projection: { project: { step: taskImageProjectDetail.productionStage === 'IMAGE_PUBLISHING' || taskImageProjectDetail.productionStage === 'IMAGE_PUBLISHED' ? 3 : taskImageProjectDetail.productionStage === 'IMAGE_REVIEW' || taskImageProjectDetail.productionStage === 'IMAGE_RETURNED' ? 2 : 1 } } }) }}/3</small>
+          <h3>{{ taskImageProjectDetail.productionStage === 'IMAGE_PUBLISHING' || taskImageProjectDetail.productionStage === 'IMAGE_PUBLISHED' ? '发布与回传' : '图文与文案生成、审核' }}</h3>
+          <p>{{ taskImageProjectDetail.productionStage === 'IMAGE_GENERATING' ? '系统正在生成图文、标题、标签和发布文案。' : taskImageProjectDetail.productionStage === 'IMAGE_RETURNED' ? '系统正按退回意见修改图文和文案。' : taskImageProjectDetail.productionStage === 'IMAGE_REVIEW' ? '请查看图文、标题标签和发布文案后审核。' : '下载图文并回传发布链接。' }}</p>
+        </div>
+        <el-button @click="refreshImageProject">刷新当前项目</el-button>
+      </header>
+      <nav class="task-video-stage-tabs" aria-label="图文项目阶段">
+        <button v-for="(step, index) in imageFlowSteps" :key="step" type="button" :class="{ active: (taskImageProjectDetail.productionStage === 'IMAGE_PUBLISHING' || taskImageProjectDetail.productionStage === 'IMAGE_PUBLISHED' ? 3 : taskImageProjectDetail.productionStage === 'IMAGE_REVIEW' || taskImageProjectDetail.productionStage === 'IMAGE_RETURNED' ? 2 : 1) === index + 1, done: (taskImageProjectDetail.productionStage === 'IMAGE_PUBLISHING' || taskImageProjectDetail.productionStage === 'IMAGE_PUBLISHED' ? 3 : taskImageProjectDetail.productionStage === 'IMAGE_REVIEW' || taskImageProjectDetail.productionStage === 'IMAGE_RETURNED' ? 2 : 1) > index + 1 }">{{ index + 1 }} {{ step }}</button>
+      </nav>
+      <template v-if="['IMAGE_GENERATING', 'IMAGE_RETURNED'].includes(taskImageProjectDetail.productionStage)">
+        <el-empty :description="taskImageProjectDetail.productionStage === 'IMAGE_RETURNED' ? '正在按退回意见重新生成图文和文案' : '正在生成图文和文案'" />
+      </template>
+      <template v-else-if="taskImageProjectDetail.productionStage === 'IMAGE_REVIEW'">
+        <section class="image-result-layout">
+          <div class="image-page-list">
+            <article v-for="(page, index) in imageProjectPages(taskImageProjectDetail)" :key="page.id || index" class="image-page-card">
+              <img v-if="imageProjectPageUrl(page)" :src="imageProjectPageUrl(page)" :alt="page.title || `第${index + 1}页`" />
+              <div v-else><el-tag size="small">第 {{ index + 1 }} 页</el-tag><strong>{{ page.title || `第 ${index + 1} 页图文` }}</strong><p>{{ page.copy || page.description || '图文内容已生成' }}</p></div>
+            </article>
+          </div>
+          <div class="image-copy-panels">
+            <section><header><strong>标题与标签</strong><el-button size="small" @click="copyTaskContent(`${imageProjectVariant(taskImageProjectDetail).title || ''}\n${imageProjectTags(taskImageProjectDetail).map((tag: string) => `#${tag}`).join(' ')}`, '标题与标签')">复制</el-button></header><h4>{{ imageProjectVariant(taskImageProjectDetail).title }}</h4><el-tag v-for="tag in imageProjectTags(taskImageProjectDetail)" :key="tag" size="small">#{{ tag }}</el-tag></section>
+            <section><header><strong>发布文案</strong><el-button size="small" @click="copyTaskContent(imageProjectCopy(taskImageProjectDetail), '发布文案')">复制</el-button></header><p>{{ imageProjectCopy(taskImageProjectDetail) || '发布文案已随图文生成' }}</p></section>
+          </div>
+        </section>
+        <div class="preview-actions">
+          <el-button @click="imageProjectPreviewVisible = true">预览图文</el-button>
+          <el-button type="danger" plain @click="reviewImageProject(false)">退回并填写原因</el-button>
+          <el-button type="success" @click="reviewImageProject(true)">图文审核通过</el-button>
+        </div>
+      </template>
+      <template v-else>
+        <section class="image-result-layout published">
+          <div class="image-page-list"><article v-for="(page, index) in imageProjectPages(taskImageProjectDetail)" :key="page.id || index" class="image-page-card"><img v-if="imageProjectPageUrl(page)" :src="imageProjectPageUrl(page)" :alt="page.title || `第${index + 1}页`" /><div v-else><strong>{{ page.title || `第 ${index + 1} 页图文` }}</strong></div></article></div>
+          <div class="image-copy-panels"><section><header><strong>标题与标签</strong><el-button size="small" @click="copyTaskContent(`${imageProjectVariant(taskImageProjectDetail).title || ''}\n${imageProjectTags(taskImageProjectDetail).map((tag: string) => `#${tag}`).join(' ')}`, '标题与标签')">复制</el-button></header><h4>{{ imageProjectVariant(taskImageProjectDetail).title }}</h4><el-tag v-for="tag in imageProjectTags(taskImageProjectDetail)" :key="tag" size="small">#{{ tag }}</el-tag></section><section><header><strong>发布文案</strong><el-button size="small" @click="copyTaskContent(imageProjectCopy(taskImageProjectDetail), '发布文案')">复制</el-button></header><p>{{ imageProjectCopy(taskImageProjectDetail) }}</p></section></div>
+        </section>
+        <div class="image-publish-form">
+          <div v-for="(record, index) in imagePublishRecords" :key="index" class="image-publish-record"><el-select v-model="record.platform"><el-option v-for="item in publishPlatformOptions" :key="item.value" :label="item.label" :value="item.value" /></el-select><el-input v-model="record.remoteUrl" placeholder="粘贴已发布图文链接" /></div>
+          <el-button @click="addImagePublishRecord">添加一个发布平台</el-button>
+          <el-button @click="imageProjectPreviewVisible = true">预览并下载图文</el-button>
+          <el-button type="primary" @click="saveImagePublishLinks">回传发布链接</el-button>
+        </div>
+      </template>
+    </div>
+    <template #footer><el-button @click="imageProjectVisible = false">关闭</el-button></template>
+  </el-dialog>
+
+  <el-dialog v-model="imageProjectPreviewVisible" title="图文预览" width="min(960px, 96vw)">
+    <div class="image-preview-grid"><article v-for="(page, index) in imageProjectPages(taskImageProjectDetail)" :key="page.id || index" class="image-page-card"><img v-if="imageProjectPageUrl(page)" :src="imageProjectPageUrl(page)" :alt="page.title || `第${index + 1}页`" /><div v-else><strong>{{ page.title || `第 ${index + 1} 页图文` }}</strong><p>{{ page.copy || page.description }}</p></div><a v-if="imageProjectPageUrl(page)" :href="imageProjectPageUrl(page)" target="_blank" download>下载本页</a></article></div>
+    <template #footer><el-button @click="imageProjectPreviewVisible = false">完成预览</el-button></template>
   </el-dialog>
 
   <el-dialog v-model="newVideoProjectVisible" title="新建智能视频项目" width="min(980px, 96vw)" destroy-on-close>

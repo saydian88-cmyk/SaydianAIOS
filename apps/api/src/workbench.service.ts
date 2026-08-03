@@ -296,8 +296,9 @@ export class WorkbenchService {
     const projected = await this.attachTaskProjections(this.sortTasks(rows));
     const visible = defaultWorkQueue
       ? projected.filter((task: any) => {
-          const isVideoProject = task.sourceType === "VIDEO_PROJECT" || task.category === "VIDEO_PROJECT";
-          if (isVideoProject) return !task.projection?.project?.hasReturnedPublishLink;
+          const isProject = ["VIDEO_PROJECT", "IMAGE_PROJECT"].includes(String(task.sourceType))
+            || ["VIDEO_PROJECT", "IMAGE_PROJECT"].includes(String(task.category));
+          if (isProject) return !task.projection?.project?.hasReturnedPublishLink;
           return !["COMPLETED", "VERIFIED", "CANCELLED"].includes(value(task.status).toUpperCase());
         })
       : projected;
@@ -389,6 +390,41 @@ export class WorkbenchService {
         projectStage: project.productionStage || "PROJECT_BRIEF",
         projectPath: `/data-center/video-projects/${project.id}`,
       },
+    }, employee.name);
+  }
+
+  async ensureImageProjectTask(
+    employee: { employeeId: string; name: string },
+    project: { id: string; productionNo?: string | null; topic?: string | null; productionStage?: string | null },
+  ) {
+    const existing = await this.prisma.opsTask.findFirst({
+      where: { sourceType: "IMAGE_PROJECT", sourceId: project.id, assigneeEmployeeId: employee.employeeId, deletedAt: null },
+      include: this.taskInclude(),
+    });
+    const evidence = {
+      taskType: "IMAGE_PROJECT",
+      contentPlanId: project.id,
+      productionNo: project.productionNo || null,
+      projectStage: project.productionStage || "IMAGE_GENERATING",
+      projectPath: `/image-projects/${project.id}`,
+    } as Prisma.InputJsonValue;
+    if (existing) return this.prisma.opsTask.update({
+      where: { id: existing.id },
+      data: { title: project.topic || existing.title, evidence },
+      include: this.taskInclude(),
+    });
+    return this.createTask({
+      title: project.topic || "图文项目",
+      description: "员工新建图文项目后自动生成。进入项目查看图文、标题、发布文案和标签。",
+      expectedResult: "完成图文与文案审核，并回传发布链接。",
+      category: "IMAGE_PROJECT",
+      priority: "MEDIUM",
+      owner: employee.name,
+      assigneeEmployeeId: employee.employeeId,
+      assignedByEmployeeId: employee.employeeId,
+      sourceType: "IMAGE_PROJECT",
+      sourceId: project.id,
+      evidence,
     }, employee.name);
   }
 
@@ -1808,7 +1844,7 @@ export class WorkbenchService {
     };
   }
 
-  private taskProjection(task: any, aiRequest: any, videoProject?: any) {
+  private taskProjection(task: any, aiRequest: any, videoProject?: any, imageProject?: any) {
     const aiStatus = value(aiRequest?.status).toUpperCase();
     const state = {
       WAITING_CONFIRMATION: ["待后台确认", "等待管理员审核", "管理员确认后由Codex执行"],
@@ -1859,7 +1895,8 @@ export class WorkbenchService {
           contentPlan: item.contentPlan || null,
         };
       });
-    const projectProjection = videoProject ? this.videoProjectTaskProjection(videoProject) : null;
+    const projectProjection = videoProject ? this.videoProjectTaskProjection(videoProject)
+      : imageProject ? this.imageProjectTaskProjection(imageProject) : null;
     return {
       // 视频项目任务必须与视频工厂共用项目主阶段；AI 子任务只提供进度明细，
       // 不能把已经进入脚本审核的项目继续显示成“脚本生成中”。
@@ -1955,6 +1992,40 @@ export class WorkbenchService {
     };
   }
 
+  private imageProjectTaskProjection(project: any) {
+    const stage = value(project.productionStage).toUpperCase();
+    const signal = Array.isArray(project.sourceSignals)
+      ? project.sourceSignals.map(object).find((item: Record<string, unknown>) => item.type === "IMAGE_PROJECT") || {}
+      : {};
+    const brief = object(signal.brief);
+    const hasReturnedPublishLink = Array.isArray(project.variants)
+      && project.variants.some((variant: Record<string, unknown>) => Boolean(value(variant.manualPublishUrl)));
+    const state: Record<string, [number, string, string]> = {
+      IMAGE_GENERATING: [2, "图文与文案生成中", "等待图文制作 Skill 返回图文、标题、发布文案和标签"],
+      IMAGE_REVIEW: [2, "图文与文案待审核", "查看图文、标题、发布文案和标签并审核"],
+      IMAGE_RETURNED: [2, "图文正在按意见修改", "等待图文制作 Skill 返回修改版本"],
+      IMAGE_PUBLISHING: [3, "待发布与回传", "下载图文并回传一个或多个发布链接"],
+      IMAGE_PUBLISHED: [3, "已完成", "查看已发布图文"],
+    };
+    const current = state[stage] || [2, "图文项目处理中", "进入项目查看进度"];
+    return {
+      id: project.id,
+      productionNo: project.productionNo,
+      productModel: project.productModel || null,
+      projectMode: "IMAGE_POST",
+      topic: project.topic || null,
+      platform: Array.isArray(project.targetPlatforms) ? project.targetPlatforms[0] || null : null,
+      videoType: value(brief.imageType) || null,
+      createdAt: project.createdAt || null,
+      updatedAt: project.updatedAt || null,
+      hasReturnedPublishLink,
+      stage,
+      step: current[0],
+      displayStatus: current[1],
+      nextAction: current[2],
+    };
+  }
+
   private async attachTaskProjections<T extends { id: string; evidence?: Prisma.JsonValue }>(tasks: T[]) {
     if (!tasks.length) return tasks;
     const taskIds = tasks.map((task) => task.id);
@@ -2011,7 +2082,18 @@ export class WorkbenchService {
           },
         })
       : [];
+    const imageProjectIds = tasks
+      .filter((task: any) => task.sourceType === "IMAGE_PROJECT")
+      .map((task: any) => task.sourceId)
+      .filter(Boolean);
+    const imageProjects = imageProjectIds.length
+      ? await this.prisma.contentPlan.findMany({
+          where: { id: { in: imageProjectIds } },
+          select: { id: true, productionNo: true, productionStage: true, productModel: true, targetPlatforms: true, sourceSignals: true, createdAt: true, updatedAt: true, variants: { select: { manualPublishUrl: true } } },
+        })
+      : [];
     const videoProjectById = new Map(videoProjects.map((project) => [project.id, project]));
+    const imageProjectById = new Map(imageProjects.map((project) => [project.id, project]));
     const byTaskId = new Map<string, (typeof aiTasks)[number]>();
     for (const aiTask of aiTasks) {
       const linkedIds = new Set<string>([
@@ -2032,10 +2114,12 @@ export class WorkbenchService {
     }
     return tasks
       .filter((task) => {
-        if ((task as any).sourceType !== "VIDEO_PROJECT") return true;
-        const project = videoProjectById.get((task as any).sourceId);
-        return project != null
-          && !["VIDEO_FACTORY_ARCHIVED", "VIDEO_FACTORY_PURGED"].includes(String(project.productionStage || ""));
+        if ((task as any).sourceType === "VIDEO_PROJECT") {
+          const project = videoProjectById.get((task as any).sourceId);
+          return project != null && !["VIDEO_FACTORY_ARCHIVED", "VIDEO_FACTORY_PURGED"].includes(String(project.productionStage || ""));
+        }
+        if ((task as any).sourceType === "IMAGE_PROJECT") return imageProjectById.has((task as any).sourceId);
+        return true;
       })
       .map((task) => ({
       ...task,
@@ -2043,6 +2127,7 @@ export class WorkbenchService {
         task,
         byTaskId.get(task.id) || null,
         videoProjectById.get((task as any).sourceId) || null,
+        imageProjectById.get((task as any).sourceId) || null,
       ),
       }));
   }
@@ -2081,12 +2166,12 @@ export class WorkbenchService {
   }>(tasks: T[]): T[] {
     const weight: Record<string, number> = { URGENT: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
     return [...tasks].sort((left, right) => {
-      const leftVideoProject = left.sourceType === "VIDEO_PROJECT" || left.category === "VIDEO_PROJECT";
-      const rightVideoProject = right.sourceType === "VIDEO_PROJECT" || right.category === "VIDEO_PROJECT";
-      if (leftVideoProject !== rightVideoProject) return leftVideoProject ? -1 : 1;
-      if (leftVideoProject && rightVideoProject) {
-        // Video projects are the employee's work queue.  Keep the newest
-        // project at the top even when an older project receives an AI update.
+      const leftProject = ["VIDEO_PROJECT", "IMAGE_PROJECT"].includes(String(left.sourceType)) || ["VIDEO_PROJECT", "IMAGE_PROJECT"].includes(String(left.category));
+      const rightProject = ["VIDEO_PROJECT", "IMAGE_PROJECT"].includes(String(right.sourceType)) || ["VIDEO_PROJECT", "IMAGE_PROJECT"].includes(String(right.category));
+      if (leftProject !== rightProject) return leftProject ? -1 : 1;
+      if (leftProject && rightProject) {
+        // Project cards are the employee's work queue. Keep newly created
+        // projects above ordinary tasks and never sort them by a stale due date.
         return right.createdAt.getTime() - left.createdAt.getTime();
       }
       const priority = (weight[left.priority] ?? 9) - (weight[right.priority] ?? 9);

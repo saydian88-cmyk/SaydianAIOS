@@ -70,6 +70,21 @@ describe("skill task router", () => {
     });
   });
 
+  it("routes an image-project task through the dispatcher to the 图文制作 Skill", () => {
+    expect(routeTask({
+      task: { type: "IMAGE", sourceType: "IMAGE_PROJECT", input: { executionMode: "IMAGE_POST" } },
+      execution: {
+        mode: "IMAGE_POST",
+        strategy: "CODEX_SKILL",
+        requiredSkill: "saidian-ai-task-dispatcher",
+      },
+    }, { ...process.env, CODEX_HOME: routeOnlyCodexHome })).toMatchObject({
+      key: "saidian-ai-task-dispatcher",
+      executionMode: "IMAGE_POST",
+      downstreamSkillName: "saidian-douyin-image-posts",
+    });
+  });
+
   it("routes Codex direct full-video tasks through the dispatcher to the full local editing Skill", () => {
     expect(routeTask({
       task: { type: "VIDEO", input: { executionMode: "FULL_VIDEO", codexDirectFullVideo: true } },

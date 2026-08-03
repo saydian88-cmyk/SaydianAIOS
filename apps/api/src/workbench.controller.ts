@@ -51,6 +51,10 @@ const workbenchBatchUploadStorage = diskStorage({
   filename: (_request, file, callback) => callback(null, `${Date.now()}-${randomUUID()}${extname(file.originalname).toLowerCase()}`),
 });
 
+function object(value: unknown): Record<string, any> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : {};
+}
+
 function compileVideoScriptTaskPrompt(project: Record<string, any>, brief: Record<string, unknown>) {
   const value = (key: string, fallback = "未填写") => String(brief[key] ?? fallback).trim() || fallback;
   const optionalLines = [
@@ -162,6 +166,20 @@ function compileScopedVideoScriptTaskPrompt(project: Record<string, any>, brief:
     "返回基础任务信息、内容定位、黄金三秒钩子、完整口播/无口播文案、脚本结构、逐句镜头需求、素材覆盖状态、画面事实、音画匹配、留人设计、字幕稿、重点文字、声音设计、合规检查、结尾设计和素材缺口清单。",
     "返回结构化结果时，每句必须具有稳定 lineId，素材绑定必须可被系统直接保存并再次提供给远程剪辑节点。",
   ].join("\n");
+}
+
+function imageProjectRequirement(body: Record<string, unknown>) {
+  const model = String(body.productModel || "").trim();
+  const imageType = String(body.imageType || "").trim();
+  const audience = String(body.audience || "").trim();
+  const hook = String(body.hook || "").trim();
+  const extras = [
+    body.competitor ? `对比对象为${String(body.competitor).trim()}` : "",
+    body.creativeIntent ? `补充创意为${String(body.creativeIntent).trim()}` : "",
+    body.additionalPrompt ? `补充要求：${String(body.additionalPrompt).trim()}` : "",
+  ].filter(Boolean);
+  return String(body.requirement || "").trim()
+    || `用图文制作 skill，做一组赛电${model}${imageType}图文，面向${audience}，主钩子是“${hook}”，可以放注册证，但不要露内部型号。${extras.length ? ` ${extras.join("；")}。` : ""}`;
 }
 
 function scopedVideoScriptBrief(project: Record<string, any>, brief: Record<string, unknown>) {
@@ -975,6 +993,125 @@ export class WorkbenchController {
       ...(section === "videoFactory" ? { videoProjects, pagination: videoProjectPage, videoScripts } : {}),
       ...(options ? { products: options[0], uploadOptions: { products: options[0], productionPlans: options[1] } } : {}),
     };
+  }
+
+  @Post("image-projects")
+  async createImageProject(
+    @Headers("authorization") authorization: string | undefined,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    const productModel = String(body.productModel || "").trim();
+    const imageType = String(body.imageType || "").trim();
+    const audience = String(body.audience || "").trim();
+    const hook = String(body.hook || "").trim();
+    if (!productModel || !imageType || !audience || !hook) {
+      throw new BadRequestException("产品型号、图文类型、目标人群/场景和主钩子方向为必填项");
+    }
+    const requirement = imageProjectRequirement(body);
+    const brief = { productModel, imageType, audience, hook, competitor: String(body.competitor || "").trim() || null, creativeIntent: String(body.creativeIntent || "").trim() || null, additionalPrompt: String(body.additionalPrompt || "").trim() || null, requirement };
+    const plan = await this.prisma.contentPlan.create({
+      data: {
+        productionNo: `IP-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${randomUUID().slice(0, 6).toUpperCase()}`,
+        productionStage: "IMAGE_GENERATING",
+        planDate: new Date(), kind: "SHORT_POST", topic: `${productModel} · ${imageType} · ${hook}`,
+        productModel, audience, objective: hook, hook, outline: [], evidenceIds: [], riskReasons: [],
+        scoreBreakdown: {}, sourceSignals: [{ type: "IMAGE_PROJECT", brief }],
+        status: "DRAFT", createdBy: employee.name, owner: employee.name, assignedTo: employee.name,
+        assignedEmployeeId: employee.employeeId, targetPlatforms: ["DOUYIN"],
+      },
+    });
+    const materialRoots = ["F:\\赛电品牌素材库\\图片素材", "F:\\赛电品牌素材库\\产品规格书"];
+    if (imageType === "对比类" || brief.competitor) materialRoots.push("F:\\赛电品牌素材库\\图文制作资源\\竞品产品图");
+    const task = await this.aiTasks.createTask({
+      type: "IMAGE", title: `${plan.topic} 图文制作`, platform: "DOUYIN", productModel,
+      ownerEmployeeId: employee.employeeId, reviewerEmployeeId: employee.employeeId,
+      sourceType: "IMAGE_PROJECT", sourceId: plan.id,
+      idempotencyKey: `ai-task:image-project:${plan.id}:v1`, instructions: requirement,
+      input: {
+        executionMode: "IMAGE_POST",
+        skillName: "saidian-douyin-image-posts",
+        imageProjectId: plan.id,
+        // The worker receives only the employee-confirmed final instruction.
+        // Keep the aliases so both the current dispatcher and portable worker
+        // pick up the same canonical prompt without inventing empty defaults.
+        requirement,
+        projectPrompt: requirement,
+        finalEmployeePrompt: requirement,
+        prompt: requirement,
+        brief,
+        materialRoots,
+      },
+      modelPolicy: { strategy: "CODEX_FIRST", allowExternalGeneration: false, allowFallback: false }, estimatedCost: 0, skipPaidBudget: true,
+    }, employee.name) as Record<string, any>;
+    const linkedTask = await this.workbench.ensureImageProjectTask({ employeeId: employee.employeeId!, name: employee.name }, plan);
+    await this.prisma.opsTask.update({ where: { id: linkedTask.id }, data: { evidence: { ...(linkedTask.evidence as object), aiTaskId: task.id } } });
+    return { project: plan, task, linkedTask, requirement };
+  }
+
+  @Get("image-projects/:id")
+  async imageProject(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+  ) {
+    const employee = this.requirePermission(authorization, "DATA_CENTER_VIEW");
+    const project = await this.prisma.contentPlan.findFirst({
+      where: { id, kind: "SHORT_POST", assignedEmployeeId: employee.employeeId },
+      include: { variants: true, aiTaskOutputs: { orderBy: { createdAt: "desc" } } },
+    });
+    if (!project) throw new ForbiddenException("图文项目不存在或无权查看");
+    const aiTask = await this.prisma.aiTask.findFirst({ where: { sourceType: "IMAGE_PROJECT", sourceId: id }, orderBy: { createdAt: "desc" }, include: { outputs: { orderBy: { createdAt: "desc" } } } });
+    return { ...project, aiTask, requirement: object((Array.isArray(project.sourceSignals) ? project.sourceSignals[0] : {}) as object).brief ? object(object((project.sourceSignals as any)[0]).brief).requirement : "" };
+  }
+
+  @Post("image-projects/:id/review")
+  async reviewImageProject(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    const approve = String(body.action || "").toUpperCase() === "APPROVE";
+    const note = String(body.note || "").trim();
+    if (!approve && !note) throw new BadRequestException("退回图文时必须填写原因");
+    const project = await this.prisma.contentPlan.findFirst({ where: { id, assignedEmployeeId: employee.employeeId } });
+    if (!project) throw new ForbiddenException("图文项目不存在或无权处理");
+    await this.prisma.contentPlan.update({ where: { id }, data: { productionStage: approve ? "IMAGE_PUBLISHING" : "IMAGE_RETURNED", status: approve ? "APPROVED" : "REJECTED", approvedBy: approve ? employee.name : null, approvedAt: approve ? new Date() : null } });
+    if (!approve) {
+      const projectBrief = object(object((project.sourceSignals as any)?.[0]).brief);
+      const requirement = String(projectBrief.requirement || imageProjectRequirement({
+        productModel: project.productModel,
+        imageType: projectBrief.imageType,
+        audience: projectBrief.audience,
+        hook: projectBrief.hook,
+        competitor: projectBrief.competitor,
+        creativeIntent: projectBrief.creativeIntent,
+        additionalPrompt: projectBrief.additionalPrompt,
+      })).trim();
+      const materialRoots = ["F:\\赛电品牌素材库\\图片素材", "F:\\赛电品牌素材库\\产品规格书"];
+      if (projectBrief.imageType === "对比类" || projectBrief.competitor) materialRoots.push("F:\\赛电品牌素材库\\图文制作资源\\竞品产品图");
+      await this.aiTasks.createTask({ type: "IMAGE", title: `${project.topic} 图文修改`, platform: "DOUYIN", productModel: project.productModel, ownerEmployeeId: employee.employeeId, reviewerEmployeeId: employee.employeeId, sourceType: "IMAGE_PROJECT", sourceId: id, idempotencyKey: `ai-task:image-project:${id}:return:${project.workflowVersion + 1}`, instructions: `${requirement}\n\n请仅根据以下审核意见修改现有图文：${note}`, input: { executionMode: "IMAGE_POST", skillName: "saidian-douyin-image-posts", imageProjectId: id, requirement, projectPrompt: requirement, finalEmployeePrompt: requirement, prompt: requirement, brief: projectBrief, materialRoots, revisionOf: id, revisionFeedback: note }, modelPolicy: { strategy: "CODEX_FIRST", allowExternalGeneration: false, allowFallback: false }, estimatedCost: 0, skipPaidBudget: true }, employee.name);
+    }
+    return this.imageProject(authorization, id);
+  }
+
+  @Post("image-projects/:id/publish-links")
+  async saveImageProjectPublishLinks(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    const project = await this.prisma.contentPlan.findFirst({ where: { id, assignedEmployeeId: employee.employeeId }, include: { variants: true } });
+    if (!project) throw new ForbiddenException("图文项目不存在或无权处理");
+    const rows = Array.isArray(body.records) ? body.records as Record<string, unknown>[] : [];
+    for (const row of rows) {
+      const url = String(row.remoteUrl || "").trim(); if (!url) continue;
+      const platform = String(row.platform || "DOUYIN") as any;
+      await this.prisma.contentVariant.upsert({ where: { contentPlanId_platform: { contentPlanId: id, platform } }, create: { contentPlanId: id, platform, title: project.topic, body: "", manualPublishUrl: url, manualPublishedAt: new Date(), status: "PUBLISHED" }, update: { manualPublishUrl: url, manualPublishedAt: new Date(), status: "PUBLISHED" } });
+    }
+    await this.prisma.contentPlan.update({ where: { id }, data: { productionStage: "IMAGE_PUBLISHED", status: "PUBLISHED" } });
+    return this.imageProject(authorization, id);
   }
 
   @Post("data-center/video-projects")

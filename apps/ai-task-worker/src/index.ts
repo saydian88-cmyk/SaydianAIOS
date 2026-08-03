@@ -100,6 +100,14 @@ function isCodexDirectFullVideoTask(taskPackage: JsonRecord) {
     && input.codexDirectFullVideo === true;
 }
 
+function isImagePostProjectTask(taskPackage: JsonRecord) {
+  const task = record(taskPackage.task);
+  const execution = record(taskPackage.execution);
+  return String(task.type || "") === "IMAGE"
+    && String(task.sourceType || taskPackage.sourceType || "") === "IMAGE_PROJECT"
+    && String(execution.mode || "").toUpperCase() === "IMAGE_POST";
+}
+
 function assertCodexDirectMasterOutput(result: JsonRecord, taskPackage: JsonRecord) {
   if (!isCodexDirectFullVideoTask(taskPackage)) return;
   const masters = (Array.isArray(result.outputFiles) ? result.outputFiles : [])
@@ -118,7 +126,13 @@ function assertCodexDirectMasterOutput(result: JsonRecord, taskPackage: JsonReco
   }
 }
 
-function outputSchema(type: string, executionMode = "", requestedCardCount = 10, codexDirectFullVideo = false) {
+function outputSchema(
+  type: string,
+  executionMode = "",
+  requestedCardCount = 10,
+  codexDirectFullVideo = false,
+  imagePostProject = false,
+) {
   if (type === "VIDEO") {
     // Direct-output work does not return a project script or a material-binding payload.
     // It has an intentionally empty system task package and must only hand back its master.
@@ -589,8 +603,37 @@ function outputSchema(type: string, executionMode = "", requestedCardCount = 10,
           },
           required: ["prompt", "negativePrompt", "ratio", "modelRequirement"],
         },
+        ...(imagePostProject ? {
+          imagePost: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              title: { type: "string" },
+              publishCopy: { type: "string" },
+              tags: { type: "array", items: { type: "string" } },
+              pages: {
+                type: "array",
+                minItems: 1,
+                items: {
+                  type: "object",
+                  additionalProperties: false,
+                  properties: {
+                    pageNo: { type: "number" },
+                    title: { type: "string" },
+                    copy: { type: "string" },
+                    outputFile: { type: "string" },
+                  },
+                  required: ["pageNo", "title", "copy", "outputFile"],
+                },
+              },
+            },
+            required: ["title", "publishCopy", "tags", "pages"],
+          },
+        } : {}),
       },
-      required: ["summary", "outputFiles", "imageBrief"],
+      required: imagePostProject
+        ? ["summary", "outputFiles", "imageBrief", "imagePost"]
+        : ["summary", "outputFiles", "imageBrief"],
     };
   }
   return {
@@ -670,6 +713,33 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
   const isCodexDirectFullVideo = type === "VIDEO"
     && executionMode === "FULL_VIDEO"
     && taskInput.codexDirectFullVideo === true;
+  if (isImagePostProjectTask(taskPackage)) {
+    const finalEmployeePrompt = String(
+      taskInput.projectPrompt
+      || taskInput.finalEmployeePrompt
+      || taskInput.prompt
+      || task.description
+      || task.title
+      || "",
+    ).trim();
+    if (!finalEmployeePrompt) {
+      throw new Error("图文项目缺少员工确认后的制作要求，不能用默认内容替代提交给图文制作 Skill。");
+    }
+    return [
+      "You are the SaiDian image-post project executor.",
+      `Read and execute the dispatcher Skill first: ${detectedSkill.skillPath}`,
+      `The dispatcher must automatically invoke the downstream image-post Skill: ${detectedSkill.downstreamSkillPath || "saidian-douyin-image-posts"}.`,
+      "This is an IMAGE_PROJECT / IMAGE_POST task. Do not use the generic $imagegen-only route.",
+      "Use the portable SaiDian library as the first source: F:\\赛电品牌素材库\\图片素材 for product images, F:\\赛电品牌素材库\\产品规格书 for product facts, and F:\\赛电品牌素材库\\图文制作资源\\竞品产品图 only when the employee explicitly requested a comparison.",
+      "Never move, rename, overwrite, or delete source material. Do not show internal model codes unless the employee's final instruction explicitly requires them.",
+      "The following is the final employee-edited requirement. It is the only creative requirement to execute. Do not append restrictions or empty default fields that the employee did not provide.",
+      finalEmployeePrompt,
+      "Create the requested image-post pages and return the real output files in outputFiles. Also return imageBrief as a concise execution summary so the current task center can register the result.",
+      "Return imagePost with title, publishCopy, tags and pages. Every imagePost.pages entry must name its matching generated image in outputFile; use exactly the same relative file path as outputFiles. Do not return a page without its generated image file.",
+      "The output must comply with the output schema. Every output file must exist inside the current task workspace.",
+      `Task package JSON:\n${JSON.stringify(taskPackage, null, 2)}`,
+    ].join("\n\n");
+  }
   if (isCodexDirectFullVideo) {
     const directInput = record(taskInput.codexDirectInput);
     const creativeMode = String(directInput.creativeMode || "FULL_VIDEO").toUpperCase();
@@ -1366,6 +1436,7 @@ async function runCodex(
     String(execution.mode || ""),
     Number(requirements.exactCount || 10),
     isCodexDirectFullVideoTask(taskPackage),
+    isImagePostProjectTask(taskPackage),
   )), null, 2), "utf8");
   await writeFile(join(workspace, "task.json"), JSON.stringify(task, null, 2), "utf8");
   const args = [
@@ -1481,6 +1552,30 @@ async function validateOutputArtifacts(result: JsonRecord, workspace: string) {
   }
   result.outputFiles = files;
   return result;
+}
+
+async function verifyImagePostSkillRuntime(taskPackageValue: JsonRecord, detectedSkill: DetectedSkill) {
+  if (!isImagePostProjectTask(taskPackageValue)) return;
+  if (detectedSkill.key !== "saidian-ai-task-dispatcher") {
+    throw new Error("图文项目必须通过赛电调度 Skill 调用图文制作 Skill。");
+  }
+  const downstreamSkillPath = String(detectedSkill.downstreamSkillPath || "").trim();
+  if (!downstreamSkillPath) throw new Error("图文制作 Skill 未配置。");
+  try {
+    const downstream = await stat(downstreamSkillPath);
+    if (!downstream.isFile()) throw new Error("not-file");
+  } catch {
+    throw new Error(`图文制作 Skill 不可用：${downstreamSkillPath}`);
+  }
+  const portableLibrary = resolve(String(process.env.AI_TASK_IMAGE_MEDIA_LIBRARY || "F:\\赛电品牌素材库"));
+  for (const requiredDirectory of ["图片素材", "产品规格书"]) {
+    try {
+      const directory = await stat(join(portableLibrary, requiredDirectory));
+      if (!directory.isDirectory()) throw new Error("not-directory");
+    } catch {
+      throw new Error(`图文项目未启动：移动硬盘素材库缺少 ${requiredDirectory}（${portableLibrary}）。`);
+    }
+  }
 }
 
 async function validateMandatoryVideoEvidence(
@@ -1702,7 +1797,12 @@ async function uploadFile(taskId: string, workspace: string, item: JsonRecord) {
   form.set("nodeCode", nodeCode);
   form.set("kind", String(item.kind || "FILE_OUTPUT"));
   form.set("title", String(item.title || basename(path)));
-  form.set("metadata", JSON.stringify(item.metadata || {}));
+  // Preserve the task-relative source path. IMAGE_PROJECT pages bind this
+  // returned path back to the corresponding page record after OSS upload.
+  form.set("metadata", JSON.stringify({
+    ...record(item.metadata),
+    workspaceOutputPath: requested,
+  }));
   form.set("file", new Blob([buffer], { type: fileMime(path) }), basename(path));
   const response = await fetch(`${apiUrl}/api/v1/ai-tasks/runner/tasks/${taskId}/output`, {
     method: "POST",
@@ -1785,6 +1885,7 @@ async function execute(claimed: JsonRecord) {
       executionMode: detectedSkill.executionMode,
     });
     await verifyVideoSkillRuntime(packaged, detectedSkill);
+    await verifyImagePostSkillRuntime(packaged, detectedSkill);
 
     const packagedTask = record(packaged.task);
     const execution = record(packaged.execution);
@@ -1796,6 +1897,7 @@ async function execute(claimed: JsonRecord) {
       String(execution.mode || ""),
       Number(requirements.exactCount || 10),
       isCodexDirectFullVideoTask(packaged),
+      isImagePostProjectTask(packaged),
     );
     const startedAt = new Date();
     let result: JsonRecord | undefined;
