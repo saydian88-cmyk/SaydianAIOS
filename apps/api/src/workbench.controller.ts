@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   ForbiddenException,
   Get,
   Headers,
@@ -1057,12 +1058,66 @@ export class WorkbenchController {
   ) {
     const employee = this.requirePermission(authorization, "DATA_CENTER_VIEW");
     const project = await this.prisma.contentPlan.findFirst({
-      where: { id, kind: "SHORT_POST", assignedEmployeeId: employee.employeeId },
+      where: { id, kind: "SHORT_POST", assignedEmployeeId: employee.employeeId, productionStage: { not: "IMAGE_ARCHIVED" } },
       include: { variants: true, aiTaskOutputs: { orderBy: { createdAt: "desc" } } },
     });
     if (!project) throw new ForbiddenException("图文项目不存在或无权查看");
     const aiTask = await this.prisma.aiTask.findFirst({ where: { sourceType: "IMAGE_PROJECT", sourceId: id }, orderBy: { createdAt: "desc" }, include: { outputs: { orderBy: { createdAt: "desc" } } } });
     return { ...project, aiTask, requirement: object((Array.isArray(project.sourceSignals) ? project.sourceSignals[0] : {}) as object).brief ? object(object((project.sourceSignals as any)[0]).brief).requirement : "" };
+  }
+
+  @Delete("image-projects/:id")
+  async deleteImageProject(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+  ) {
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    const project = await this.prisma.contentPlan.findFirst({
+      where: { id, kind: "SHORT_POST", assignedEmployeeId: employee.employeeId, productionStage: { not: "IMAGE_ARCHIVED" } },
+      select: { id: true },
+    });
+    if (!project) throw new ForbiddenException("图文项目不存在、已删除或无权处理");
+
+    const linkedAiTasks = await this.prisma.aiTask.findMany({
+      where: {
+        sourceType: "IMAGE_PROJECT",
+        sourceId: id,
+        status: { notIn: ["COMPLETED", "CANCELLED"] },
+      },
+      select: { id: true },
+    });
+    let cancelledAiTasks = 0;
+    for (const task of linkedAiTasks) {
+      try {
+        await this.aiTasks.cancel(task.id, employee.name);
+        cancelledAiTasks += 1;
+      } catch (error) {
+        // A worker may finish between the lookup and cancellation. Continue
+        // archiving the project when the task has already reached a terminal state.
+        const latest = await this.prisma.aiTask.findUnique({ where: { id: task.id }, select: { status: true } });
+        if (!latest || !["COMPLETED", "CANCELLED"].includes(latest.status)) throw error;
+      }
+    }
+
+    const now = new Date();
+    const purgeAfter = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+    const [employeeTasks] = await this.prisma.$transaction([
+      this.prisma.opsTask.updateMany({
+        where: { sourceType: "IMAGE_PROJECT", sourceId: id, deletedAt: null },
+        data: {
+          status: "CANCELLED",
+          deletedAt: now,
+          purgeAfter,
+          deletedByEmployeeId: employee.employeeId,
+          completedAt: now,
+        },
+      }),
+      this.prisma.contentPlan.update({
+        where: { id },
+        data: { productionStage: "IMAGE_ARCHIVED" },
+      }),
+    ]);
+    return { deleted: true, cancelledAiTasks, deletedEmployeeTasks: employeeTasks.count };
   }
 
   @Post("image-projects/:id/review")

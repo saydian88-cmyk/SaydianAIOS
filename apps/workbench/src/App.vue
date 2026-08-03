@@ -354,6 +354,7 @@ const newImageProjectVisible = ref(false);
 const creatingImageProject = ref(false);
 const imageProjectVisible = ref(false);
 const taskImageProjectLoading = ref(false);
+const deletingImageProjectId = ref("");
 const activeImageProjectId = ref("");
 const taskImageProjectDetail = ref<Row>({});
 const imageProjectPreviewVisible = ref(false);
@@ -1350,6 +1351,35 @@ async function openImageProjectFromTask(task: Row) {
     ElMessage.error(error instanceof Error ? error.message : "图文项目加载失败");
   } finally {
     taskImageProjectLoading.value = false;
+  }
+}
+
+async function deleteImageProject(task: Row) {
+  const projectId = task.sourceId || task.evidence?.contentPlanId;
+  if (!projectId) return ElMessage.warning("该任务未关联图文项目");
+  try {
+    await ElMessageBox.confirm(
+      `确认删除“${imageProjectCardTitle(task)}”？系统会同步取消尚未完成的关联 AI 任务，并从员工任务列表移除该项目。`,
+      "删除图文项目",
+      { confirmButtonText: "确认删除", cancelButtonText: "取消", type: "warning" },
+    );
+  } catch {
+    return;
+  }
+  deletingImageProjectId.value = projectId;
+  try {
+    await api(`/api/v1/workbench/image-projects/${projectId}`, { method: "DELETE" });
+    if (activeImageProjectId.value === projectId) {
+      activeImageProjectId.value = "";
+      taskImageProjectDetail.value = {};
+      imageProjectVisible.value = false;
+    }
+    await loadTasks();
+    ElMessage.success("图文项目和员工任务已删除，关联 AI 任务已同步取消");
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "删除图文项目失败");
+  } finally {
+    deletingImageProjectId.value = "";
   }
 }
 
@@ -3800,12 +3830,20 @@ onBeforeUnmount(() => {
                 :loading="archivingVideoProjectId === (task.sourceId || task.evidence?.contentPlanId)"
                 @click="archiveVideoProject({ id: task.sourceId || task.evidence?.contentPlanId, topic: videoProjectCardTitle(task) })"
               >删除项目</el-button>
-              <el-button
-                v-else-if="isImageProjectTask(task)"
-                type="primary"
-                :loading="taskImageProjectLoading && activeImageProjectId === (task.sourceId || task.evidence?.contentPlanId)"
-                @click="openImageProjectFromTask(task)"
-              >{{ imageProjectPrimaryAction(task) }}</el-button>
+              <template v-else-if="isImageProjectTask(task)">
+                <el-button
+                  type="primary"
+                  :loading="taskImageProjectLoading && activeImageProjectId === (task.sourceId || task.evidence?.contentPlanId)"
+                  @click="openImageProjectFromTask(task)"
+                >{{ imageProjectPrimaryAction(task) }}</el-button>
+                <el-button
+                  v-if="can('CONTENT_SUBMIT')"
+                  type="danger"
+                  plain
+                  :loading="deletingImageProjectId === (task.sourceId || task.evidence?.contentPlanId)"
+                  @click="deleteImageProject(task)"
+                >删除项目</el-button>
+              </template>
               <template v-else>
                 <el-button @click="openTaskDetail(task)">查看详情</el-button>
                 <el-button v-if="!task.assigneeEmployeeId && task.status === 'OPEN'" type="primary" @click="acceptTask(task)">领取</el-button>

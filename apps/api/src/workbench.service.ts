@@ -2118,7 +2118,10 @@ export class WorkbenchService {
           const project = videoProjectById.get((task as any).sourceId);
           return project != null && !["VIDEO_FACTORY_ARCHIVED", "VIDEO_FACTORY_PURGED"].includes(String(project.productionStage || ""));
         }
-        if ((task as any).sourceType === "IMAGE_PROJECT") return imageProjectById.has((task as any).sourceId);
+        if ((task as any).sourceType === "IMAGE_PROJECT") {
+          const project = imageProjectById.get((task as any).sourceId);
+          return project != null && String(project.productionStage || "") !== "IMAGE_ARCHIVED";
+        }
         return true;
       })
       .map((task) => ({
