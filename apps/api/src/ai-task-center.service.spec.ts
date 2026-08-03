@@ -498,6 +498,36 @@ describe("AiTaskCenterService", () => {
       downstreamSkill: undefined,
     });
 
+    task.input = {
+      executionMode: "FULL_VIDEO",
+      codexDirectFullVideo: true,
+      executionClass: "CODEX_SKILL",
+      skillName: "video-editing-from-media-library-share",
+      codexDirectInput: {
+        productModel: "W9",
+        prompt: "突出气囊测量",
+        creativeMode: "FULL_VIDEO",
+        materialPolicy: { legacy: true },
+      },
+      materialBindings: [{ lineId: "L1", assetId: "asset-1" }],
+    };
+    task.instructions = "legacy codex direct prompt";
+    const codexDirectResult = await service.runnerPackage(token, task.id, { nodeCode: "windows-codex-01" });
+    expect(codexDirectResult.task.instructions).toBe("");
+    expect(codexDirectResult.task.input).toEqual({
+      executionMode: "FULL_VIDEO",
+      executionClass: "CODEX_SKILL",
+      skillName: "video-editing-from-media-library",
+      codexDirectFullVideo: true,
+      codexDirectInput: {
+        productModel: "W9",
+        prompt: "突出气囊测量",
+        creativeMode: "FULL_VIDEO",
+      },
+    });
+    expect(codexDirectResult.assets).toEqual([]);
+    expect(codexDirectResult.snapshots).toEqual([]);
+
     task.type = "IMAGE";
     task.input = {};
     task.modelPolicy = { strategy: "AUTO", allowExternalGeneration: true };

@@ -241,7 +241,7 @@ function compileCodexDirectFullVideoPrompt(project: Record<string, any>, brief: 
       "这是无口播卡点视频，必须完整执行 no-voice-beat-editing.md：先选择真实 BGM 并生成节拍表，再按动作、构图和重拍设计逐切点转场；不得用程序生成的正弦音、蜂鸣或占位节拍代替 BGM。",
     ] : []),
     "不得向系统回传中间脚本、镜头、素材匹配或素材绑定；完成时仅回传真实主成片路径、成片元数据和简短审核说明。",
-    "当前产品没有足够的已校验视频素材时，必须返回 FAILED，原因写 MATERIAL_GAP_EXACT_PRODUCT；不得用其他型号补位或伪造产品功能、医疗效果或不存在的素材事实。",
+    "先依据当前型号真实可用视频素材调整内部脚本和镜头方案：非核心句缺少直接画面时自动改写为现有素材能够真实证明的表达，并重新完成覆盖与合规检查；不得跨型号替代或伪造产品功能、医疗效果和素材事实。只有核心功能确实没有真实画面、素材盘完全不可用或必要运行环境无法恢复时，才返回明确硬阻塞。校验、包装、转场、字幕、配音和工程问题必须内部返工，不得直接作为任务失败回传。",
     ...revisionLines,
   ].join("\n");
 }
@@ -1604,21 +1604,13 @@ export class WorkbenchController {
         finalReviewOnly: true,
         existingContentPlanId: project.id,
         workflowVersion: project.workflowVersion,
-        skillName: "video-editing-from-media-library-share",
+        executionClass: "CODEX_SKILL",
+        skillName: "video-editing-from-media-library",
         codexDirectInput: {
           productModel: project.productModel,
           prompt: directPrompt,
           creativeMode: directCreativeMode,
           ...(Object.keys(revision).length ? { revision } : {}),
-          materialPolicy: {
-            source: "LOCAL_VERIFIED_EDITING_VIDEOS_BY_PRODUCT",
-            exactProductModel: project.productModel,
-            allowCrossProduct: false,
-            allowUnverified: false,
-            allowPackaging: true,
-            packagingUse: "PACKAGING_ONLY_NOT_PRIMARY_FOOTAGE",
-            allowedKinds: ["VIDEO"],
-          },
         },
         workflowGuard: { projectId: project.id, workflowVersion: project.workflowVersion, stage: "FULL_VIDEO", allowedProjectStages: ["PROJECT_BRIEF", "EDITING"] },
         ...(Object.keys(revision).length ? { revision } : {}),
