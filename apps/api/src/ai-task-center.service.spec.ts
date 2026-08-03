@@ -468,6 +468,36 @@ describe("AiTaskCenterService", () => {
     expect(result.assets[0]).not.toHaveProperty("sourcePath");
     expect(result.assets[0]).not.toHaveProperty("objectKey");
 
+    task.input = {
+      executionMode: "FULL_VIDEO",
+      referenceDirectFullVideo: true,
+      skillName: "video-editing-from-media-library",
+      referenceVideoUrl: "https://example.com/reference.mp4",
+      referenceDirectInput: { productModel: "W9" },
+      projectBrief: { reference: "https://example.com/reference.mp4", additionalPrompt: "保留原声节奏" },
+      materialBindings: [{ lineId: "L1", assetId: "asset-1" }],
+    };
+    task.instructions = "legacy reference prompt";
+    const referenceDirectResult = await service.runnerPackage(token, task.id, { nodeCode: "windows-codex-01" });
+    expect(referenceDirectResult.task.instructions).toBe("");
+    expect(referenceDirectResult.task.input).toEqual({
+      executionMode: "FULL_VIDEO",
+      executionClass: "CODEX_SKILL",
+      skillName: "video-editing-from-media-library",
+      referenceDirectFullVideo: true,
+      referenceDirectInput: {
+        productModel: "W9",
+        referenceVideoUrl: "https://example.com/reference.mp4",
+        prompt: "保留原声节奏",
+      },
+    });
+    expect(referenceDirectResult.assets).toEqual([]);
+    expect(referenceDirectResult.snapshots).toEqual([]);
+    expect(referenceDirectResult.execution).toMatchObject({
+      requiredSkill: "saidian-ai-task-dispatcher",
+      downstreamSkill: undefined,
+    });
+
     task.type = "IMAGE";
     task.input = {};
     task.modelPolicy = { strategy: "AUTO", allowExternalGeneration: true };

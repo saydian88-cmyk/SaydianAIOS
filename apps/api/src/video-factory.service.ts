@@ -1708,7 +1708,7 @@ export class VideoFactoryService {
   }
 
   /**
-   * A returned Codex-direct master must be revised from its existing finished
+   * A returned direct-output master must be revised from its existing finished
    * video.  Preserve the original task, source asset and employee feedback so
    * the next FULL_VIDEO task is a targeted revision rather than a new project.
    */
@@ -1730,7 +1730,7 @@ export class VideoFactoryService {
     if (!plan) throw new NotFoundException("智能视频项目不存在");
     const signals = sourceSignals(plan);
     const factory = signals.find((signal) => signal.type === "VIDEO_FACTORY") || {};
-    if (String(factory.projectMode || "") !== "CODEX_DIRECT_FULL_VIDEO") {
+    if (!["CODEX_DIRECT_FULL_VIDEO", "REFERENCE_DIRECT_FULL_VIDEO"].includes(String(factory.projectMode || ""))) {
       throw new BadRequestException("当前项目不是 Codex 直出视频模式");
     }
     const render = plan.videoRenderJobs[0];

@@ -158,7 +158,9 @@ function isCodexDirectFullVideoTask(taskPackage: JsonRecord) {
     && String(input.skillName || "").toLowerCase() === "video-editing-from-media-library";
   return String(task.type || "") === "VIDEO"
     && String(execution.mode || "").toUpperCase() === "FULL_VIDEO"
-    && (input.codexDirectFullVideo === true || localLibraryCodexTask);
+    && (input.codexDirectFullVideo === true
+      || input.referenceDirectFullVideo === true
+      || localLibraryCodexTask);
 }
 
 function isImagePostProjectTask(taskPackage: JsonRecord) {
@@ -221,7 +223,7 @@ function outputSchema(
             additionalProperties: false,
             properties: {
               productModel: { type: "string" },
-              taskMode: { type: "string", enum: ["CODEX_DIRECT_FULL_VIDEO"] },
+              taskMode: { type: "string", enum: ["CODEX_DIRECT_FULL_VIDEO", "REFERENCE_DIRECT_FULL_VIDEO"] },
               finalReviewOnly: { type: "boolean" },
             },
             required: ["productModel", "taskMode", "finalReviewOnly"],
@@ -787,6 +789,9 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
   const isCodexDirectFullVideo = type === "VIDEO"
     && executionMode === "FULL_VIDEO"
     && taskInput.codexDirectFullVideo === true;
+  const isReferenceDirectFullVideo = type === "VIDEO"
+    && executionMode === "FULL_VIDEO"
+    && taskInput.referenceDirectFullVideo === true;
   if (isImagePostProjectTask(taskPackage)) {
     const finalEmployeePrompt = String(
       taskInput.projectPrompt
@@ -812,6 +817,35 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
       "Return imagePost with title, publishCopy, tags and pages. Every imagePost.pages entry must name its matching generated image in outputFile; use exactly the same relative file path as outputFiles. Do not return a page without its generated image file.",
       "The output must comply with the output schema. Every output file must exist inside the current task workspace.",
       `Task package JSON:\n${JSON.stringify(taskPackage, null, 2)}`,
+    ].join("\n\n");
+  }
+  if (isReferenceDirectFullVideo) {
+    const directInput = record(taskInput.referenceDirectInput);
+    const revision = record(directInput.revision || taskInput.revision);
+    const isRevision = Boolean(String(revision.reviewNote || "").trim());
+    return [
+      "REFERENCE_DIRECT_MODE_CONTRACT: This is a reference-video direct-render job using the complete local video-editing-from-media-library Skill.",
+      `Read and execute the dispatcher Skill first: ${detectedSkill.skillPath}`,
+      `Then read and execute the full local editing Skill: ${detectedSkill.downstreamSkillPath || "G:\\codex\\xcodeplace\\CodexHome\\skills\\video-editing-from-media-library\\SKILL.md"}. Never use the share edition on this machine.`,
+      "The dispatcher only routes this job. The full editing Skill must independently inspect the reference, learn/search the complete local library, select footage, edit, package, validate and render.",
+      "REFERENCE_AUDIO_AUTHORIZATION: Submission of the reference URL is the employee's confirmation that its complete original audio may be reused for this task. Download and preserve the original audio, including BGM, ambience and sound effects. Do not request a licence file, do not return an unknown-rights warning, do not replace it with local BGM, and do not re-voice it unless the employee prompt explicitly requests that change.",
+      "Do not copy the reference video's pictures, people, brands or footage. Rebuild the visuals with exact-product real footage selected from the local media library while following the reference audio, beat map, section structure, pacing, transitions and packaging rhythm.",
+      "Do not stop for employee approval of an internal script, shot plan, footage selection, production plan or packaging. Create and validate all mandatory Skill artifacts internally, repair correctable issues, render, and return only the final VIDEO_MASTER for employee review.",
+      "The empty assets and snapshots arrays are intentional. Never request system materialBindings and never treat them as a whitelist.",
+      "Create and validate the full evidence set required by the editing Skill, including production-plan, hard-requirements, shot-plan, composition, packaging, audio, transition and HyperFrames render evidence. A plain FFmpeg concat is not an acceptable finished video.",
+      ...(isRevision ? [
+        "REFERENCE_REVISION_CONTRACT: Reuse the original reference video, its original audio, the previous finished video and the previous editing structure. Apply only the employee's return reason, then render a new version.",
+      ] : []),
+      JSON.stringify({
+        taskId: String(task.id || ""),
+        productModel: String(directInput.productModel || task.productModel || ""),
+        referenceVideoUrl: String(directInput.referenceVideoUrl || ""),
+        employeePrompt: String(directInput.prompt || ""),
+        ...(isRevision ? { revision } : {}),
+      }, null, 2),
+      "If the reference URL or its audio cannot be accessed, return the exact technical cause without fabricating completion. Otherwise continue through final render.",
+      "Return exactly one real 1080x1920 MP4 in outputFiles with kind=VIDEO_MASTER and delivery={taskMode:REFERENCE_DIRECT_FULL_VIDEO, finalReviewOnly:true}.",
+      "Every output file must exist inside the current task workspace and the result must match the output schema.",
     ].join("\n\n");
   }
   if (isCodexDirectFullVideo) {
@@ -1869,6 +1903,8 @@ async function recoverDirectOutputResult(
   }
   if (masters.length !== 1) return undefined;
   const task = record(taskPackageValue.task);
+  const taskInput = record(task.input);
+  const referenceDirect = taskInput.referenceDirectFullVideo === true;
   const master = masters[0];
   const result: JsonRecord = {
     summary: "恢复已生成的 Codex 直出成片，仅重新登记上传结果。",
@@ -1883,7 +1919,7 @@ async function recoverDirectOutputResult(
     }],
     delivery: {
       productModel: String(task.productModel || ""),
-      taskMode: "CODEX_DIRECT_FULL_VIDEO",
+      taskMode: referenceDirect ? "REFERENCE_DIRECT_FULL_VIDEO" : "CODEX_DIRECT_FULL_VIDEO",
       finalReviewOnly: true,
     },
     // Result-contract validates execution strictly. A registration-only recovery

@@ -209,8 +209,8 @@ function compileReferenceDirectFullVideoPrompt(project: Record<string, any>, bri
     `产品型号：${project.productModel || "未提供"}`,
     `参考视频链接：${referenceVideoUrl}`,
     "请直接完成：参考分析 → 脚本 → 素材匹配 → 剪辑 → 9:16 成片。不要提交脚本审核，员工只审核最终成片。",
-    "默认沿用参考视频可访问的 BGM；画面仅参考其节奏、镜头结构和氛围，不复制原视频的素材、文案、人物、品牌或受版权保护的内容。",
-    "必须优先使用系统已审核的剪辑主画面 VIDEO 素材；包装资源只能作包装，不能作为主画面。",
+    "提交参考视频链接即代表员工确认该视频完整原声可用于本次制作。必须直接提取并复用其中的 BGM、环境声、音效、口播和节拍；不得要求授权文件，不得因授权字段缺失暂停或失败，不得擅自换成本地 BGM 或重新配音。员工提示明确要求改变声音时除外。",
+    "画面沿用参考原声的段落、重音、节奏、镜头结构和氛围，但必须由完整版剪辑 Skill 从本机素材库自主选择当前型号真实 VIDEO 素材重建；不得复制参考视频原画面、人物或品牌素材。包装资源只能作包装，不能作为主画面。",
     "若参考链接、音频或关键素材无法访问，返回 WAITING_INPUT 及具体原因，禁止伪造完成。",
     "输出 1080×1920、30fps 主成片，并回传成片路径、使用素材绑定、参考访问结果和审核说明。",
   ].join("\n");
@@ -1511,6 +1511,9 @@ export class WorkbenchController {
       throw new ForbiddenException("当前项目不是参考视频直出模式");
     }
     const referenceVideoUrl = String(brief.reference || "").trim();
+    const revision = factory.directVideoRevision && typeof factory.directVideoRevision === "object"
+      ? factory.directVideoRevision as Record<string, unknown>
+      : {};
     if (!referenceVideoUrl) throw new ForbiddenException("请填写参考视频链接");
     const task = await this.aiTasks.createTask({
       type: "VIDEO",
@@ -1527,12 +1530,22 @@ export class WorkbenchController {
         executionMode: "FULL_VIDEO",
         referenceDirectFullVideo: true,
         skipScriptReview: true,
+        suppressIntermediateProjectUpdates: true,
+        finalReviewOnly: true,
         existingContentPlanId: project.id,
         workflowVersion: project.workflowVersion,
-        skillName: "video-editing-from-media-library-share",
+        executionClass: "CODEX_SKILL",
+        skillName: "video-editing-from-media-library",
         referenceVideoUrl,
+        referenceDirectInput: {
+          productModel: project.productModel,
+          referenceVideoUrl,
+          prompt: String(brief.additionalPrompt || "").trim(),
+          ...(Object.keys(revision).length ? { revision } : {}),
+        },
         workflowGuard: { projectId: project.id, workflowVersion: project.workflowVersion, stage: "FULL_VIDEO", allowedProjectStages: ["PROJECT_BRIEF", "EDITING"] },
         projectBrief: brief,
+        ...(Object.keys(revision).length ? { revision } : {}),
         requiredOutputs: ["master_video", "master_video_path", "source_asset_bindings", "reference_access_report", "review_summary"],
       },
       modelPolicy: { strategy: "CODEX_FIRST", allowExternalGeneration: false, allowFallback: false },
@@ -1972,7 +1985,9 @@ export class WorkbenchController {
     const factory = Array.isArray(currentProject?.sourceSignals)
       ? currentProject.sourceSignals.find((signal: any) => signal?.type === "VIDEO_FACTORY") as Record<string, unknown> | undefined
       : undefined;
-    const codexDirectFullVideo = String(factory?.projectMode || "") === "CODEX_DIRECT_FULL_VIDEO";
+    const directProjectMode = String(factory?.projectMode || "");
+    const codexDirectFullVideo = directProjectMode === "CODEX_DIRECT_FULL_VIDEO";
+    const referenceDirectFullVideo = directProjectMode === "REFERENCE_DIRECT_FULL_VIDEO";
     // A final-video return must also return the AI task that produced it.  Without
     // this, the asset was marked RETURNED while the task remained PENDING_REVIEW,
     // leaving the employee project stuck at 100% / "waiting for review".
@@ -1986,6 +2001,11 @@ export class WorkbenchController {
     if (action === "RETURN" && codexDirectFullVideo) {
       await this.videoFactory.prepareCodexDirectVideoRevision(id, employee.name);
       const revisionSubmission = await this.submitCodexDirectFullVideoTask(authorization, id);
+      return { ...revisionSubmission.project, revisionTask: revisionSubmission.task, previousReview: reviewed };
+    }
+    if (action === "RETURN" && referenceDirectFullVideo) {
+      await this.videoFactory.prepareCodexDirectVideoRevision(id, employee.name);
+      const revisionSubmission = await this.submitReferenceDirectFullVideoTask(authorization, id);
       return { ...revisionSubmission.project, revisionTask: revisionSubmission.task, previousReview: reviewed };
     }
     return reviewed;

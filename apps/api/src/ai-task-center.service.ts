@@ -692,7 +692,7 @@ export class AiTaskCenterService implements OnModuleInit {
     const taskInput = object(task.input);
     const isDirectOutputTask = task.type === "VIDEO"
       && text(taskInput.executionMode).toUpperCase() === "FULL_VIDEO"
-      && taskInput.codexDirectFullVideo === true;
+      && (taskInput.codexDirectFullVideo === true || taskInput.referenceDirectFullVideo === true);
     // The first recovery retry may have been consumed by an older worker that
     // wrote an invalid result-contract envelope. Allow one final registration-
     // only retry, never a fresh render and never unlimited retries.
@@ -1112,7 +1112,12 @@ export class AiTaskCenterService implements OnModuleInit {
     const codexDirectFullVideo = task.type === "VIDEO"
       && executionMode === "FULL_VIDEO"
       && (input.codexDirectFullVideo === true || localLibraryCodexTask);
+    const referenceDirectFullVideo = task.type === "VIDEO"
+      && executionMode === "FULL_VIDEO"
+      && input.referenceDirectFullVideo === true;
+    const localDirectFullVideo = codexDirectFullVideo || referenceDirectFullVideo;
     const existingDirectInput = object(input.codexDirectInput);
+    const existingReferenceInput = object(input.referenceDirectInput);
     const projectBrief = object(input.projectBrief);
     const packageInput = codexDirectFullVideo
       ? {
@@ -1129,6 +1134,23 @@ export class AiTaskCenterService implements OnModuleInit {
           creativeMode: text(existingDirectInput.creativeMode) || text(input.creativeMode) || "FULL_VIDEO",
         },
       }
+      : referenceDirectFullVideo
+        ? {
+          executionMode: "FULL_VIDEO",
+          executionClass: "CODEX_SKILL",
+          skillName: "video-editing-from-media-library",
+          referenceDirectFullVideo: true,
+          referenceDirectInput: {
+            productModel: text(existingReferenceInput.productModel) || text(task.productModel),
+            referenceVideoUrl: text(existingReferenceInput.referenceVideoUrl)
+              || text(input.referenceVideoUrl)
+              || text(projectBrief.reference),
+            prompt: text(existingReferenceInput.prompt) || text(projectBrief.additionalPrompt),
+            ...(Object.keys(object(existingReferenceInput.revision)).length
+              ? { revision: object(existingReferenceInput.revision) }
+              : {}),
+          },
+        }
       : input;
     const imagePostProject = task.type === "IMAGE"
       && executionMode === "IMAGE_POST"
@@ -1136,7 +1158,7 @@ export class AiTaskCenterService implements OnModuleInit {
         || text(input.sourceType).toUpperCase() === "IMAGE_PROJECT"
         || Boolean(input.imageProjectId));
     const assetIds = new Set<string>();
-    if (!codexDirectFullVideo) {
+    if (!localDirectFullVideo) {
       for (const snapshot of task.inputSnapshots || []) {
         const payload = object(snapshot.payload);
         for (const item of Array.isArray(payload.assets) ? payload.assets.map(object) : []) {
@@ -1219,7 +1241,7 @@ export class AiTaskCenterService implements OnModuleInit {
         taskNo: task.taskNo,
         type: task.type,
         title: task.title,
-        instructions: codexDirectFullVideo ? "" : task.instructions,
+        instructions: localDirectFullVideo ? "" : task.instructions,
         platform: task.platform,
         productModel: task.productModel,
         sourceType: task.sourceType,
@@ -1227,7 +1249,7 @@ export class AiTaskCenterService implements OnModuleInit {
         input: packageInput,
         modelPolicy,
       },
-      snapshots: (codexDirectFullVideo ? [] : task.inputSnapshots || []).map((snapshot) => ({
+      snapshots: (localDirectFullVideo ? [] : task.inputSnapshots || []).map((snapshot) => ({
         id: snapshot.id,
         kind: snapshot.kind,
         sourceType: snapshot.sourceType,
@@ -1264,7 +1286,7 @@ export class AiTaskCenterService implements OnModuleInit {
         allowExternalGeneration: ["IMAGE", "ARTICLE"].includes(task.type)
           ? false
           : modelPolicy.allowExternalGeneration === true,
-        requiredSkill: codexDirectFullVideo
+        requiredSkill: localDirectFullVideo
           ? "saidian-ai-task-dispatcher"
           : task.type === "VIDEO"
           && dedicatedDouyin
@@ -1280,7 +1302,7 @@ export class AiTaskCenterService implements OnModuleInit {
             : task.type === "ARTICLE"
               ? "build-health-brand-trust-content"
             : undefined,
-        fallbackOrder: codexDirectFullVideo
+        fallbackOrder: localDirectFullVideo
           ? ["LOCAL_FULL_SKILL", "INTERNAL_SCRIPT_AND_SHOT_PLAN", "MANDATORY_QC", "FINAL_VIDEO_ONLY"]
           : task.type === "VIDEO"
           && executionMode === "FULL_VIDEO"
@@ -2392,8 +2414,9 @@ export class AiTaskCenterService implements OnModuleInit {
         };
       }
       const existingContentPlanId = text(taskInput.existingContentPlanId);
-      const directCodexFullVideo = executionMode === "FULL_VIDEO" && taskInput.codexDirectFullVideo === true;
-      if (directCodexFullVideo) {
+      const directFullVideo = executionMode === "FULL_VIDEO"
+        && (taskInput.codexDirectFullVideo === true || taskInput.referenceDirectFullVideo === true);
+      if (directFullVideo) {
         if (!existingContentPlanId) {
           return { status: "WAITING_INPUT" as AiTaskStatus, message: "Codex 直出任务缺少关联视频项目" };
         }
