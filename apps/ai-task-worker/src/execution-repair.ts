@@ -22,7 +22,7 @@ const patterns: Array<[RepairCategory, RegExp]> = [
   ["CODEX_RUNTIME", /codex.*(?:idle timeout|executable|spawn|interrupted)|(?:idle timeout|executable|spawn).*codex/i],
   ["RESULT_CONTRACT", /result\.json|schema|must have required property|additional properties|video_master/i],
   ["RENDER_EVIDENCE", /render evidence|production-plan|shot-plan|validator|ffmpeg|ffprobe/i],
-  ["TRANSIENT_TRANSFER", /upload|oss|callback|heartbeat|fetch failed|econnreset|etimedout|http 5\d\d/i],
+  ["TRANSIENT_TRANSFER", /upload|oss|callback|heartbeat|fetch failed|econnreset|etimedout|http 5\d\d|statuscode["':\s]*5\d\d|5\d\d[^\n]{0,120}internal server error/i],
 ];
 
 export function classifyExecutionFailure(message: string): RepairDecision {

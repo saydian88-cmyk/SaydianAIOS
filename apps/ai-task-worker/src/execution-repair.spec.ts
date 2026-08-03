@@ -19,4 +19,10 @@ describe("classifyExecutionFailure", () => {
     expect(result.recoverable).toBe(false);
     expect(result.category).toBe("NONE");
   });
+
+  it("recovers an upload 500 even when the localized prefix is garbled", () => {
+    const result = classifyExecutionFailure('涓婁紶澶辫触 500: {"statusCode":500,"message":"Internal server error"}');
+    expect(result.recoverable).toBe(true);
+    expect(result.category).toBe("TRANSIENT_TRANSFER");
+  });
 });
