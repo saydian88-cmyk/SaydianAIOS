@@ -24,9 +24,13 @@ Get-Content -LiteralPath $resolvedConfig -Encoding UTF8 | ForEach-Object {
 $repoPath = $env:AI_TASK_REPO_PATH
 if (-not $repoPath) { throw "AI_TASK_REPO_PATH is not configured" }
 $resolvedRepo = (Resolve-Path -LiteralPath $repoPath).Path
-$tsxExecutable = Join-Path $resolvedRepo "apps\ai-task-worker\node_modules\.bin\tsx.cmd"
-if (-not (Test-Path -LiteralPath $tsxExecutable -PathType Leaf)) {
-  throw "The installed AI task runner runtime is missing: $tsxExecutable"
+$tsxCli = Join-Path $resolvedRepo "apps\ai-task-worker\node_modules\tsx\dist\cli.mjs"
+if (-not (Test-Path -LiteralPath $tsxCli -PathType Leaf)) {
+  throw "The installed AI task runner runtime is missing: $tsxCli"
+}
+$nodeExecutable = $env:NODE_EXECUTABLE
+if (-not $nodeExecutable -or -not (Test-Path -LiteralPath $nodeExecutable -PathType Leaf)) {
+  throw "NODE_EXECUTABLE is not configured"
 }
 $runtimePathParts = @(
   (Split-Path -Parent $env:NODE_EXECUTABLE)
@@ -43,7 +47,9 @@ $runnerErrorLog = Join-Path $configRoot "runner-error.log"
 Set-Location -LiteralPath $resolvedRepo
 $ErrorActionPreference = "Continue"
 while ($true) {
-  & $tsxExecutable (Join-Path $resolvedRepo "apps\ai-task-worker\src\index.ts") 1>> $runnerLog 2>> $runnerErrorLog
+  # Call Node directly. Going through tsx.cmd creates a visible cmd/Windows
+  # Terminal window even when the scheduled PowerShell wrapper is hidden.
+  & $nodeExecutable $tsxCli (Join-Path $resolvedRepo "apps\ai-task-worker\src\index.ts") 1>> $runnerLog 2>> $runnerErrorLog
   $workerExitCode = $LASTEXITCODE
   Add-Content -LiteralPath $runnerErrorLog -Value "$(Get-Date -Format o) worker exited with code $workerExitCode; restarting in 15 seconds"
   Start-Sleep -Seconds 15
