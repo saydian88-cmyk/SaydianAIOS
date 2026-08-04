@@ -3246,11 +3246,18 @@ async function reviewProjectPackaging(approved: boolean) {
       approved,
       note,
     });
+    // Reflect the completed review immediately. The following project refresh
+    // remains the source of truth, but users should never need to refresh the
+    // whole page to see that their click succeeded.
+    variant.packagingStatus = approved ? "APPROVED" : "RETURNED";
     closePackagingPreview();
     ElMessage.success(approved ? "封面和标题审核通过，可以进入发布环节" : "已退回并同步修改说明");
     await invalidateDataCenterSection("videoFactory");
     await loadDataCenter(true);
-    await refreshTaskVideoProject();
+    await refreshVideoProject(project.id);
+    await loadTasks();
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "封面标题审核失败，请重试");
   } finally {
     reviewingPackagingVariantId.value = "";
   }
@@ -3265,8 +3272,27 @@ function closePackagingPreview() {
 }
 
 async function downloadWorkbenchAsset(asset: Row) {
-  const result = await api<{ url: string }>(`/api/v1/workbench/assets/${asset.id}/download-url`);
-  window.open(result.url, "_blank", "noopener,noreferrer");
+  try {
+    const result = await api<{ url: string }>(`/api/v1/workbench/assets/${asset.id}/download-url`);
+    if (!result.url) return ElMessage.warning("成片文件暂不可下载");
+    const response = await fetch(result.url);
+    if (!response.ok) throw new Error(`下载失败（${response.status}）`);
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const rawName = String(asset.displayName || asset.originalName || asset.fileName || asset.title || "成片")
+      .trim()
+      .replace(/[<>:"/\\|?*\u0000-\u001F]/g, "_");
+    const extension = rawName.includes(".") ? "" : blob.type.includes("quicktime") ? ".mov" : ".mp4";
+    link.href = objectUrl;
+    link.download = `${rawName || "成片"}${extension}`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "成片下载失败，请重试");
+  }
 }
 
 async function openShotUpload(project: Row, shot: Row) {
@@ -4436,8 +4462,8 @@ onBeforeUnmount(() => {
                                 <el-button type="primary" @click="openPublishLink(taskVideoProjectDetail, job)">回传发布链接</el-button>
                               </template>
                               <template v-else-if="variant.packagingStatus === 'PENDING_REVIEW'">
-                                <el-button type="danger" plain @click="reviewProjectPackagingDirect(taskVideoProjectDetail, variant, false)">退回并填写原因</el-button>
-                                <el-button type="success" @click="reviewProjectPackagingDirect(taskVideoProjectDetail, variant, true)">审核通过</el-button>
+                                <el-button type="danger" plain :loading="reviewingPackagingVariantId === variant.id" @click="reviewProjectPackagingDirect(taskVideoProjectDetail, variant, false)">退回并填写原因</el-button>
+                                <el-button type="success" :loading="reviewingPackagingVariantId === variant.id" @click="reviewProjectPackagingDirect(taskVideoProjectDetail, variant, true)">审核通过</el-button>
                               </template>
                               <el-button
                                 v-else
