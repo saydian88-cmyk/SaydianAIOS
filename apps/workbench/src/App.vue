@@ -737,6 +737,11 @@ function imageExtension(blob: Blob, url: string) {
   return match?.[1]?.toLowerCase() || "png";
 }
 
+function compactDownloadTime(date = new Date()) {
+  const part = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}${part(date.getMonth() + 1)}${part(date.getDate())}-${part(date.getHours())}${part(date.getMinutes())}${part(date.getSeconds())}`;
+}
+
 async function downloadAllImageProjectPages(project?: Row) {
   const pages = imageProjectPages(project).filter((page: Row) => imageProjectPageUrl(page));
   if (!pages.length) return ElMessage.warning("暂无可下载的图文");
@@ -756,7 +761,9 @@ async function downloadAllImageProjectPages(project?: Row) {
     const objectUrl = URL.createObjectURL(zipBlob);
     const anchor = document.createElement("a");
     anchor.href = objectUrl;
-    anchor.download = `${safeDownloadName(project?.productModel, "图文项目")}-图文-${pages.length}张.zip`;
+    const productName = safeDownloadName(project?.productModel, "未标注产品");
+    const imageType = safeDownloadName(project?.imageType || project?.videoType, "图文");
+    anchor.download = `图文-${productName}-${imageType}-${compactDownloadTime()}.zip`;
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
