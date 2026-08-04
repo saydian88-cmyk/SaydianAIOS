@@ -585,8 +585,25 @@ export class WorkbenchController {
   }
 
   @Get("task-recycle-bin")
-  taskRecycleBin(@Headers("authorization") authorization: string | undefined) {
-    return this.workbench.taskRecycleBin(this.employee(authorization));
+  async taskRecycleBin(@Headers("authorization") authorization: string | undefined) {
+    const rows = await this.workbench.taskRecycleBin(this.employee(authorization));
+    const imageProjectIds = rows
+      .filter((row) => row.sourceType === "IMAGE_PROJECT" && row.sourceId)
+      .map((row) => row.sourceId as string);
+    if (!imageProjectIds.length) return rows;
+    const projects = await this.prisma.contentPlan.findMany({
+      where: { id: { in: imageProjectIds }, kind: "SHORT_POST" },
+      select: { id: true, sourceSignals: true },
+    });
+    const previousStages = new Map(projects.map((project) => {
+      const signals = Array.isArray(project.sourceSignals) ? project.sourceSignals as Array<Record<string, unknown>> : [];
+      const archive = signals.find((item) => item?.type === "IMAGE_PROJECT_ARCHIVE");
+      return [project.id, String(archive?.previousProductionStage || "IMAGE_REVIEW")];
+    }));
+    return rows.map((row) => ({
+      ...row,
+      recyclePreviousStage: row.sourceType === "IMAGE_PROJECT" ? previousStages.get(String(row.sourceId || "")) : undefined,
+    }));
   }
 
   @Post("tasks/:id/restore")

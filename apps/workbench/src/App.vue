@@ -2141,6 +2141,21 @@ function recycleTaskTypeLabel(task: Row) {
   return task.sourceType === "OPERATOR_COLLAB" ? "协作任务" : "普通任务";
 }
 
+function recycleProjectStageLabel(stage: unknown, kind: "VIDEO" | "IMAGE") {
+  const value = String(stage || "");
+  if (kind === "IMAGE") {
+    if (["IMAGE_DRAFT"].includes(value)) return "项目创建";
+    if (["IMAGE_GENERATING", "IMAGE_RETURNED", "IMAGE_REVIEW"].includes(value)) return "图文与文案生成、审核";
+    if (["IMAGE_PUBLISHING", "IMAGE_PUBLISHED"].includes(value)) return "发布与回传";
+    return "项目创建";
+  }
+  if (["PROJECT_BRIEF"].includes(value)) return "项目创建";
+  if (["SCRIPT_GENERATING", "SCRIPT_RETURNED", "FACTORY_SCRIPT_READY", "SCRIPT_APPROVED", "FACTORY_GENERATING", "MATERIAL_REVIEW", "MATERIAL_RETURNED"].includes(value)) return "脚本与素材准备";
+  if (["READY_TO_EDIT", "EDITING", "VIDEO_REVIEW"].includes(value)) return "视频生成与成片审核";
+  if (["PLATFORM_PACKAGING", "PACKAGING_REVIEW", "READY_TO_PUBLISH", "PUBLISHING", "TRACKING"].includes(value)) return "封面标题与发布";
+  return "项目创建";
+}
+
 async function restoreRecycledImageProject(task: Row) {
   const projectId = task.sourceId || task.evidence?.contentPlanId;
   if (!projectId) return ElMessage.warning("该回收记录未关联图文项目");
@@ -5405,7 +5420,7 @@ onBeforeUnmount(() => {
       <el-tab-pane :label="`视频项目 (${videoRecycleProjects.length})`" name="VIDEO">
         <div v-loading="videoRecycleBinLoading" class="task-recycle-list">
           <article v-for="project in videoRecycleProjects" :key="project.id" class="task-recycle-item">
-            <div><div class="task-meta"><el-tag size="small">视频项目</el-tag><span>删除于 {{ formatTime(project.archivedAt) }}</span><span class="recycle-countdown">{{ recycleRemainingText(project) }}</span></div><h4>{{ project.topic }}</h4><p class="task-summary">{{ project.productModel || "未填写产品型号" }}</p></div>
+            <div><div class="task-meta"><el-tag size="small">视频项目</el-tag><el-tag size="small" type="warning">删除前：{{ recycleProjectStageLabel(project.previousProductionStage, "VIDEO") }}</el-tag><span>删除于 {{ formatTime(project.archivedAt) }}</span><span class="recycle-countdown">{{ recycleRemainingText(project) }}</span></div><h4>{{ project.topic }}</h4><p class="task-summary">{{ project.productModel || "未填写产品型号" }}</p></div>
             <el-button type="primary" plain :loading="restoringVideoProjectId === project.id" @click="restoreVideoProject(project)">恢复</el-button>
           </article>
           <el-empty v-if="!videoRecycleBinLoading && !videoRecycleProjects.length" description="暂无已删除的视频项目" />
@@ -5414,7 +5429,7 @@ onBeforeUnmount(() => {
       <el-tab-pane :label="`图文项目 (${recycledImageProjects.length})`" name="IMAGE">
         <div v-loading="taskRecycleBinLoading" class="task-recycle-list">
           <article v-for="task in recycledImageProjects" :key="task.id" class="task-recycle-item">
-            <div><div class="task-meta"><el-tag size="small" type="success">图文项目</el-tag><span>删除于 {{ formatTime(task.deletedAt) }}</span><span class="recycle-countdown">{{ recycleRemaining(task) }}</span></div><h4>{{ task.title }}</h4><p class="task-summary">{{ task.description || task.expectedResult || "图文项目" }}</p></div>
+            <div><div class="task-meta"><el-tag size="small" type="success">图文项目</el-tag><el-tag size="small" type="warning">删除前：{{ recycleProjectStageLabel(task.recyclePreviousStage, "IMAGE") }}</el-tag><span>删除于 {{ formatTime(task.deletedAt) }}</span><span class="recycle-countdown">{{ recycleRemaining(task) }}</span></div><h4>{{ task.title }}</h4><p class="task-summary">{{ task.description || task.expectedResult || "图文项目" }}</p></div>
             <el-button type="primary" plain :loading="restoringTaskId === task.id" @click="restoreRecycledImageProject(task)">恢复</el-button>
           </article>
           <el-empty v-if="!taskRecycleBinLoading && !recycledImageProjects.length" description="暂无已删除的图文项目" />

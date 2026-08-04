@@ -4212,7 +4212,6 @@ export class VideoFactoryService {
         kind: "VIDEO",
         productionStage: "VIDEO_FACTORY_ARCHIVED",
         sourceSignals: { array_contains: [{ type: "VIDEO_FACTORY" }] },
-        OR: [{ owner: actor }, { createdBy: actor }, { assignedTo: actor }],
       },
       // The project list is a creation queue, not an activity feed: an old
       // project being retried must not jump ahead of a newly created project.
@@ -4224,6 +4223,9 @@ export class VideoFactoryService {
     for (const plan of rows) {
       const signals = sourceSignals(plan);
       const factory = signals.find((item) => item.type === "VIDEO_FACTORY") || {};
+      // The employee recycle bin is private. Project ownership or assignment
+      // is not enough: only the employee who performed the deletion may see it.
+      if (String(factory.archivedBy || "") !== actor) continue;
       const purgeAfter = new Date(String(factory.purgeAfter || 0)).getTime();
       if (!purgeAfter || purgeAfter <= now) {
         const nextSignals = signals.map((item) => item.type === "VIDEO_FACTORY"
@@ -4262,6 +4264,9 @@ export class VideoFactoryService {
     }
     const signals = sourceSignals(plan);
     const factory = signals.find((item) => item.type === "VIDEO_FACTORY") || {};
+    if (String(factory.archivedBy || "") !== actor) {
+      throw new BadRequestException("只能恢复自己删除的视频项目");
+    }
     const purgeAfter = new Date(String(factory.purgeAfter || 0)).getTime();
     if (!purgeAfter || purgeAfter <= Date.now()) {
       throw new BadRequestException("该项目已超过3天恢复期限");
