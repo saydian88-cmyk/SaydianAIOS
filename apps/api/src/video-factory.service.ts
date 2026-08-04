@@ -28,6 +28,7 @@ type JsonRow = Record<string, unknown>;
 type ProjectCreateInput = {
   projectMode?: "STANDARD" | "REFERENCE_DIRECT_FULL_VIDEO" | "CODEX_DIRECT_FULL_VIDEO";
   referenceVideoUrl?: string;
+  referenceDirectTaskRequirement?: string;
   platform?: string;
   voiceoverMode?: string;
   accountType?: string;
@@ -1586,6 +1587,9 @@ export class VideoFactoryService {
       additionalPrompt: String(input.additionalPrompt || "").trim(),
       ...(directFullVideo ? {} : { videoType: normalizedVideoType, keywords: normalizedKeywords }),
       ...(referenceDirect ? { reference: referenceVideoUrl } : {}),
+      ...(referenceDirect && String(input.referenceDirectTaskRequirement || "").trim()
+        ? { referenceDirectTaskRequirement: String(input.referenceDirectTaskRequirement).trim() }
+        : {}),
       ...(codexDirect ? { codexDirectFullVideo: true, directOutputOnly: true } : {}),
       hook: String(input.hook || "").trim(),
       scene: String(input.scene || "").trim(),

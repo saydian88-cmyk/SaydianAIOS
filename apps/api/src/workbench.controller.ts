@@ -203,6 +203,8 @@ function scopedVideoScriptBrief(project: Record<string, any>, brief: Record<stri
 }
 
 function compileReferenceDirectFullVideoPrompt(project: Record<string, any>, brief: Record<string, unknown>) {
+  const employeeRequirement = String(brief.referenceDirectTaskRequirement || "").trim();
+  if (employeeRequirement) return employeeRequirement;
   const referenceVideoUrl = String(brief.reference || "").trim();
   return [
     "【任务类型】参考视频直出（完整视频）",
@@ -1252,6 +1254,7 @@ export class WorkbenchController {
           ? "CODEX_DIRECT_FULL_VIDEO"
           : "STANDARD",
       referenceVideoUrl: body.referenceVideoUrl ? String(body.referenceVideoUrl) : undefined,
+      referenceDirectTaskRequirement: body.referenceDirectTaskRequirement ? String(body.referenceDirectTaskRequirement) : undefined,
       platform: body.platform && body.platform !== "AUTO" ? String(body.platform) : undefined,
       voiceoverMode: body.voiceoverMode && body.voiceoverMode !== "AUTO" ? String(body.voiceoverMode) : undefined,
       accountType: body.accountType && body.accountType !== "AUTO" ? String(body.accountType) : undefined,

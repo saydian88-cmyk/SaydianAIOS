@@ -267,11 +267,14 @@ const videoFactoryForm = reactive({
   scene: "",
   painPoint: "",
   referenceVideoUrl: "",
+  referenceDirectTaskRequirement: "",
   scriptEngines: ["SYSTEM_AI"] as string[],
   keywordIds: [] as string[],
   externalVideoIds: [] as string[],
 });
 const videoProjectMode = ref<"STANDARD" | "REFERENCE_DIRECT_FULL_VIDEO" | "CODEX_DIRECT_FULL_VIDEO">("STANDARD");
+const referenceDirectRequirementEdited = ref(false);
+const lastAutoReferenceDirectRequirement = ref("");
 const videoOptionalOpen = ref(false);
 const videoDefaultsOpen = ref(false);
 const videoProjectCollapseNames = ref<string[]>([]);
@@ -1309,6 +1312,25 @@ function markImageRequirementEdited() {
   imageRequirementEdited.value = true;
 }
 
+function buildReferenceDirectTaskRequirement() {
+  const model = videoFactoryForm.productModel.trim() || "所选产品";
+  const referenceUrl = videoFactoryForm.referenceVideoUrl.trim() || "待填写的参考视频链接";
+  return `用视频剪辑--基于素材库分享版 skill，为赛电${model}制作参考视频直出成片。参考视频：${referenceUrl}。请直接完成脚本结构、素材匹配、剪辑和最终成片，无需返回中间脚本、素材匹配或剪辑过程；参考该视频的镜头结构、画面节奏和氛围，并直接复用可访问原声中的 BGM、环境声、音效、口播与节拍。画面必须使用${model}的真实素材重建，不得混用其他产品素材。只回传最终成片供员工审核。`;
+}
+
+function syncReferenceDirectTaskRequirement() {
+  const next = buildReferenceDirectTaskRequirement();
+  if (!referenceDirectRequirementEdited.value || videoFactoryForm.referenceDirectTaskRequirement === lastAutoReferenceDirectRequirement.value) {
+    videoFactoryForm.referenceDirectTaskRequirement = next;
+    referenceDirectRequirementEdited.value = false;
+  }
+  lastAutoReferenceDirectRequirement.value = next;
+}
+
+function markReferenceDirectRequirementEdited() {
+  referenceDirectRequirementEdited.value = videoFactoryForm.referenceDirectTaskRequirement !== lastAutoReferenceDirectRequirement.value;
+}
+
 function changeImageProjectType() {
   const defaults = imageDefaultsForType(imageProjectForm.imageType);
   imageProjectForm.audience = defaults.audience;
@@ -2094,6 +2116,10 @@ async function ensureContentTaskOptions() {
 async function openNewVideoProjectDialog() {
   videoProjectMode.value = "STANDARD";
   videoFactoryForm.referenceVideoUrl = "";
+  videoFactoryForm.referenceDirectTaskRequirement = "";
+  referenceDirectRequirementEdited.value = false;
+  lastAutoReferenceDirectRequirement.value = "";
+  syncReferenceDirectTaskRequirement();
   videoFactoryForm.scriptEngines = ["SYSTEM_AI"];
   videoProjectCollapseNames.value = active.value === "tasks" ? ["optional"] : [];
   createdVideoProjectDialogId.value = "";
@@ -2469,6 +2495,7 @@ async function createVideoFactoryProject() {
   if (videoProjectMode.value === "REFERENCE_DIRECT_FULL_VIDEO") {
     if (!videoFactoryForm.productModel) return ElMessage.warning("请选择产品型号");
     if (!videoFactoryForm.referenceVideoUrl.trim()) return ElMessage.warning("请填写参考视频链接");
+    if (!videoFactoryForm.referenceDirectTaskRequirement.trim()) return ElMessage.warning("请填写提交给剪辑 Skill 的任务要求");
   } else if (videoProjectMode.value === "CODEX_DIRECT_FULL_VIDEO") {
     if (!videoFactoryForm.productModel) return ElMessage.warning("请选择产品型号");
     if (!videoFactoryForm.additionalPrompt.trim()) return ElMessage.warning("请填写 AI 提示词");
@@ -5679,17 +5706,27 @@ onBeforeUnmount(() => {
         <header><strong>参考视频</strong><span>此模式仅需产品型号和参考视频链接</span></header>
         <div class="prototype-reference-grid reference-video-fields">
           <el-form-item label="产品型号" required>
-            <el-select v-model="videoFactoryForm.productModel" filterable placeholder="搜索或选择产品型号">
+            <el-select v-model="videoFactoryForm.productModel" filterable placeholder="搜索或选择产品型号" @change="syncReferenceDirectTaskRequirement">
               <el-option v-for="product in productOptions" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" />
             </el-select>
           </el-form-item>
           <el-form-item class="reference-video-url-field" label="参考视频链接" required>
-            <el-input v-model="videoFactoryForm.referenceVideoUrl" placeholder="粘贴可访问的参考视频链接" />
+            <el-input v-model="videoFactoryForm.referenceVideoUrl" placeholder="粘贴可访问的参考视频链接" @input="syncReferenceDirectTaskRequirement" />
           </el-form-item>
         </div>
       </section>
 
-      <section v-else class="prototype-form-section">
+      <section v-if="videoProjectMode === 'REFERENCE_DIRECT_FULL_VIDEO'" class="prototype-form-section">
+        <header><strong>提交给剪辑 Skill 的任务要求</strong><span>仅提交这段内容，可直接修改</span></header>
+        <el-input
+          v-model="videoFactoryForm.referenceDirectTaskRequirement"
+          type="textarea"
+          :rows="5"
+          @input="markReferenceDirectRequirementEdited"
+        />
+      </section>
+
+      <section v-if="videoProjectMode === 'CODEX_DIRECT_FULL_VIDEO'" class="prototype-form-section">
         <header><strong>Codex 直出视频</strong><span>仅需产品型号和 AI 提示词</span></header>
         <div class="prototype-reference-grid">
           <el-form-item label="产品型号" required>
