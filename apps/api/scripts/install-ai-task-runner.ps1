@@ -66,7 +66,7 @@ $launcherLines = @(
   "Option Explicit"
   "Dim shell"
   "Set shell = CreateObject(`"WScript.Shell`")"
-  "shell.Run `"$($launcherCommand.Replace('`"', '`"`"'))`", 0, False"
+  "shell.Run `"$($launcherCommand.Replace('`"', '`"`"'))`", 0, True"
 )
 Set-Content -LiteralPath $hiddenLauncher -Value $launcherLines -Encoding ASCII
 
