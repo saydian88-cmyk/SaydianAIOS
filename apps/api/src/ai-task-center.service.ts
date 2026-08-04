@@ -187,6 +187,24 @@ export function runnerCanClaimTask(
     .includes("IMAGE_POST");
 }
 
+export function runnerTaskTypeCapabilities(
+  storedCapabilities: readonly string[],
+  supportedRouteKeys: unknown,
+): AiTaskType[] {
+  const routeKeys = strings(supportedRouteKeys).map((item) => item.toUpperCase());
+  if (!routeKeys.length) return storedCapabilities.length
+    ? storedCapabilities.filter((item): item is AiTaskType => taskTypes.includes(item as AiTaskType))
+    : taskTypes;
+  const capabilities: AiTaskType[] = [];
+  if (routeKeys.includes("IMAGE_POST")) capabilities.push("IMAGE");
+  if (routeKeys.some((key) => [
+    "STANDARD_SMART_VIDEO",
+    "REFERENCE_DIRECT_FULL_VIDEO",
+    "CODEX_DIRECT_FULL_VIDEO",
+  ].includes(key))) capabilities.push("VIDEO");
+  return capabilities;
+}
+
 function normalizeTaskOutputSizes<T>(task: T): T {
   const source = object(task);
   if (!Array.isArray(source.outputs)) return task;
@@ -1117,7 +1135,7 @@ export class AiTaskCenterService implements OnModuleInit {
   async claimRunner(token: string, body: JsonRecord) {
     const node = await this.runner(token, text(body.nodeCode));
     await this.releaseStaleTasks();
-    const capabilities = node.capabilities.length ? node.capabilities as AiTaskType[] : taskTypes;
+    const capabilities = runnerTaskTypeCapabilities(node.capabilities, body.supportedRouteKeys);
     const tasks = await this.prisma.aiTask.findMany({
       where: {
         status: { in: claimableStatuses },

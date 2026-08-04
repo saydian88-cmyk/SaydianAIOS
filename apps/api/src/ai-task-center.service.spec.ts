@@ -6,6 +6,7 @@ import {
   aiTaskRoute,
   aiTaskTargetNodeCode,
   runnerCanClaimTask,
+  runnerTaskTypeCapabilities,
   videoScriptOutputMetadata,
 } from "./ai-task-center.service";
 
@@ -145,6 +146,16 @@ describe("AiTaskCenterService", () => {
       sourceType: "DAILY_AI_PLAN",
       input: { executionMode: "DEFAULT" },
     }, [], ["STANDARD_SMART_VIDEO", "IMAGE_POST"])).toBe(false);
+  });
+
+  it("derives VIDEO and IMAGE query capabilities from unified route keys", () => {
+    expect(runnerTaskTypeCapabilities(["VIDEO"], [
+      "STANDARD_SMART_VIDEO",
+      "REFERENCE_DIRECT_FULL_VIDEO",
+      "CODEX_DIRECT_FULL_VIDEO",
+      "IMAGE_POST",
+    ])).toEqual(["IMAGE", "VIDEO"]);
+    expect(runnerTaskTypeCapabilities(["VIDEO"], undefined)).toEqual(["VIDEO"]);
   });
 
   it("repairs the execution envelope during exhausted legacy image-project routing recovery", async () => {
