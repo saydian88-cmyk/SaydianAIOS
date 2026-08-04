@@ -1333,8 +1333,8 @@ export class WorkbenchService {
         deletedAt: { not: null },
         purgeAfter: { gt: now },
         OR: [
-          { sourceType: "SELF_CREATED", assigneeEmployeeId: session.employeeId },
-          { sourceType: "OPERATOR_COLLAB", assignedByEmployeeId: session.employeeId },
+          { assigneeEmployeeId: session.employeeId },
+          { assignedByEmployeeId: session.employeeId },
         ],
       },
       include: this.taskInclude(),

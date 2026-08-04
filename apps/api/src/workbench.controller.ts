@@ -1167,6 +1167,14 @@ export class WorkbenchController {
       }
     }
 
+    const currentProject = await this.prisma.contentPlan.findUnique({ where: { id }, select: { sourceSignals: true, productionStage: true } });
+    const previousSignals = Array.isArray(currentProject?.sourceSignals) ? currentProject.sourceSignals as Array<Record<string, unknown>> : [];
+    const archiveSignal = {
+      type: "IMAGE_PROJECT_ARCHIVE",
+      archivedAt: new Date().toISOString(),
+      previousProductionStage: currentProject?.productionStage || "IMAGE_REVIEW",
+    };
+    const nextSignals = [...previousSignals.filter((item) => item?.type !== "IMAGE_PROJECT_ARCHIVE"), archiveSignal];
     const now = new Date();
     const purgeAfter = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
     const [employeeTasks] = await this.prisma.$transaction([
@@ -1182,10 +1190,42 @@ export class WorkbenchController {
       }),
       this.prisma.contentPlan.update({
         where: { id },
-        data: { productionStage: "IMAGE_ARCHIVED" },
+        data: { productionStage: "IMAGE_ARCHIVED", sourceSignals: nextSignals as any },
       }),
     ]);
     return { deleted: true, cancelledAiTasks, deletedEmployeeTasks: employeeTasks.count };
+  }
+
+  @Post("image-projects/:id/restore")
+  async restoreImageProject(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+  ) {
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    const project = await this.prisma.contentPlan.findFirst({
+      where: { id, kind: "SHORT_POST", assignedEmployeeId: employee.employeeId, productionStage: "IMAGE_ARCHIVED" },
+    });
+    if (!project) throw new ForbiddenException("回收站中的图文项目不存在、已过期或无权恢复");
+    const deletedTask = await this.prisma.opsTask.findFirst({
+      where: { sourceType: "IMAGE_PROJECT", sourceId: id, deletedByEmployeeId: employee.employeeId, deletedAt: { not: null }, purgeAfter: { gt: new Date() } },
+      orderBy: { deletedAt: "desc" },
+    });
+    if (!deletedTask) throw new ForbiddenException("图文项目已超过恢复期限");
+    const signals = Array.isArray(project.sourceSignals) ? project.sourceSignals as Array<Record<string, unknown>> : [];
+    const archive = signals.find((item) => item?.type === "IMAGE_PROJECT_ARCHIVE");
+    const previousStage = String(archive?.previousProductionStage || "IMAGE_REVIEW");
+    const restoredSignals = signals.filter((item) => item?.type !== "IMAGE_PROJECT_ARCHIVE");
+    await this.prisma.$transaction([
+      this.prisma.contentPlan.update({
+        where: { id },
+        data: { productionStage: previousStage, sourceSignals: restoredSignals as any },
+      }),
+      this.prisma.opsTask.updateMany({
+        where: { sourceType: "IMAGE_PROJECT", sourceId: id, deletedAt: { not: null } },
+        data: { deletedAt: null, purgeAfter: null, deletedByEmployeeId: null },
+      }),
+    ]);
+    return { restored: true, id };
   }
 
   @Post("image-projects/:id/review")

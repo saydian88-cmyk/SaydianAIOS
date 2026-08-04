@@ -138,6 +138,7 @@ const copyingTeamTask = ref(false);
 const taskRecycleBinVisible = ref(false);
 const taskRecycleBinLoading = ref(false);
 const taskRecycleItems = ref<Row[]>([]);
+const recycleCategory = ref("TASK");
 const trashingTaskId = ref("");
 const restoringTaskId = ref("");
 const inviteVisible = ref(false);
@@ -2098,7 +2099,30 @@ async function loadTaskRecycleBin() {
 
 async function openTaskRecycleBin() {
   taskRecycleBinVisible.value = true;
-  await loadTaskRecycleBin();
+  await Promise.all([loadTaskRecycleBin(), loadVideoRecycleBin()]);
+}
+
+const recycledNormalTasks = computed(() => taskRecycleItems.value.filter((item) => !["VIDEO_PROJECT", "IMAGE_PROJECT"].includes(String(item.sourceType || "")) && item.category !== "ARTICLE_PROJECT"));
+const recycledImageProjects = computed(() => taskRecycleItems.value.filter((item) => item.sourceType === "IMAGE_PROJECT" || item.category === "IMAGE_PROJECT"));
+const recycledArticleProjects = computed(() => taskRecycleItems.value.filter((item) => item.sourceType === "ARTICLE_PROJECT" || item.category === "ARTICLE_PROJECT"));
+
+function recycleTaskTypeLabel(task: Row) {
+  if (task.sourceType === "IMAGE_PROJECT" || task.category === "IMAGE_PROJECT") return "图文项目";
+  if (task.sourceType === "ARTICLE_PROJECT" || task.category === "ARTICLE_PROJECT") return "软文项目";
+  return task.sourceType === "OPERATOR_COLLAB" ? "协作任务" : "普通任务";
+}
+
+async function restoreRecycledImageProject(task: Row) {
+  const projectId = task.sourceId || task.evidence?.contentPlanId;
+  if (!projectId) return ElMessage.warning("该回收记录未关联图文项目");
+  restoringTaskId.value = task.id;
+  try {
+    await post(`/api/v1/workbench/image-projects/${projectId}/restore`);
+    ElMessage.success("图文项目已恢复");
+    await Promise.all([loadTaskRecycleBin(), loadTasks()]);
+  } finally {
+    restoringTaskId.value = "";
+  }
 }
 
 async function restoreRecycledTask(task: Row) {
@@ -2743,8 +2767,8 @@ async function loadVideoRecycleBin() {
 }
 
 async function openVideoRecycleBin() {
-  videoRecycleBinVisible.value = true;
-  await loadVideoRecycleBin();
+  recycleCategory.value = "VIDEO";
+  await openTaskRecycleBin();
 }
 
 function recycleRemainingText(project: Row) {
@@ -5325,23 +5349,50 @@ onBeforeUnmount(() => {
     <template #footer><el-button @click="teamTaskVisible = false">取消</el-button><el-button type="primary" :loading="creatingTeamTask" @click="createTeamTask">{{ editingTeamTaskId ? "保存并通知" : copyingTeamTask ? "确认再次安排" : "安排任务" }}</el-button></template>
   </el-dialog>
 
-  <el-dialog v-model="taskRecycleBinVisible" title="任务回收站" width="min(720px, 94vw)">
-    <p class="muted">这里只显示你删除的任务。删除后保留3天，超期将自动彻底删除。</p>
-    <div v-loading="taskRecycleBinLoading" class="task-recycle-list">
-      <article v-for="task in taskRecycleItems" :key="task.id" class="task-recycle-item">
-        <div>
-          <div class="task-meta">
-            <el-tag size="small" type="info">{{ task.sourceType === "OPERATOR_COLLAB" ? "协作任务" : "我的任务" }}</el-tag>
-            <span>删除于 {{ formatTime(task.deletedAt) }}</span>
-            <span class="recycle-countdown">{{ recycleRemaining(task) }}</span>
-          </div>
-          <h4>{{ task.title }}</h4>
-          <p class="task-summary">{{ task.description || task.expectedResult || "未填写任务说明" }}</p>
+  <el-dialog v-model="taskRecycleBinVisible" title="回收站" width="min(820px, 94vw)">
+    <p class="muted">删除内容保留 3 天，超期自动彻底删除。恢复项目时会同时恢复员工任务与项目本体。</p>
+    <el-tabs v-model="recycleCategory" class="recycle-tabs">
+      <el-tab-pane :label="`普通任务 (${recycledNormalTasks.length})`" name="TASK">
+        <div v-loading="taskRecycleBinLoading" class="task-recycle-list">
+          <article v-for="task in recycledNormalTasks" :key="task.id" class="task-recycle-item">
+            <div>
+              <div class="task-meta"><el-tag size="small" type="info">{{ recycleTaskTypeLabel(task) }}</el-tag><span>删除于 {{ formatTime(task.deletedAt) }}</span><span class="recycle-countdown">{{ recycleRemaining(task) }}</span></div>
+              <h4>{{ task.title }}</h4>
+              <p class="task-summary">{{ task.description || task.expectedResult || "未填写任务说明" }}</p>
+            </div>
+            <el-button type="primary" plain :loading="restoringTaskId === task.id" @click="restoreRecycledTask(task)">恢复</el-button>
+          </article>
+          <el-empty v-if="!taskRecycleBinLoading && !recycledNormalTasks.length" description="暂无已删除的普通任务" />
         </div>
-        <el-button type="primary" plain :loading="restoringTaskId === task.id" @click="restoreRecycledTask(task)">恢复</el-button>
-      </article>
-      <el-empty v-if="!taskRecycleBinLoading && !taskRecycleItems.length" description="回收站暂无任务" />
-    </div>
+      </el-tab-pane>
+      <el-tab-pane :label="`视频项目 (${videoRecycleProjects.length})`" name="VIDEO">
+        <div v-loading="videoRecycleBinLoading" class="task-recycle-list">
+          <article v-for="project in videoRecycleProjects" :key="project.id" class="task-recycle-item">
+            <div><div class="task-meta"><el-tag size="small">视频项目</el-tag><span>删除于 {{ formatTime(project.archivedAt) }}</span><span class="recycle-countdown">{{ recycleRemainingText(project) }}</span></div><h4>{{ project.topic }}</h4><p class="task-summary">{{ project.productModel || "未填写产品型号" }}</p></div>
+            <el-button type="primary" plain :loading="restoringVideoProjectId === project.id" @click="restoreVideoProject(project)">恢复</el-button>
+          </article>
+          <el-empty v-if="!videoRecycleBinLoading && !videoRecycleProjects.length" description="暂无已删除的视频项目" />
+        </div>
+      </el-tab-pane>
+      <el-tab-pane :label="`图文项目 (${recycledImageProjects.length})`" name="IMAGE">
+        <div v-loading="taskRecycleBinLoading" class="task-recycle-list">
+          <article v-for="task in recycledImageProjects" :key="task.id" class="task-recycle-item">
+            <div><div class="task-meta"><el-tag size="small" type="success">图文项目</el-tag><span>删除于 {{ formatTime(task.deletedAt) }}</span><span class="recycle-countdown">{{ recycleRemaining(task) }}</span></div><h4>{{ task.title }}</h4><p class="task-summary">{{ task.description || task.expectedResult || "图文项目" }}</p></div>
+            <el-button type="primary" plain :loading="restoringTaskId === task.id" @click="restoreRecycledImageProject(task)">恢复</el-button>
+          </article>
+          <el-empty v-if="!taskRecycleBinLoading && !recycledImageProjects.length" description="暂无已删除的图文项目" />
+        </div>
+      </el-tab-pane>
+      <el-tab-pane :label="`软文项目 (${recycledArticleProjects.length})`" name="ARTICLE">
+        <div v-loading="taskRecycleBinLoading" class="task-recycle-list">
+          <article v-for="task in recycledArticleProjects" :key="task.id" class="task-recycle-item">
+            <div><div class="task-meta"><el-tag size="small" type="warning">软文项目</el-tag><span>删除于 {{ formatTime(task.deletedAt) }}</span><span class="recycle-countdown">{{ recycleRemaining(task) }}</span></div><h4>{{ task.title }}</h4><p class="task-summary">{{ task.description || task.expectedResult || "软文项目" }}</p></div>
+            <el-button type="primary" plain :loading="restoringTaskId === task.id" @click="restoreRecycledTask(task)">恢复</el-button>
+          </article>
+          <el-empty v-if="!taskRecycleBinLoading && !recycledArticleProjects.length" description="暂无已删除的软文项目" />
+        </div>
+      </el-tab-pane>
+    </el-tabs>
   </el-dialog>
 
   <el-dialog v-model="reviewVisible" title="审核运营任务成果" width="min(560px, 92vw)">
