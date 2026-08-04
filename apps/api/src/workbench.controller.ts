@@ -1195,8 +1195,12 @@ export class WorkbenchController {
     @Body() body: Record<string, unknown>,
   ) {
     const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
-    const approve = String(body.action || "").toUpperCase() === "APPROVE";
-    const note = String(body.note || "").trim();
+    const action = String(body.action || "").trim().toUpperCase();
+    if (!["APPROVE", "RETURN"].includes(action)) throw new BadRequestException("图文审核动作不正确");
+    const approve = action === "APPROVE";
+    // `reason` was used by an older workbench client. Keep accepting it so a
+    // cached page can still return an image project after a deployment.
+    const note = String(body.note || body.reason || "").trim();
     if (!approve && !note) throw new BadRequestException("退回图文时必须填写原因");
     const project = await this.prisma.contentPlan.findFirst({ where: { id, assignedEmployeeId: employee.employeeId } });
     if (!project) throw new ForbiddenException("图文项目不存在或无权处理");

@@ -363,6 +363,7 @@ const activeImageProjectId = ref("");
 const taskImageProjectDetail = ref<Row>({});
 const imageProjectPreviewVisible = ref(false);
 const imageProjectPreviewIndex = ref(0);
+const reviewingImageProject = ref(false);
 const downloadingImageProject = ref(false);
 const imageProjectForm = reactive({
   productModel: "",
@@ -1517,16 +1518,25 @@ async function retryImageProject() {
 }
 
 async function reviewImageProject(approve: boolean) {
-  if (!activeImageProjectId.value) return;
-  let reason = "";
+  if (!activeImageProjectId.value || reviewingImageProject.value) return;
+  let note = "";
   if (!approve) {
     try {
       const answer = await ElMessageBox.prompt("请说明需要修改的内容", "退回图文", { inputType: "textarea", inputValidator: (value) => value?.trim() ? true : "请填写退回原因" });
-      reason = answer.value;
+      note = answer.value.trim();
     } catch { return; }
   }
-  await post<Row>(`/api/v1/workbench/image-projects/${activeImageProjectId.value}/review`, { action: approve ? "APPROVE" : "RETURN", reason });
-  await refreshImageProject();
+  reviewingImageProject.value = true;
+  try {
+    await post<Row>(`/api/v1/workbench/image-projects/${activeImageProjectId.value}/review`, {
+      action: approve ? "APPROVE" : "RETURN",
+      note,
+    });
+    ElMessage.success(approve ? "图文审核通过" : "图文已退回，正在按修改要求重新生成");
+    await refreshImageProject();
+  } finally {
+    reviewingImageProject.value = false;
+  }
 }
 
 function addImagePublishRecord() {
@@ -4032,7 +4042,7 @@ onBeforeUnmount(() => {
                       <section><header><strong>发布文案</strong><el-button size="small" @click="copyTaskContent(imageProjectCopy(taskImageProjectDetail), '发布文案')">复制</el-button></header><p>{{ imageProjectCopy(taskImageProjectDetail) || '发布文案已随图文生成' }}</p></section>
                     </div>
                   </section>
-                  <div class="preview-actions"><el-button @click="openImageProjectPreview">预览图文</el-button><el-button :loading="downloadingImageProject" @click="downloadAllImageProjectPages(taskImageProjectDetail)">一键下载全部</el-button><el-button type="danger" plain @click="reviewImageProject(false)">退回并填写原因</el-button><el-button type="success" @click="reviewImageProject(true)">图文审核通过</el-button></div>
+                  <div class="preview-actions"><el-button @click="openImageProjectPreview">预览图文</el-button><el-button :loading="downloadingImageProject" @click="downloadAllImageProjectPages(taskImageProjectDetail)">一键下载全部</el-button><el-button type="danger" plain :loading="reviewingImageProject" @click="reviewImageProject(false)">退回并填写原因</el-button><el-button type="success" :loading="reviewingImageProject" @click="reviewImageProject(true)">图文审核通过</el-button></div>
                 </template>
                 <template v-else>
                   <section class="image-result-layout published">
@@ -5637,8 +5647,8 @@ onBeforeUnmount(() => {
         <div class="preview-actions">
           <el-button @click="openImageProjectPreview">预览图文</el-button>
           <el-button :loading="downloadingImageProject" @click="downloadAllImageProjectPages(taskImageProjectDetail)">一键下载全部</el-button>
-          <el-button type="danger" plain @click="reviewImageProject(false)">退回并填写原因</el-button>
-          <el-button type="success" @click="reviewImageProject(true)">图文审核通过</el-button>
+          <el-button type="danger" plain :loading="reviewingImageProject" @click="reviewImageProject(false)">退回并填写原因</el-button>
+          <el-button type="success" :loading="reviewingImageProject" @click="reviewImageProject(true)">图文审核通过</el-button>
         </div>
       </template>
       <template v-else>
