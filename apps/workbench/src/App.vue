@@ -139,6 +139,8 @@ const taskRecycleBinVisible = ref(false);
 const taskRecycleBinLoading = ref(false);
 const taskRecycleItems = ref<Row[]>([]);
 const recycleCategory = ref("TASK");
+const recyclePageSize = 5;
+const recyclePages = reactive({ TASK: 1, VIDEO: 1, IMAGE: 1, ARTICLE: 1 });
 const trashingTaskId = ref("");
 const restoringTaskId = ref("");
 const inviteVisible = ref(false);
@@ -2131,9 +2133,37 @@ async function openTaskRecycleBin() {
   await Promise.all([loadTaskRecycleBin(), loadVideoRecycleBin()]);
 }
 
-const recycledNormalTasks = computed(() => taskRecycleItems.value.filter((item) => !["VIDEO_PROJECT", "IMAGE_PROJECT"].includes(String(item.sourceType || "")) && item.category !== "ARTICLE_PROJECT"));
-const recycledImageProjects = computed(() => taskRecycleItems.value.filter((item) => item.sourceType === "IMAGE_PROJECT" || item.category === "IMAGE_PROJECT"));
-const recycledArticleProjects = computed(() => taskRecycleItems.value.filter((item) => item.sourceType === "ARTICLE_PROJECT" || item.category === "ARTICLE_PROJECT"));
+function recycleDeletedAt(item: Row) {
+  return new Date(item.deletedAt || item.archivedAt || 0).getTime();
+}
+
+function newestRecycleItems(items: Row[]) {
+  return [...items].sort((a, b) => recycleDeletedAt(b) - recycleDeletedAt(a));
+}
+
+function recyclePageItems(items: Row[], page: number) {
+  const start = (page - 1) * recyclePageSize;
+  return items.slice(start, start + recyclePageSize);
+}
+
+const recycledNormalTasks = computed(() => newestRecycleItems(taskRecycleItems.value.filter((item) => !["VIDEO_PROJECT", "IMAGE_PROJECT"].includes(String(item.sourceType || "")) && item.category !== "ARTICLE_PROJECT")));
+const recycledImageProjects = computed(() => newestRecycleItems(taskRecycleItems.value.filter((item) => item.sourceType === "IMAGE_PROJECT" || item.category === "IMAGE_PROJECT")));
+const recycledArticleProjects = computed(() => newestRecycleItems(taskRecycleItems.value.filter((item) => item.sourceType === "ARTICLE_PROJECT" || item.category === "ARTICLE_PROJECT")));
+const recycledVideoProjects = computed(() => newestRecycleItems(videoRecycleProjects.value));
+const pagedRecycledNormalTasks = computed(() => recyclePageItems(recycledNormalTasks.value, recyclePages.TASK));
+const pagedRecycledVideoProjects = computed(() => recyclePageItems(recycledVideoProjects.value, recyclePages.VIDEO));
+const pagedRecycledImageProjects = computed(() => recyclePageItems(recycledImageProjects.value, recyclePages.IMAGE));
+const pagedRecycledArticleProjects = computed(() => recyclePageItems(recycledArticleProjects.value, recyclePages.ARTICLE));
+
+watch(
+  [() => recycledNormalTasks.value.length, () => recycledVideoProjects.value.length, () => recycledImageProjects.value.length, () => recycledArticleProjects.value.length],
+  ([taskCount, videoCount, imageCount, articleCount]) => {
+    recyclePages.TASK = Math.min(recyclePages.TASK, Math.max(1, Math.ceil(taskCount / recyclePageSize)));
+    recyclePages.VIDEO = Math.min(recyclePages.VIDEO, Math.max(1, Math.ceil(videoCount / recyclePageSize)));
+    recyclePages.IMAGE = Math.min(recyclePages.IMAGE, Math.max(1, Math.ceil(imageCount / recyclePageSize)));
+    recyclePages.ARTICLE = Math.min(recyclePages.ARTICLE, Math.max(1, Math.ceil(articleCount / recyclePageSize)));
+  },
+);
 
 function recycleTaskTypeLabel(task: Row) {
   if (task.sourceType === "IMAGE_PROJECT" || task.category === "IMAGE_PROJECT") return "图文项目";
@@ -5432,7 +5462,7 @@ onBeforeUnmount(() => {
     <el-tabs v-model="recycleCategory" class="recycle-tabs">
       <el-tab-pane :label="`普通任务 (${recycledNormalTasks.length})`" name="TASK">
         <div v-loading="taskRecycleBinLoading" class="task-recycle-list">
-          <article v-for="task in recycledNormalTasks" :key="task.id" class="task-recycle-item">
+          <article v-for="task in pagedRecycledNormalTasks" :key="task.id" class="task-recycle-item">
             <div>
               <div class="task-meta"><el-tag size="small" type="info">{{ recycleTaskTypeLabel(task) }}</el-tag><span>删除于 {{ formatTime(task.deletedAt) }}</span><span class="recycle-countdown">{{ recycleRemaining(task) }}</span></div>
               <h4>{{ task.title }}</h4>
@@ -5441,33 +5471,37 @@ onBeforeUnmount(() => {
             <el-button type="primary" plain :loading="restoringTaskId === task.id" @click="restoreRecycledTask(task)">恢复</el-button>
           </article>
           <el-empty v-if="!taskRecycleBinLoading && !recycledNormalTasks.length" description="暂无已删除的普通任务" />
+          <el-pagination v-if="recycledNormalTasks.length > recyclePageSize" v-model:current-page="recyclePages.TASK" small background layout="prev, pager, next" :page-size="recyclePageSize" :total="recycledNormalTasks.length" />
         </div>
       </el-tab-pane>
       <el-tab-pane :label="`视频项目 (${videoRecycleProjects.length})`" name="VIDEO">
         <div v-loading="videoRecycleBinLoading" class="task-recycle-list">
-          <article v-for="project in videoRecycleProjects" :key="project.id" class="task-recycle-item">
+          <article v-for="project in pagedRecycledVideoProjects" :key="project.id" class="task-recycle-item">
             <div><div class="task-meta"><el-tag size="small">视频项目</el-tag><el-tag size="small" type="warning">删除前：{{ recycleProjectStageLabel(project.previousProductionStage, "VIDEO") }}</el-tag><span>删除于 {{ formatTime(project.archivedAt) }}</span><span class="recycle-countdown">{{ recycleRemainingText(project) }}</span></div><h4>{{ project.topic }}</h4><p class="task-summary">{{ project.productModel || "未填写产品型号" }}</p></div>
             <el-button type="primary" plain :loading="restoringVideoProjectId === project.id" @click="restoreVideoProject(project)">恢复</el-button>
           </article>
-          <el-empty v-if="!videoRecycleBinLoading && !videoRecycleProjects.length" description="暂无已删除的视频项目" />
+          <el-empty v-if="!videoRecycleBinLoading && !recycledVideoProjects.length" description="暂无已删除的视频项目" />
+          <el-pagination v-if="recycledVideoProjects.length > recyclePageSize" v-model:current-page="recyclePages.VIDEO" small background layout="prev, pager, next" :page-size="recyclePageSize" :total="recycledVideoProjects.length" />
         </div>
       </el-tab-pane>
       <el-tab-pane :label="`图文项目 (${recycledImageProjects.length})`" name="IMAGE">
         <div v-loading="taskRecycleBinLoading" class="task-recycle-list">
-          <article v-for="task in recycledImageProjects" :key="task.id" class="task-recycle-item">
+          <article v-for="task in pagedRecycledImageProjects" :key="task.id" class="task-recycle-item">
             <div><div class="task-meta"><el-tag size="small" type="success">图文项目</el-tag><el-tag size="small" type="warning">删除前：{{ recycleProjectStageLabel(task.recyclePreviousStage, "IMAGE") }}</el-tag><span>删除于 {{ formatTime(task.deletedAt) }}</span><span class="recycle-countdown">{{ recycleRemaining(task) }}</span></div><h4>{{ task.title }}</h4><p class="task-summary">{{ task.description || task.expectedResult || "图文项目" }}</p></div>
             <el-button type="primary" plain :loading="restoringTaskId === task.id" @click="restoreRecycledImageProject(task)">恢复</el-button>
           </article>
           <el-empty v-if="!taskRecycleBinLoading && !recycledImageProjects.length" description="暂无已删除的图文项目" />
+          <el-pagination v-if="recycledImageProjects.length > recyclePageSize" v-model:current-page="recyclePages.IMAGE" small background layout="prev, pager, next" :page-size="recyclePageSize" :total="recycledImageProjects.length" />
         </div>
       </el-tab-pane>
       <el-tab-pane :label="`软文项目 (${recycledArticleProjects.length})`" name="ARTICLE">
         <div v-loading="taskRecycleBinLoading" class="task-recycle-list">
-          <article v-for="task in recycledArticleProjects" :key="task.id" class="task-recycle-item">
+          <article v-for="task in pagedRecycledArticleProjects" :key="task.id" class="task-recycle-item">
             <div><div class="task-meta"><el-tag size="small" type="warning">软文项目</el-tag><span>删除于 {{ formatTime(task.deletedAt) }}</span><span class="recycle-countdown">{{ recycleRemaining(task) }}</span></div><h4>{{ task.title }}</h4><p class="task-summary">{{ task.description || task.expectedResult || "软文项目" }}</p></div>
             <el-button type="primary" plain :loading="restoringTaskId === task.id" @click="restoreRecycledTask(task)">恢复</el-button>
           </article>
           <el-empty v-if="!taskRecycleBinLoading && !recycledArticleProjects.length" description="暂无已删除的软文项目" />
+          <el-pagination v-if="recycledArticleProjects.length > recyclePageSize" v-model:current-page="recyclePages.ARTICLE" small background layout="prev, pager, next" :page-size="recyclePageSize" :total="recycledArticleProjects.length" />
         </div>
       </el-tab-pane>
     </el-tabs>
@@ -6206,7 +6240,7 @@ onBeforeUnmount(() => {
   >
     <el-alert title="这里只显示你自己删除的视频项目。删除后保留3天，期限内可以恢复。" type="info" :closable="false" />
     <div v-loading="videoRecycleBinLoading" class="video-recycle-list">
-      <article v-for="project in videoRecycleProjects" :key="project.id" class="video-recycle-item">
+      <article v-for="project in pagedRecycledVideoProjects" :key="project.id" class="video-recycle-item">
         <div>
           <div class="task-meta">
             <span>{{ platformLabel(project.targetPlatforms?.[0]) }}</span>
@@ -6223,7 +6257,8 @@ onBeforeUnmount(() => {
           @click="restoreVideoProject(project)"
         >恢复项目</el-button>
       </article>
-      <el-empty v-if="!videoRecycleBinLoading && !videoRecycleProjects.length" description="回收站暂无可恢复的视频项目" />
+      <el-empty v-if="!videoRecycleBinLoading && !recycledVideoProjects.length" description="回收站暂无可恢复的视频项目" />
+      <el-pagination v-if="recycledVideoProjects.length > recyclePageSize" v-model:current-page="recyclePages.VIDEO" small background layout="prev, pager, next" :page-size="recyclePageSize" :total="recycledVideoProjects.length" />
     </div>
     <template #footer><el-button @click="videoRecycleBinVisible = false">关闭</el-button></template>
   </el-dialog>
