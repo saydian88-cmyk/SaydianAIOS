@@ -24,12 +24,12 @@ Get-Content -LiteralPath $resolvedConfig -Encoding UTF8 | ForEach-Object {
 $repoPath = $env:AI_TASK_REPO_PATH
 if (-not $repoPath) { throw "AI_TASK_REPO_PATH is not configured" }
 $resolvedRepo = (Resolve-Path -LiteralPath $repoPath).Path
-$pnpmExecutable = $env:PNPM_EXECUTABLE
-if (-not $pnpmExecutable -or -not (Test-Path -LiteralPath $pnpmExecutable)) {
-  throw "PNPM_EXECUTABLE is not configured"
+$tsxExecutable = Join-Path $resolvedRepo "apps\ai-task-worker\node_modules\.bin\tsx.cmd"
+if (-not (Test-Path -LiteralPath $tsxExecutable -PathType Leaf)) {
+  throw "The installed AI task runner runtime is missing: $tsxExecutable"
 }
 $runtimePathParts = @(
-  (Split-Path -Parent $pnpmExecutable)
+  (Split-Path -Parent $env:NODE_EXECUTABLE)
   (Split-Path -Parent $env:CODEX_EXECUTABLE)
   (Split-Path -Parent $env:AI_TASK_PYTHON_EXECUTABLE)
   (Split-Path -Parent $env:FFMPEG_EXECUTABLE)
@@ -42,5 +42,5 @@ $runnerErrorLog = Join-Path $configRoot "runner-error.log"
 
 Set-Location -LiteralPath $resolvedRepo
 $ErrorActionPreference = "Continue"
-& $pnpmExecutable dev:ai-task-runner 1>> $runnerLog 2>> $runnerErrorLog
+& $tsxExecutable (Join-Path $resolvedRepo "apps\ai-task-worker\src\index.ts") 1>> $runnerLog 2>> $runnerErrorLog
 exit $LASTEXITCODE

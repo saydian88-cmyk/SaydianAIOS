@@ -42,6 +42,11 @@ if (-not $SkipDependencies) {
   -RunnerToken $values["AI_TASK_RUNNER_TOKEN"] `
   -ApiUrl $values["AI_TASK_API_URL"] `
   -NodeCode $values["AI_TASK_RUNNER_NODE_CODE"] `
-  -TaskName $TaskName
+  -TaskName $TaskName `
+  -NodeExecutable $(if ($values["NODE_EXECUTABLE"]) { $values["NODE_EXECUTABLE"] } else { "node.exe" }) `
+  -CodexExecutable $values["CODEX_EXECUTABLE"] `
+  -PythonExecutable $values["AI_TASK_PYTHON_EXECUTABLE"] `
+  -FfmpegExecutable $values["FFMPEG_EXECUTABLE"] `
+  -FfprobeExecutable $values["FFPROBE_EXECUTABLE"]
 
 Write-Output "AI task runner upgraded; existing Runner Token retained; version=3.0.0"
