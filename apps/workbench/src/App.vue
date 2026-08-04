@@ -1315,7 +1315,7 @@ function markImageRequirementEdited() {
 function buildReferenceDirectTaskRequirement() {
   const model = videoFactoryForm.productModel.trim() || "所选产品";
   const referenceUrl = videoFactoryForm.referenceVideoUrl.trim() || "待填写的参考视频链接";
-  return `用视频剪辑--基于素材库分享版 skill，为赛电${model}制作参考视频直出成片。参考视频：${referenceUrl}。请直接完成脚本结构、素材匹配、剪辑和最终成片，无需返回中间脚本、素材匹配或剪辑过程；参考该视频的镜头结构、画面节奏和氛围，并直接复用可访问原声中的 BGM、环境声、音效、口播与节拍。画面必须使用${model}的真实素材重建，不得混用其他产品素材。只回传最终成片供员工审核。`;
+  return `用视频剪辑--基于素材库 skill，参考视频：${referenceUrl}。请直接完成参考视频分析、脚本结构、素材匹配、剪辑和最终成片，无需返回中间脚本、素材匹配或剪辑过程；参考该视频的镜头结构、画面节奏和氛围，并直接复用可访问原声中的 BGM、环境声、音效节拍。画面必须使用${model}的真实素材重建，不得混用其他产品素材。只回传最终成片供员工审核。`;
 }
 
 function syncReferenceDirectTaskRequirement() {
