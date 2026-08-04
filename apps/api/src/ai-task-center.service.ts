@@ -3623,20 +3623,30 @@ export class AiTaskCenterService implements OnModuleInit {
           { lockedBy: null, updatedAt: { lt: staleAt } },
         ],
       },
-      select: { id: true, lockedBy: true, retryCount: true, maxRetries: true },
+      select: { id: true, lockedBy: true },
     });
     for (const task of stale) {
-      const terminal = task.retryCount + 1 >= task.maxRetries;
       await this.prisma.aiTask.update({
         where: { id: task.id },
         data: {
-          status: terminal ? "FAILED" : "RETRY",
-          retryCount: { increment: 1 },
-          failureReason: "Codex执行节点心跳超时",
+          // A missing heartbeat is an infrastructure interruption, not a
+          // creative/task attempt. Keep the business retry budget untouched
+          // so shutdowns, reboots and runner crashes can always resume.
+          status: "RETRY",
+          progressMessage: "执行节点中断，正在从已有结果自动恢复",
+          failureReason: null,
           lockedBy: null,
           lockedAt: null,
           heartbeatAt: null,
-          finishedAt: terminal ? new Date() : null,
+          finishedAt: null,
+        },
+      });
+      await this.prisma.aiTaskAttempt.updateMany({
+        where: { aiTaskId: task.id, status: "RUNNING" },
+        data: {
+          status: "RETRY",
+          failureReason: "执行节点关机或心跳中断，等待自动续跑",
+          finishedAt: new Date(),
         },
       });
       if (task.lockedBy) {
@@ -3646,7 +3656,7 @@ export class AiTaskCenterService implements OnModuleInit {
             status: "OFFLINE",
             currentTaskId: null,
             currentSkill: null,
-            lastError: "任务心跳超时",
+            lastError: "执行节点心跳中断，任务已转入自动恢复",
           },
         });
       }

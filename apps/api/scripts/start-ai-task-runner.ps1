@@ -42,5 +42,9 @@ $runnerErrorLog = Join-Path $configRoot "runner-error.log"
 
 Set-Location -LiteralPath $resolvedRepo
 $ErrorActionPreference = "Continue"
-& $tsxExecutable (Join-Path $resolvedRepo "apps\ai-task-worker\src\index.ts") 1>> $runnerLog 2>> $runnerErrorLog
-exit $LASTEXITCODE
+while ($true) {
+  & $tsxExecutable (Join-Path $resolvedRepo "apps\ai-task-worker\src\index.ts") 1>> $runnerLog 2>> $runnerErrorLog
+  $workerExitCode = $LASTEXITCODE
+  Add-Content -LiteralPath $runnerErrorLog -Value "$(Get-Date -Format o) worker exited with code $workerExitCode; restarting in 15 seconds"
+  Start-Sleep -Seconds 15
+}

@@ -158,6 +158,50 @@ describe("AiTaskCenterService", () => {
     expect(runnerTaskTypeCapabilities(["VIDEO"], undefined)).toEqual(["VIDEO"]);
   });
 
+  it("recovers shutdown-interrupted tasks without consuming business retries", async () => {
+    const taskUpdate = vi.fn().mockResolvedValue({});
+    const attemptUpdateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const nodeUpdateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const service = new AiTaskCenterService(
+      {
+        aiTask: {
+          findMany: vi.fn().mockResolvedValue([{
+            id: "shutdown-task-1",
+            lockedBy: "windows-codex-video-01",
+          }]),
+          update: taskUpdate,
+        },
+        aiTaskAttempt: { updateMany: attemptUpdateMany },
+        aiWorkerNode: { updateMany: nodeUpdateMany },
+      } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await (service as unknown as { releaseStaleTasks(): Promise<void> }).releaseStaleTasks();
+
+    expect(taskUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        status: "RETRY",
+        progressMessage: "执行节点中断，正在从已有结果自动恢复",
+        failureReason: null,
+        lockedBy: null,
+        finishedAt: null,
+      }),
+    }));
+    expect(taskUpdate.mock.calls[0]?.[0].data).not.toHaveProperty("retryCount");
+    expect(attemptUpdateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { aiTaskId: "shutdown-task-1", status: "RUNNING" },
+      data: expect.objectContaining({ status: "RETRY" }),
+    }));
+    expect(nodeUpdateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: "OFFLINE", currentTaskId: null }),
+    }));
+  });
+
   it("repairs the execution envelope during exhausted legacy image-project routing recovery", async () => {
     const task = {
       id: "ai-image-1",
