@@ -89,7 +89,8 @@ $lines = @(
 Set-Content -LiteralPath $configPath -Value $lines -Encoding UTF8
 
 $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-$wscriptPath = (Get-Command wscript.exe -ErrorAction Stop).Source
+$wscriptPath = Join-Path $env:WINDIR "System32\wscript.exe"
+if (-not (Test-Path -LiteralPath $wscriptPath -PathType Leaf)) { throw "wscript.exe is unavailable" }
 $action = New-ScheduledTaskAction `
   -Execute $wscriptPath `
   -Argument "//B //Nologo `"$hiddenLauncher`""
