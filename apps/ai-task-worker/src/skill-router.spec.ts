@@ -17,7 +17,7 @@ describe("skill task router", () => {
     ["VIDEO", "COVER_TITLE", "saidian-ai-task-dispatcher"],
   ])("routes %s/%s to %s", (type, mode, skill) => {
     expect(routeTask({
-      task: { type },
+      task: { type, ...(type === "VIDEO" ? { sourceType: "VIDEO_FACTORY_PROJECT" } : {}) },
       execution: { mode, strategy: "CODEX_SKILL", requiredSkill: skill },
     }, { ...process.env, CODEX_HOME: routeOnlyCodexHome }).key).toBe(skill);
   });
@@ -54,19 +54,19 @@ describe("skill task router", () => {
     },
   );
 
-  it("uses the configured share-edition video Skill for colleague nodes", () => {
-    const shareSkillPath = join(routeOnlyCodexHome, "skills", "video-editing-from-media-library-share", "SKILL.md");
+  it("does not allow an environment override to downgrade the full video Skill", () => {
+    const fullSkillPath = join(routeOnlyCodexHome, "skills", "video-editing-from-media-library", "SKILL.md");
     expect(routeTask({
-      task: { type: "VIDEO" },
+      task: { type: "VIDEO", sourceType: "VIDEO_FACTORY_PROJECT" },
       execution: { mode: "FULL_VIDEO", strategy: "CODEX_SKILL", requiredSkill: "saidian-ai-task-dispatcher" },
     }, {
       ...process.env,
       CODEX_HOME: routeOnlyCodexHome,
       AI_TASK_VIDEO_SKILL_NAME: "video-editing-from-media-library-share",
-      AI_TASK_VIDEO_SKILL_PATH: shareSkillPath,
+      AI_TASK_VIDEO_SKILL_PATH: join(routeOnlyCodexHome, "skills", "video-editing-from-media-library-share", "SKILL.md"),
     })).toMatchObject({
-      downstreamSkillName: "video-editing-from-media-library-share",
-      downstreamSkillPath: shareSkillPath,
+      downstreamSkillName: "video-editing-from-media-library",
+      downstreamSkillPath: fullSkillPath,
     });
   });
 
@@ -116,7 +116,7 @@ describe("skill task router", () => {
 
   it("routes Codex direct full-video tasks through the dispatcher to the full local editing Skill", () => {
     expect(routeTask({
-      task: { type: "VIDEO", input: { executionMode: "FULL_VIDEO", codexDirectFullVideo: true } },
+      task: { type: "VIDEO", sourceType: "VIDEO_FACTORY_PROJECT", input: { executionMode: "FULL_VIDEO", codexDirectFullVideo: true } },
       execution: {
         mode: "FULL_VIDEO",
         strategy: "CODEX_FIRST",
@@ -131,7 +131,7 @@ describe("skill task router", () => {
 
   it("accepts legacy task packages that name the share video Skill directly", () => {
     expect(routeTask({
-      task: { type: "VIDEO", input: { executionMode: "SCRIPT_ONLY" } },
+      task: { type: "VIDEO", sourceType: "VIDEO_FACTORY_PROJECT", input: { executionMode: "SCRIPT_ONLY" } },
       execution: {
         mode: "SCRIPT_ONLY",
         strategy: "CODEX_SKILL",
@@ -144,6 +144,66 @@ describe("skill task router", () => {
       key: "saidian-ai-task-dispatcher",
       downstreamSkillName: "video-editing-from-media-library",
     });
+  });
+
+  it("validates and routes the versioned project contract", () => {
+    expect(routeTask({
+      task: {
+        type: "VIDEO",
+        sourceType: "VIDEO_FACTORY_PROJECT",
+        input: {
+          executionMode: "FULL_VIDEO",
+          taskRoute: {
+            version: 1,
+            domain: "VIDEO_PROJECT",
+            projectMode: "CODEX_DIRECT_FULL_VIDEO",
+            stage: "FULL_VIDEO",
+            executionMode: "FULL_VIDEO",
+            requiredSkill: "video-editing-from-media-library",
+          },
+        },
+      },
+      execution: {
+        mode: "FULL_VIDEO",
+        strategy: "CODEX_SKILL",
+        requiredSkill: "video-editing-from-media-library",
+      },
+    }, { ...process.env, CODEX_HOME: routeOnlyCodexHome })).toMatchObject({
+      key: "saidian-ai-task-dispatcher",
+      downstreamSkillName: "video-editing-from-media-library",
+    });
+  });
+
+  it("rejects a conflicting versioned project contract", () => {
+    expect(() => routeTask({
+      task: {
+        type: "IMAGE",
+        sourceType: "IMAGE_PROJECT",
+        input: {
+          executionMode: "IMAGE_POST",
+          taskRoute: {
+            version: 1,
+            domain: "IMAGE_PROJECT",
+            projectMode: "IMAGE_POST",
+            stage: "IMAGE_POST",
+            executionMode: "IMAGE_POST",
+            requiredSkill: "saidian-douyin-image-posts",
+          },
+        },
+      },
+      execution: { mode: "IMAGE_POST", strategy: "CODEX_SKILL", requiredSkill: "imagegen" },
+    }, { ...process.env, CODEX_HOME: routeOnlyCodexHome })).toThrowError(
+      expect.objectContaining<Partial<SkillRouteError>>({ code: "TASK_ROUTE_CONFLICT" }),
+    );
+  });
+
+  it("does not route unrelated VIDEO tasks through the editing dispatcher", () => {
+    expect(() => routeTask({
+      task: { type: "VIDEO", sourceType: "DAILY_VIDEO_TOPIC_CARDS", input: { executionMode: "FULL_VIDEO" } },
+      execution: { mode: "FULL_VIDEO", strategy: "CODEX_SKILL", requiredSkill: "video-editing-from-media-library" },
+    }, { ...process.env, CODEX_HOME: routeOnlyCodexHome })).toThrowError(
+      expect.objectContaining<Partial<SkillRouteError>>({ code: "UNSUPPORTED_TASK_TYPE" }),
+    );
   });
 
   it("rejects unknown task types without silent fallback", () => {

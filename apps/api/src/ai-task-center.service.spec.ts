@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import {
   AiTaskCenterService,
   aiTaskExecutionMode,
+  aiTaskRoute,
   aiTaskTargetNodeCode,
   runnerCanClaimTask,
   videoScriptOutputMetadata,
@@ -104,6 +105,46 @@ describe("AiTaskCenterService", () => {
     expect(runnerCanClaimTask(imageProject, ["DEFAULT"])).toBe(false);
     expect(runnerCanClaimTask(imageProject, ["IMAGE_POST"])).toBe(true);
     expect(runnerCanClaimTask({ type: "IMAGE", input: { executionMode: "DEFAULT" } }, undefined)).toBe(true);
+  });
+
+  it("builds deterministic routes without reading the task title", () => {
+    expect(aiTaskRoute({
+      type: "VIDEO",
+      sourceType: "VIDEO_FACTORY_PROJECT",
+      input: { executionMode: "FULL_VIDEO", codexDirectFullVideo: true, workflowGuard: { stage: "FULL_VIDEO" } },
+    })).toEqual({
+      version: 1,
+      domain: "VIDEO_PROJECT",
+      projectMode: "CODEX_DIRECT_FULL_VIDEO",
+      stage: "FULL_VIDEO",
+      executionMode: "FULL_VIDEO",
+      requiredSkill: "video-editing-from-media-library",
+    });
+    expect(aiTaskRoute({
+      type: "IMAGE",
+      sourceType: "IMAGE_PROJECT",
+      input: { executionMode: "IMAGE_POST", imageProjectId: "image-project-1" },
+    })?.requiredSkill).toBe("saidian-douyin-image-posts");
+    expect(aiTaskRoute({
+      type: "VIDEO",
+      sourceType: "DAILY_VIDEO_TOPIC_CARDS",
+      input: { executionMode: "TOPIC_CARD_BATCH" },
+    })).toBeNull();
+  });
+
+  it("claims only route keys explicitly supported by the unified node", () => {
+    const codexDirect = {
+      type: "VIDEO",
+      sourceType: "VIDEO_FACTORY_PROJECT",
+      input: { executionMode: "FULL_VIDEO", codexDirectFullVideo: true },
+    };
+    expect(runnerCanClaimTask(codexDirect, [], ["CODEX_DIRECT_FULL_VIDEO"])).toBe(true);
+    expect(runnerCanClaimTask(codexDirect, [], ["IMAGE_POST"])).toBe(false);
+    expect(runnerCanClaimTask({
+      type: "ARTICLE",
+      sourceType: "DAILY_AI_PLAN",
+      input: { executionMode: "DEFAULT" },
+    }, [], ["STANDARD_SMART_VIDEO", "IMAGE_POST"])).toBe(false);
   });
 
   it("repairs the execution envelope during exhausted legacy image-project routing recovery", async () => {
@@ -268,6 +309,14 @@ describe("AiTaskCenterService", () => {
     expect(create.mock.calls[0][0].data.input).toMatchObject({
       executionMode: "SCRIPT_ONLY",
       preferredNodeCode: "windows-codex-video-01",
+      taskRoute: {
+        version: 1,
+        domain: "VIDEO_PROJECT",
+        projectMode: "STANDARD_SMART_VIDEO",
+        stage: "SCRIPT_ONLY",
+        executionMode: "SCRIPT_ONLY",
+        requiredSkill: "video-editing-from-media-library",
+      },
     });
   });
 
@@ -575,7 +624,7 @@ describe("AiTaskCenterService", () => {
     expect(referenceDirectResult.assets).toEqual([]);
     expect(referenceDirectResult.snapshots).toEqual([]);
     expect(referenceDirectResult.execution).toMatchObject({
-      requiredSkill: "saidian-ai-task-dispatcher",
+      requiredSkill: "video-editing-from-media-library",
       downstreamSkill: undefined,
     });
 

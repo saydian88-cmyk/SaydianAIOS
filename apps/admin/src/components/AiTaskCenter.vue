@@ -176,10 +176,11 @@ function hasSuccessfulAttempt(task?: Row) {
 
 function routedSkill(task?: Row) {
   if (task?.output?.execution?.skill) return task.output.execution.skill;
+  if (task?.input?.taskRoute?.requiredSkill) return task.input.taskRoute.requiredSkill;
   if (!hasSuccessfulAttempt(task)) return "等待执行";
   if (task?.input?.factoryModule === "DOUYIN_VIRAL") return "saydian-douyin-viral-video-generator";
   return ({
-    VIDEO: "video-editing-from-media-library-share",
+    VIDEO: "video-editing-from-media-library",
     IMAGE: "imagegen",
     ARTICLE: "build-health-brand-trust-content",
   } as Row)[task?.type] || "Codex本地分析";

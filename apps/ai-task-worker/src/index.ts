@@ -2150,6 +2150,8 @@ async function execute(claimed: JsonRecord) {
       skillDigest: detectedSkill.digest,
       strategy: detectedSkill.strategy,
       executionMode: detectedSkill.executionMode,
+      projectMode: detectedSkill.projectMode || "",
+      stage: detectedSkill.stage || detectedSkill.executionMode,
       routeReason: detectedSkill.reason,
       fallbackOrder: detectedSkill.fallbackOrder,
       startedAt: new Date().toISOString(),
@@ -2188,6 +2190,9 @@ async function execute(claimed: JsonRecord) {
       digest: detectedSkill.digest,
       strategy: detectedSkill.strategy,
       executionMode: detectedSkill.executionMode,
+      projectMode: detectedSkill.projectMode || "",
+      routeStage: detectedSkill.stage || detectedSkill.executionMode,
+      routeReason: detectedSkill.reason,
       resumed: resumeEligible || resumeDirectOutputUpload,
     });
     await report("SKILL_DETECTED", 15, detectedSkill.downstreamSkillName
@@ -2196,6 +2201,9 @@ async function execute(claimed: JsonRecord) {
       skillVersion: detectedSkill.version,
       strategy: detectedSkill.strategy,
       executionMode: detectedSkill.executionMode,
+      projectMode: detectedSkill.projectMode || "",
+      routeStage: detectedSkill.stage || detectedSkill.executionMode,
+      routeReason: detectedSkill.reason,
     });
     await verifyVideoSkillRuntime(packaged, detectedSkill);
     await verifyImagePostSkillRuntime(packaged, detectedSkill);
@@ -2454,6 +2462,15 @@ async function main() {
           // IMAGE_POST is intentionally opt-in. The API uses this declaration
           // to keep image-project jobs away from legacy generic imagegen nodes.
           supportedExecutionModes: ["IMAGE_POST"],
+          // Route keys are business capabilities, not broad AiTask enums. When
+          // present, the API will not let this unified node claim articles,
+          // topic cards, analyses, generic images, or ambiguous legacy jobs.
+          supportedRouteKeys: [
+            "STANDARD_SMART_VIDEO",
+            "REFERENCE_DIRECT_FULL_VIDEO",
+            "CODEX_DIRECT_FULL_VIDEO",
+            "IMAGE_POST",
+          ],
         }),
       });
       if (claimed.task) {

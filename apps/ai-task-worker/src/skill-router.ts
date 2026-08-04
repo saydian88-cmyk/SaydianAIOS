@@ -23,6 +23,8 @@ export type SkillRoute = {
   skillPath?: string;
   downstreamSkillName?: string;
   downstreamSkillPath?: string;
+  projectMode?: string;
+  stage?: string;
 };
 
 export type DetectedSkill = SkillRoute & {
@@ -83,14 +85,11 @@ export function skillRegistry(env: NodeJS.ProcessEnv = process.env): Record<Excl
 
 function videoSkillPath(env: NodeJS.ProcessEnv) {
   const home = codexHome(env);
-  return resolve(String(
-    env.AI_TASK_VIDEO_SKILL_PATH
-    || join(home, "skills", "video-editing-from-media-library", "SKILL.md"),
-  ));
+  return resolve(join(home, "skills", "video-editing-from-media-library", "SKILL.md"));
 }
 
 function videoSkillName(env: NodeJS.ProcessEnv) {
-  return String(env.AI_TASK_VIDEO_SKILL_NAME || "video-editing-from-media-library").trim();
+  return "video-editing-from-media-library";
 }
 
 function imagePostSkillName(env: NodeJS.ProcessEnv) {
@@ -133,6 +132,25 @@ export function routeTask(taskPackage: JsonRecord, env: NodeJS.ProcessEnv = proc
   ).trim().toUpperCase();
   const requestedExecutionMode = String(execution.mode || taskInput.executionMode || "").trim().toUpperCase();
   const requiredSkill = String(execution.requiredSkill || "").trim();
+  const taskRoute = object(taskInput.taskRoute || execution.taskRoute);
+  const routeVersion = Number(taskRoute.version || 0);
+  const routeDomain = String(taskRoute.domain || "").trim().toUpperCase();
+  const routeProjectMode = String(taskRoute.projectMode || "").trim().toUpperCase();
+  const routeStage = String(taskRoute.stage || "").trim().toUpperCase();
+  const routeExecutionMode = String(taskRoute.executionMode || "").trim().toUpperCase();
+  const routeRequiredSkill = String(taskRoute.requiredSkill || "").trim();
+  if (Object.keys(taskRoute).length) {
+    if (routeVersion !== 1 || !routeDomain || !routeProjectMode || !routeStage || !routeExecutionMode || !routeRequiredSkill) {
+      throw new SkillRouteError("taskRoute is incomplete", "TASK_ROUTE_INVALID", "WAITING_INPUT");
+    }
+    if (routeExecutionMode !== requestedExecutionMode || routeRequiredSkill !== requiredSkill) {
+      throw new SkillRouteError("taskRoute conflicts with the execution envelope", "TASK_ROUTE_CONFLICT", "WAITING_INPUT");
+    }
+    if ((routeDomain === "VIDEO_PROJECT" && (type !== "VIDEO" || sourceType !== "VIDEO_FACTORY_PROJECT"))
+      || (routeDomain === "IMAGE_PROJECT" && type !== "IMAGE")) {
+      throw new SkillRouteError("taskRoute conflicts with the task domain", "TASK_ROUTE_DOMAIN_CONFLICT", "WAITING_INPUT");
+    }
+  }
   const isImagePostProject = type === "IMAGE"
     && (
       sourceType === "IMAGE_PROJECT"
@@ -149,9 +167,13 @@ export function routeTask(taskPackage: JsonRecord, env: NodeJS.ProcessEnv = proc
   const isCodexDirectFullVideo = type === "VIDEO"
     && executionMode === "FULL_VIDEO"
     && taskInput.codexDirectFullVideo === true;
+  const isReferenceDirectFullVideo = type === "VIDEO"
+    && executionMode === "FULL_VIDEO"
+    && taskInput.referenceDirectFullVideo === true;
   const registry = () => skillRegistry(env);
 
-  if (isImagePostProject && executionMode === "IMAGE_POST") {
+  if (isImagePostProject && executionMode === "IMAGE_POST"
+    && (!Object.keys(taskRoute).length || (routeDomain === "IMAGE_PROJECT" && routeProjectMode === "IMAGE_POST"))) {
     assertPackageRoute(
       execution,
       "saidian-ai-task-dispatcher",
@@ -163,11 +185,15 @@ export function routeTask(taskPackage: JsonRecord, env: NodeJS.ProcessEnv = proc
       taskType: type,
       executionMode,
       strategy: "CODEX_SKILL",
-      reason: "IMAGE/IMAGE_PROJECT 由赛电调度 Skill 自动调用图文制作 Skill，生成整组图文、标题、标签与发布文案",
+      reason: Object.keys(taskRoute).length
+        ? `taskRoute v1: IMAGE_PROJECT/${routeProjectMode}/${routeStage} -> ${imagePostSkillName(env)}`
+        : "兼容旧图文项目结构：IMAGE_PROJECT/IMAGE_POST -> saidian-douyin-image-posts",
       fallbackOrder: ["SAIDIAN_DOUYIN_IMAGE_POSTS", "WAITING_INPUT"],
       skillPath: registry()["saidian-ai-task-dispatcher"],
       downstreamSkillName: imagePostSkillName(env),
       downstreamSkillPath: registry()["saidian-douyin-image-posts"],
+      projectMode: routeProjectMode || "IMAGE_POST",
+      stage: routeStage || executionMode,
     };
   }
 
@@ -226,7 +252,13 @@ export function routeTask(taskPackage: JsonRecord, env: NodeJS.ProcessEnv = proc
     };
   }
 
-  if (type === "VIDEO" && ["FULL_VIDEO", "SCRIPT_ONLY", "SIMILAR_VIDEO", "NO_VOICE_VIDEO", "COVER_TITLE"].includes(executionMode)) {
+  if (type === "VIDEO"
+    && sourceType === "VIDEO_FACTORY_PROJECT"
+    && ["FULL_VIDEO", "SCRIPT_ONLY", "SIMILAR_VIDEO", "NO_VOICE_VIDEO", "COVER_TITLE"].includes(executionMode)
+    && (!Object.keys(taskRoute).length || (
+      routeDomain === "VIDEO_PROJECT"
+      && ["STANDARD_SMART_VIDEO", "REFERENCE_DIRECT_FULL_VIDEO", "CODEX_DIRECT_FULL_VIDEO"].includes(routeProjectMode)
+    ))) {
     assertPackageRoute(
       execution,
       "saidian-ai-task-dispatcher",
@@ -242,7 +274,9 @@ export function routeTask(taskPackage: JsonRecord, env: NodeJS.ProcessEnv = proc
       taskType: type,
       executionMode,
       strategy: "CODEX_SKILL",
-      reason: isCodexDirectFullVideo
+      reason: Object.keys(taskRoute).length
+        ? `taskRoute v1: VIDEO_PROJECT/${routeProjectMode}/${routeStage} -> ${videoSkillName(env)}`
+        : isCodexDirectFullVideo
         ? "Codex直出成片由赛电调度 Skill 调用本机完整版素材库剪辑 Skill，内部完整制作质检，仅隐藏中间审核界面"
         : executionMode === "COVER_TITLE"
         ? "VIDEO/COVER_TITLE 由赛电调度 Skill 调用本地素材库剪辑 Skill，再交接封面标题子 Skill"
@@ -263,6 +297,12 @@ export function routeTask(taskPackage: JsonRecord, env: NodeJS.ProcessEnv = proc
       skillPath: registry()["saidian-ai-task-dispatcher"],
       downstreamSkillName: videoSkillName(env),
       downstreamSkillPath: videoSkillPath(env),
+      projectMode: routeProjectMode || (isCodexDirectFullVideo
+        ? "CODEX_DIRECT_FULL_VIDEO"
+        : isReferenceDirectFullVideo
+          ? "REFERENCE_DIRECT_FULL_VIDEO"
+          : "STANDARD_SMART_VIDEO"),
+      stage: routeStage || executionMode,
     };
   }
 
