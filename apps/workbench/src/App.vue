@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import type { UploadUserFile } from "element-plus";
+import JSZip from "jszip";
 import {
   Bell,
   Collection,
@@ -362,6 +363,7 @@ const activeImageProjectId = ref("");
 const taskImageProjectDetail = ref<Row>({});
 const imageProjectPreviewVisible = ref(false);
 const imageProjectPreviewIndex = ref(0);
+const downloadingImageProject = ref(false);
 const imageProjectForm = reactive({
   productModel: "",
   imageType: "送礼类",
@@ -707,22 +709,64 @@ function imageProjectTags(project?: Row) {
     : [];
 }
 
-function downloadAllImageProjectPages(project?: Row) {
+function safeDownloadName(value: unknown, fallback: string) {
+  const normalized = String(value || "")
+    .replace(/[\\/:*?"<>|]/gu, "-")
+    .replace(/\s+/gu, " ")
+    .replace(/[. ]+$/gu, "")
+    .trim();
+  return normalized || fallback;
+}
+
+function imageProjectPageFileName(page: Row, index: number, extension = "png") {
+  const sequence = String(index + 1).padStart(2, "0");
+  const pageLabel = index === 0 ? "封面" : safeDownloadName(page.title, `第${index + 1}页`);
+  return `${sequence}-${pageLabel}.${extension}`;
+}
+
+function imageExtension(blob: Blob, url: string) {
+  const byMime: Record<string, string> = {
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+    "image/gif": "gif",
+  };
+  if (byMime[blob.type]) return byMime[blob.type];
+  const pathname = (() => { try { return new URL(url, window.location.href).pathname; } catch { return ""; } })();
+  const match = pathname.match(/\.([a-z0-9]{2,5})$/iu);
+  return match?.[1]?.toLowerCase() || "png";
+}
+
+async function downloadAllImageProjectPages(project?: Row) {
   const pages = imageProjectPages(project).filter((page: Row) => imageProjectPageUrl(page));
   if (!pages.length) return ElMessage.warning("暂无可下载的图文");
-  pages.forEach((page: Row, index: number) => {
-    window.setTimeout(() => {
-      const anchor = document.createElement("a");
-      anchor.href = imageProjectPageUrl(page);
-      anchor.download = `${project?.productModel || "图文"}-${index + 1}.png`;
-      anchor.target = "_blank";
-      anchor.rel = "noopener";
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-    }, index * 180);
-  });
-  ElMessage.success(`已开始下载全部 ${pages.length} 张图文`);
+  if (downloadingImageProject.value) return;
+  downloadingImageProject.value = true;
+  try {
+    const zip = new JSZip();
+    const downloads = await Promise.all(pages.map(async (page: Row, index: number) => {
+      const url = imageProjectPageUrl(page);
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`第 ${index + 1} 张下载失败`);
+      const blob = await response.blob();
+      return { blob, fileName: imageProjectPageFileName(page, index, imageExtension(blob, url)) };
+    }));
+    downloads.forEach(({ blob, fileName }) => zip.file(fileName, blob));
+    const zipBlob = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
+    const objectUrl = URL.createObjectURL(zipBlob);
+    const anchor = document.createElement("a");
+    anchor.href = objectUrl;
+    anchor.download = `${safeDownloadName(project?.productModel, "图文项目")}-图文-${pages.length}张.zip`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 30_000);
+    ElMessage.success(`已打包下载 ${pages.length} 张图文`);
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "图文打包下载失败，请稍后重试");
+  } finally {
+    downloadingImageProject.value = false;
+  }
 }
 
 function imageProjectCopy(project?: Row) {
@@ -3981,7 +4025,7 @@ onBeforeUnmount(() => {
                       <section><header><strong>发布文案</strong><el-button size="small" @click="copyTaskContent(imageProjectCopy(taskImageProjectDetail), '发布文案')">复制</el-button></header><p>{{ imageProjectCopy(taskImageProjectDetail) || '发布文案已随图文生成' }}</p></section>
                     </div>
                   </section>
-                  <div class="preview-actions"><el-button @click="openImageProjectPreview">预览图文</el-button><el-button @click="downloadAllImageProjectPages(taskImageProjectDetail)">一键下载全部</el-button><el-button type="danger" plain @click="reviewImageProject(false)">退回并填写原因</el-button><el-button type="success" @click="reviewImageProject(true)">图文审核通过</el-button></div>
+                  <div class="preview-actions"><el-button @click="openImageProjectPreview">预览图文</el-button><el-button :loading="downloadingImageProject" @click="downloadAllImageProjectPages(taskImageProjectDetail)">一键下载全部</el-button><el-button type="danger" plain @click="reviewImageProject(false)">退回并填写原因</el-button><el-button type="success" @click="reviewImageProject(true)">图文审核通过</el-button></div>
                 </template>
                 <template v-else>
                   <section class="image-result-layout published">
@@ -3990,7 +4034,7 @@ onBeforeUnmount(() => {
                   </section>
                   <div class="image-publish-form">
                     <div v-for="(record, index) in imagePublishRecords" :key="index" class="image-publish-record"><el-select v-model="record.platform"><el-option v-for="item in publishPlatformOptions" :key="item.value" :label="item.label" :value="item.value" /></el-select><el-input v-model="record.remoteUrl" placeholder="粘贴已发布图文链接" /></div>
-                    <el-button @click="addImagePublishRecord">添加一个发布平台</el-button><el-button @click="downloadAllImageProjectPages(taskImageProjectDetail)">一键下载全部</el-button><el-button @click="openImageProjectPreview">预览图文</el-button><el-button type="primary" @click="saveImagePublishLinks">回传发布链接</el-button>
+                    <el-button @click="addImagePublishRecord">添加一个发布平台</el-button><el-button :loading="downloadingImageProject" @click="downloadAllImageProjectPages(taskImageProjectDetail)">一键下载全部</el-button><el-button @click="openImageProjectPreview">预览图文</el-button><el-button type="primary" @click="saveImagePublishLinks">回传发布链接</el-button>
                   </div>
                 </template>
               </template>
@@ -5585,7 +5629,7 @@ onBeforeUnmount(() => {
         </section>
         <div class="preview-actions">
           <el-button @click="openImageProjectPreview">预览图文</el-button>
-          <el-button @click="downloadAllImageProjectPages(taskImageProjectDetail)">一键下载全部</el-button>
+          <el-button :loading="downloadingImageProject" @click="downloadAllImageProjectPages(taskImageProjectDetail)">一键下载全部</el-button>
           <el-button type="danger" plain @click="reviewImageProject(false)">退回并填写原因</el-button>
           <el-button type="success" @click="reviewImageProject(true)">图文审核通过</el-button>
         </div>
@@ -5598,7 +5642,7 @@ onBeforeUnmount(() => {
         <div class="image-publish-form">
           <div v-for="(record, index) in imagePublishRecords" :key="index" class="image-publish-record"><el-select v-model="record.platform"><el-option v-for="item in publishPlatformOptions" :key="item.value" :label="item.label" :value="item.value" /></el-select><el-input v-model="record.remoteUrl" placeholder="粘贴已发布图文链接" /></div>
           <el-button @click="addImagePublishRecord">添加一个发布平台</el-button>
-          <el-button @click="downloadAllImageProjectPages(taskImageProjectDetail)">一键下载全部</el-button>
+          <el-button :loading="downloadingImageProject" @click="downloadAllImageProjectPages(taskImageProjectDetail)">一键下载全部</el-button>
           <el-button @click="openImageProjectPreview">预览并下载图文</el-button>
           <el-button type="primary" @click="saveImagePublishLinks">回传发布链接</el-button>
         </div>
@@ -5643,9 +5687,9 @@ onBeforeUnmount(() => {
         class="image-preview-download"
         :href="imageProjectPageUrl(currentImageProjectPreviewPage)"
         target="_blank"
-        download
+        :download="imageProjectPageFileName(currentImageProjectPreviewPage, imageProjectPreviewIndex)"
       >下载本页</a>
-      <el-button @click="downloadAllImageProjectPages(taskImageProjectDetail)">一键下载全部</el-button>
+      <el-button :loading="downloadingImageProject" @click="downloadAllImageProjectPages(taskImageProjectDetail)">一键下载全部</el-button>
       <el-button type="primary" @click="imageProjectPreviewVisible = false">完成预览</el-button>
     </template>
   </el-dialog>
