@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException, OnModuleInit } from "@nestjs/common";
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, OnModuleInit } from "@nestjs/common";
 import { Interval } from "@nestjs/schedule";
 import {
   AiTaskExecutionPolicy,
@@ -203,6 +203,29 @@ export function runnerTaskTypeCapabilities(
     "CODEX_DIRECT_FULL_VIDEO",
   ].includes(key))) capabilities.push("VIDEO");
   return capabilities;
+}
+
+export function aiTaskFastLane(task: {
+  input?: Prisma.JsonValue | JsonRecord | null;
+}) {
+  const input = object(task.input);
+  const mode = text(input.executionMode).toUpperCase();
+  const stage = text(object(input.taskRoute).stage).toUpperCase();
+  return [mode, stage].some((value) => value === "COVER_TITLE" || value === "SCRIPT_ONLY");
+}
+
+export function aiTaskQueueRank(task: {
+  priority?: string | null;
+  input?: Prisma.JsonValue | JsonRecord | null;
+}) {
+  const priority = text(task.priority).toUpperCase();
+  if (priority === "URGENT") return 0;
+  const input = object(task.input);
+  const mode = text(input.executionMode).toUpperCase();
+  const stage = text(object(input.taskRoute).stage).toUpperCase();
+  if ([mode, stage].includes("COVER_TITLE")) return 10;
+  if ([mode, stage].includes("SCRIPT_ONLY")) return 20;
+  return ({ HIGH: 100, MEDIUM: 200, NORMAL: 200, LOW: 300 } as Record<string, number>)[priority] ?? 200;
 }
 
 function normalizeTaskOutputSizes<T>(task: T): T {
@@ -589,6 +612,7 @@ export class AiTaskCenterService implements OnModuleInit {
         ? "WAITING_CONFIRMATION"
         : "PENDING";
     const taskNo = `AIT-${dateKey().replace(/-/g, "")}-${randomBytes(4).toString("hex").toUpperCase()}`;
+    const requestedPriority = text(body.priority).toUpperCase();
     const task = await this.prisma.aiTask.create({
       data: {
         taskNo,
@@ -597,7 +621,7 @@ export class AiTaskCenterService implements OnModuleInit {
         title,
         instructions: text(body.instructions) || null,
         status,
-        priority: text(body.priority).toUpperCase() || "MEDIUM",
+        priority: requestedPriority || (aiTaskFastLane({ input: rawInput }) ? "HIGH" : "MEDIUM"),
         executionPolicy,
         sourceType,
         sourceId,
@@ -915,6 +939,51 @@ export class AiTaskCenterService implements OnModuleInit {
     return updated;
   }
 
+  async markEmployeeUrgent(id: string, employeeId: string, actor: string) {
+    const { updated, activeUrgentCount } = await this.prisma.$transaction(async (tx) => {
+      // Serialize urgent-slot allocation per employee so simultaneous clicks cannot exceed three slots.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`ai-task-urgent:${employeeId}`}))`;
+      const task = await tx.aiTask.findUnique({ where: { id }, include: this.includeTask(true) });
+      if (!task) throw new NotFoundException("AI任务不存在");
+      if (task.ownerEmployeeId !== employeeId) {
+        throw new ForbiddenException("只能把自己负责的AI任务标记为紧急");
+      }
+      if (["COMPLETED", "CANCELLED"].includes(task.status)) {
+        throw new BadRequestException("已完成或已取消的AI任务不能标记为紧急");
+      }
+      if (task.priority === "URGENT") return { updated: task, activeUrgentCount: null };
+
+      const count = await tx.aiTask.count({
+        where: {
+          ownerEmployeeId: employeeId,
+          priority: "URGENT",
+          status: { notIn: ["COMPLETED", "CANCELLED"] },
+        },
+      });
+      if (count >= 3) {
+        throw new BadRequestException("你已有3个未完成的紧急AI任务，请等待其中一个完成后再标记");
+      }
+      const result = await tx.aiTask.update({
+        where: { id },
+        data: {
+          priority: "URGENT",
+          input: json({
+            ...object(task.input),
+            urgentMarkedByEmployeeId: employeeId,
+            urgentMarkedBy: actor,
+            urgentMarkedAt: new Date().toISOString(),
+          }),
+        },
+        include: this.includeTask(true),
+      });
+      return { updated: result, activeUrgentCount: count + 1 };
+    });
+    if (activeUrgentCount !== null) {
+      await this.audit(actor, "AI_TASK_MARK_URGENT", id, { employeeId, activeUrgentCount });
+    }
+    return updated;
+  }
+
   async review(id: string, body: JsonRecord, actor: string) {
     const task = await this.prisma.aiTask.findUnique({ where: { id }, include: { outputs: true } });
     if (!task || !reviewableStatuses.includes(task.status)) throw new BadRequestException("任务当前不在待审核状态");
@@ -1149,6 +1218,14 @@ export class AiTaskCenterService implements OnModuleInit {
       // jobs forever. Scan a bounded but sufficiently broad window so other
       // supported task types can still be claimed.
       take: 200,
+    });
+    tasks.sort((left, right) => {
+      const rank = aiTaskQueueRank(left) - aiTaskQueueRank(right);
+      if (rank) return rank;
+      const leftDue = left.dueAt?.getTime() ?? Number.MAX_SAFE_INTEGER;
+      const rightDue = right.dueAt?.getTime() ?? Number.MAX_SAFE_INTEGER;
+      if (leftDue !== rightDue) return leftDue - rightDue;
+      return left.createdAt.getTime() - right.createdAt.getTime();
     });
     for (const candidate of tasks) {
       if (!runnerCanClaimTask(candidate, body.supportedExecutionModes, body.supportedRouteKeys)) continue;

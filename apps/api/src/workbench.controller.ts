@@ -1976,6 +1976,16 @@ export class WorkbenchController {
     }, employee.name);
   }
 
+  @Post("ai-tasks/:id/urgent")
+  markAiTaskUrgent(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+  ) {
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    if (!employee.employeeId) throw new ForbiddenException("当前账号未关联员工档案");
+    return this.aiTasks.markEmployeeUrgent(id, employee.employeeId, employee.name);
+  }
+
   @Post("data-center/video-projects/:id/ensure-script-line-shot")
   ensureScriptLineShot(
     @Headers("authorization") authorization: string | undefined,

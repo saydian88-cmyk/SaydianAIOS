@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import {
   AiTaskCenterService,
+  aiTaskFastLane,
+  aiTaskQueueRank,
   aiTaskExecutionMode,
   aiTaskRoute,
   aiTaskTargetNodeCode,
@@ -16,7 +18,7 @@ function serviceWith(overrides: Record<string, unknown> = {}) {
     ...data,
     ownerEmployeeId: null,
   }));
-  const prisma = {
+  const prisma: Record<string, any> = {
     aiTask: {
       findUnique: vi.fn().mockResolvedValue(null),
       create,
@@ -46,6 +48,8 @@ function serviceWith(overrides: Record<string, unknown> = {}) {
     auditLog: { create: vi.fn().mockResolvedValue({}) },
     ...overrides,
   };
+  prisma.$executeRaw = vi.fn().mockResolvedValue(0);
+  prisma.$transaction = vi.fn(async (callback: (tx: Record<string, any>) => unknown) => callback(prisma));
   return {
     prisma,
     create,
@@ -94,6 +98,53 @@ describe("AiTaskCenterService", () => {
       sourceType: "WORKBENCH_CONTENT_REQUEST",
       input: { executionMode: "DEFAULT" },
     })).toBe("DEFAULT");
+  });
+
+  it("lets an employee mark at most three unfinished owned AI tasks urgent", async () => {
+    const task = {
+      id: "ai-task-urgent",
+      taskNo: "AIT-URGENT",
+      ownerEmployeeId: "employee-1",
+      status: "PENDING",
+      priority: "MEDIUM",
+      input: {},
+    };
+    const count = vi.fn().mockResolvedValue(2);
+    const update = vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({ ...task, ...data }));
+    const { service } = serviceWith({
+      aiTask: {
+        findUnique: vi.fn().mockResolvedValue(task),
+        count,
+        update,
+      },
+    });
+
+    const result = await service.markEmployeeUrgent(task.id, "employee-1", "测试员工");
+    expect(result.priority).toBe("URGENT");
+    expect(count).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ ownerEmployeeId: "employee-1", priority: "URGENT" }),
+    }));
+  });
+
+  it("rejects a fourth unfinished urgent AI task for the same employee", async () => {
+    const task = {
+      id: "ai-task-fourth",
+      taskNo: "AIT-FOURTH",
+      ownerEmployeeId: "employee-1",
+      status: "FAILED",
+      priority: "MEDIUM",
+      input: {},
+    };
+    const { service } = serviceWith({
+      aiTask: {
+        findUnique: vi.fn().mockResolvedValue(task),
+        count: vi.fn().mockResolvedValue(3),
+        update: vi.fn(),
+      },
+    });
+
+    await expect(service.markEmployeeUrgent(task.id, "employee-1", "测试员工"))
+      .rejects.toThrow("你已有3个未完成的紧急AI任务");
   });
 
   it("prevents legacy imagegen runners from claiming image-project tasks", () => {
@@ -156,6 +207,16 @@ describe("AiTaskCenterService", () => {
       "IMAGE_POST",
     ])).toEqual(["IMAGE", "VIDEO"]);
     expect(runnerTaskTypeCapabilities(["VIDEO"], undefined)).toEqual(["VIDEO"]);
+  });
+
+  it("prioritizes quick structured stages without reading task titles", () => {
+    expect(aiTaskFastLane({ input: { executionMode: "COVER_TITLE" } })).toBe(true);
+    expect(aiTaskFastLane({ input: { executionMode: "SCRIPT_ONLY" } })).toBe(true);
+    expect(aiTaskFastLane({ input: { executionMode: "FULL_VIDEO" } })).toBe(false);
+    expect(aiTaskQueueRank({ priority: "MEDIUM", input: { executionMode: "COVER_TITLE" } }))
+      .toBeLessThan(aiTaskQueueRank({ priority: "HIGH", input: { executionMode: "FULL_VIDEO" } }));
+    expect(aiTaskQueueRank({ priority: "URGENT", input: { executionMode: "FULL_VIDEO" } }))
+      .toBeLessThan(aiTaskQueueRank({ priority: "MEDIUM", input: { executionMode: "COVER_TITLE" } }));
   });
 
   it("recovers shutdown-interrupted tasks without consuming business retries", async () => {

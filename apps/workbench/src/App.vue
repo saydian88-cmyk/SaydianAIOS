@@ -216,6 +216,7 @@ const knowledgeForm = reactive({
 });
 const liveData = reactive<Row>({ roleEnabled: false, courses: [], reviews: [] });
 const notices = ref<Row[]>([]);
+const markingUrgentAiTaskId = ref("");
 const dataCenter = reactive<Row>({
   permissions: [],
   summary: {},
@@ -634,6 +635,34 @@ function taskDisplayStatus(task: Row) {
 
 function taskStatusCode(task: Row) {
   return task.projection?.aiTask?.status || task.status;
+}
+
+function linkedAiTask(task: Row) {
+  return task.projection?.aiTask && typeof task.projection.aiTask === "object"
+    ? task.projection.aiTask as Row
+    : undefined;
+}
+
+function canMarkAiTaskUrgent(task: Row) {
+  const aiTask = linkedAiTask(task);
+  return Boolean(aiTask?.id)
+    && aiTask?.priority !== "URGENT"
+    && !["COMPLETED", "CANCELLED"].includes(String(aiTask?.status || ""));
+}
+
+async function markAiTaskUrgent(task: Row) {
+  const aiTask = linkedAiTask(task);
+  if (!aiTask?.id) return;
+  markingUrgentAiTaskId.value = String(aiTask.id);
+  try {
+    await post(`/api/v1/workbench/ai-tasks/${aiTask.id}/urgent`, {});
+    aiTask.priority = "URGENT";
+    task.priority = "URGENT";
+    ElMessage.success("已标记紧急，将优先于其他AI任务执行");
+    await loadTasks();
+  } finally {
+    markingUrgentAiTaskId.value = "";
+  }
 }
 
 function isVideoProjectTask(task: Row) {
@@ -3975,6 +4004,14 @@ onBeforeUnmount(() => {
               <p v-else-if="task.returnReason" class="return-note">修改要求：{{ task.returnReason }}</p>
             </div>
             <div class="task-actions">
+              <el-button
+                v-if="can('CONTENT_SUBMIT') && canMarkAiTaskUrgent(task)"
+                type="danger"
+                plain
+                :loading="markingUrgentAiTaskId === linkedAiTask(task)?.id"
+                @click="markAiTaskUrgent(task)"
+              >标记紧急</el-button>
+              <el-tag v-else-if="linkedAiTask(task)?.priority === 'URGENT'" type="danger">紧急优先</el-tag>
               <el-button
                 v-if="isVideoProjectTask(task)"
                 type="primary"
