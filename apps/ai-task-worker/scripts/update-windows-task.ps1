@@ -38,13 +38,21 @@ if (-not $SkipDependencies) {
   if ($LASTEXITCODE -ne 0) { throw "Runner build failed" }
 }
 
+# Codex Desktop rotates its versioned executable directory during app updates.
+# Fall back to the current registered command instead of leaving the runner
+# permanently offline with a stale absolute path.
+$codexExecutable = [string]$values["CODEX_EXECUTABLE"]
+if (-not $codexExecutable -or -not (Test-Path -LiteralPath $codexExecutable -PathType Leaf)) {
+  $codexExecutable = "codex.exe"
+}
+
 & $installer `
   -RunnerToken $values["AI_TASK_RUNNER_TOKEN"] `
   -ApiUrl $values["AI_TASK_API_URL"] `
   -NodeCode $values["AI_TASK_RUNNER_NODE_CODE"] `
   -TaskName $TaskName `
   -NodeExecutable $(if ($values["NODE_EXECUTABLE"]) { $values["NODE_EXECUTABLE"] } else { "node.exe" }) `
-  -CodexExecutable $values["CODEX_EXECUTABLE"] `
+  -CodexExecutable $codexExecutable `
   -PythonExecutable $values["AI_TASK_PYTHON_EXECUTABLE"] `
   -FfmpegExecutable $values["FFMPEG_EXECUTABLE"] `
   -FfprobeExecutable $values["FFPROBE_EXECUTABLE"]
