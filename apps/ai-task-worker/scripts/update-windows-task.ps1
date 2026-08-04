@@ -42,8 +42,11 @@ if (-not $SkipDependencies) {
 # Fall back to the current registered command instead of leaving the runner
 # permanently offline with a stale absolute path.
 $codexExecutable = [string]$values["CODEX_EXECUTABLE"]
-if (-not $codexExecutable -or -not (Test-Path -LiteralPath $codexExecutable -PathType Leaf)) {
-  $codexExecutable = "codex.exe"
+if (-not $codexExecutable -or -not (Test-Path -LiteralPath $codexExecutable -PathType Leaf) -or $codexExecutable -match "\\WindowsApps\\") {
+  $desktopCodex = Get-ChildItem -LiteralPath (Join-Path $env:LOCALAPPDATA "OpenAI\Codex\bin") -Recurse -Filter "codex.exe" -File -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -ExpandProperty FullName -First 1
+  $codexExecutable = if ($desktopCodex) { $desktopCodex } else { "codex.exe" }
 }
 
 & $installer `

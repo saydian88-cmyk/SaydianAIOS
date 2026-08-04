@@ -1637,7 +1637,13 @@ async function runCodex(
   const resolvedCodexExecutable = await resolveCodexExecutable();
   const args = [
     "exec", "--ephemeral", "--skip-git-repo-check", "--output-schema", schemaPath, "--json",
-    "--sandbox", "workspace-write", "-c", "approval_policy=\"never\"",
+    // Codex's Windows workspace-write sandbox can fail before the first
+    // command while applying deny-read ACLs. This dedicated node already
+    // enforces task scope, target Skills and read-only source-material rules,
+    // so use the non-ACL sandbox mode on Windows and keep workspace-write on
+    // platforms where the native sandbox is reliable.
+    "--sandbox", process.platform === "win32" ? "danger-full-access" : "workspace-write",
+    "-c", "approval_policy=\"never\"",
     "--cd", workspace, "--output-last-message", resultPath, "-",
   ];
   let stdout = "";

@@ -20,6 +20,12 @@ $workPath = Join-Path $configRoot "work"
 $installedStartScript = Join-Path $configRoot "start-ai-task-runner.ps1"
 $resolvedNode = (Get-Command $NodeExecutable -ErrorAction Stop).Source
 $resolvedCodex = (Get-Command $CodexExecutable -ErrorAction Stop).Source
+if ($resolvedCodex -match "\\WindowsApps\\") {
+  $desktopCodex = Get-ChildItem -LiteralPath (Join-Path $env:LOCALAPPDATA "OpenAI\Codex\bin") -Recurse -Filter "codex.exe" -File -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -ExpandProperty FullName -First 1
+  if ($desktopCodex) { $resolvedCodex = $desktopCodex }
+}
 $resolvedFfmpeg = (Get-Command $FfmpegExecutable -ErrorAction Stop).Source
 $resolvedFfprobe = (Get-Command $FfprobeExecutable -ErrorAction Stop).Source
 $resolvedPython = (Get-Command $PythonExecutable -ErrorAction SilentlyContinue).Source
