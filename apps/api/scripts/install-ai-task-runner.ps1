@@ -18,6 +18,7 @@ $configRoot = Join-Path $env:LOCALAPPDATA "SaydianAiTaskRunner"
 $configPath = Join-Path $configRoot "runner.env"
 $workPath = Join-Path $configRoot "work"
 $installedStartScript = Join-Path $configRoot "start-ai-task-runner.ps1"
+$hiddenLauncher = Join-Path $configRoot "launch-hidden.vbs"
 $resolvedNode = (Get-Command $NodeExecutable -ErrorAction Stop).Source
 $resolvedCodex = (Get-Command $CodexExecutable -ErrorAction Stop).Source
 if ($resolvedCodex -match "\\WindowsApps\\") {
@@ -60,6 +61,14 @@ if (-not $RunnerToken) { throw "RunnerToken is not configured" }
 New-Item -ItemType Directory -Path $configRoot -Force | Out-Null
 New-Item -ItemType Directory -Path $workPath -Force | Out-Null
 Copy-Item -LiteralPath $startScript -Destination $installedStartScript -Force
+$launcherCommand = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$installedStartScript`" -ConfigPath `"$configPath`""
+$launcherLines = @(
+  "Option Explicit"
+  "Dim shell"
+  "Set shell = CreateObject(`"WScript.Shell`")"
+  "shell.Run `"$($launcherCommand.Replace('`"', '`"`"'))`", 0, False"
+)
+Set-Content -LiteralPath $hiddenLauncher -Value $launcherLines -Encoding ASCII
 
 $lines = @(
   "AI_TASK_API_URL=$($ApiUrl.TrimEnd('/'))"
@@ -80,10 +89,10 @@ $lines = @(
 Set-Content -LiteralPath $configPath -Value $lines -Encoding UTF8
 
 $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-$powerShellPath = (Get-Command powershell.exe -ErrorAction Stop).Source
+$wscriptPath = (Get-Command wscript.exe -ErrorAction Stop).Source
 $action = New-ScheduledTaskAction `
-  -Execute $powerShellPath `
-  -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$installedStartScript`" -ConfigPath `"$configPath`""
+  -Execute $wscriptPath `
+  -Argument "//B //Nologo `"$hiddenLauncher`""
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $currentUser
 $settings = New-ScheduledTaskSettingsSet `
   -AllowStartIfOnBatteries `
