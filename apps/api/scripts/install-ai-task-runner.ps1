@@ -98,6 +98,24 @@ if ($existingTask -and $existingTask.State -eq "Running") {
   }
 }
 
+# A hard shutdown or a replaced scheduled-task registration can leave the
+# wrapper process detached from Task Scheduler. Stop only process trees whose
+# command line points at this runner's installed script/config before starting
+# the new singleton instance.
+function Stop-RunnerProcessTree([int]$ProcessId) {
+  Get-CimInstance Win32_Process -Filter "ParentProcessId = $ProcessId" -ErrorAction SilentlyContinue |
+    ForEach-Object { Stop-RunnerProcessTree -ProcessId $_.ProcessId }
+  Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
+}
+$orphanRunnerProcesses = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+  $_.Name -eq "powershell.exe" -and $_.CommandLine -and
+  ($_.CommandLine.Contains($installedStartScript) -or $_.CommandLine.Contains($configPath))
+}
+foreach ($process in $orphanRunnerProcesses) {
+  Stop-RunnerProcessTree -ProcessId $process.ProcessId
+}
+if ($orphanRunnerProcesses) { Start-Sleep -Seconds 1 }
+
 try {
   Register-ScheduledTask `
     -TaskName $TaskName `
