@@ -824,33 +824,15 @@ function plannedBatchImageGroups() {
 }
 
 function buildBatchImageTaskRequirement() {
-  const valid = imageProjectForm.batchProducts.filter((product) => product.model && Number(product.count) > 0);
-  const total = batchImageTotalGroups();
-  const productLines = valid.length
-    ? valid.map((product, index) => `${index + 1}. ${product.model}（${product.count} 组）`).join("\n")
-    : "产品型号：待选择";
-  const typeLines = imageProjectForm.batchTypes
-    .map((row, index) => `${index + 1}. ${row.type}（${row.count} 组）`)
-    .join("\n") || "待指定";
   const groupLines = plannedBatchImageGroups()
     .map((group, index) => `${index + 1}. ${group.product}｜${group.type}｜第 ${group.groupKey.split("-")[1]} 组`)
     .join("\n") || "待完成产品和类型配置";
-  return `模式：BATCH_IMAGE_POST_PROJECT
-执行目标：作为批量图文项目，一次任务内完成全部 ${total} 组图文的图文页、标题、标签和发布文案，默认同步一次生成，不拆成两步。内部过程不回传员工端，只回传总体进度和最终成品。
-
-产品与图文分配：
-${productLines}
-
-图文类型总量：
-${typeLines}
-
-明确执行清单（以下每项为 1 组，必须按此执行；不可自行平均、调换产品或类型）：
+  const additionalPrompt = imageProjectForm.additionalPrompt.trim();
+  return `批量图文执行清单（每项为 1 组，必须按此执行，不可调换产品或类型）：
 ${groupLines}
 
-用户补充提示词：
-${imageProjectForm.additionalPrompt.trim() || "（无，尽量给 AI 更多自由发挥空间）"}
-
-画面约束：只使用所选产品的真实素材，不得混用其他产品素材；产品图优先从系统素材库查找。各产品方向尽量错开，避免整批重复。最终以批量任务整体交付，等待员工审核。`;
+交付：每组同步完成图文页、标题、标签和发布文案。
+素材限制：仅使用对应产品的真实素材，不得混用其他产品素材。${additionalPrompt ? `\n补充要求：${additionalPrompt}` : ""}`;
 }
 
 function syncBatchImageTaskRequirement() {
@@ -6686,8 +6668,8 @@ onBeforeUnmount(() => {
         </el-form-item>
       </section>
       <section class="prototype-form-section batch-task-requirement">
-        <header><strong>提交给图文制作 Skill 的任务要求</strong><span>自动整理成唯一 AI 任务，可直接修改，随输入实时更新</span></header>
-        <el-input v-model="imageProjectForm.batchTaskRequirement" type="textarea" :rows="6" @input="markBatchImageRequirementEdited" />
+        <header><strong>提交给图文制作 Skill 的任务要求</strong><span>系统自动整理为唯一执行清单；补充要求请在上方填写</span></header>
+        <el-input v-model="imageProjectForm.batchTaskRequirement" type="textarea" :rows="6" readonly />
       </section>
       </template>
     </div>
