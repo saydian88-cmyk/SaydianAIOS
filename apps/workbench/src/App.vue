@@ -791,6 +791,38 @@ function batchImageTypeTotal() {
   return imageProjectForm.batchTypes.reduce((sum, row) => sum + Math.max(0, Number(row.count || 0)), 0);
 }
 
+function plannedBatchImageGroups() {
+  const products = imageProjectForm.batchProducts
+    .filter((product) => product.model && Number(product.count) > 0)
+    .map((product) => ({ model: product.model, count: Math.max(0, Number(product.count || 0)) }));
+  const types = imageProjectForm.batchTypes
+    .filter((row) => row.type && Number(row.count) > 0)
+    .map((row) => ({ type: row.type, count: Math.max(0, Number(row.count || 0)) }));
+  const groups: Array<{ product: string; type: string; groupKey: string }> = [];
+  let productIndex = 0;
+  types.forEach((row) => {
+    for (let index = 0; index < row.count && products.length; index += 1) {
+      let guard = 0;
+      while (guard < products.length * 2) {
+        const selected = products[productIndex % products.length];
+        const used = groups.filter((group) => group.product === selected.model).length;
+        if (used < selected.count) break;
+        productIndex += 1;
+        guard += 1;
+      }
+      const selectedIndex = productIndex % products.length;
+      const selected = products[selectedIndex];
+      groups.push({
+        product: selected.model,
+        type: row.type,
+        groupKey: `${selectedIndex + 1}-${groups.filter((group) => group.product === selected.model).length + 1}`,
+      });
+      productIndex += 1;
+    }
+  });
+  return groups;
+}
+
 function buildBatchImageTaskRequirement() {
   const valid = imageProjectForm.batchProducts.filter((product) => product.model && Number(product.count) > 0);
   const total = batchImageTotalGroups();
@@ -800,14 +832,20 @@ function buildBatchImageTaskRequirement() {
   const typeLines = imageProjectForm.batchTypes
     .map((row, index) => `${index + 1}. ${row.type}（${row.count} 组）`)
     .join("\n") || "待指定";
+  const groupLines = plannedBatchImageGroups()
+    .map((group, index) => `${index + 1}. ${group.product}｜${group.type}｜第 ${group.groupKey.split("-")[1]} 组`)
+    .join("\n") || "待完成产品和类型配置";
   return `模式：BATCH_IMAGE_POST_PROJECT
 执行目标：作为批量图文项目，一次任务内完成全部 ${total} 组图文的图文页、标题、标签和发布文案，默认同步一次生成，不拆成两步。内部过程不回传员工端，只回传总体进度和最终成品。
 
 产品与图文分配：
 ${productLines}
 
-图文类型分配（自动平均分配到各产品）：
+图文类型总量：
 ${typeLines}
+
+明确执行清单（以下每项为 1 组，必须按此执行；不可自行平均、调换产品或类型）：
+${groupLines}
 
 用户补充提示词：
 ${imageProjectForm.additionalPrompt.trim() || "（无，尽量给 AI 更多自由发挥空间）"}
@@ -6612,7 +6650,7 @@ onBeforeUnmount(() => {
         <el-button type="primary" plain :disabled="imageProjectForm.batchProducts.length >= 5" @click="addBatchImageProduct">+ 添加产品</el-button>
       </section>
       <section class="prototype-form-section">
-        <header><strong>类型分配</strong><span>总体指定各类型组数，系统自动平均分配到每个产品；不需要每个产品单独指定</span></header>
+        <header><strong>类型总量</strong><span>填写各类型总组数后，系统会自动整理为逐组执行清单；不需要手动逐一分配</span></header>
         <div v-for="(row, index) in imageProjectForm.batchTypes" :key="`batch-image-type-${index}`" class="batch-product-row">
           <el-form-item :label="`类型 ${index + 1}`" required>
             <el-select v-model="row.type" @change="syncBatchImageTaskRequirement">
@@ -6629,9 +6667,17 @@ onBeforeUnmount(() => {
         </div>
         <div class="batch-allocation-hint" :class="{ error: batchImageTypeTotal() !== batchImageTotalGroups() }">
           <template v-if="batchImageTypeTotal() !== batchImageTotalGroups()">类型组数合计 {{ batchImageTypeTotal() }} 组，与图文总量 {{ batchImageTotalGroups() }} 组不一致。</template>
-          <template v-else>类型组数合计 {{ batchImageTypeTotal() }} 组，与图文总量一致，将自动平均分配到各产品。</template>
+          <template v-else>类型组数合计 {{ batchImageTypeTotal() }} 组，与图文总量一致；下方会给出唯一的逐组执行清单。</template>
         </div>
         <el-button type="primary" plain @click="addBatchImageType">+ 添加类型</el-button>
+      </section>
+      <section v-if="batchImageTypeTotal() === batchImageTotalGroups() && plannedBatchImageGroups().length" class="prototype-form-section">
+        <header><strong>逐组执行清单</strong><span>此清单会原样写入任务要求，并作为唯一执行依据</span></header>
+        <div class="batch-allocation-hint">
+          <div v-for="(group, index) in plannedBatchImageGroups()" :key="`${group.groupKey}-${group.type}`">
+            {{ index + 1 }}. {{ group.product }}｜{{ group.type }}｜第 {{ group.groupKey.split('-')[1] }} 组
+          </div>
+        </div>
       </section>
       <section class="prototype-form-section">
         <header><strong>批量创作设置</strong><span>补充提示词会自动写入任务要求</span></header>

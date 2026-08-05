@@ -340,19 +340,22 @@ function compileBatchImagePostPrompt(project: Record<string, any>, brief: Record
   const groups = Array.isArray(batch.groups) ? batch.groups as Array<Record<string, unknown>> : [];
   const productLines = products.map((item, index) => `${index + 1}. ${String(item.model || "")}（${Number(item.count || 0)} 组）`).join("\n") || "产品清单：待补充";
   const typeLines = types.map((item, index) => `${index + 1}. ${String(item.type || "")}（${Number(item.count || 0)} 组）`).join("\n") || "类型清单：待补充";
-  const groupLines = groups.map((item) => `${item.groupKey} · ${String(item.product || "")} · ${String(item.type || "")}`).join("\n") || "分组清单：待补充";
+  const groupLines = groups.map((item, index) => {
+    const groupNo = String(item.groupKey || "").split("-")[1] || String(index + 1);
+    return `${index + 1}. ${String(item.product || "")}｜${String(item.type || "")}｜第 ${groupNo} 组`;
+  }).join("\n") || "分组清单：待补充";
   const requirement = String(batch.taskRequirement || "").trim();
-  const base = requirement || [
+  const base = [
     "【任务类型】批量图文项目（只回传最终成品）",
     `项目编号：${project.productionNo || project.id}`,
     `产品与图文分配：\n${productLines}`,
-    `图文类型分配：\n${typeLines}`,
-    `按产品分配结果：\n${groupLines}`,
+    `图文类型总量：\n${typeLines}`,
+    `明确执行清单（以下每项为 1 组，必须按此执行；不可自行平均、调换产品或类型）：\n${groupLines}`,
     `用户补充提示词：${String(batch.additionalPrompt || "").trim() || "（无，尽量给 AI 更多自由发挥空间）"}`,
     "请在同一个任务内完成全部组图文的图文页、标题、标签和发布文案，默认同步一次生成，不拆成两步。内部过程不回传系统，只回传总体进度和最终成品。",
     "只使用所选产品的真实素材，不得混用其他产品素材；产品图优先从系统素材库查找。各产品方向尽量错开，避免整批重复。最终以批量任务整体交付，等待员工审核。",
   ].join("\n");
-  return base;
+  return requirement ? `${base}\n\n用户补充任务要求：\n${requirement}` : base;
 }
 
 @Controller("api/v1/workbench")
@@ -1296,7 +1299,7 @@ export class WorkbenchController {
       },
     });
     const materialRoots = ["F:\\赛电品牌素材库\\图片素材", "F:\\赛电品牌素材库\\产品规格书"];
-    const finalRequirement = requirement || compileBatchImagePostPrompt(plan as unknown as Record<string, any>, brief);
+    const finalRequirement = compileBatchImagePostPrompt(plan as unknown as Record<string, any>, brief);
     const task = await this.aiTasks.createTask({
       type: "IMAGE",
       title: `${plan.topic} 批量图文制作`,
