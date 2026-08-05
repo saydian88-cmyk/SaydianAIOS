@@ -1225,6 +1225,72 @@ main { grid-column: 2; width: min(1240px, calc(100% - 48px)); margin: 24px auto;
   font-size: 12px;
   line-height: 1.7;
 }
+.group-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+.group-card {
+  padding: 12px;
+  border: 1px solid #e2e7ec;
+  border-radius: 11px;
+  background: #fff;
+}
+.group-card .g-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.group-thumb {
+  display: grid;
+  height: 108px;
+  margin-top: 10px;
+  place-items: center;
+  border-radius: 9px;
+  background: linear-gradient(145deg, #5c6a68, #8a918d 58%, #c7bda8);
+  color: #fff;
+  text-align: center;
+}
+.group-meta {
+  margin-top: 9px;
+  color: #6f7975;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.group-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+.copy-line {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid #e6dfd5;
+  border-radius: 9px;
+  background: #fffdf9;
+}
+.copy-line .copy-title {
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1.4;
+}
+.copy-line .tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.copy-line .tags .el-tag {
+  margin: 0;
+}
+.copy-line .note {
+  margin-top: 6px;
+  color: #7c8582;
+  font-size: 11px;
+}
 .batch-summary-strip {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1368,6 +1434,7 @@ main { grid-column: 2; width: min(1240px, calc(100% - 48px)); margin: 24px auto;
     grid-template-columns: 1fr;
   }
   .batch-video-grid,
+  .group-grid,
   .batch-summary-strip {
     grid-template-columns: 1fr;
   }

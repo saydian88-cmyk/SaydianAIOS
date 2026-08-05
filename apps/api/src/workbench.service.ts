@@ -2032,6 +2032,8 @@ export class WorkbenchService {
       ? project.sourceSignals.map(object).find((item: Record<string, unknown>) => item.type === "IMAGE_PROJECT") || {}
       : {};
     const brief = object(signal.brief);
+    const batchImageMode = value(brief.projectMode) === "BATCH_IMAGE_POST_PROJECT";
+    const batchImageConfig = object(brief.batchDirect);
     const hasReturnedPublishLink = Array.isArray(project.variants)
       && project.variants.some((variant: Record<string, unknown>) => Boolean(value(variant.manualPublishUrl)));
     const state: Record<string, [number, string, string]> = {
@@ -2041,15 +2043,28 @@ export class WorkbenchService {
       IMAGE_PUBLISHING: [3, "待发布与回传", "下载图文并回传一个或多个发布链接"],
       IMAGE_PUBLISHED: [3, "已完成", "查看已发布图文"],
     };
-    const current = state[stage] || [2, "图文项目处理中", "进入项目查看进度"];
+    const current = batchImageMode
+      ? stage === "IMAGE_REVIEW"
+        ? [2, "批量图文待审核", "审核整批图文、标题、标签和发布文案"]
+        : ["IMAGE_PUBLISHING", "IMAGE_PUBLISHED"].includes(stage)
+          ? [3, "待发布与回传", "逐组回传各平台发布链接"]
+          : [2, "批量图文生成中", "等待唯一 AI 任务完成"]
+      : state[stage] || [2, "图文项目处理中", "进入项目查看进度"];
     return {
       id: project.id,
       productionNo: project.productionNo,
       productModel: project.productModel || null,
-      projectMode: "IMAGE_POST",
+      projectMode: batchImageMode ? "BATCH_IMAGE_POST_PROJECT" : "IMAGE_POST",
       topic: project.topic || null,
       platform: Array.isArray(project.targetPlatforms) ? project.targetPlatforms[0] || null : null,
       videoType: value(brief.imageType) || null,
+      batch: batchImageMode ? {
+        products: Array.isArray(batchImageConfig.products) ? batchImageConfig.products : [],
+        typeDistribution: Array.isArray(batchImageConfig.typeDistribution) ? batchImageConfig.typeDistribution : [],
+        groups: Array.isArray(batchImageConfig.groups) ? batchImageConfig.groups : [],
+        taskRequirement: value(batchImageConfig.taskRequirement) || null,
+        publishRecords: Array.isArray(batchImageConfig.publishRecords) ? batchImageConfig.publishRecords : [],
+      } : null,
       createdAt: project.createdAt || null,
       updatedAt: project.updatedAt || null,
       hasReturnedPublishLink,

@@ -298,6 +298,63 @@ function compileBatchCodexDirectFullVideoPrompt(project: Record<string, any>, br
   return [base, ...revisionLines].join("\n");
 }
 
+function batchImageBriefValue(brief: Record<string, unknown>) {
+  return brief.batchDirect && typeof brief.batchDirect === "object" && !Array.isArray(brief.batchDirect)
+    ? brief.batchDirect as Record<string, unknown>
+    : {};
+}
+
+function distributeBatchImageGroups(
+  products: Array<{ model: string; count: number }>,
+  typeRows: Array<{ type: string; count: number }>,
+) {
+  const groups: Array<{ product: string; type: string; groupKey: string }> = [];
+  let productIndex = 0;
+  typeRows.forEach((row) => {
+    for (let i = 0; i < Math.max(0, Number(row.count || 0)); i += 1) {
+      let guard = 0;
+      while (products.length && guard < products.length * 2) {
+        const idx = productIndex % products.length;
+        const used = groups.filter((group) => group.product === products[idx].model).length;
+        if (used < Math.max(0, Number(products[idx].count || 0))) break;
+        productIndex += 1;
+        guard += 1;
+      }
+      if (!products.length) break;
+      const idx = productIndex % products.length;
+      groups.push({
+        product: products[idx].model,
+        type: row.type,
+        groupKey: `${idx + 1}-${groups.filter((group) => group.product === products[idx].model).length + 1}`,
+      });
+      productIndex += 1;
+    }
+  });
+  return groups;
+}
+
+function compileBatchImagePostPrompt(project: Record<string, any>, brief: Record<string, unknown>) {
+  const batch = batchImageBriefValue(brief);
+  const products = Array.isArray(batch.products) ? batch.products as Array<Record<string, unknown>> : [];
+  const types = Array.isArray(batch.typeDistribution) ? batch.typeDistribution as Array<Record<string, unknown>> : [];
+  const groups = Array.isArray(batch.groups) ? batch.groups as Array<Record<string, unknown>> : [];
+  const productLines = products.map((item, index) => `${index + 1}. ${String(item.model || "")}（${Number(item.count || 0)} 组）`).join("\n") || "产品清单：待补充";
+  const typeLines = types.map((item, index) => `${index + 1}. ${String(item.type || "")}（${Number(item.count || 0)} 组）`).join("\n") || "类型清单：待补充";
+  const groupLines = groups.map((item) => `${item.groupKey} · ${String(item.product || "")} · ${String(item.type || "")}`).join("\n") || "分组清单：待补充";
+  const requirement = String(batch.taskRequirement || "").trim();
+  const base = requirement || [
+    "【任务类型】批量图文项目（只回传最终成品）",
+    `项目编号：${project.productionNo || project.id}`,
+    `产品与图文分配：\n${productLines}`,
+    `图文类型分配：\n${typeLines}`,
+    `按产品分配结果：\n${groupLines}`,
+    `用户补充提示词：${String(batch.additionalPrompt || "").trim() || "（无，尽量给 AI 更多自由发挥空间）"}`,
+    "请在同一个任务内完成全部组图文的图文页、标题、标签和发布文案，默认同步一次生成，不拆成两步。内部过程不回传系统，只回传总体进度和最终成品。",
+    "只使用所选产品的真实素材，不得混用其他产品素材；产品图优先从系统素材库查找。各产品方向尽量错开，避免整批重复。最终以批量任务整体交付，等待员工审核。",
+  ].join("\n");
+  return base;
+}
+
 @Controller("api/v1/workbench")
 export class WorkbenchController {
   constructor(
@@ -1110,6 +1167,9 @@ export class WorkbenchController {
     @Body() body: Record<string, unknown>,
   ) {
     const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    if (String(body.mode || "").trim() === "BATCH_IMAGE_POST_PROJECT") {
+      return this.createBatchImageProject(body, employee);
+    }
     const productModel = String(body.productModel || "").trim();
     const imageType = String(body.imageType || "").trim();
     const audience = String(body.audience || "").trim();
@@ -1159,6 +1219,120 @@ export class WorkbenchController {
     return { project: plan, task, linkedTask, requirement };
   }
 
+  private async createBatchImageProject(
+    body: Record<string, unknown>,
+    employee: { employeeId?: string | null; name: string; roles?: string[] },
+  ) {
+    const productModelList = Array.isArray(body.batchProducts)
+      ? body.batchProducts
+        .map((item) => {
+          const row = item && typeof item === "object" ? item as Record<string, unknown> : {};
+          return {
+            model: String(row.model || "").trim(),
+            count: Math.max(2, Math.min(10, Math.round(Number(row.count || 0)))),
+          };
+        })
+        .filter((item) => item.model && item.count > 0)
+      : [];
+    const typeRows = Array.isArray(body.batchTypes)
+      ? body.batchTypes
+        .map((item) => {
+          const row = item && typeof item === "object" ? item as Record<string, unknown> : {};
+          return {
+            type: String(row.type || "").trim(),
+            count: Math.max(1, Math.min(10, Math.round(Number(row.count || 0)))),
+          };
+        })
+        .filter((item) => item.type && item.count > 0)
+      : [];
+    if (!productModelList.length || productModelList.length > 5) {
+      throw new BadRequestException("请选择 1 到 5 个产品");
+    }
+    const totalGroups = productModelList.reduce((sum, item) => sum + item.count, 0);
+    if (totalGroups > 10) throw new BadRequestException("批量图文总数量最多 10 组");
+    const typeTotal = typeRows.reduce((sum, item) => sum + item.count, 0);
+    if (!typeRows.length || typeTotal !== totalGroups) {
+      throw new BadRequestException("类型组数合计必须等于图文总量");
+    }
+    const groups = distributeBatchImageGroups(productModelList, typeRows);
+    const productModel = productModelList.map((item) => item.model.split(" · ")[0]).join("、");
+    const topic = `${productModelList.map((item) => item.model.split(" · ")[0]).join(" · ")} · 批量图文`;
+    const requirement = String(body.batchTaskRequirement || "").trim();
+    const additionalPrompt = String(body.additionalPrompt || "").trim();
+    const brief = {
+      projectMode: "BATCH_IMAGE_POST_PROJECT",
+      productModel,
+      batchDirect: {
+        products: productModelList,
+        typeDistribution: typeRows,
+        groups,
+        taskRequirement: requirement,
+        additionalPrompt,
+        publishRecords: [],
+      },
+    };
+    const plan = await this.prisma.contentPlan.create({
+      data: {
+        productionNo: `IP-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${randomUUID().slice(0, 6).toUpperCase()}`,
+        productionStage: "IMAGE_GENERATING",
+        planDate: new Date(),
+        kind: "SHORT_POST",
+        topic,
+        productModel,
+        audience: "批量图文",
+        objective: "批量图文",
+        hook: topic,
+        outline: [],
+        evidenceIds: [],
+        riskReasons: [],
+        scoreBreakdown: {},
+        sourceSignals: [{ type: "IMAGE_PROJECT", brief }],
+        status: "DRAFT",
+        createdBy: employee.name,
+        owner: employee.name,
+        assignedTo: employee.name,
+        assignedEmployeeId: employee.employeeId,
+        targetPlatforms: ["DOUYIN"],
+      },
+    });
+    const materialRoots = ["F:\\赛电品牌素材库\\图片素材", "F:\\赛电品牌素材库\\产品规格书"];
+    const finalRequirement = requirement || compileBatchImagePostPrompt(plan as unknown as Record<string, any>, brief);
+    const task = await this.aiTasks.createTask({
+      type: "IMAGE",
+      title: `${plan.topic} 批量图文制作`,
+      platform: "DOUYIN",
+      productModel,
+      ownerEmployeeId: employee.employeeId!,
+      reviewerEmployeeId: employee.employeeId!,
+      sourceType: "IMAGE_PROJECT",
+      sourceId: plan.id,
+      idempotencyKey: `ai-task:image-project:${plan.id}:batch:v1`,
+      instructions: finalRequirement,
+      input: {
+        sourceType: "IMAGE_PROJECT",
+        executionMode: "BATCH_IMAGE_POST",
+        skillName: "saidian-douyin-image-posts",
+        imageProjectId: plan.id,
+        requirement: finalRequirement,
+        projectPrompt: finalRequirement,
+        finalEmployeePrompt: finalRequirement,
+        prompt: finalRequirement,
+        brief,
+        materialRoots,
+        batchImageDirect: brief.batchDirect,
+      },
+      modelPolicy: { strategy: "CODEX_FIRST", allowExternalGeneration: false, allowFallback: false },
+      estimatedCost: 0,
+      skipPaidBudget: true,
+    }, employee.name) as Record<string, any>;
+    const linkedTask = await this.workbench.ensureImageProjectTask({ employeeId: employee.employeeId!, name: employee.name }, plan);
+    await this.prisma.opsTask.update({
+      where: { id: linkedTask.id },
+      data: { evidence: { ...(linkedTask.evidence as object), aiTaskId: task.id } },
+    });
+    return { project: plan, task, linkedTask, requirement: finalRequirement };
+  }
+
   @Get("image-projects/:id")
   async imageProject(
     @Headers("authorization") authorization: string | undefined,
@@ -1172,7 +1346,18 @@ export class WorkbenchController {
     if (!project) throw new ForbiddenException("图文项目不存在或无权查看");
     const aiTask = await this.prisma.aiTask.findFirst({ where: { sourceType: "IMAGE_PROJECT", sourceId: id }, orderBy: { createdAt: "desc" }, include: { outputs: { orderBy: { createdAt: "desc" } } } });
     const variants = await this.imageProjectVariantsWithDownloadUrls(project.variants as Record<string, any>[]);
-    return { ...project, variants, aiTask, requirement: object((Array.isArray(project.sourceSignals) ? project.sourceSignals[0] : {}) as object).brief ? object(object((project.sourceSignals as any)[0]).brief).requirement : "" };
+    const firstSignal = Array.isArray(project.sourceSignals) ? object(project.sourceSignals[0]) : {};
+    const imageBrief = object(firstSignal.brief);
+    return {
+      ...project,
+      variants,
+      aiTask,
+      requirement: imageBrief.requirement ? String(imageBrief.requirement) : "",
+      batch: String(imageBrief.projectMode || "") === "BATCH_IMAGE_POST_PROJECT"
+        ? { ...batchImageBriefValue(imageBrief), taskRequirement: imageBrief.batchDirect && typeof imageBrief.batchDirect === "object"
+          ? String((imageBrief.batchDirect as Record<string, unknown>).taskRequirement || "") : "" }
+        : null,
+    };
   }
 
   @Post("image-projects/:id/retry")
@@ -1345,6 +1530,122 @@ export class WorkbenchController {
       await this.prisma.contentVariant.upsert({ where: { contentPlanId_platform: { contentPlanId: id, platform } }, create: { contentPlanId: id, platform, title: project.topic, body: "", manualPublishUrl: url, manualPublishedAt: new Date(), status: "PUBLISHED" }, update: { manualPublishUrl: url, manualPublishedAt: new Date(), status: "PUBLISHED" } });
     }
     await this.prisma.contentPlan.update({ where: { id }, data: { productionStage: "IMAGE_PUBLISHED", status: "PUBLISHED" } });
+    return this.imageProject(authorization, id);
+  }
+
+  @Post("image-projects/:id/batch-review")
+  async reviewBatchImageProject(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    const action = String(body.action || "").trim().toUpperCase();
+    if (!["APPROVE", "RETURN"].includes(action)) throw new BadRequestException("图文审核动作不正确");
+    const approve = action === "APPROVE";
+    const note = String(body.note || body.reason || "").trim();
+    if (!approve && !note) throw new BadRequestException("退回图文时必须填写原因");
+    const project = await this.prisma.contentPlan.findFirst({ where: { id, assignedEmployeeId: employee.employeeId } });
+    if (!project) throw new ForbiddenException("图文项目不存在或无权处理");
+    const signals = Array.isArray(project.sourceSignals) ? project.sourceSignals as Array<Record<string, unknown>> : [];
+    const imageSignal = signals.find((signal) => signal?.type === "IMAGE_PROJECT") || {};
+    const imageBrief = object(imageSignal.brief);
+    if (String(imageBrief.projectMode || "") !== "BATCH_IMAGE_POST_PROJECT") {
+      throw new BadRequestException("当前项目不是批量图文模式");
+    }
+    await this.prisma.contentPlan.update({
+      where: { id },
+      data: {
+        productionStage: approve ? "IMAGE_PUBLISHING" : "IMAGE_RETURNED",
+        status: approve ? "APPROVED" : "REJECTED",
+        approvedBy: approve ? employee.name : null,
+        approvedAt: approve ? new Date() : null,
+      },
+    });
+    if (!approve) {
+      const batch = batchImageBriefValue(imageBrief);
+      const requirement = String(batch.taskRequirement || compileBatchImagePostPrompt(project as unknown as Record<string, any>, imageBrief));
+      const materialRoots = ["F:\\赛电品牌素材库\\图片素材", "F:\\赛电品牌素材库\\产品规格书"];
+      await this.aiTasks.createTask({
+        type: "IMAGE",
+        title: `${project.topic} 批量图文修改`,
+        platform: "DOUYIN",
+        productModel: project.productModel,
+        ownerEmployeeId: employee.employeeId!,
+        reviewerEmployeeId: employee.employeeId!,
+        sourceType: "IMAGE_PROJECT",
+        sourceId: id,
+        idempotencyKey: `ai-task:image-project:${id}:batch-return:${project.workflowVersion + 1}`,
+        instructions: `${requirement}\n\n请仅根据以下审核意见修改现有图文：${note}`,
+        input: {
+          sourceType: "IMAGE_PROJECT",
+          executionMode: "BATCH_IMAGE_POST",
+          skillName: "saidian-douyin-image-posts",
+          imageProjectId: id,
+          requirement,
+          projectPrompt: requirement,
+          finalEmployeePrompt: requirement,
+          prompt: requirement,
+          brief: imageBrief,
+          materialRoots,
+          batchImageDirect: batch,
+          revisionOf: id,
+          revisionFeedback: note,
+        },
+        modelPolicy: { strategy: "CODEX_FIRST", allowExternalGeneration: false, allowFallback: false },
+        estimatedCost: 0,
+        skipPaidBudget: true,
+      }, employee.name);
+    }
+    return this.imageProject(authorization, id);
+  }
+
+  @Post("image-projects/:id/batch-publish")
+  async saveBatchImagePublishLinks(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    const project = await this.prisma.contentPlan.findFirst({ where: { id, assignedEmployeeId: employee.employeeId } });
+    if (!project) throw new ForbiddenException("图文项目不存在或无权处理");
+    const signals = Array.isArray(project.sourceSignals) ? project.sourceSignals as Array<Record<string, unknown>> : [];
+    const imageSignal = signals.find((signal) => signal?.type === "IMAGE_PROJECT") || {};
+    const imageBrief = object(imageSignal.brief);
+    if (String(imageBrief.projectMode || "") !== "BATCH_IMAGE_POST_PROJECT") {
+      throw new BadRequestException("当前项目不是批量图文模式");
+    }
+    const batch = batchImageBriefValue(imageBrief);
+    const rows = Array.isArray(body.records) ? body.records as Array<Record<string, unknown>> : [];
+    if (!rows.length) throw new BadRequestException("请至少填写一组发布链接");
+    const allowedPlatforms = ["DOUYIN", "TIKTOK", "XIAOHONGSHU", "BILIBILI", "WECHAT_CHANNELS", "KUAISHOU"];
+    const normalized = rows.map((row) => ({
+      groupKey: String(row.groupKey || "").trim(),
+      platform: String(row.platform || "").trim().toUpperCase(),
+      remoteUrl: String(row.remoteUrl || "").trim(),
+    }));
+    if (normalized.some((row) => !row.groupKey)) throw new BadRequestException("每条发布记录必须对应一组图文");
+    if (normalized.some((row) => !allowedPlatforms.includes(row.platform))) throw new BadRequestException("发布平台不在支持范围内");
+    if (normalized.some((row) => !/^https?:\/\/\S+$/i.test(row.remoteUrl))) {
+      throw new BadRequestException("请填写以 http:// 或 https:// 开头的完整作品链接");
+    }
+    const previous = Array.isArray(batch.publishRecords) ? batch.publishRecords as Array<Record<string, unknown>> : [];
+    const merged = [
+      ...previous.filter((item) => !normalized.some((row) => row.groupKey === String(item.groupKey || ""))),
+      ...normalized,
+    ];
+    const nextSignals = signals.map((signal) => {
+      if (String(signal?.type || "") !== "IMAGE_PROJECT") return signal;
+      return { ...signal, brief: { ...imageBrief, batchDirect: { ...batch, publishRecords: merged } } };
+    });
+    await this.prisma.contentPlan.update({
+      where: { id },
+      data: { productionStage: "IMAGE_PUBLISHED", status: "PUBLISHED", sourceSignals: nextSignals as never },
+    });
+    await this.prisma.opsTask.updateMany({
+      where: { sourceType: "IMAGE_PROJECT", sourceId: id, deletedAt: null, status: { notIn: ["CANCELLED", "COMPLETED"] } },
+      data: { status: "COMPLETED", completedAt: new Date(), completedBy: employee.name, result: `已回传 ${normalized.length} 组批量图文发布链接` },
+    });
     return this.imageProject(authorization, id);
   }
 

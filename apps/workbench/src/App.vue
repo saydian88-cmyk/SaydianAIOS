@@ -386,8 +386,15 @@ const imageProjectForm = reactive({
   creativeIntent: "",
   additionalPrompt: "",
   requirement: "",
+  batchProducts: [{ model: "", count: 2 }] as Array<{ model: string; count: number }>,
+  batchTypes: [{ type: "种草类", count: 2 }] as Array<{ type: string; count: number }>,
+  batchTaskRequirement: "",
 });
 const imageRequirementEdited = ref(false);
+const imageProjectMode = ref<"SINGLE" | "BATCH">("SINGLE");
+const imageBatchRequirementEdited = ref(false);
+const lastAutoImageBatchRequirement = ref("");
+const batchImagePublishForm = ref<Record<string, { platform: string; remoteUrl: string }>>({});
 const imagePublishRecords = ref<Array<{ platform: string; remoteUrl: string }>>([{ platform: "DOUYIN", remoteUrl: "" }]);
 const imageProjectTypes = ["送礼类", "种草类", "避坑类", "科普类", "实拍类", "测评类", "教程类", "对比类"];
 const lockedShotUpload = ref<Row>();
@@ -704,16 +711,231 @@ function imageProjectPrimaryAction(task: Row) {
 }
 
 function imageProjectModeLabel(task: Row) {
-  return "图文项目";
+  return isBatchImageProject(task) ? "批量图文" : "图文项目";
 }
 
 function imageProjectCardTitle(task: Row) {
   const project = task.projection?.project || {};
   const model = String(project.productModel || "").trim() || "未标注产品";
+  if (String(project.projectMode || "") === "BATCH_IMAGE_POST_PROJECT") {
+    const products = Array.isArray(project.batch?.products) ? project.batch.products as Array<Row> : [];
+    const names = products.map((item) => String(item.model || "").split(" · ")[0]).filter(Boolean);
+    return `${names.length ? names.join(" · ") : model} · 批量图文`;
+  }
   const imageType = String(project.imageType || project.videoType || "图文").trim();
   const topic = String(project.topic || task.title || "").trim();
   const normalized = topic.replace(/^.+?·\s*/u, "");
   return `${model} · ${imageType} · ${normalized || formatTime(project.createdAt || task.createdAt)}`;
+}
+
+function isBatchImageProject(task: Row) {
+  return String(task.projection?.project?.projectMode || "") === "BATCH_IMAGE_POST_PROJECT";
+}
+
+function isBatchImageProjectDetail(project?: Row) {
+  if (!project) return false;
+  if (String(project.projectMode || "") === "BATCH_IMAGE_POST_PROJECT") return true;
+  const factory = Array.isArray(project.sourceSignals)
+    ? project.sourceSignals.find((item: Row) => item.type === "IMAGE_PROJECT")
+    : undefined;
+  const brief = factory?.brief && typeof factory.brief === "object" ? factory.brief as Row : {};
+  return String(brief.projectMode || "") === "BATCH_IMAGE_POST_PROJECT";
+}
+
+function batchImageConfigOf(project?: Row) {
+  if (!project) return undefined;
+  if (project.batch) return project.batch as Row;
+  const factory = Array.isArray(project.sourceSignals)
+    ? project.sourceSignals.find((item: Row) => item.type === "IMAGE_PROJECT")
+    : undefined;
+  const brief = factory?.brief && typeof factory.brief === "object" ? factory.brief as Row : {};
+  return brief.batchDirect as Row | undefined;
+}
+
+function batchImageGroups(project?: Row) {
+  const cfg = batchImageConfigOf(project);
+  const stored = Array.isArray(cfg?.groups) ? cfg.groups as Array<Row> : [];
+  if (stored.length) return stored;
+  const products = Array.isArray(cfg?.products) ? cfg.products as Array<Row> : [];
+  const types = Array.isArray(cfg?.typeDistribution) ? cfg.typeDistribution as Array<Row> : [];
+  const groups: Array<Row> = [];
+  let productIndex = 0;
+  types.forEach((row) => {
+    for (let i = 0; i < Math.max(0, Number(row.count || 0)); i += 1) {
+      if (!products.length) break;
+      let guard = 0;
+      while (guard < products.length * 2) {
+        const idx = productIndex % products.length;
+        const used = groups.filter((group) => group.product === String(products[idx].model || "")).length;
+        if (used < Math.max(0, Number(products[idx].count || 0))) break;
+        productIndex += 1;
+        guard += 1;
+      }
+      const idx = productIndex % products.length;
+      groups.push({
+        product: String(products[idx].model || ""),
+        type: String(row.type || ""),
+        groupKey: `${idx + 1}-${groups.filter((group) => group.product === String(products[idx].model || "")).length + 1}`,
+      });
+      productIndex += 1;
+    }
+  });
+  return groups;
+}
+
+function batchImageTotalGroups() {
+  return imageProjectForm.batchProducts.reduce((sum, product) => sum + Math.max(0, Number(product.count || 0)), 0);
+}
+
+function batchImageTypeTotal() {
+  return imageProjectForm.batchTypes.reduce((sum, row) => sum + Math.max(0, Number(row.count || 0)), 0);
+}
+
+function buildBatchImageTaskRequirement() {
+  const valid = imageProjectForm.batchProducts.filter((product) => product.model && Number(product.count) > 0);
+  const total = batchImageTotalGroups();
+  const productLines = valid.length
+    ? valid.map((product, index) => `${index + 1}. ${product.model}（${product.count} 组）`).join("\n")
+    : "产品型号：待选择";
+  const typeLines = imageProjectForm.batchTypes
+    .map((row, index) => `${index + 1}. ${row.type}（${row.count} 组）`)
+    .join("\n") || "待指定";
+  return `模式：BATCH_IMAGE_POST_PROJECT
+执行目标：作为批量图文项目，一次任务内完成全部 ${total} 组图文的图文页、标题、标签和发布文案，默认同步一次生成，不拆成两步。内部过程不回传员工端，只回传总体进度和最终成品。
+
+产品与图文分配：
+${productLines}
+
+图文类型分配（自动平均分配到各产品）：
+${typeLines}
+
+用户补充提示词：
+${imageProjectForm.additionalPrompt.trim() || "（无，尽量给 AI 更多自由发挥空间）"}
+
+画面约束：只使用所选产品的真实素材，不得混用其他产品素材；产品图优先从系统素材库查找。各产品方向尽量错开，避免整批重复。最终以批量任务整体交付，等待员工审核。`;
+}
+
+function syncBatchImageTaskRequirement() {
+  const next = buildBatchImageTaskRequirement();
+  if (!imageBatchRequirementEdited.value || imageProjectForm.batchTaskRequirement === lastAutoImageBatchRequirement.value) {
+    imageProjectForm.batchTaskRequirement = next;
+    imageBatchRequirementEdited.value = false;
+  }
+  lastAutoImageBatchRequirement.value = next;
+}
+
+function markBatchImageRequirementEdited() {
+  imageBatchRequirementEdited.value = imageProjectForm.batchTaskRequirement !== lastAutoImageBatchRequirement.value;
+}
+
+function addBatchImageProduct() {
+  if (imageProjectForm.batchProducts.length >= 5) {
+    ElMessage.warning("批量图文最多 5 个产品");
+    return;
+  }
+  imageProjectForm.batchProducts.push({ model: "", count: 2 });
+  syncBatchImageTaskRequirement();
+}
+
+function removeBatchImageProduct(index: number) {
+  if (imageProjectForm.batchProducts.length <= 1) return;
+  imageProjectForm.batchProducts.splice(index, 1);
+  syncBatchImageTaskRequirement();
+}
+
+function addBatchImageType() {
+  imageProjectForm.batchTypes.push({ type: "种草类", count: 1 });
+  syncBatchImageTaskRequirement();
+}
+
+function removeBatchImageType(index: number) {
+  if (imageProjectForm.batchTypes.length <= 1) return;
+  imageProjectForm.batchTypes.splice(index, 1);
+  syncBatchImageTaskRequirement();
+}
+
+function batchImagePublishRecord(groupKey: string) {
+  if (!batchImagePublishForm.value[groupKey]) {
+    batchImagePublishForm.value[groupKey] = { platform: "DOUYIN", remoteUrl: "" };
+  }
+  return batchImagePublishForm.value[groupKey];
+}
+
+function batchImageCopyMeta(index: number) {
+  const pools = [
+    { title: "爸妈的健康，从看得见的日常开始", tags: ["赛电", "智能手表", "健康关爱", "送爸妈", "真实体验"] },
+    { title: "买给父母前，先看这组真实使用", tags: ["赛电", "智能手表", "父母礼物", "血压监测", "日常守护"] },
+    { title: "健康手表怎么选，先避开这几个坑", tags: ["赛电", "智能手表", "避坑", "健康生活", "实用好物"] },
+    { title: "一张图看懂适不适合爸妈", tags: ["赛电", "智能手表", "科普", "老人健康", "随时守护"] },
+  ];
+  return pools[index % pools.length];
+}
+
+function batchImageProgressStats(project?: Row) {
+  const groups = batchImageGroups(project);
+  const task = project?.aiTask as Row | undefined;
+  const status = String(task?.status || "").toUpperCase();
+  const done = ["COMPLETED", "SUCCEEDED"].includes(status) ? groups.length : 0;
+  const failed = status === "FAILED" ? groups.length : 0;
+  const products = Array.from(new Set(groups.map((group) => String(group.product || "")))).length;
+  return { total: groups.length, products, done, failed };
+}
+
+async function approveBatchImage() {
+  const projectId = activeImageProjectId.value;
+  if (!projectId) return;
+  try {
+    await post(`/api/v1/workbench/image-projects/${projectId}/batch-review`, { action: "APPROVE" });
+    ElMessage.success("整批审核通过，可以回传发布链接");
+    await refreshImageProject();
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "审核提交失败");
+  }
+}
+
+async function rejectBatchImage(group?: Row) {
+  const target = group ? String(group.groupKey || "该组图文") : "整批";
+  const answer = await ElMessageBox.prompt(
+    `退回${target === "整批" ? "整批" : `第 ${target} 组`}。填写具体原因后，Codex 会按原因定向修改。`,
+    "填写退回原因",
+    { inputType: "textarea", inputValidator: (value) => (value?.trim() ? true : "请填写退回原因") },
+  ).catch(() => null);
+  if (!answer) return;
+  const note = answer.value.trim();
+  if (!note) return;
+  const projectId = activeImageProjectId.value;
+  if (!projectId) return;
+  try {
+    await post(`/api/v1/workbench/image-projects/${projectId}/batch-review`, { action: "RETURN", note });
+    ElMessage.success("已退回，Codex 正在按原因修改");
+    await refreshImageProject();
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "退回提交失败");
+  }
+}
+
+async function submitBatchImagePublish() {
+  const projectId = activeImageProjectId.value;
+  const project = taskImageProjectDetail.value;
+  if (!projectId || !project) return;
+  const records = batchImageGroups(project)
+    .map((group) => {
+      const form = batchImagePublishForm.value[String(group.groupKey || "")];
+      return {
+        groupKey: String(group.groupKey || ""),
+        platform: form?.platform || "DOUYIN",
+        remoteUrl: form?.remoteUrl || "",
+      };
+    })
+    .filter((record) => Boolean(record.remoteUrl.trim()));
+  if (!records.length) return ElMessage.warning("请至少为一组图文粘贴发布链接");
+  try {
+    await post(`/api/v1/workbench/image-projects/${projectId}/batch-publish`, { records });
+    ElMessage.success("发布链接已回传，任务完成");
+    await refreshImageProject();
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "回传发布链接失败");
+  }
 }
 
 function imageProjectPages(project?: Row) {
@@ -1719,6 +1941,13 @@ function changeImageProjectType() {
 }
 
 async function openNewImageProjectDialog() {
+  imageProjectMode.value = "SINGLE";
+  imageProjectForm.batchProducts = [{ model: "", count: 2 }];
+  imageProjectForm.batchTypes = [{ type: "种草类", count: 2 }];
+  imageProjectForm.batchTaskRequirement = "";
+  imageBatchRequirementEdited.value = false;
+  lastAutoImageBatchRequirement.value = "";
+  syncBatchImageTaskRequirement();
   try {
     // This entry can be opened directly from the employee task page, before
     // the data-center cache has loaded. Fetch the current product catalogue
@@ -1744,6 +1973,38 @@ async function openNewImageProjectDialog() {
 }
 
 async function createImageProject() {
+  if (imageProjectMode.value === "BATCH") {
+    const valid = imageProjectForm.batchProducts.filter((product) => product.model && Number(product.count) > 0);
+    if (!valid.length) return ElMessage.warning("请至少选择一个产品型号");
+    if (valid.length > 5) return ElMessage.warning("批量图文产品最多 5 个");
+    const total = batchImageTotalGroups();
+    if (total > 10) return ElMessage.warning("批量图文总数量最多 10 组");
+    if (batchImageTypeTotal() !== total) return ElMessage.warning("类型组数合计必须等于图文总量");
+    if (!imageProjectForm.batchTaskRequirement.trim()) return ElMessage.warning("请填写提交给图文 Skill 的任务要求");
+    creatingImageProject.value = true;
+    try {
+      const requirement = imageProjectForm.batchTaskRequirement.trim();
+      const result = await post<Row>("/api/v1/workbench/image-projects", {
+        mode: "BATCH_IMAGE_POST_PROJECT",
+        batchProducts: imageProjectForm.batchProducts.filter((product) => product.model && Number(product.count) > 0),
+        batchTypes: imageProjectForm.batchTypes.filter((row) => row.type && Number(row.count) > 0),
+        batchTaskRequirement: requirement,
+        additionalPrompt: imageProjectForm.additionalPrompt,
+      });
+      newImageProjectVisible.value = false;
+      await loadTasks();
+      const project = result.project || result;
+      activeImageProjectId.value = project.id;
+      taskImageProjectDetail.value = project;
+      imageProjectVisible.value = false;
+      ElMessage.success("批量图文项目已创建，正在生成图文和文案");
+    } catch (error) {
+      ElMessage.error(error instanceof Error ? error.message : "批量图文项目创建失败");
+    } finally {
+      creatingImageProject.value = false;
+    }
+    return;
+  }
   if (!imageProjectForm.productModel || !imageProjectForm.imageType || !imageProjectForm.audience.trim() || !imageProjectForm.hook.trim()) {
     return ElMessage.warning("请填写产品型号、图文类型、目标人群/场景和主钩子方向");
   }
@@ -4472,7 +4733,86 @@ onBeforeUnmount(() => {
                     :class="{ active: imageProjectTaskStep(task) === index + 1, done: imageProjectTaskStep(task) > index + 1 }"
                   >{{ index + 1 }} {{ step }}</button>
                 </nav>
-                <section v-if="['IMAGE_GENERATING', 'IMAGE_RETURNED'].includes(taskImageProjectDetail.productionStage)" class="task-video-stage-panel">
+
+                <template v-if="isBatchImageProjectDetail(taskImageProjectDetail)">
+                  <section v-if="['IMAGE_GENERATING', 'IMAGE_RETURNED'].includes(taskImageProjectDetail.productionStage)" class="task-video-stage-panel">
+                    <h4>{{ taskImageProjectDetail.productionStage === 'IMAGE_RETURNED' ? '批量图文正在按意见修改' : '批量图文与文案生成中' }}</h4>
+                    <p>一个项目一个 AI 任务，同步生成每组图文页、标题、标签和发布文案。</p>
+                    <div class="batch-summary-strip">
+                      <div><b>{{ batchImageProgressStats(taskImageProjectDetail).total }}</b><span>组图文</span></div>
+                      <div><b>{{ batchImageProgressStats(taskImageProjectDetail).products }}</b><span>个产品</span></div>
+                      <div><b>{{ batchImageProgressStats(taskImageProjectDetail).done }}</b><span>已完成</span></div>
+                      <div><b>{{ batchImageProgressStats(taskImageProjectDetail).failed }}</b><span>失败</span></div>
+                    </div>
+                    <template v-if="taskImageProjectDetail.aiTask">
+                      <div class="project-running-task-meta">
+                        <el-tag size="small" type="info">AI 任务 {{ taskImageProjectDetail.aiTask?.taskNo || '已提交' }}</el-tag>
+                        <el-tag size="small" :type="taskImageProjectDetail.aiTask?.status === 'FAILED' ? 'danger' : taskImageProjectDetail.aiTask?.status === 'SUCCEEDED' ? 'success' : 'warning'">{{ statusLabels[String(taskImageProjectDetail.aiTask?.status || '')] || taskImageProjectDetail.aiTask?.status }}</el-tag>
+                      </div>
+                      <el-progress :percentage="imageProjectAiTaskProgress(taskImageProjectDetail)" :status="taskImageProjectDetail.aiTask?.status === 'FAILED' ? 'exception' : undefined" />
+                      <p class="project-running-message">{{ imageProjectAiTaskMessage(taskImageProjectDetail) }}</p>
+                      <el-button v-if="taskImageProjectDetail.aiTask?.status === 'FAILED'" type="primary" @click="retryImageProject">重新执行</el-button>
+                    </template>
+                    <div class="group-grid">
+                      <article v-for="group in batchImageGroups(taskImageProjectDetail)" :key="`gen-${group.groupKey}`" class="group-card">
+                        <div class="g-head"><b>{{ String(group.product || '').split(' · ')[0] }} · 第{{ group.groupKey }}组</b><el-tag size="small" type="info">{{ group.type }}</el-tag></div>
+                        <div class="group-thumb"><div><div style="font-size:22px">▦</div><div style="margin-top:6px;font-size:12px">{{ group.type }} · 图文与文案同步生成</div></div></div>
+                        <div class="group-meta">标题、标签和发布文案随图文同步生成</div>
+                      </article>
+                    </div>
+                    <div class="preview-actions"><el-button @click="refreshImageProject">刷新当前项目</el-button></div>
+                  </section>
+                  <section v-else-if="taskImageProjectDetail.productionStage === 'IMAGE_REVIEW'" class="task-video-stage-panel">
+                    <h4>批量图文审核</h4>
+                    <p>每组图文、标题、标签和发布文案集中审核，可整批通过，也可填写原因退回。</p>
+                    <div class="group-grid">
+                      <article v-for="(group, index) in batchImageGroups(taskImageProjectDetail)" :key="`review-${group.groupKey}`" class="group-card">
+                        <div class="g-head"><b>{{ String(group.product || '').split(' · ')[0] }} · 第{{ group.groupKey }}组</b><el-tag size="small" type="success">图文待审核</el-tag></div>
+                        <div class="group-thumb"><div><div style="font-size:22px">▦</div><div style="margin-top:6px;font-size:12px">{{ group.type }} · 图文已生成</div></div></div>
+                        <div class="copy-line">
+                          <div class="copy-title">{{ batchImageCopyMeta(index).title }}</div>
+                          <div class="tags"><el-tag v-for="tag in batchImageCopyMeta(index).tags" :key="tag" size="small" type="info">#{{ tag }}</el-tag></div>
+                          <div class="note">标签至少 5 个 · 发布文案已随图文生成</div>
+                        </div>
+                        <div class="group-actions">
+                          <el-button size="small" @click="openImageProjectPreview">预览图文</el-button>
+                          <el-button size="small" @click="copyTaskContent(batchImageCopyMeta(index).title + '\n' + batchImageCopyMeta(index).tags.map((tag: string) => '#' + tag).join(' '), '标题与标签')">复制标题标签</el-button>
+                          <el-button size="small" @click="copyTaskContent(batchImageCopyMeta(index).title + '。' + batchImageCopyMeta(index).tags.join(' '), '发布文案')">复制文案</el-button>
+                          <el-button size="small" type="danger" plain @click="rejectBatchImage(group)">退回</el-button>
+                        </div>
+                      </article>
+                    </div>
+                    <div class="status-line">整批审核通过后进入回传链接；单组退回时填写原因，Codex 只修改对应图文。</div>
+                    <div class="preview-actions">
+                      <el-button @click="refreshImageProject">刷新当前项目</el-button>
+                      <el-button type="danger" plain @click="rejectBatchImage()">整批退回</el-button>
+                      <el-button type="success" @click="approveBatchImage">整批审核通过</el-button>
+                    </div>
+                  </section>
+                  <section v-else class="task-video-stage-panel">
+                    <h4>发布与回传</h4>
+                    <p>整批已审核通过。下载文件后，逐组粘贴发布链接并回传。</p>
+                    <div class="batch-publish-rows">
+                      <div v-for="group in batchImageGroups(taskImageProjectDetail)" :key="`pub-${group.groupKey}`" class="batch-publish-row">
+                        <b>{{ String(group.product || '').split(' · ')[0] }} · 第{{ group.groupKey }}组（{{ group.type }}）</b>
+                        <el-select v-model="batchImagePublishRecord(String(group.groupKey)).platform">
+                          <el-option label="抖音" value="DOUYIN" />
+                          <el-option label="小红书" value="XIAOHONGSHU" />
+                          <el-option label="快手" value="KUAISHOU" />
+                          <el-option label="视频号" value="WECHAT_CHANNELS" />
+                          <el-option label="B站" value="BILIBILI" />
+                        </el-select>
+                        <el-input v-model="batchImagePublishRecord(String(group.groupKey)).remoteUrl" placeholder="粘贴已发布图文链接" />
+                      </div>
+                    </div>
+                    <div class="preview-actions">
+                      <el-button @click="refreshImageProject">刷新当前项目</el-button>
+                      <el-button type="primary" @click="submitBatchImagePublish">全部回传完成</el-button>
+                    </div>
+                  </section>
+                </template>
+
+                <section v-if="!isBatchImageProjectDetail(taskImageProjectDetail) && ['IMAGE_GENERATING', 'IMAGE_RETURNED'].includes(taskImageProjectDetail.productionStage)" class="task-video-stage-panel">
                   <h4>{{ taskImageProjectDetail.productionStage === 'IMAGE_RETURNED' ? '图文正在按意见修改' : '图文与文案生成中' }}</h4>
                   <p>{{ taskImageProjectDetail.productionStage === 'IMAGE_RETURNED' ? '图文制作 Skill 正在根据退回意见生成修改版本。' : '图文制作 Skill 正在生成图文、标题、标签和发布文案。' }}</p>
                   <template v-if="imageProjectAiTask(taskImageProjectDetail)">
@@ -4490,7 +4830,7 @@ onBeforeUnmount(() => {
                   </template>
                   <el-alert v-else title="图文 AI 任务正在登记，稍后可点击“刷新当前项目”查看进度。" type="info" :closable="false" show-icon />
                 </section>
-                <template v-else-if="taskImageProjectDetail.productionStage === 'IMAGE_REVIEW'">
+                <template v-else-if="!isBatchImageProjectDetail(taskImageProjectDetail) && taskImageProjectDetail.productionStage === 'IMAGE_REVIEW'">
                   <section class="image-result-layout">
                     <div class="image-page-list">
                       <article v-for="(page, index) in imageProjectPages(taskImageProjectDetail)" :key="page.id || index" class="image-page-card">
@@ -4505,7 +4845,7 @@ onBeforeUnmount(() => {
                   </section>
                   <div class="preview-actions"><el-button @click="openImageProjectPreview">预览图文</el-button><el-button :loading="downloadingImageProject" @click="downloadAllImageProjectPages(taskImageProjectDetail)">一键下载全部</el-button><el-button type="danger" plain :loading="reviewingImageProject" @click="reviewImageProject(false)">退回并填写原因</el-button><el-button type="success" :loading="reviewingImageProject" @click="reviewImageProject(true)">图文审核通过</el-button></div>
                 </template>
-                <template v-else>
+                <template v-else-if="!isBatchImageProjectDetail(taskImageProjectDetail)">
                   <section class="image-result-layout published">
                     <div class="image-page-list"><article v-for="(page, index) in imageProjectPages(taskImageProjectDetail)" :key="page.id || index" class="image-page-card"><img v-if="imageProjectPageUrl(page)" :src="imageProjectPageUrl(page)" :alt="page.title || `第${index + 1}页`" /><div v-else><strong>{{ page.title || `第${index + 1}页图文` }}</strong></div></article></div>
                     <div class="image-copy-panels"><section><header><strong>标题与标签</strong><el-button size="small" @click="copyTaskContent(`${imageProjectVariant(taskImageProjectDetail).title || ''}\n${imageProjectTags(taskImageProjectDetail).map((tag: string) => `#${tag}`).join(' ')}`, '标题与标签')">复制</el-button></header><h4>{{ imageProjectVariant(taskImageProjectDetail).title }}</h4><el-tag v-for="tag in imageProjectTags(taskImageProjectDetail)" :key="tag" size="small">#{{ tag }}</el-tag></section><section><header><strong>发布文案</strong><el-button size="small" @click="copyTaskContent(imageProjectCopy(taskImageProjectDetail), '发布文案')">复制</el-button></header><p>{{ imageProjectCopy(taskImageProjectDetail) }}</p></section></div>
@@ -6191,7 +6531,12 @@ onBeforeUnmount(() => {
 
   <el-dialog v-model="newImageProjectVisible" title="新建图文项目" width="min(920px, 96vw)" destroy-on-close>
     <div class="prototype-project-form image-project-form">
-      <el-alert title="填写图文制作要求后创建项目。系统会生成图文初稿、标题、标签和发布文案，员工只需审核；所有内容都会自动保存。" type="info" :closable="false" />
+      <el-alert :title="imageProjectMode === 'BATCH' ? '批量图文：多个产品、多组图文只作为一个项目、只提交一个 AI 任务，一次性同步生成图文页、标题、标签和发布文案。' : '填写图文制作要求后创建项目。系统会生成图文初稿、标题、标签和发布文案，员工只需审核；所有内容都会自动保存。'" type="info" :closable="false" />
+      <el-radio-group v-model="imageProjectMode" class="project-mode-switch" style="margin-top:12px">
+        <el-radio-button label="SINGLE">单组图文</el-radio-button>
+        <el-radio-button label="BATCH">批量图文</el-radio-button>
+      </el-radio-group>
+      <template v-if="imageProjectMode === 'SINGLE'">
       <section class="prototype-form-section">
         <header><strong>必填信息</strong><span>产品型号、图文类型、目标人群/场景和主钩子方向为必填项</span></header>
         <div class="prototype-required-grid image-project-required-grid">
@@ -6241,10 +6586,68 @@ onBeforeUnmount(() => {
         <header><strong>提交给图文制作 Skill 的任务要求</strong><span>仅提交这段内容，可直接修改</span></header>
         <el-input v-model="imageProjectForm.requirement" type="textarea" :rows="3" @input="markImageRequirementEdited" />
       </section>
+      </template>
+      <template v-else>
+      <section class="prototype-form-section">
+        <header><strong>批量任务</strong><span>每个产品选择图文数量，所有产品合计最多 10 组（最多 5 个产品）</span></header>
+        <div v-for="(product, index) in imageProjectForm.batchProducts" :key="`batch-image-product-${index}`" class="batch-product-row">
+          <el-form-item :label="`产品 ${index + 1}`" required>
+            <el-select v-model="product.model" filterable placeholder="搜索或选择产品型号" @change="syncBatchImageTaskRequirement">
+              <el-option v-for="option in productOptions" :key="option.id" :label="`${option.modelCode} · ${option.name}`" :value="option.modelCode" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="图文数量">
+            <el-select v-model="product.count" @change="syncBatchImageTaskRequirement">
+              <el-option v-for="count in [2,3,4,5,6,7,8,9,10]" :key="count" :label="`${count} 组`" :value="count" />
+            </el-select>
+          </el-form-item>
+          <el-button v-if="imageProjectForm.batchProducts.length > 1" type="danger" plain @click="removeBatchImageProduct(index)">移除</el-button>
+          <span v-else></span>
+        </div>
+        <div class="batch-allocation-hint" :class="{ error: batchImageTotalGroups() > 10 }">
+          <template v-if="batchImageTotalGroups() === 0">请为每个产品选择图文数量。</template>
+          <template v-else-if="batchImageTotalGroups() > 10">当前合计 {{ batchImageTotalGroups() }} 组，超过上限 10 组。</template>
+          <template v-else>合计 {{ batchImageTotalGroups() }} 组（最多 10 组）。</template>
+        </div>
+        <el-button type="primary" plain :disabled="imageProjectForm.batchProducts.length >= 5" @click="addBatchImageProduct">+ 添加产品</el-button>
+      </section>
+      <section class="prototype-form-section">
+        <header><strong>类型分配</strong><span>总体指定各类型组数，系统自动平均分配到每个产品；不需要每个产品单独指定</span></header>
+        <div v-for="(row, index) in imageProjectForm.batchTypes" :key="`batch-image-type-${index}`" class="batch-product-row">
+          <el-form-item :label="`类型 ${index + 1}`" required>
+            <el-select v-model="row.type" @change="syncBatchImageTaskRequirement">
+              <el-option v-for="item in imageProjectTypes" :key="item" :label="item" :value="item" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="组数">
+            <el-select v-model="row.count" @change="syncBatchImageTaskRequirement">
+              <el-option v-for="count in [1,2,3,4,5,6,7,8,9,10]" :key="count" :label="`${count} 组`" :value="count" />
+            </el-select>
+          </el-form-item>
+          <el-button v-if="imageProjectForm.batchTypes.length > 1" type="danger" plain @click="removeBatchImageType(index)">移除</el-button>
+          <span v-else></span>
+        </div>
+        <div class="batch-allocation-hint" :class="{ error: batchImageTypeTotal() !== batchImageTotalGroups() }">
+          <template v-if="batchImageTypeTotal() !== batchImageTotalGroups()">类型组数合计 {{ batchImageTypeTotal() }} 组，与图文总量 {{ batchImageTotalGroups() }} 组不一致。</template>
+          <template v-else>类型组数合计 {{ batchImageTypeTotal() }} 组，与图文总量一致，将自动平均分配到各产品。</template>
+        </div>
+        <el-button type="primary" plain @click="addBatchImageType">+ 添加类型</el-button>
+      </section>
+      <section class="prototype-form-section">
+        <header><strong>批量创作设置</strong><span>补充提示词会自动写入任务要求</span></header>
+        <el-form-item label="补充 AI 提示词">
+          <el-input v-model="imageProjectForm.additionalPrompt" type="textarea" :rows="3" placeholder="例如：整体真实温暖，各产品方向尽量错开" @input="syncBatchImageTaskRequirement" />
+        </el-form-item>
+      </section>
+      <section class="prototype-form-section batch-task-requirement">
+        <header><strong>提交给图文制作 Skill 的任务要求</strong><span>自动整理成唯一 AI 任务，可直接修改，随输入实时更新</span></header>
+        <el-input v-model="imageProjectForm.batchTaskRequirement" type="textarea" :rows="6" @input="markBatchImageRequirementEdited" />
+      </section>
+      </template>
     </div>
     <template #footer>
       <el-button @click="newImageProjectVisible = false">取消</el-button>
-      <el-button type="primary" :loading="creatingImageProject" @click="createImageProject">创建项目并生成图文</el-button>
+      <el-button type="primary" :loading="creatingImageProject" @click="createImageProject">{{ imageProjectMode === 'BATCH' ? '创建批量项目并提交任务' : '创建项目并生成图文' }}</el-button>
     </template>
   </el-dialog>
 
