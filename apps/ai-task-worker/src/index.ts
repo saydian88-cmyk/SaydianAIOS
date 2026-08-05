@@ -30,6 +30,7 @@ import {
   writeJsonAtomic,
   type WorkspaceState,
 } from "./workspace-state";
+import { availableClaimRouteKeys, videoRouteKeys } from "./worker-utils";
 import {
   classifyExecutionFailure,
   repairHyperFramesRuntime,
@@ -66,9 +67,18 @@ const executionRepairSkillPath = resolve(String(
   || "G:\\codex\\xcodeplace\\CodexHome\\skills\\saidian-ai-task-execution-repair\\SKILL.md",
 ));
 const maxInternalRepairs = Math.max(1, Number(process.env.AI_TASK_MAX_INTERNAL_REPAIRS || 3));
-const maxConcurrentTasks = Math.max(1, Number(process.env.AI_TASK_MAX_CONCURRENT_TASKS || 2));
+const maxVideoConcurrency = Math.max(1, Number(process.env.AI_TASK_MAX_VIDEO_CONCURRENCY || 1));
+const maxImageConcurrency = Math.max(1, Number(process.env.AI_TASK_MAX_IMAGE_CONCURRENCY || 2));
 let lastMaterialSyncAt = 0;
 let materialSyncInFlight: Promise<void> | undefined;
+
+function activeKindCount(activeTasks: Map<string, { kind: "VIDEO" | "IMAGE"; promise: Promise<void> }>, kind: "VIDEO" | "IMAGE") {
+  let count = 0;
+  for (const entry of activeTasks.values()) {
+    if (entry.kind === kind) count += 1;
+  }
+  return count;
+}
 
 async function prepareHyperFramesRuntime(workspace: string) {
   const source = await stat(bundledGsapPath).catch(() => undefined);
@@ -2453,11 +2463,22 @@ async function main() {
   // Material indexing must never delay task claiming. This is especially
   // important for Codex direct-output jobs, which do not consume assets.
   syncSystemMaterialIndexInBackground(true);
-  const activeTasks = new Map<string, Promise<void>>();
+  const activeTasks = new Map<string, { kind: "VIDEO" | "IMAGE"; promise: Promise<void> }>();
   for (;;) {
     try {
-      if (activeTasks.size >= maxConcurrentTasks) {
-        await Promise.race(activeTasks.values());
+      const activeVideo = activeKindCount(activeTasks, "VIDEO");
+      const activeImage = activeKindCount(activeTasks, "IMAGE");
+      const supportedRouteKeys = availableClaimRouteKeys(
+        activeVideo,
+        activeImage,
+        maxVideoConcurrency,
+        maxImageConcurrency,
+      );
+      // Video and image projects keep separate local concurrency pools so a
+      // long video render never blocks image posts (and vice versa). When a
+      // pool is full the API is told not to hand this node a task of that kind.
+      if (!supportedRouteKeys.length) {
+        await Promise.race([...activeTasks.values()].map((entry) => entry.promise));
         continue;
       }
       const claimed = await api<JsonRecord>("/api/v1/ai-tasks/runner/claim", {
@@ -2471,23 +2492,19 @@ async function main() {
           // Route keys are business capabilities, not broad AiTask enums. When
           // present, the API will not let this unified node claim articles,
           // topic cards, analyses, generic images, or ambiguous legacy jobs.
-          supportedRouteKeys: [
-            "STANDARD_SMART_VIDEO",
-            "REFERENCE_DIRECT_FULL_VIDEO",
-            "CODEX_DIRECT_FULL_VIDEO",
-            "IMAGE_POST",
-          ],
+          supportedRouteKeys,
         }),
       });
       if (claimed.task) {
         const claimedTask = record(claimed.task);
         const taskId = String(claimedTask.id || claimedTask.taskNo || `task-${Date.now()}`);
+        const kind = String(claimedTask.type || "").toUpperCase() === "VIDEO" ? "VIDEO" : "IMAGE";
         const execution = execute(claimed)
           .catch((error) => {
             process.stderr.write(`${new Date().toISOString()} ${taskId} ${error instanceof Error ? error.message : String(error)}\n`);
           })
           .finally(() => activeTasks.delete(taskId));
-        activeTasks.set(taskId, execution);
+        activeTasks.set(taskId, { kind, promise: execution });
         // Give the API a brief moment to persist the lock before looking for a
         // different task type. Server-side per-type concurrency remains the
         // authority; this only removes the worker's accidental global lock.
