@@ -1169,10 +1169,27 @@ main { grid-column: 2; width: min(1240px, calc(100% - 48px)); margin: 24px auto;
 /* 批量 Codex 直出项目 */
 .batch-product-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 150px auto;
+  grid-template-columns: minmax(0, 2fr) minmax(150px, 1fr) auto;
   gap: 10px;
   align-items: center;
   margin-top: 10px;
+}
+.batch-product-row .el-form-item {
+  display: block;
+  margin-bottom: 0;
+}
+.batch-product-row .el-form-item__label {
+  display: block;
+  height: auto;
+  padding: 0 0 4px;
+  line-height: 1.4;
+  text-align: left;
+}
+.batch-product-row .el-form-item__content {
+  width: 100%;
+}
+.batch-product-row .el-select {
+  width: 100%;
 }
 .batch-allocation-hint {
   margin: 10px 0 12px;
