@@ -1191,6 +1191,10 @@ main { grid-column: 2; width: min(1240px, calc(100% - 48px)); margin: 24px auto;
 .batch-product-row .el-select {
   width: 100%;
 }
+.batch-product-row > .el-button {
+  align-self: end;
+  margin-bottom: 0;
+}
 .batch-allocation-hint {
   margin: 10px 0 12px;
   color: #7c8582;
