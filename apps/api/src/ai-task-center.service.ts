@@ -126,7 +126,7 @@ export function aiTaskRoute(task: {
   }
 
   if (type === "IMAGE" && (sourceType === "IMAGE_PROJECT" || Boolean(text(input.imageProjectId)))
-    && (executionMode === "IMAGE_POST" || !executionMode)) {
+    && (["IMAGE_POST", "BATCH_IMAGE_POST"].includes(executionMode) || !executionMode)) {
     return {
       version: 1,
       domain: "IMAGE_PROJECT",
@@ -1340,6 +1340,11 @@ export class AiTaskCenterService implements OnModuleInit {
     const existingDirectInput = object(input.codexDirectInput);
     const existingReferenceInput = object(input.referenceDirectInput);
     const projectBrief = object(input.projectBrief);
+    const imagePostProject = task.type === "IMAGE"
+      && ["IMAGE_POST", "BATCH_IMAGE_POST"].includes(executionMode)
+      && (text(task.sourceType).toUpperCase() === "IMAGE_PROJECT"
+        || text(input.sourceType).toUpperCase() === "IMAGE_PROJECT"
+        || Boolean(input.imageProjectId));
     const packageInputBase = codexDirectFullVideo
       ? {
         executionMode: "FULL_VIDEO",
@@ -1372,16 +1377,16 @@ export class AiTaskCenterService implements OnModuleInit {
               : {}),
           },
         }
-      : input;
+      : imagePostProject
+        ?
+        // Batch image projects retain their batch brief, but the shared
+        // dispatcher contract uses IMAGE_POST as the execution mode.
+          { ...input, executionMode: "IMAGE_POST" }
+        : input;
     const packageInput = {
       ...packageInputBase,
       ...(resolvedTaskRoute ? { taskRoute: resolvedTaskRoute } : {}),
     };
-    const imagePostProject = task.type === "IMAGE"
-      && executionMode === "IMAGE_POST"
-      && (text(task.sourceType).toUpperCase() === "IMAGE_PROJECT"
-        || text(input.sourceType).toUpperCase() === "IMAGE_PROJECT"
-        || Boolean(input.imageProjectId));
     const assetIds = new Set<string>();
     if (!localDirectFullVideo) {
       for (const snapshot of task.inputSnapshots || []) {

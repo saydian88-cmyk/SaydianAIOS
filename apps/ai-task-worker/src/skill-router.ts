@@ -161,7 +161,9 @@ export function routeTask(taskPackage: JsonRecord, env: NodeJS.ProcessEnv = proc
       || requiredSkill === "saidian-douyin-image-posts"
     );
   const executionMode = String(
-    requestedExecutionMode || (type === "VIDEO" ? "FULL_VIDEO" : isImagePostProject ? "IMAGE_POST" : "DEFAULT"),
+    requestedExecutionMode === "BATCH_IMAGE_POST"
+      ? "IMAGE_POST"
+      : requestedExecutionMode || (type === "VIDEO" ? "FULL_VIDEO" : isImagePostProject ? "IMAGE_POST" : "DEFAULT"),
   ).trim().toUpperCase();
   const isDouyinViralModule = String(taskInput.factoryModule || "").trim().toUpperCase() === "DOUYIN_VIRAL";
   const isCodexDirectFullVideo = type === "VIDEO"

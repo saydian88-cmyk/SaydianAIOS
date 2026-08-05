@@ -178,6 +178,15 @@ describe("AiTaskCenterService", () => {
       input: { executionMode: "IMAGE_POST", imageProjectId: "image-project-1" },
     })?.requiredSkill).toBe("saidian-douyin-image-posts");
     expect(aiTaskRoute({
+      type: "IMAGE",
+      sourceType: "IMAGE_PROJECT",
+      input: { executionMode: "BATCH_IMAGE_POST", imageProjectId: "image-project-1" },
+    })).toMatchObject({
+      projectMode: "IMAGE_POST",
+      executionMode: "IMAGE_POST",
+      requiredSkill: "saidian-douyin-image-posts",
+    });
+    expect(aiTaskRoute({
       type: "VIDEO",
       sourceType: "DAILY_VIDEO_TOPIC_CARDS",
       input: { executionMode: "TOPIC_CARD_BATCH" },

@@ -1950,7 +1950,17 @@ async function validateMandatoryVideoEvidence(
     throw new Error("Production-plan gate must complete before render evidence is created");
   }
   const commands = Array.isArray(renderEvidence.commands) ? renderEvidence.commands.map(record) : [];
-  const inferredHyperframes = /hyperframes/iu.test(`${String(renderEvidence.project || "")} ${commands.map((item) => String(item.command || "")).join(" ")}`);
+  // Render evidence stores project metadata as an object. Stringifying that
+  // object produces only "[object Object]", which made a completed
+  // HyperFrames render indistinguishable from a non-HyperFrames artifact.
+  const project = record(renderEvidence.project);
+  const projectEvidence = [
+    String(renderEvidence.project || ""),
+    String(project.id || ""),
+    String(project.path || ""),
+    String(project.composition || ""),
+  ].join(" ");
+  const inferredHyperframes = /hyperframes/iu.test(`${projectEvidence} ${commands.map((item) => String(item.command || item.name || "")).join(" ")}`);
   if (String(renderEvidence.engine || "").toUpperCase() !== "HYPERFRAMES" && !inferredHyperframes) {
     throw new Error("直出成片未使用完整版Skill规定的 HyperFrames 渲染链");
   }

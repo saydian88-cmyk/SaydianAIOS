@@ -85,6 +85,17 @@ describe("skill task router", () => {
     });
   });
 
+  it("normalizes batch image projects to the shared IMAGE_POST dispatcher route", () => {
+    expect(routeTask({
+      task: { type: "IMAGE", sourceType: "IMAGE_PROJECT", input: { executionMode: "BATCH_IMAGE_POST", imageProjectId: "image-project-1" } },
+      execution: { mode: "IMAGE_POST", strategy: "CODEX_SKILL", requiredSkill: "saidian-ai-task-dispatcher" },
+    }, { ...process.env, CODEX_HOME: routeOnlyCodexHome })).toMatchObject({
+      key: "saidian-ai-task-dispatcher",
+      executionMode: "IMAGE_POST",
+      downstreamSkillName: "saidian-douyin-image-posts",
+    });
+  });
+
   it("routes an image project when legacy rows only retain the project signal in input", () => {
     expect(routeTask({
       task: { type: "IMAGE", input: { imageProjectId: "image-project-1", executionMode: "IMAGE_POST" } },
