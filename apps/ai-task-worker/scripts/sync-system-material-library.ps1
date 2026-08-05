@@ -3,6 +3,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$env:CI = "true"
 Get-Content -LiteralPath $ConfigPath -Encoding UTF8 | ForEach-Object {
   $line = $_.Trim()
   if (-not $line -or $line.StartsWith("#")) { return }
@@ -11,5 +12,10 @@ Get-Content -LiteralPath $ConfigPath -Encoding UTF8 | ForEach-Object {
 }
 $repoPath = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..\..\..")).Path
 Set-Location -LiteralPath $repoPath
-& $env:PNPM_EXECUTABLE --filter '@saidian-ops/ai-task-worker' sync:system-materials
+$pnpmExecutable = $env:PNPM_EXECUTABLE
+if ([string]::IsNullOrWhiteSpace($pnpmExecutable) -or -not (Test-Path -LiteralPath $pnpmExecutable)) {
+  $pnpmCommand = Get-Command pnpm -ErrorAction Stop
+  $pnpmExecutable = $pnpmCommand.Source
+}
+& $pnpmExecutable --filter '@saidian-ops/ai-task-worker' sync:system-materials
 exit $LASTEXITCODE

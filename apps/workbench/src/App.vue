@@ -276,10 +276,18 @@ const videoFactoryForm = reactive({
   scriptEngines: ["SYSTEM_AI"] as string[],
   keywordIds: [] as string[],
   externalVideoIds: [] as string[],
+  batchProducts: [{ model: "", count: 2 }] as Array<{ model: string; count: number }>,
+  batchVoiceoverSplit: "HALF" as "HALF" | "ALL" | "NONE",
+  batchBgmVariety: true,
+  batchVoiceVariety: true,
+  batchGenerateCoverTitle: true,
+  batchTaskRequirement: "",
 });
-const videoProjectMode = ref<"STANDARD" | "REFERENCE_DIRECT_FULL_VIDEO" | "CODEX_DIRECT_FULL_VIDEO">("STANDARD");
+const videoProjectMode = ref<"STANDARD" | "REFERENCE_DIRECT_FULL_VIDEO" | "CODEX_DIRECT_FULL_VIDEO" | "BATCH_CODEX_DIRECT_FULL_VIDEO">("STANDARD");
 const referenceDirectRequirementEdited = ref(false);
 const lastAutoReferenceDirectRequirement = ref("");
+const batchRequirementEdited = ref(false);
+const lastAutoBatchRequirement = ref("");
 const videoOptionalOpen = ref(false);
 const videoDefaultsOpen = ref(false);
 const videoProjectCollapseNames = ref<string[]>([]);
@@ -840,6 +848,7 @@ function videoProjectModeLabel(task: Row) {
   const mode = String(task.projection?.project?.projectMode || "");
   if (mode === "REFERENCE_DIRECT_FULL_VIDEO") return "参考直出";
   if (mode === "CODEX_DIRECT_FULL_VIDEO") return "Codex 直出";
+  if (mode === "BATCH_CODEX_DIRECT_FULL_VIDEO") return "批量Codex直出";
   return "标准项目";
 }
 
@@ -848,6 +857,15 @@ function videoProjectPrimaryAction(task: Row) {
   if (expandedTaskVideoProjectId.value === projectId) return "收起项目";
   const stage = String(task.projection?.project?.stage || "").toUpperCase();
   if (["COMPLETED", "PUBLISHED"].includes(String(task.status || "").toUpperCase())) return "查看项目";
+  if (isBatchVideoProjectTask(task)) {
+    const step = Number(task.projection?.project?.step || 2);
+    const cfg = task.projection?.project?.batch as Row | undefined;
+    const cover = cfg ? cfg.generateCoverTitle !== false : true;
+    const finalStep = cover ? 3 : 4;
+    if (step === finalStep) return "审核成片";
+    if (["READY_TO_PUBLISH", "PUBLISHING", "TRACKING"].includes(stage)) return "回传链接";
+    return step > 1 ? "查看进度" : "处理项目";
+  }
   if (stage === "VIDEO_REVIEW") return "审核成片";
   if ([
     "FACTORY_SCRIPT_READY",
@@ -868,6 +886,12 @@ function videoProjectCardTitle(task: Row) {
   const mode = String(project.projectMode || "");
   if (mode === "REFERENCE_DIRECT_FULL_VIDEO") return `${model} · 参考直出`;
   if (mode === "CODEX_DIRECT_FULL_VIDEO") return `${model} · Codex直出`;
+  if (mode === "BATCH_CODEX_DIRECT_FULL_VIDEO") {
+    const products = Array.isArray(project.batch?.products) ? project.batch.products as Array<Row> : [];
+    const names = products.map((item) => String(item.model || "").split(" · ")[0]).filter(Boolean);
+    const titleBase = names.length ? names.join(" · ") : model;
+    return `${titleBase} · 批量Codex直出`;
+  }
   const videoType = String(project.videoType || "").trim() || "智能视频";
   const rawTopic = String(project.topic || task.title || "").trim();
   const genericTopic = !rawTopic || rawTopic === `${model} 智能视频项目` || rawTopic === `${model} · ${videoType}`;
@@ -883,6 +907,277 @@ function videoProjectDueText(task: Row) {
   const remain = dueAt.getTime() - Date.now();
   if (remain > 24 * 60 * 60 * 1000) return "";
   return remain < 0 ? `已逾期 ${formatTime(task.dueAt)}` : `截止 ${formatTime(task.dueAt)}`;
+}
+
+function isBatchCodexVideoProject(project?: Row) {
+  return projectMode(project || {}) === "BATCH_CODEX_DIRECT_FULL_VIDEO";
+}
+
+function isBatchVideoProjectTask(task: Row) {
+  return String(task.projection?.project?.projectMode || "") === "BATCH_CODEX_DIRECT_FULL_VIDEO";
+}
+
+function batchConfigOf(project?: Row) {
+  if (!project) return undefined;
+  if (project.batch) return project.batch as Row;
+  const factory = Array.isArray(project.sourceSignals)
+    ? project.sourceSignals.find((item: Row) => item.type === "VIDEO_FACTORY")
+    : undefined;
+  const brief = factory?.brief && typeof factory.brief === "object" ? factory.brief as Row : {};
+  return brief.batchDirect as Row | undefined;
+}
+
+function batchFlowSteps(task: Row) {
+  const cover = task.projection?.project?.batch?.generateCoverTitle !== false;
+  return cover
+    ? ["新建项目", "生成视频 · 封面 · 标题", "成片审核与回传"]
+    : ["新建项目", "生成视频", "封面标题生成", "成片审核与回传"];
+}
+
+function batchFlowStepsForProject(project?: Row) {
+  const cfg = batchConfigOf(project);
+  const cover = cfg ? cfg.generateCoverTitle !== false : true;
+  return cover
+    ? ["新建项目", "生成视频 · 封面 · 标题", "成片审核与回传"]
+    : ["新建项目", "生成视频", "封面标题生成", "成片审核与回传"];
+}
+
+function batchFlowStep(project?: Row) {
+  const cfg = batchConfigOf(project);
+  const cover = cfg ? cfg.generateCoverTitle !== false : true;
+  const stage = String(project?.productionStage || "").toUpperCase();
+  if (["EDITING", "FACTORY_GENERATING", "PROJECT_BRIEF"].includes(stage)) return 2;
+  if (!cover) {
+    if (stage === "VIDEO_REVIEW") return 3;
+    if (stage === "PLATFORM_PACKAGING") return 3;
+    if (["PACKAGING_REVIEW", "READY_TO_PUBLISH", "PUBLISHING", "TRACKING"].includes(stage)) return 4;
+    return 3;
+  }
+  if (["VIDEO_REVIEW", "PACKAGING_REVIEW", "READY_TO_PUBLISH", "PUBLISHING", "TRACKING"].includes(stage)) return 3;
+  return 2;
+}
+
+function batchVideos(project?: Row) {
+  const cfg = batchConfigOf(project);
+  const products = Array.isArray(cfg?.products) ? cfg.products as Array<Row> : [];
+  const split = String(cfg?.voiceoverSplit || "HALF").toUpperCase();
+  const videos: Array<Row> = [];
+  products.forEach((product, productIndex) => {
+    const count = Math.max(0, Number(product.count || 0));
+    const voiced = split === "ALL" ? count : split === "NONE" ? 0 : Math.floor(count / 2);
+    const model = String(product.model || "未标注产品");
+    for (let index = 0; index < count; index += 1) {
+      videos.push({
+        videoKey: `${productIndex + 1}-${index + 1}`,
+        product: model,
+        productShort: model.split(" · ")[0],
+        type: index < voiced ? "口播" : "无口播",
+        displayName: `${model.split(" · ")[0]} · 视频 ${productIndex + 1}-${index + 1}`,
+      });
+    }
+  });
+  return videos;
+}
+
+function batchTotalVideos() {
+  return videoFactoryForm.batchProducts.reduce((sum, product) => sum + Math.max(0, Number(product.count || 0)), 0);
+}
+
+function batchProductOptions() {
+  return (contentTaskOptions.products || []) as Array<Row>;
+}
+
+function addBatchProduct() {
+  if (videoFactoryForm.batchProducts.length >= 5) {
+    ElMessage.warning("批量视频最多 5 个产品");
+    return;
+  }
+  videoFactoryForm.batchProducts.push({ model: "", count: 2 });
+  syncBatchTaskRequirement();
+}
+
+function removeBatchProduct(index: number) {
+  if (videoFactoryForm.batchProducts.length <= 1) return;
+  videoFactoryForm.batchProducts.splice(index, 1);
+  syncBatchTaskRequirement();
+}
+
+function buildBatchTaskRequirement() {
+  const valid = videoFactoryForm.batchProducts.filter((product) => product.model && Number(product.count) > 0);
+  const total = batchTotalVideos();
+  const productLines = valid.length
+    ? valid.map((product, index) => `${index + 1}. ${product.model}（${product.count} 条）`).join("\n")
+    : "产品型号：待选择";
+  const voiceover = videoFactoryForm.batchVoiceoverSplit === "ALL"
+    ? "全部口播"
+    : videoFactoryForm.batchVoiceoverSplit === "NONE"
+      ? "全部无口播"
+      : "一半口播、一半无口播（按每个产品各半分配，奇数条时无口播多一条）";
+  const cover = videoFactoryForm.batchGenerateCoverTitle;
+  return `模式：BATCH_CODEX_DIRECT_FULL_VIDEO
+执行目标：作为批量 Codex 直出项目，一次任务内直接生成全部 ${total} 条视频并交付最终成片。内部脚本、素材匹配和剪辑由 Codex 自动完成，不回传员工端，只回传总体进度和最终成品${cover ? "，并为每条视频生成封面、标题和标签" : ""}。
+
+产品与视频分配：
+${productLines}
+
+口播分配：${voiceover}
+每条视频使用不同 BGM：${videoFactoryForm.batchBgmVariety ? "是（默认）" : "否"}
+多使用几种音色、尽量不重复：${videoFactoryForm.batchVoiceVariety ? "是（默认）" : "否"}
+${cover ? "同时生成封面标题：是（员工提交后直接获得最终成品；每条视频的标签至少 5 个）" : "同时生成封面标题：否（封面标题在后续单独步骤生成）"}
+
+用户补充提示词：
+${videoFactoryForm.additionalPrompt.trim() || "（无，尽量给 AI 更多自由发挥空间）"}
+
+画面约束：只使用所选产品的真实素材，不得混用其他产品素材。各视频在脚本方向、开场、画面节奏上尽量错开，避免整批重复。最终以批量任务整体交付，等待员工审核。`;
+}
+
+function syncBatchTaskRequirement() {
+  const next = buildBatchTaskRequirement();
+  if (!batchRequirementEdited.value || videoFactoryForm.batchTaskRequirement === lastAutoBatchRequirement.value) {
+    videoFactoryForm.batchTaskRequirement = next;
+    batchRequirementEdited.value = false;
+  }
+  lastAutoBatchRequirement.value = next;
+}
+
+function markBatchRequirementEdited() {
+  batchRequirementEdited.value = videoFactoryForm.batchTaskRequirement !== lastAutoBatchRequirement.value;
+}
+
+const batchPublishForm = ref<Record<string, { platform: string; remoteUrl: string }>>({});
+
+function batchPublishRecord(videoKey: string) {
+  if (!batchPublishForm.value[videoKey]) {
+    batchPublishForm.value[videoKey] = { platform: "DOUYIN", remoteUrl: "" };
+  }
+  return batchPublishForm.value[videoKey];
+}
+
+function batchProductsCount(project?: Row) {
+  const cfg = batchConfigOf(project);
+  return Array.isArray(cfg?.products) ? cfg.products.length : 0;
+}
+
+function batchProgressStats(project?: Row) {
+  const videos = batchVideos(project);
+  const task = activeProjectVideoTask(project);
+  const status = String(task?.status || "").toUpperCase();
+  const renderJobs = Array.isArray(project?.videoRenderJobs) ? project!.videoRenderJobs : [];
+  const succeededRenders = renderJobs.filter((job: Row) => String(job.status || "").toUpperCase() === "SUCCEEDED").length;
+  const done = ["COMPLETED", "SUCCEEDED"].includes(status)
+    ? videos.length
+    : Math.max(0, Math.min(videos.length, succeededRenders));
+  const failed = status === "FAILED" ? videos.length : 0;
+  return { total: videos.length, products: batchProductsCount(project), done, failed };
+}
+
+function batchVideoRenderJob(project?: Row, videoKey?: string) {
+  const jobs = reviewableVideoRenderJobs(project);
+  const index = batchVideos(project).findIndex((video) => video.videoKey === videoKey);
+  return index >= 0 ? jobs[index] : jobs[0];
+}
+
+async function previewBatchVideo(video: Row) {
+  const job = batchVideoRenderJob(taskVideoProjectDetail.value, String(video.videoKey || ""));
+  if (job?.outputAsset) {
+    await openAssetPreview(job.outputAsset, String(video.displayName || "成片预览"));
+    return;
+  }
+  ElMessage.warning("该条成片尚未回传，请稍后刷新");
+}
+
+async function downloadBatchVideo(video: Row) {
+  const job = batchVideoRenderJob(taskVideoProjectDetail.value, String(video.videoKey || ""));
+  if (!job?.outputAsset) {
+    ElMessage.warning("该条成片尚未回传，无法下载");
+    return;
+  }
+  try {
+    const result = await api<{ url: string }>(`/api/v1/workbench/assets/${job.outputAsset.id}/download-url`);
+    if (result.url) window.open(result.url, "_blank", "noopener,noreferrer");
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "成片下载失败");
+  }
+}
+
+async function approveBatchVideo() {
+  const projectId = expandedTaskVideoProjectId.value;
+  if (!projectId) return;
+  try {
+    await post(`/api/v1/workbench/data-center/video-projects/${projectId}/batch-review`, { action: "APPROVE" });
+    await refreshTaskVideoProject();
+    ElMessage.success("整批审核通过，可以回传发布链接");
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "审核提交失败");
+  }
+}
+
+async function rejectBatchVideo(video?: Row) {
+  const target = video ? String(video.displayName || "该条视频") : "整批";
+  const result = await ElMessageBox.prompt(
+    `退回${target}。填写具体原因后，Codex 会按原因定向修改${video ? "这条视频" : "整批视频"}。`,
+    "填写退回原因",
+    { confirmButtonText: "确认退回", cancelButtonText: "取消", inputType: "textarea" },
+  ).catch(() => null);
+  if (!result) return;
+  const note = result.value.trim();
+  if (!note) return ElMessage.warning("退回时必须填写具体修改原因");
+  const projectId = expandedTaskVideoProjectId.value;
+  if (!projectId) return;
+  try {
+    await post(`/api/v1/workbench/data-center/video-projects/${projectId}/batch-review`, { action: "RETURN", note });
+    await refreshTaskVideoProject();
+    ElMessage.success("已退回，Codex 正在按原因修改");
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "退回提交失败");
+  }
+}
+
+async function submitBatchCoverTitle() {
+  const projectId = expandedTaskVideoProjectId.value;
+  if (!projectId) return;
+  try {
+    await post(`/api/v1/workbench/data-center/video-projects/${projectId}/batch-cover-title`, {});
+    await refreshTaskVideoProject();
+    ElMessage.success("批量封面标题任务已提交");
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "封面标题任务提交失败");
+  }
+}
+
+async function submitBatchPublish() {
+  const projectId = expandedTaskVideoProjectId.value;
+  const project = taskVideoProjectDetail.value;
+  if (!projectId || !project) return;
+  const records = batchVideos(project)
+    .map((video) => {
+      const form = batchPublishForm.value[String(video.videoKey || "")];
+      return {
+        videoKey: String(video.videoKey || ""),
+        platform: form?.platform || "DOUYIN",
+        remoteUrl: form?.remoteUrl || "",
+      };
+    })
+    .filter((record) => Boolean(record.remoteUrl.trim()));
+  if (!records.length) return ElMessage.warning("请至少为一条视频粘贴发布链接");
+  try {
+    await post(`/api/v1/workbench/data-center/video-projects/${projectId}/batch-publish`, { records });
+    await refreshTaskVideoProject();
+    ElMessage.success("发布链接已回传，任务完成");
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "回传发布链接失败");
+  }
+}
+
+function batchVideoCoverMeta(video: Row, index: number) {
+  const model = String(video.productShort || "赛电");
+  const pools = [
+    { title: "上班来电话不用先摸手机", coverText: "抬腕操作 清晰直观", tags: [`#赛电${model}`, "#智能手表", "#健康关爱", "#血压监测", "#送爸妈"] },
+    { title: "血压变化看得见，爸妈更安心", coverText: "给父母的关心看得见", tags: [`#赛电${model}`, "#智能穿戴", "#父母礼物", "#日常守护", "#健康生活"] },
+    { title: "健康状态随时掌握", coverText: "一天一测 心里有数", tags: [`#赛电${model}`, "#智能手表", "#血压测量", "#远程关爱", "#实用好物"] },
+    { title: "给爸妈的安心，从抬腕开始", coverText: "健康提醒 贴心守护", tags: [`#赛电${model}`, "#智能手表", "#老人健康", "#随时守护", "#真实测评"] },
+  ];
+  return pools[index % pools.length];
 }
 
 function compactNumber(value?: number | string) {
@@ -1046,6 +1341,7 @@ const videoFlowSteps = [
 ];
 
 function videoFlowStep(project: Row) {
+  if (isBatchCodexVideoProject(project)) return batchFlowStep(project);
   if (projectWaitingForScripts(project)) return 2;
   const stage = String(project.productionStage || "");
   if (isCodexDirectVideoProject(project) && codexDirectRevision(project) && ["FACTORY_GENERATING", "EDITING"].includes(stage)) return 3;
@@ -1797,6 +2093,10 @@ function projectVideoTaskProgress(project?: Row) {
   return Math.max(0, Math.min(100, Number(activeProjectVideoTask(project)?.progress || 0)));
 }
 
+function projectVideoTaskStatus(project?: Row) {
+  return String(activeProjectVideoTask(project)?.status || "");
+}
+
 function projectVideoTaskMessage(project?: Row) {
   return String(activeProjectVideoTask(project)?.progressMessage || "远程节点正在按已确认脚本和素材生成视频。");
 }
@@ -2279,6 +2579,15 @@ async function openNewVideoProjectDialog() {
   referenceDirectRequirementEdited.value = false;
   lastAutoReferenceDirectRequirement.value = "";
   syncReferenceDirectTaskRequirement();
+  videoFactoryForm.batchProducts = [{ model: "", count: 2 }];
+  videoFactoryForm.batchVoiceoverSplit = "HALF";
+  videoFactoryForm.batchBgmVariety = true;
+  videoFactoryForm.batchVoiceVariety = true;
+  videoFactoryForm.batchGenerateCoverTitle = true;
+  videoFactoryForm.batchTaskRequirement = "";
+  batchRequirementEdited.value = false;
+  lastAutoBatchRequirement.value = "";
+  syncBatchTaskRequirement();
   videoFactoryForm.scriptEngines = ["SYSTEM_AI"];
   videoProjectCollapseNames.value = active.value === "tasks" ? ["optional"] : [];
   createdVideoProjectDialogId.value = "";
@@ -2658,10 +2967,17 @@ async function createVideoFactoryProject() {
   } else if (videoProjectMode.value === "CODEX_DIRECT_FULL_VIDEO") {
     if (!videoFactoryForm.productModel) return ElMessage.warning("请选择产品型号");
     if (!videoFactoryForm.additionalPrompt.trim()) return ElMessage.warning("请填写 AI 提示词");
+  } else if (videoProjectMode.value === "BATCH_CODEX_DIRECT_FULL_VIDEO") {
+    const valid = videoFactoryForm.batchProducts.filter((product) => product.model && Number(product.count) > 0);
+    if (!valid.length) return ElMessage.warning("请至少选择一个产品型号");
+    if (valid.length > 5) return ElMessage.warning("批量产品最多 5 个");
+    const total = valid.reduce((sum, product) => sum + Math.max(0, Number(product.count || 0)), 0);
+    if (total > 10) return ElMessage.warning("批量视频总数最多 10 条");
+    if (!videoFactoryForm.batchTaskRequirement.trim()) return ElMessage.warning("请填写提交给 Codex 的任务要求");
   } else {
-  if (!videoFactoryForm.productModel) return ElMessage.warning("请选择产品型号");
-  if (!videoFactoryForm.videoType.trim()) return ElMessage.warning("请选择或填写视频类型");
-  if (!videoFactoryForm.keywords.trim() && !videoFactoryForm.keywordIds.length) return ElMessage.warning("请填写或选择关键词");
+    if (!videoFactoryForm.productModel) return ElMessage.warning("请选择产品型号");
+    if (!videoFactoryForm.videoType.trim()) return ElMessage.warning("请选择或填写视频类型");
+    if (!videoFactoryForm.keywords.trim() && !videoFactoryForm.keywordIds.length) return ElMessage.warning("请填写或选择关键词");
   }
   videoFactoryForm.scriptEngines = videoProjectMode.value === "STANDARD" ? ["SYSTEM_AI"] : ["REMOTE_CODEX"];
   creatingVideoProject.value = true;
@@ -2669,6 +2985,12 @@ async function createVideoFactoryProject() {
     const createdProject = await post<Row>("/api/v1/workbench/data-center/video-projects", {
       ...videoFactoryForm,
       projectMode: videoProjectMode.value,
+      batchProducts: videoFactoryForm.batchProducts.filter((product) => product.model && Number(product.count) > 0),
+      batchVoiceoverSplit: videoFactoryForm.batchVoiceoverSplit,
+      batchBgmVariety: videoFactoryForm.batchBgmVariety,
+      batchVoiceVariety: videoFactoryForm.batchVoiceVariety,
+      batchGenerateCoverTitle: videoFactoryForm.batchGenerateCoverTitle,
+      batchTaskRequirement: videoFactoryForm.batchTaskRequirement,
       generationMode: videoScriptMode.value === "ASSET_ONLY" ? "ASSET_ONLY" : videoScriptMode.value === "ASSET_FIRST" ? "ASSET_FIRST" : "AUTO",
       contentRestrictionMode: videoFactoryForm.healthContentAllowed === null
         ? "AUTO"
@@ -2704,6 +3026,13 @@ function checkNewVideoProjectBrief() {
     if (!videoFactoryForm.productModel) return ElMessage.warning("请先选择产品型号");
     if (!videoFactoryForm.additionalPrompt.trim()) return ElMessage.warning("请填写 AI 提示词");
     return ElMessage.success("项目会直接交给 Codex 完成，系统仅在成片完成后通知你审核");
+  }
+  if (videoProjectMode.value === "BATCH_CODEX_DIRECT_FULL_VIDEO") {
+    const valid = videoFactoryForm.batchProducts.filter((product) => product.model && Number(product.count) > 0);
+    if (!valid.length) return ElMessage.warning("请先选择产品型号");
+    const total = valid.reduce((sum, product) => sum + Math.max(0, Number(product.count || 0)), 0);
+    if (total > 10) return ElMessage.warning("批量视频总数最多 10 条");
+    return ElMessage.success("批量任务信息完整，可以创建项目");
   }
   if (!videoFactoryForm.productModel) return ElMessage.warning("请先选择产品型号");
   if (!videoFactoryForm.videoType.trim()) return ElMessage.warning("请选择或填写视频类型");
@@ -4059,7 +4388,7 @@ onBeforeUnmount(() => {
               <template v-if="isVideoProjectTask(task)">
                 <div class="video-task-steps" :aria-label="`当前进行到第 ${videoProjectTaskStep(task)} 步`">
                   <span
-                    v-for="(step, index) in videoFlowSteps"
+                    v-for="(step, index) in isBatchVideoProjectTask(task) ? batchFlowSteps(task) : videoFlowSteps"
                     :key="step"
                     :class="{ active: videoProjectTaskStep(task) === index + 1, done: videoProjectTaskStep(task) > index + 1 }"
                   >{{ index + 1 }} {{ step }}</span>
@@ -4196,8 +4525,8 @@ onBeforeUnmount(() => {
               <template v-if="taskVideoProjectDetail">
                 <header class="task-video-workspace-head">
                   <div>
-                    <small>当前阶段 {{ videoFlowStep(taskVideoProjectDetail) }}/4</small>
-                    <h3>{{ videoFlowSteps[videoFlowStep(taskVideoProjectDetail) - 1] }}</h3>
+                    <small>当前阶段 {{ videoFlowStep(taskVideoProjectDetail) }}/{{ isBatchVideoProjectTask(task) ? batchFlowSteps(task).length : 4 }}</small>
+                    <h3>{{ isBatchVideoProjectTask(task) ? batchFlowSteps(task)[videoFlowStep(taskVideoProjectDetail) - 1] : videoFlowSteps[videoFlowStep(taskVideoProjectDetail) - 1] }}</h3>
                     <p>{{ videoProjectTaskHint(task) }}</p>
                     <div class="video-project-version-strip">
                       <el-tag size="small" type="info">项目版本 v{{ taskVideoProjectDetail.workflowVersion || 1 }}</el-tag>
@@ -4231,14 +4560,155 @@ onBeforeUnmount(() => {
 
                 <nav class="task-video-stage-tabs" aria-label="视频项目阶段">
                   <button
-                    v-for="(step, index) in videoFlowSteps"
+                    v-for="(step, index) in isBatchVideoProjectTask(task) ? batchFlowSteps(task) : videoFlowSteps"
                     :key="step"
                     type="button"
                     :class="{ active: videoFlowStep(taskVideoProjectDetail) === index + 1, done: videoFlowStep(taskVideoProjectDetail) > index + 1 }"
                   >{{ index + 1 }} {{ step }}</button>
                 </nav>
 
-                <section v-if="videoFlowStep(taskVideoProjectDetail) === 2 && projectWaitingForScripts(taskVideoProjectDetail)" class="task-video-stage-panel">
+                <template v-if="isBatchVideoProjectTask(task)">
+                  <section v-if="videoFlowStep(taskVideoProjectDetail) === 2" class="task-video-stage-panel">
+                    <h4>批量 Codex 直出</h4>
+                    <p>一个项目一个 AI 任务，Codex 统一完成全部视频{{ batchConfigOf(taskVideoProjectDetail)?.generateCoverTitle !== false ? '、封面和标题' : '' }}。</p>
+                    <div class="batch-summary-strip">
+                      <div><b>{{ batchProgressStats(taskVideoProjectDetail).total }}</b><span>条视频</span></div>
+                      <div><b>{{ batchProgressStats(taskVideoProjectDetail).products }}</b><span>个产品</span></div>
+                      <div><b>{{ batchProgressStats(taskVideoProjectDetail).done }}</b><span>已完成</span></div>
+                      <div><b>{{ batchProgressStats(taskVideoProjectDetail).failed }}</b><span>失败</span></div>
+                    </div>
+                    <template v-if="activeProjectVideoTask(taskVideoProjectDetail)">
+                      <el-progress
+                        :percentage="projectVideoTaskProgress(taskVideoProjectDetail)"
+                        :status="projectVideoTaskStatus(taskVideoProjectDetail) === 'FAILED' ? 'exception' : undefined"
+                      />
+                      <p class="project-running-message">{{ projectVideoTaskMessage(taskVideoProjectDetail) }}</p>
+                    </template>
+                    <el-alert
+                      v-if="projectVideoTaskStatus(taskVideoProjectDetail) === 'FAILED'"
+                      :title="`批量生成失败：${projectVideoTaskMessage(taskVideoProjectDetail)}`"
+                      type="error"
+                      :closable="false"
+                      show-icon
+                    />
+                    <div class="batch-video-grid">
+                      <article v-for="(video, index) in batchVideos(taskVideoProjectDetail)" :key="video.videoKey" class="batch-video-card">
+                        <div class="v-head">
+                          <b>{{ video.displayName }}</b>
+                          <el-tag size="small" :type="index < batchProgressStats(taskVideoProjectDetail).done ? 'success' : 'warning'">{{ index < batchProgressStats(taskVideoProjectDetail).done ? '已完成' : '生成中' }}</el-tag>
+                        </div>
+                        <div class="batch-video-thumb"><span class="play">▶</span></div>
+                        <div class="batch-video-meta">{{ video.type }} · 对应产品 {{ video.product }} · {{ batchConfigOf(taskVideoProjectDetail)?.generateCoverTitle !== false ? '含封面标题' : '封面标题另行生成' }}</div>
+                        <div class="preview-actions" style="margin-top:10px">
+                          <el-button size="small" @click="previewBatchVideo(video)">预览</el-button>
+                          <el-button size="small" @click="downloadBatchVideo(video)">下载</el-button>
+                        </div>
+                      </article>
+                    </div>
+                    <div
+                      v-if="batchConfigOf(taskVideoProjectDetail)?.generateCoverTitle === false
+                        && ['VIDEO_REVIEW', 'FACTORY_GENERATING', 'EDITING'].includes(String(taskVideoProjectDetail.productionStage || ''))
+                        && batchProgressStats(taskVideoProjectDetail).done === batchProgressStats(taskVideoProjectDetail).total
+                        && !coverTitleTaskIsRunning(taskVideoProjectDetail)"
+                      class="preview-actions"
+                      style="margin-top:14px"
+                    >
+                      <el-button type="primary" @click="submitBatchCoverTitle">生成封面标题</el-button>
+                    </div>
+                    <div class="preview-actions" style="margin-top:14px">
+                      <el-button @click="refreshTaskVideoProject">刷新当前项目</el-button>
+                    </div>
+                  </section>
+
+                  <section
+                    v-else-if="videoFlowStep(taskVideoProjectDetail) === 3
+                      && batchConfigOf(taskVideoProjectDetail)?.generateCoverTitle === false
+                      && !['PACKAGING_REVIEW', 'READY_TO_PUBLISH', 'PUBLISHING', 'TRACKING'].includes(String(taskVideoProjectDetail.productionStage || ''))"
+                    class="task-video-stage-panel"
+                  >
+                    <h4>封面标题生成</h4>
+                    <template v-if="coverTitleTaskIsRunning(taskVideoProjectDetail)">
+                      <p>正在为 {{ batchVideos(taskVideoProjectDetail).length }} 条已生成视频制作封面、标题和标签。</p>
+                      <el-progress :percentage="coverTitleTaskProgress(taskVideoProjectDetail)" />
+                      <p class="project-running-message">{{ coverTitleTaskMessage(taskVideoProjectDetail) }}</p>
+                    </template>
+                    <el-alert
+                      v-else-if="['FAILED', 'WAITING_INPUT', 'CANCELLED'].includes(coverTitleTaskStatus(taskVideoProjectDetail))"
+                      :title="`封面标题任务未完成：${coverTitleTaskMessage(taskVideoProjectDetail)}`"
+                      type="error"
+                      :closable="false"
+                      show-icon
+                    />
+                    <template v-else>
+                      <p>视频已生成。提交后 Codex 会为每条视频生成封面、标题和标签，每条视频标签至少 5 个。</p>
+                      <div class="preview-actions" style="margin-top:12px">
+                        <el-button type="primary" @click="submitBatchCoverTitle">生成封面标题</el-button>
+                      </div>
+                    </template>
+                    <div class="preview-actions" style="margin-top:14px">
+                      <el-button @click="refreshTaskVideoProject">刷新当前项目</el-button>
+                    </div>
+                  </section>
+
+                  <section v-else class="task-video-stage-panel">
+                    <template v-if="['READY_TO_PUBLISH', 'PUBLISHING', 'TRACKING'].includes(String(taskVideoProjectDetail.productionStage || ''))">
+                      <h4>发布与回传</h4>
+                      <p>整批已审核通过。下载文件后，逐条粘贴各平台发布链接并回传。</p>
+                      <div class="batch-publish-rows">
+                        <div v-for="video in batchVideos(taskVideoProjectDetail)" :key="`publish-${video.videoKey}`" class="batch-publish-row">
+                          <b>{{ video.displayName }}</b>
+                          <el-select v-model="batchPublishRecord(String(video.videoKey)).platform">
+                            <el-option label="抖音" value="DOUYIN" />
+                            <el-option label="快手" value="KUAISHOU" />
+                            <el-option label="视频号" value="WECHAT_CHANNELS" />
+                            <el-option label="小红书" value="XIAOHONGSHU" />
+                            <el-option label="B站" value="BILIBILI" />
+                          </el-select>
+                          <el-input v-model="batchPublishRecord(String(video.videoKey)).remoteUrl" placeholder="粘贴已发布视频链接" />
+                        </div>
+                      </div>
+                      <div class="preview-actions" style="margin-top:14px">
+                        <el-button @click="refreshTaskVideoProject">刷新当前项目</el-button>
+                        <el-button type="primary" @click="submitBatchPublish">全部回传完成</el-button>
+                      </div>
+                    </template>
+                    <template v-else>
+                      <h4>成片与封面标题审核</h4>
+                      <p>成片、封面、标题和标签集中审核，可整批通过，也可填写原因退回。</p>
+                      <div class="batch-video-grid">
+                        <article v-for="(video, index) in batchVideos(taskVideoProjectDetail)" :key="`review-${video.videoKey}`" class="batch-video-card">
+                          <div class="v-head">
+                            <b>{{ video.displayName }}</b>
+                            <el-tag size="small" type="success">成片待审核</el-tag>
+                          </div>
+                          <div class="batch-video-thumb"><span class="play">▶</span><span style="margin-left:8px;font-size:12px">00:{{ String(18 + index * 3).padStart(2, '0') }}</span></div>
+                          <template v-if="batchConfigOf(taskVideoProjectDetail)?.generateCoverTitle !== false">
+                            <div class="batch-cover-line">
+                              <button class="batch-cover-thumb" type="button" @click="ElMessage.info('点击封面放大查看（原型示意）')"><div><b>赛电 {{ video.productShort }}</b><span>{{ batchVideoCoverMeta(video, index).coverText }}</span></div></button>
+                              <div>
+                                <div class="batch-cover-title">{{ batchVideoCoverMeta(video, index).title }}</div>
+                                <div class="batch-tags"><el-tag v-for="tag in batchVideoCoverMeta(video, index).tags" :key="tag" size="small" type="info">{{ tag }}</el-tag></div>
+                                <div class="batch-tags-note">标签至少 5 个（示例）</div>
+                              </div>
+                            </div>
+                          </template>
+                          <div class="preview-actions" style="margin-top:10px">
+                            <el-button size="small" @click="previewBatchVideo(video)">预览成片</el-button>
+                            <el-button size="small" @click="downloadBatchVideo(video)">下载成片</el-button>
+                            <el-button size="small" type="danger" plain @click="rejectBatchVideo(video)">退回</el-button>
+                          </div>
+                        </article>
+                      </div>
+                      <div class="preview-actions" style="margin-top:14px">
+                        <el-button @click="refreshTaskVideoProject">刷新当前项目</el-button>
+                        <el-button type="danger" plain @click="rejectBatchVideo()">整批退回</el-button>
+                        <el-button type="success" @click="approveBatchVideo">整批审核通过</el-button>
+                      </div>
+                    </template>
+                  </section>
+                </template>
+
+                <section v-if="!isBatchVideoProjectTask(task) && videoFlowStep(taskVideoProjectDetail) === 2 && projectWaitingForScripts(taskVideoProjectDetail)" class="task-video-stage-panel">
                   <h4>脚本与素材匹配中</h4>
                   <p>系统 AI 可直接生成；远程 Codex 会按素材库与风险规则生成。结果返回后会在这里直接编辑。</p>
                   <div class="script-engine-progress">
@@ -4279,7 +4749,7 @@ onBeforeUnmount(() => {
                   >转交 Codex</el-button>
                 </section>
 
-                <section v-if="videoFlowStep(taskVideoProjectDetail) === 2 && !projectWaitingForScripts(taskVideoProjectDetail)" class="task-video-stage-panel">
+                <section v-if="!isBatchVideoProjectTask(task) && videoFlowStep(taskVideoProjectDetail) === 2 && !projectWaitingForScripts(taskVideoProjectDetail)" class="task-video-stage-panel">
                   <h4>脚本与对应素材</h4>
                   <div class="task-script-candidates" :class="{ single: displayedProjectCandidates(taskVideoProjectDetail).length === 1 }">
                     <article v-for="(candidate, index) in displayedProjectCandidates(taskVideoProjectDetail)" :key="`${taskVideoProjectDetail.id}-task-${index}`">
@@ -4344,7 +4814,7 @@ onBeforeUnmount(() => {
                   </div>
                 </section>
 
-                <section v-if="videoFlowStep(taskVideoProjectDetail) === 3" class="task-video-stage-panel">
+                <section v-if="!isBatchVideoProjectTask(task) && videoFlowStep(taskVideoProjectDetail) === 3" class="task-video-stage-panel">
                   <template v-if="isCodexDirectVideoProject(taskVideoProjectDetail)">
                     <template v-if="codexDirectShouldShowProgress(taskVideoProjectDetail)">
                       <h4>{{ codexDirectTaskTitle(taskVideoProjectDetail) }}</h4>
@@ -4403,7 +4873,7 @@ onBeforeUnmount(() => {
                   </template>
                 </section>
 
-                <section v-if="videoFlowStep(taskVideoProjectDetail) === 4 || (videoFlowStep(taskVideoProjectDetail) === 3 && !isCodexDirectVideoProject(taskVideoProjectDetail))" class="task-video-stage-panel">
+                <section v-if="!isBatchVideoProjectTask(task) && (videoFlowStep(taskVideoProjectDetail) === 4 || (videoFlowStep(taskVideoProjectDetail) === 3 && !isCodexDirectVideoProject(taskVideoProjectDetail)))" class="task-video-stage-panel">
                   <h4>{{ videoFlowStep(taskVideoProjectDetail) === 3 ? "成片审核" : "封面标题、发布与回传" }}</h4>
                   <article
                     v-for="job in reviewableVideoRenderJobs(taskVideoProjectDetail)"
@@ -5882,12 +6352,16 @@ onBeforeUnmount(() => {
         <el-radio-button label="STANDARD">标准智能项目</el-radio-button>
         <el-radio-button label="REFERENCE_DIRECT_FULL_VIDEO">参考视频直出</el-radio-button>
         <el-radio-button label="CODEX_DIRECT_FULL_VIDEO">Codex 直出视频</el-radio-button>
+        <el-radio-button label="BATCH_CODEX_DIRECT_FULL_VIDEO">批量Codex直出</el-radio-button>
       </el-radio-group>
       <p v-if="videoProjectMode === 'REFERENCE_DIRECT_FULL_VIDEO'" class="project-mode-help">
         只需提供参考视频链接。项目会直接交给远程 Codex 完成脚本、素材匹配、剪辑和成片，默认参考其节奏与可访问的 BGM；员工只需审核最终成片。
       </p>
       <p v-else-if="videoProjectMode === 'CODEX_DIRECT_FULL_VIDEO'" class="project-mode-help">
         只需选择产品型号并填写 AI 提示词。项目会直接交给远程 Codex 完成脚本、素材匹配、剪辑和成片；中间过程不回传，员工只审核最终成片。
+      </p>
+      <p v-else-if="videoProjectMode === 'BATCH_CODEX_DIRECT_FULL_VIDEO'" class="project-mode-help">
+        多个产品、多条视频只作为一个项目、只提交一个 AI 任务。每个产品选择视频数量，所有产品合计最多 10 条；Codex 统一完成全部视频和封面标题，员工最终一次性审核。
       </p>
 
       <section v-if="videoProjectMode === 'STANDARD'" class="prototype-form-section">
@@ -5964,6 +6438,67 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
+      <section v-if="videoProjectMode === 'BATCH_CODEX_DIRECT_FULL_VIDEO'" class="prototype-form-section">
+        <header><strong>批量任务</strong><span>每个产品直接选择视频数量，所有产品合计最多 10 条（最多 5 个产品）</span></header>
+        <div v-for="(product, index) in videoFactoryForm.batchProducts" :key="`batch-product-${index}`" class="batch-product-row">
+          <el-form-item :label="`产品 ${index + 1}`" required>
+            <el-select v-model="product.model" filterable placeholder="搜索或选择产品型号" @change="syncBatchTaskRequirement">
+              <el-option v-for="option in batchProductOptions()" :key="option.id" :label="`${option.modelCode} · ${option.name}`" :value="option.modelCode" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="视频数量">
+            <el-select v-model="product.count" @change="syncBatchTaskRequirement">
+              <el-option v-for="count in [2,3,4,5,6,7,8,9,10]" :key="count" :label="`${count} 条`" :value="count" />
+            </el-select>
+          </el-form-item>
+          <el-button
+            v-if="videoFactoryForm.batchProducts.length > 1"
+            type="danger"
+            plain
+            @click="removeBatchProduct(index)"
+          >移除</el-button>
+          <span v-else></span>
+        </div>
+        <div class="batch-allocation-hint" :class="{ error: batchTotalVideos() > 10 }">
+          <template v-if="batchTotalVideos() === 0">请为每个产品选择视频数量。</template>
+          <template v-else-if="batchTotalVideos() > 10">当前合计 {{ batchTotalVideos() }} 条，超过上限 10 条，请调低部分产品数量。</template>
+          <template v-else>合计 {{ batchTotalVideos() }} 条（最多 10 条）。</template>
+        </div>
+        <el-button type="primary" plain :disabled="videoFactoryForm.batchProducts.length >= 5" @click="addBatchProduct">+ 添加产品</el-button>
+      </section>
+
+      <section v-if="videoProjectMode === 'BATCH_CODEX_DIRECT_FULL_VIDEO'" class="prototype-form-section">
+        <header><strong>批量创作设置</strong><span>默认已按最佳实践设置，可直接使用</span></header>
+        <div class="batch-create-settings">
+          <el-form-item label="口播分配">
+            <el-radio-group v-model="videoFactoryForm.batchVoiceoverSplit" @change="syncBatchTaskRequirement">
+              <el-radio-button label="HALF">一半口播、一半无口播</el-radio-button>
+              <el-radio-button label="ALL">全部口播</el-radio-button>
+              <el-radio-button label="NONE">全部无口播</el-radio-button>
+            </el-radio-group>
+            <div class="batch-setting-hint">一半口播时按每个产品各半分配，奇数条时无口播多一条。</div>
+          </el-form-item>
+          <el-form-item label="补充 AI 提示词">
+            <el-input v-model="videoFactoryForm.additionalPrompt" type="textarea" :rows="3" placeholder="例如：整体真实温暖，各条视频方向尽量错开" @input="syncBatchTaskRequirement" />
+          </el-form-item>
+        </div>
+        <div class="batch-option-checks">
+          <el-checkbox v-model="videoFactoryForm.batchBgmVariety" @change="syncBatchTaskRequirement">每条视频使用不同 BGM</el-checkbox>
+          <el-checkbox v-model="videoFactoryForm.batchVoiceVariety" @change="syncBatchTaskRequirement">多使用几种音色，尽量不重复</el-checkbox>
+          <el-checkbox v-model="videoFactoryForm.batchGenerateCoverTitle" @change="syncBatchTaskRequirement">同时生成封面和标题（每条视频标签至少 5 个）</el-checkbox>
+        </div>
+      </section>
+
+      <section v-if="videoProjectMode === 'BATCH_CODEX_DIRECT_FULL_VIDEO'" class="prototype-form-section batch-task-requirement">
+        <header><strong>提交给 Codex 的任务要求</strong><span>自动整理成唯一 AI 任务，可直接修改，随输入实时更新</span></header>
+        <el-input
+          v-model="videoFactoryForm.batchTaskRequirement"
+          type="textarea"
+          :rows="6"
+          @input="markBatchRequirementEdited"
+        />
+      </section>
+
       <el-collapse v-if="videoProjectMode === 'STANDARD'" v-model="videoProjectCollapseNames" class="prototype-collapses">
         <el-collapse-item name="optional">
           <template #title>
@@ -6008,20 +6543,26 @@ onBeforeUnmount(() => {
     </div>
     <div v-else-if="taskVideoProjectDetail" class="task-video-stage-panel">
       <el-alert
-        :title="isCodexDirectVideoProject(taskVideoProjectDetail)
-          ? 'Codex 正在直出最终成片，中间脚本、素材匹配和剪辑过程不会回传系统'
-          : projectWaitingForScripts(taskVideoProjectDetail) ? '项目已创建，系统 AI 正在生成脚本并匹配素材' : '脚本与素材已经准备好，可直接查看、修改或确认'"
+        :title="isBatchCodexVideoProject(taskVideoProjectDetail)
+          ? '批量 Codex 直出任务已提交，一个任务直接产出全部视频和封面标题'
+          : isCodexDirectVideoProject(taskVideoProjectDetail)
+            ? 'Codex 正在直出最终成片，中间脚本、素材匹配和剪辑过程不会回传系统'
+            : projectWaitingForScripts(taskVideoProjectDetail) ? '项目已创建，系统 AI 正在生成脚本并匹配素材' : '脚本与素材已经准备好，可直接查看、修改或确认'"
         type="success"
         :closable="false"
       />
       <div class="video-flow-steps compact">
         <span
-          v-for="(step, index) in videoFlowSteps"
+          v-for="(step, index) in isBatchCodexVideoProject(taskVideoProjectDetail) ? batchFlowStepsForProject(taskVideoProjectDetail) : videoFlowSteps"
           :key="`dialog-${step}`"
           :class="{ active: videoFlowStep(taskVideoProjectDetail) === index + 1, done: videoFlowStep(taskVideoProjectDetail) > index + 1 }"
         >{{ index + 1 }} {{ step }}</span>
       </div>
-      <section v-if="isCodexDirectVideoProject(taskVideoProjectDetail)">
+      <section v-if="isBatchCodexVideoProject(taskVideoProjectDetail)">
+        <h3>批量 Codex 直出成片中</h3>
+        <p>项目已提交。一个 AI 任务直接产出全部视频{{ batchConfigOf(taskVideoProjectDetail)?.generateCoverTitle !== false ? '、封面和标题' : '' }}，仅最终成片或失败原因会回传到此项目。</p>
+      </section>
+      <section v-else-if="isCodexDirectVideoProject(taskVideoProjectDetail)">
         <h3>Codex 直出成片中</h3>
         <p>项目已提交。仅最终成片或失败原因会回传到此项目，完成后自动进入成片审核。</p>
       </section>
@@ -6099,7 +6640,7 @@ onBeforeUnmount(() => {
       <template v-if="!createdVideoProjectDialogId">
         <el-button @click="newVideoProjectVisible = false">取消</el-button>
         <el-button @click="checkNewVideoProjectBrief">AI检查任务信息</el-button>
-        <el-button type="primary" :loading="creatingVideoProject" @click="createVideoFactoryProject">{{ videoProjectMode === 'STANDARD' ? '创建项目并生成脚本' : videoProjectMode === 'REFERENCE_DIRECT_FULL_VIDEO' ? '提交 Codex 全流程任务' : '提交 Codex 直出任务' }}</el-button>
+        <el-button type="primary" :loading="creatingVideoProject" @click="createVideoFactoryProject">{{ videoProjectMode === 'STANDARD' ? '创建项目并生成脚本' : videoProjectMode === 'REFERENCE_DIRECT_FULL_VIDEO' ? '提交 Codex 全流程任务' : videoProjectMode === 'CODEX_DIRECT_FULL_VIDEO' ? '提交 Codex 直出任务' : '创建批量项目并提交 Codex 任务' }}</el-button>
       </template>
       <el-button v-else @click="newVideoProjectVisible = false">关闭，稍后继续</el-button>
     </template>

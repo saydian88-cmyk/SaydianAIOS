@@ -1928,6 +1928,11 @@ export class WorkbenchService {
       : {};
     const brief = object(factory.brief);
     const codexDirectFullVideo = value(factory.projectMode) === "CODEX_DIRECT_FULL_VIDEO";
+    const batchDirectFullVideo = value(factory.projectMode) === "BATCH_CODEX_DIRECT_FULL_VIDEO";
+    const batchConfig = object(brief.batchDirect);
+    const batchGenerateCoverTitle = batchDirectFullVideo && batchConfig.generateCoverTitle !== false;
+    const batchStep = batchDirectFullVideo ? (batchGenerateCoverTitle ? 3 : 4) : 3;
+    const batchCoverTaskId = value(factory.coverAiTaskId) || null;
     const hasReturnedPublishLink = Array.isArray(project.variants)
       && project.variants.some((variant: Record<string, unknown>) => Boolean(value(variant.manualPublishUrl)));
     const state: Record<string, [number, string, string]> = {
@@ -1964,15 +1969,35 @@ export class WorkbenchService {
       });
     const directVideoReturned = codexDirectFullVideo
       && (value(project.masterVideoStatus).toUpperCase() === "RETURNED" || stage === "READY_TO_EDIT");
-    const current = reviewableMaster
-      ? [3, "成片待审核", "预览成片并审核或填写原因退回"]
-      : codexDirectFullVideo && directRevision && ["EDITING", "FACTORY_GENERATING"].includes(stage)
-      ? [3, "Codex 正在按退回说明修改成片", "等待 Codex 回传修改后的新成片，再次审核"]
-      : directVideoReturned
-        ? [3, "成片已退回", "正在准备按退回说明生成修改版本"]
-        : codexDirectFullVideo && ["EDITING", "FACTORY_GENERATING"].includes(stage)
-        ? [3, "Codex 直出成片中", "等待 Codex 回传最终成片，完成后审核"]
-        : state[stage] || [2, "脚本处理中", "进入项目查看处理进度"];
+    const current = batchDirectFullVideo
+      ? batchGenerateCoverTitle
+        ? reviewableMaster
+          ? [3, "成片与封面标题待审核", "审核整批成片和封面标题，或填写原因退回"]
+          : ["EDITING", "FACTORY_GENERATING", "PROJECT_BRIEF"].includes(stage)
+            ? [2, "批量生成中（视频+封面标题）", "查看唯一 AI 任务进度，无需员工操作"]
+            : ["READY_TO_PUBLISH", "PUBLISHING", "TRACKING"].includes(stage)
+              ? [3, "待回传发布链接", "逐条回传各平台发布链接"]
+              : state[stage] || [2, "批量生成中", "查看唯一 AI 任务进度"]
+        : ["EDITING", "FACTORY_GENERATING", "PROJECT_BRIEF"].includes(stage)
+          ? [2, "批量生成视频中", "查看唯一 AI 任务进度，无需员工操作"]
+          : stage === "VIDEO_REVIEW" && !batchCoverTaskId
+            ? [3, "封面标题待生成", "视频已生成，提交封面标题任务"]
+            : stage === "PLATFORM_PACKAGING"
+              ? [3, "封面标题生成中", "等待批量封面标题任务完成"]
+              : ["VIDEO_REVIEW", "PACKAGING_REVIEW"].includes(stage)
+                ? [4, "成片与封面标题待审核", "审核整批成片和封面标题，或填写原因退回"]
+                : ["READY_TO_PUBLISH", "PUBLISHING", "TRACKING"].includes(stage)
+                  ? [4, "待回传发布链接", "逐条回传各平台发布链接"]
+                  : state[stage] || [2, "批量生成中", "查看唯一 AI 任务进度"]
+      : reviewableMaster
+        ? [3, "成片待审核", "预览成片并审核或填写原因退回"]
+        : codexDirectFullVideo && directRevision && ["EDITING", "FACTORY_GENERATING"].includes(stage)
+          ? [3, "Codex 正在按退回说明修改成片", "等待 Codex 回传修改后的新成片，再次审核"]
+          : directVideoReturned
+            ? [3, "成片已退回", "正在准备按退回说明生成修改版本"]
+            : codexDirectFullVideo && ["EDITING", "FACTORY_GENERATING"].includes(stage)
+              ? [3, "Codex 直出成片中", "等待 Codex 回传最终成片，完成后审核"]
+              : state[stage] || [2, "脚本处理中", "进入项目查看处理进度"];
     return {
       id: project.id,
       productionNo: project.productionNo,
@@ -1982,6 +2007,15 @@ export class WorkbenchService {
       platform: Array.isArray(project.targetPlatforms) ? project.targetPlatforms[0] || null : null,
       videoType: value(brief.videoType) || null,
       keywords: value(brief.keywords) || null,
+      batch: batchDirectFullVideo ? {
+        products: Array.isArray(batchConfig.products) ? batchConfig.products : [],
+        generateCoverTitle: batchGenerateCoverTitle,
+        voiceoverSplit: value(batchConfig.voiceoverSplit) || "HALF",
+        bgmVariety: batchConfig.bgmVariety !== false,
+        voiceVariety: batchConfig.voiceVariety !== false,
+        taskRequirement: value(batchConfig.taskRequirement) || null,
+        publishRecords: Array.isArray(batchConfig.publishRecords) ? batchConfig.publishRecords : [],
+      } : null,
       createdAt: project.createdAt || null,
       updatedAt: project.updatedAt || null,
       hasReturnedPublishLink,

@@ -249,6 +249,55 @@ function compileCodexDirectFullVideoPrompt(project: Record<string, any>, brief: 
   ].join("\n");
 }
 
+function batchBriefValue(brief: Record<string, unknown>) {
+  return brief.batchDirect && typeof brief.batchDirect === "object" && !Array.isArray(brief.batchDirect)
+    ? brief.batchDirect as Record<string, unknown>
+    : {};
+}
+
+function compileBatchCodexDirectFullVideoPrompt(project: Record<string, any>, brief: Record<string, unknown>, revision: Record<string, unknown> = {}) {
+  const batch = batchBriefValue(brief);
+  const products = Array.isArray(batch.products) ? batch.products as Array<Record<string, unknown>> : [];
+  const productLines = products.length
+    ? products.map((item, index) => `${index + 1}. ${String(item.model || "")}（${Number(item.count || 0)} 条）`).join("\n")
+    : "产品清单：待补充";
+  const total = products.reduce((sum, item) => sum + Number(item.count || 0), 0);
+  const voiceoverSplit = String(batch.voiceoverSplit || "HALF").toUpperCase();
+  const voiceoverText = voiceoverSplit === "ALL"
+    ? "全部口播"
+    : voiceoverSplit === "NONE"
+      ? "全部无口播"
+      : "一半口播、一半无口播（按每个产品各半分配，奇数条时无口播多一条）";
+  const generateCoverTitle = batch.generateCoverTitle !== false;
+  const revisionNote = String(revision.reviewNote || "").trim();
+  const revisionLines = revisionNote ? [
+    "【定向成片修改】本任务不是从零重新创作。必须基于指定的原成片和原任务进行定向修改。",
+    `原 AI 任务：${String(revision.sourceTaskId || "")}`,
+    `原成片素材：${String(revision.sourceMasterName || revision.sourceMasterAssetId || "")}`,
+    `原成片路径：${String(revision.sourceMasterSourcePath || revision.sourceMasterStorageUrl || revision.sourceMasterObjectKey || "")}`,
+    `退回原因：${revisionNote}`,
+    "保持未被退回的批量清单、脚本结构、画面节奏、可用素材和成片规格；只修复退回原因涉及的视频画面、文案、配音、节奏或合规问题。完成时必须回传修改后的成片及简短修改说明。",
+  ] : [];
+  const requirement = String(batch.taskRequirement || "").trim();
+  const base = requirement
+    ? requirement
+    : [
+      "【任务类型】批量 Codex 直出视频（只回传最终成片）",
+      `项目编号：${project.productionNo || project.id}`,
+      `视频总数：${total} 条`,
+      `产品与视频分配：\n${productLines}`,
+      `口播分配：${voiceoverText}`,
+      `每条视频使用不同 BGM：${batch.bgmVariety !== false ? "是（默认）" : "否"}`,
+      `多使用几种音色、尽量不重复：${batch.voiceVariety !== false ? "是（默认）" : "否"}`,
+      `同时生成封面和标题：${generateCoverTitle ? "是（每条视频标签至少 5 个）" : "否（封面标题在后续单独步骤生成）"}`,
+      `用户补充提示词：${String(batch.additionalPrompt || "").trim() || "（无，尽量给 AI 更多自由发挥空间）"}`,
+      "请在同一个任务内完成全部视频的脚本、素材匹配、剪辑和最终成片。内部脚本、素材匹配和剪辑由 Codex 自动完成，不回传系统；只回传总体进度和最终成品。无需脚本审核、无需素材补全确认，员工只审核最终成片。",
+      "这是本地素材库直出模式：主画面只能读取本地已同步的“对应产品型号 + 视觉校验通过 + 可剪辑 VIDEO”清单；禁止使用其他型号、未校验素材、图片、音频或包装资源作为主镜头。各视频在脚本方向、开场、画面节奏上尽量错开，避免整批重复。包装资源只能用于 BGM、音效、贴纸、花字、字体和特效层。",
+      "不得向系统回传中间脚本、镜头、素材匹配或素材绑定；完成时按批量清单回传每条视频的真实主成片路径、成片元数据、简短审核说明，以及任务整体批量清单。",
+    ].join("\n");
+  return [base, ...revisionLines].join("\n");
+}
+
 @Controller("api/v1/workbench")
 export class WorkbenchController {
   constructor(
@@ -1313,6 +1362,8 @@ export class WorkbenchController {
         ? "REFERENCE_DIRECT_FULL_VIDEO"
         : body.projectMode === "CODEX_DIRECT_FULL_VIDEO"
           ? "CODEX_DIRECT_FULL_VIDEO"
+          : body.projectMode === "BATCH_CODEX_DIRECT_FULL_VIDEO"
+            ? "BATCH_CODEX_DIRECT_FULL_VIDEO"
           : "STANDARD",
       referenceVideoUrl: body.referenceVideoUrl ? String(body.referenceVideoUrl) : undefined,
       referenceDirectTaskRequirement: body.referenceDirectTaskRequirement ? String(body.referenceDirectTaskRequirement) : undefined,
@@ -1349,10 +1400,25 @@ export class WorkbenchController {
       scene: body.scene ? String(body.scene) : undefined,
       painPoint: body.painPoint ? String(body.painPoint) : undefined,
       scriptEngines: Array.isArray(body.scriptEngines) ? body.scriptEngines.map(String) : undefined,
+      batchProducts: Array.isArray(body.batchProducts)
+        ? body.batchProducts.map((item) => {
+          const row = item && typeof item === "object" ? item as Record<string, unknown> : {};
+          return { model: String(row.model || "").trim(), count: Math.round(Number(row.count || 0)) };
+        })
+        : undefined,
+      batchVoiceoverSplit: body.batchVoiceoverSplit === "ALL" || body.batchVoiceoverSplit === "NONE"
+        ? body.batchVoiceoverSplit
+        : undefined,
+      batchBgmVariety: typeof body.batchBgmVariety === "boolean" ? body.batchBgmVariety : undefined,
+      batchVoiceVariety: typeof body.batchVoiceVariety === "boolean" ? body.batchVoiceVariety : undefined,
+      batchGenerateCoverTitle: typeof body.batchGenerateCoverTitle === "boolean" ? body.batchGenerateCoverTitle : undefined,
+      batchTaskRequirement: body.batchTaskRequirement ? String(body.batchTaskRequirement) : undefined,
     }, employee.name) as Record<string, any>;
-    if (["REFERENCE_DIRECT_FULL_VIDEO", "CODEX_DIRECT_FULL_VIDEO"].includes(String(body.projectMode || ""))) {
+    if (["REFERENCE_DIRECT_FULL_VIDEO", "CODEX_DIRECT_FULL_VIDEO", "BATCH_CODEX_DIRECT_FULL_VIDEO"].includes(String(body.projectMode || ""))) {
       const directSubmission = body.projectMode === "CODEX_DIRECT_FULL_VIDEO"
         ? await this.submitCodexDirectFullVideoTask(authorization, String(project.id))
+        : body.projectMode === "BATCH_CODEX_DIRECT_FULL_VIDEO"
+          ? await this.submitBatchCodexDirectFullVideoTask(authorization, String(project.id))
         : await this.submitReferenceDirectFullVideoTask(authorization, String(project.id));
       const submittedProject = directSubmission.project as Record<string, any>;
       const task = await this.workbench.ensureVideoProjectTask({ employeeId: employee.employeeId!, name: employee.name }, {
@@ -1720,6 +1786,87 @@ export class WorkbenchController {
         workflowGuard: { projectId: project.id, workflowVersion: project.workflowVersion, stage: "FULL_VIDEO", allowedProjectStages: ["PROJECT_BRIEF", "EDITING"] },
         ...(Object.keys(revision).length ? { revision } : {}),
         requiredOutputs: ["master_video", "master_video_path", "review_summary"],
+      },
+      modelPolicy: { strategy: "CODEX_FIRST", allowExternalGeneration: false, allowFallback: false },
+      estimatedCost: 0,
+      skipPaidBudget: true,
+    }, employee.name) as Record<string, any>;
+    await this.videoFactory.attachRemoteTask(id, task.id, "FULL_VIDEO", employee.name);
+    const submittedProject = await this.videoFactory.project(id) as Record<string, any>;
+    await this.workbench.ensureVideoProjectTask(
+      { employeeId: employee.employeeId, name: employee.name },
+      {
+        id: submittedProject.id,
+        productionNo: submittedProject.productionNo,
+        topic: submittedProject.topic,
+        productionStage: submittedProject.productionStage,
+      },
+    );
+    return { project: submittedProject, task };
+  }
+
+  private async submitBatchCodexDirectFullVideoTask(authorization: string | undefined, id: string) {
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    if (!employee.employeeId) throw new ForbiddenException("当前账号未关联员工档案");
+    const project = await this.videoFactory.project(id) as Record<string, any>;
+    if (project.createdBy !== employee.name) throw new ForbiddenException("只能提交自己创建的视频项目");
+    const factory = Array.isArray(project.sourceSignals)
+      ? project.sourceSignals.find((item: Record<string, unknown>) => item?.type === "VIDEO_FACTORY") || {}
+      : {};
+    const brief = factory.brief && typeof factory.brief === "object" ? factory.brief as Record<string, unknown> : {};
+    if (String(factory.projectMode || "") !== "BATCH_CODEX_DIRECT_FULL_VIDEO") {
+      throw new ForbiddenException("当前项目不是批量 Codex 直出视频模式");
+    }
+    const batch = batchBriefValue(brief);
+    const products = Array.isArray(batch.products)
+      ? (batch.products as Array<Record<string, unknown>>)
+        .map((item) => ({ model: String(item.model || "").trim(), count: Math.round(Number(item.count || 0)) }))
+        .filter((item) => item.model && item.count > 0)
+      : [];
+    if (!products.length) throw new ForbiddenException("批量产品清单缺失，请重新创建项目");
+    const revision = factory.directVideoRevision && typeof factory.directVideoRevision === "object"
+      ? factory.directVideoRevision as Record<string, unknown>
+      : {};
+    const revisionNote = String(revision.reviewNote || "").trim();
+    const idempotencyKey = `ai-task:video-project:${project.id}:batch-codex-direct:v${project.workflowVersion}${revisionNote ? `:r${String(revision.revisionNo || 1)}` : ""}`;
+    const task = await this.aiTasks.createTask({
+      type: "VIDEO",
+      title: `${project.topic} · 批量Codex直出`,
+      platform: project.targetPlatforms?.[0] || "DOUYIN",
+      productModel: project.productModel,
+      ownerEmployeeId: employee.employeeId,
+      reviewerEmployeeId: employee.employeeId,
+      sourceType: "VIDEO_FACTORY_PROJECT",
+      sourceId: project.id,
+      idempotencyKey,
+      instructions: compileBatchCodexDirectFullVideoPrompt(project, brief, revision),
+      input: {
+        executionMode: "FULL_VIDEO",
+        batchCodexDirectFullVideo: true,
+        skipScriptReview: true,
+        suppressIntermediateProjectUpdates: true,
+        finalReviewOnly: true,
+        existingContentPlanId: project.id,
+        workflowVersion: project.workflowVersion,
+        executionClass: "CODEX_SKILL",
+        skillName: "video-editing-from-media-library",
+        batchDirectInput: {
+          products,
+          voiceoverSplit: String(batch.voiceoverSplit || "HALF").toUpperCase(),
+          bgmVariety: batch.bgmVariety !== false,
+          voiceVariety: batch.voiceVariety !== false,
+          generateCoverTitle: batch.generateCoverTitle !== false,
+          prompt: String(batch.additionalPrompt || "").trim(),
+          ...(Object.keys(revision).length ? { revision } : {}),
+        },
+        workflowGuard: { projectId: project.id, workflowVersion: project.workflowVersion, stage: "FULL_VIDEO", allowedProjectStages: ["PROJECT_BRIEF", "EDITING"] },
+        ...(Object.keys(revision).length ? { revision } : {}),
+        requiredOutputs: [
+          "batch_manifest",
+          "master_videos",
+          ...(batch.generateCoverTitle !== false ? ["cover_titles"] : []),
+          "review_summary",
+        ],
       },
       modelPolicy: { strategy: "CODEX_FIRST", allowExternalGeneration: false, allowFallback: false },
       estimatedCost: 0,
@@ -2116,6 +2263,228 @@ export class WorkbenchController {
       return { ...revisionSubmission.project, revisionTask: revisionSubmission.task, previousReview: reviewed };
     }
     return reviewed;
+  }
+
+  @Post("data-center/video-projects/:id/batch-review")
+  async reviewBatchVideoProject(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    if (!employee.roles.some((role) => ["CONTENT_OPERATOR", "VIDEO_SPECIALIST"].includes(role))) {
+      throw new ForbiddenException("只有运营和视频专员可以审核批量成片");
+    }
+    const action = String(body.action || "").trim().toUpperCase();
+    const note = String(body.note || "").trim();
+    if (!["APPROVE", "RETURN"].includes(action)) throw new ForbiddenException("审核动作不正确");
+    if (action === "RETURN" && !note) throw new ForbiddenException("退回时必须填写具体修改说明");
+    const project = await this.videoFactory.project(id) as Record<string, any>;
+    const factory = Array.isArray(project.sourceSignals)
+      ? project.sourceSignals.find((item: Record<string, unknown>) => item?.type === "VIDEO_FACTORY") || {}
+      : {};
+    if (String(factory.projectMode || "") !== "BATCH_CODEX_DIRECT_FULL_VIDEO") {
+      throw new ForbiddenException("当前项目不是批量 Codex 直出模式");
+    }
+    const brief = factory.brief && typeof factory.brief === "object" ? factory.brief as Record<string, unknown> : {};
+    const batch = batchBriefValue(brief);
+    if (action === "RETURN") {
+      const videoAiTaskId = String(factory.videoAiTaskId || "").trim();
+      if (videoAiTaskId) {
+        await this.aiTasks.review(videoAiTaskId, { action: "RETURN", note }, employee.name);
+      }
+      const pendingRender = await this.prisma.videoRenderJob.findFirst({
+        where: { contentPlanId: id, status: "SUCCEEDED", outputAsset: { reviewStatus: "PENDING" } },
+        orderBy: { createdAt: "asc" },
+        select: { outputAssetId: true },
+      });
+      if (pendingRender?.outputAssetId) {
+        await this.videoFactory.reviewOutput(pendingRender.outputAssetId, false, employee.name, note);
+      }
+      await this.videoFactory.prepareCodexDirectVideoRevision(id, employee.name);
+      const revisionSubmission = await this.submitBatchCodexDirectFullVideoTask(authorization, id);
+      return { ...revisionSubmission.project, revisionTask: revisionSubmission.task };
+    }
+    const renders = await this.prisma.videoRenderJob.findMany({
+      where: { contentPlanId: id, status: "SUCCEEDED", outputAsset: { reviewStatus: "PENDING" } },
+      select: { outputAssetId: true },
+    });
+    for (const render of renders) {
+      if (render.outputAssetId) {
+        await this.videoFactory.reviewOutput(render.outputAssetId, true, employee.name, "批量成片审核通过");
+      }
+    }
+    const coverAiTaskId = String(factory.coverAiTaskId || "").trim();
+    if (coverAiTaskId) {
+      await this.prisma.aiTask.updateMany({
+        where: { id: coverAiTaskId, status: "PENDING_REVIEW" },
+        data: { status: "COMPLETED", finishedAt: new Date(), reviewedAt: new Date(), reviewedBy: employee.name },
+      });
+    }
+    await this.prisma.contentPlan.update({
+      where: { id },
+      data: { productionStage: "READY_TO_PUBLISH", masterVideoStatus: "APPROVED" },
+    });
+    return this.videoFactory.project(id);
+  }
+
+  @Post("data-center/video-projects/:id/batch-cover-title")
+  async submitBatchCoverTitleTask(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+  ) {
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    if (!employee.employeeId) throw new ForbiddenException("当前账号未关联员工档案");
+    const project = await this.videoFactory.project(id) as Record<string, any>;
+    const factory = Array.isArray(project.sourceSignals)
+      ? project.sourceSignals.find((item: Record<string, unknown>) => item?.type === "VIDEO_FACTORY") || {}
+      : {};
+    if (String(factory.projectMode || "") !== "BATCH_CODEX_DIRECT_FULL_VIDEO") {
+      throw new ForbiddenException("当前项目不是批量 Codex 直出模式");
+    }
+    const brief = factory.brief && typeof factory.brief === "object" ? factory.brief as Record<string, unknown> : {};
+    const batch = batchBriefValue(brief);
+    if (batch.generateCoverTitle !== false) {
+      throw new ForbiddenException("该项目已在视频任务中同时生成封面标题，不需要单独提交");
+    }
+    const products = Array.isArray(batch.products)
+      ? (batch.products as Array<Record<string, unknown>>)
+        .map((item) => ({ model: String(item.model || "").trim(), count: Math.round(Number(item.count || 0)) }))
+        .filter((item) => item.model && item.count > 0)
+      : [];
+    if (!products.length) throw new ForbiddenException("批量产品清单缺失");
+    const existingTasks = await this.prisma.aiTask.findMany({
+      where: {
+        type: "VIDEO",
+        sourceType: "VIDEO_FACTORY_PROJECT",
+        sourceId: id,
+        status: { in: ["PENDING", "CLAIMED", "RUNNING", "QUALITY_CHECK", "UPLOADING", "PENDING_REVIEW"] },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 20,
+    });
+    const active = existingTasks.find((item) => String((item.input as Record<string, unknown>)?.executionMode || "") === "COVER_TITLE");
+    if (active) return { project: await this.videoFactory.project(id), task: active, duplicate: true };
+    const historical = await this.prisma.aiTask.findMany({
+      where: { type: "VIDEO", sourceType: "VIDEO_FACTORY_PROJECT", sourceId: id },
+      select: { input: true },
+    });
+    const revision = historical.filter((item) => String((item.input as Record<string, unknown>)?.executionMode || "") === "COVER_TITLE").length + 1;
+    const productLines = products.map((item, index) => `${index + 1}. ${item.model}（${item.count} 条）`).join("\n");
+    const task = await this.aiTasks.createTask({
+      type: "VIDEO",
+      title: `${project.topic} · 批量封面标题`,
+      platform: project.targetPlatforms?.[0] || "DOUYIN",
+      productModel: project.productModel,
+      ownerEmployeeId: employee.employeeId,
+      reviewerEmployeeId: employee.employeeId,
+      sourceType: "VIDEO_FACTORY_PROJECT",
+      sourceId: id,
+      idempotencyKey: `ai-task:video-project:${id}:batch-cover-title:v${revision}`,
+      instructions: `【任务类型】批量封面标题生成\n项目编号：${project.productionNo || id}\n批量产品分配：\n${productLines}\n请为已生成的全部视频逐一生成封面、标题和标签；每条视频的标签至少 5 个。先分析已审核成片，再按各视频内容和产品型号生成，避免整批标题和标签重复。`,
+      input: {
+        executionMode: "COVER_TITLE",
+        batchCodexDirectFullVideo: true,
+        existingContentPlanId: id,
+        skillName: "video-editing-from-media-library",
+        childSkillName: "feng-mian-biao-ti",
+        batchDirectInput: {
+          products,
+          generateCoverTitle: true,
+          voiceoverSplit: String(batch.voiceoverSplit || "HALF").toUpperCase(),
+          bgmVariety: batch.bgmVariety !== false,
+          voiceVariety: batch.voiceVariety !== false,
+        },
+        requiredOutputs: ["batch_manifest", "cover_titles", "title_workbook"],
+        resultContract: {
+          packaging: "每条视频一条，包含 videoKey、platform、title、body、coverText、hashtags（至少 5 个）、contentFingerprint、compliance",
+          outputFiles: "每条视频上传一张 JPG 封面，kind=COVER_IMAGE，metadata.videoKey 必须等于对应视频键",
+        },
+      },
+      modelPolicy: { strategy: "CODEX_FIRST", allowExternalGeneration: false, allowFallback: false },
+      estimatedCost: 0,
+      skipPaidBudget: true,
+    }, employee.name) as Record<string, any>;
+    await this.videoFactory.attachRemoteTask(id, task.id, "COVER_TITLE", employee.name);
+    return { project: await this.videoFactory.project(id), task, duplicate: false };
+  }
+
+  @Post("data-center/video-projects/:id/batch-publish")
+  async recordBatchPublish(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    if (!employee.roles.some((role) => ["CONTENT_OPERATOR", "VIDEO_SPECIALIST"].includes(role))) {
+      throw new ForbiddenException("只有运营和视频专员可以回传批量发布链接");
+    }
+    const records = Array.isArray(body.records) ? body.records as Array<Record<string, unknown>> : [];
+    if (!records.length) throw new ForbiddenException("请至少填写一条发布链接");
+    const allowedPlatforms = ["DOUYIN", "TIKTOK", "XIAOHONGSHU", "BILIBILI", "WECHAT_CHANNELS", "KUAISHOU"];
+    const normalized = records.map((record) => ({
+      videoKey: String(record.videoKey || "").trim(),
+      platform: String(record.platform || "").trim().toUpperCase(),
+      remoteUrl: String(record.remoteUrl || "").trim(),
+    }));
+    if (normalized.some((record) => !record.videoKey)) throw new ForbiddenException("每条发布记录必须对应一条视频");
+    if (normalized.some((record) => !allowedPlatforms.includes(record.platform))) {
+      throw new ForbiddenException("发布平台不在支持范围内");
+    }
+    if (normalized.some((record) => !/^https?:\/\/\S+$/i.test(record.remoteUrl))) {
+      throw new ForbiddenException("请填写以 http:// 或 https:// 开头的完整作品链接");
+    }
+    const project = await this.videoFactory.project(id) as Record<string, any>;
+    const factory = Array.isArray(project.sourceSignals)
+      ? project.sourceSignals.find((item: Record<string, unknown>) => item?.type === "VIDEO_FACTORY") || {}
+      : {};
+    if (String(factory.projectMode || "") !== "BATCH_CODEX_DIRECT_FULL_VIDEO") {
+      throw new ForbiddenException("当前项目不是批量 Codex 直出模式");
+    }
+    const brief = factory.brief && typeof factory.brief === "object" ? factory.brief as Record<string, unknown> : {};
+    const batch = batchBriefValue(brief);
+    if (!["READY_TO_PUBLISH", "PUBLISHING", "TRACKING"].includes(String(project.productionStage || ""))) {
+      throw new ForbiddenException("请先审核通过成片，再回传发布链接");
+    }
+    const previous = Array.isArray(batch.publishRecords) ? batch.publishRecords as Array<Record<string, unknown>> : [];
+    const merged = [
+      ...previous.filter((item) => !normalized.some((record) => record.videoKey === String(item.videoKey || ""))),
+      ...normalized,
+    ];
+    const nextSignals = (project.sourceSignals as Array<Record<string, unknown>>).map((signal) => {
+      if (String(signal.type || "") !== "VIDEO_FACTORY") return signal;
+      return {
+        ...signal,
+        brief: {
+          ...(brief as Record<string, unknown>),
+          batchDirect: { ...batch, publishRecords: merged },
+        },
+      };
+    });
+    await this.prisma.contentPlan.update({
+      where: { id },
+      data: {
+        productionStage: "TRACKING",
+        masterVideoStatus: "APPROVED",
+        sourceSignals: nextSignals as never,
+        targetPlatforms: Array.from(new Set([...(project.targetPlatforms || []), ...normalized.map((record) => record.platform)])) as never,
+      },
+    });
+    await this.prisma.opsTask.updateMany({
+      where: {
+        sourceType: "VIDEO_PROJECT",
+        sourceId: id,
+        deletedAt: null,
+        status: { notIn: ["CANCELLED", "COMPLETED"] },
+      },
+      data: {
+        status: "COMPLETED",
+        completedAt: new Date(),
+        completedBy: employee.name,
+        result: `已回传 ${normalized.length} 条批量视频发布链接，项目进入数据跟踪`,
+      },
+    });
+    return this.videoFactory.project(id);
   }
 
   @Post("data-center/video-projects/:id/similar")

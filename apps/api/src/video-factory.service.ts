@@ -26,7 +26,7 @@ import {
 type JsonRow = Record<string, unknown>;
 
 type ProjectCreateInput = {
-  projectMode?: "STANDARD" | "REFERENCE_DIRECT_FULL_VIDEO" | "CODEX_DIRECT_FULL_VIDEO";
+  projectMode?: "STANDARD" | "REFERENCE_DIRECT_FULL_VIDEO" | "CODEX_DIRECT_FULL_VIDEO" | "BATCH_CODEX_DIRECT_FULL_VIDEO";
   referenceVideoUrl?: string;
   referenceDirectTaskRequirement?: string;
   platform?: string;
@@ -59,6 +59,12 @@ type ProjectCreateInput = {
   scene?: string;
   painPoint?: string;
   scriptEngines?: string[];
+  batchProducts?: Array<{ model: string; count: number }>;
+  batchVoiceoverSplit?: "HALF" | "ALL" | "NONE";
+  batchBgmVariety?: boolean;
+  batchVoiceVariety?: boolean;
+  batchGenerateCoverTitle?: boolean;
+  batchTaskRequirement?: string;
 };
 
 type GenerateInput = {
@@ -1529,9 +1535,25 @@ export class VideoFactoryService {
     const videoType = String(input.videoType || "").trim();
     const referenceDirect = input.projectMode === "REFERENCE_DIRECT_FULL_VIDEO";
     const codexDirect = input.projectMode === "CODEX_DIRECT_FULL_VIDEO";
-    const directFullVideo = referenceDirect || codexDirect;
+    const batchDirect = input.projectMode === "BATCH_CODEX_DIRECT_FULL_VIDEO";
+    const directFullVideo = referenceDirect || codexDirect || batchDirect;
     const referenceVideoUrl = String(input.referenceVideoUrl || input.reference || "").trim();
     const codexDirectPrompt = String(input.additionalPrompt || "").trim();
+    const normalizedBatchProducts = batchDirect
+      ? (input.batchProducts || [])
+        .map((item) => ({
+          model: String(item.model || "").trim(),
+          count: Math.max(2, Math.min(10, Math.round(Number(item.count || 0)))),
+        }))
+        .filter((item) => item.model && item.count > 0)
+      : [];
+    if (batchDirect) {
+      if (!normalizedBatchProducts.length || normalizedBatchProducts.length > 5) {
+        throw new BadRequestException("请选择 1 到 5 个产品");
+      }
+      const batchTotal = normalizedBatchProducts.reduce((sum, item) => sum + item.count, 0);
+      if (batchTotal > 10) throw new BadRequestException("批量视频总数最多 10 条");
+    }
     const requestedKeywordIds = Array.from(new Set((input.keywordIds || []).map(String).filter(Boolean)));
     const [selectedSmartKeywords, selectedViralKeywords] = requestedKeywordIds.length
       ? await Promise.all([
@@ -1554,7 +1576,7 @@ export class VideoFactoryService {
       ...selectedViralKeywords.map((item) => item.keyword),
     ].filter(Boolean))).join("、");
     const keywords = String(input.keywords || input.topic || selectedKeywordText).trim();
-    if (directFullVideo && !productModel) throw new BadRequestException("请选择产品型号");
+    if ((referenceDirect || codexDirect) && !productModel) throw new BadRequestException("请选择产品型号");
     if (referenceDirect && !referenceVideoUrl) throw new BadRequestException("请填写参考视频链接");
     if (codexDirect && !codexDirectPrompt) throw new BadRequestException("请填写 AI 提示词");
     if (!directFullVideo && !productModel) throw new BadRequestException("请选择产品型号");
@@ -1562,13 +1584,16 @@ export class VideoFactoryService {
     if (!directFullVideo && !keywords && !input.keywordIds?.length) throw new BadRequestException("请填写或选择关键词");
     const platform = integrationKind(input.platform);
     const productionNo = `VF-${localDateKey(new Date()).replaceAll("-", "")}-${randomUUID().slice(0, 6).toUpperCase()}`;
-    const normalizedProductModel = productModel || "REFERENCE_VIDEO";
-    const normalizedVideoType = videoType || (codexDirect ? "Codex 直出视频" : "参考视频直出");
-    const normalizedKeywords = keywords || (codexDirect ? "Codex 直出" : "参考视频直出");
+    const normalizedProductModel = productModel
+      || (batchDirect ? normalizedBatchProducts.map((item) => item.model.split(" · ")[0]).join("、") : "REFERENCE_VIDEO");
+    const normalizedVideoType = videoType || (batchDirect ? "批量 Codex 直出" : codexDirect ? "Codex 直出视频" : "参考视频直出");
+    const normalizedKeywords = keywords || (batchDirect ? "批量Codex直出" : codexDirect ? "Codex 直出" : "参考视频直出");
     const topic = conciseVideoTopic(String(input.topic || (referenceDirect
       ? `${normalizedProductModel} · 参考直出`
       : codexDirect
         ? `${normalizedProductModel} · Codex直出`
+        : batchDirect
+          ? `${normalizedBatchProducts.map((item) => item.model.split(" · ")[0]).join(" · ")} · 批量Codex直出`
         : `${normalizedProductModel} · ${normalizedVideoType}${normalizedKeywords ? ` · ${normalizedKeywords}` : ""}`)));
     const brief = {
       ...(input.platform ? { platform } : {}),
@@ -1591,6 +1616,20 @@ export class VideoFactoryService {
         ? { referenceDirectTaskRequirement: String(input.referenceDirectTaskRequirement).trim() }
         : {}),
       ...(codexDirect ? { codexDirectFullVideo: true, directOutputOnly: true } : {}),
+      ...(batchDirect ? {
+        batchDirectFullVideo: true,
+        directOutputOnly: true,
+        batchDirect: {
+          products: normalizedBatchProducts,
+          voiceoverSplit: input.batchVoiceoverSplit === "ALL" ? "ALL" : input.batchVoiceoverSplit === "NONE" ? "NONE" : "HALF",
+          bgmVariety: input.batchBgmVariety !== false,
+          voiceVariety: input.batchVoiceVariety !== false,
+          generateCoverTitle: input.batchGenerateCoverTitle !== false,
+          additionalPrompt: String(input.additionalPrompt || "").trim(),
+          taskRequirement: String(input.batchTaskRequirement || "").trim(),
+          publishRecords: [],
+        },
+      } : {}),
       hook: String(input.hook || "").trim(),
       scene: String(input.scene || "").trim(),
       painPoint: String(input.painPoint || "").trim(),
@@ -1603,14 +1642,16 @@ export class VideoFactoryService {
         source: "SYSTEM_RISK_TERM_AND_VISUAL_LIBRARY",
         generatedByRemoteCodex: true,
       },
-      coverTitleTiming: "AFTER_VIDEO_APPROVAL",
+      coverTitleTiming: batchDirect
+        ? (input.batchGenerateCoverTitle !== false ? "WITH_VIDEO" : "AFTER_VIDEO_APPROVAL")
+        : "AFTER_VIDEO_APPROVAL",
     };
     const plan = await this.prisma.$transaction(async (tx) => {
       const created = await tx.contentPlan.create({
         data: {
           productionNo,
           productionStage: "PROJECT_BRIEF",
-          workflowVersion: 4,
+          workflowVersion: batchDirect ? 5 : 4,
           owner: actor,
           targetPlatforms: [platform],
           planDate: new Date(),
@@ -1625,15 +1666,17 @@ export class VideoFactoryService {
           outline: [],
           sourceSignals: [{
             type: "VIDEO_FACTORY",
-            workflowVersion: 4,
-            projectMode: referenceDirect ? "REFERENCE_DIRECT_FULL_VIDEO" : codexDirect ? "CODEX_DIRECT_FULL_VIDEO" : "SINGLE_SCRIPT_SYSTEM_FIRST",
+            workflowVersion: batchDirect ? 5 : 4,
+            projectMode: batchDirect
+              ? "BATCH_CODEX_DIRECT_FULL_VIDEO"
+              : referenceDirect ? "REFERENCE_DIRECT_FULL_VIDEO" : codexDirect ? "CODEX_DIRECT_FULL_VIDEO" : "SINGLE_SCRIPT_SYSTEM_FIRST",
             brief,
             scriptCandidates: [],
             selectedCandidateIndex: 0,
             scriptEngineStatus: Object.fromEntries(brief.scriptEngines.map((engine) => [engine, "PENDING"])),
             keywordIds,
             externalVideoIds: input.externalVideoIds || [],
-            externalReferencePolicy: referenceDirect ? "REFERENCE_STYLE_AND_BGM" : codexDirect ? "NONE" : "STRUCTURE_ONLY",
+            externalReferencePolicy: referenceDirect ? "REFERENCE_STYLE_AND_BGM" : (codexDirect || batchDirect) ? "NONE" : "STRUCTURE_ONLY",
             routingMode: directFullVideo ? "CODEX_DIRECT" : "SYSTEM_FIRST",
             allowFallback: false,
           }] as unknown as Prisma.InputJsonValue,
@@ -1662,7 +1705,7 @@ export class VideoFactoryService {
           action: "VIDEO_FACTORY_PROJECT_DRAFT_CREATE",
           entityType: "ContentPlan",
           entityId: created.id,
-          after: { productionNo, projectMode: referenceDirect ? "REFERENCE_DIRECT_FULL_VIDEO" : codexDirect ? "CODEX_DIRECT_FULL_VIDEO" : "SINGLE_SCRIPT_SYSTEM_FIRST", scriptEngines: brief.scriptEngines },
+          after: { productionNo, projectMode: batchDirect ? "BATCH_CODEX_DIRECT_FULL_VIDEO" : referenceDirect ? "REFERENCE_DIRECT_FULL_VIDEO" : codexDirect ? "CODEX_DIRECT_FULL_VIDEO" : "SINGLE_SCRIPT_SYSTEM_FIRST", scriptEngines: brief.scriptEngines },
         },
       });
       return created;
@@ -1734,7 +1777,7 @@ export class VideoFactoryService {
     if (!plan) throw new NotFoundException("智能视频项目不存在");
     const signals = sourceSignals(plan);
     const factory = signals.find((signal) => signal.type === "VIDEO_FACTORY") || {};
-    if (!["CODEX_DIRECT_FULL_VIDEO", "REFERENCE_DIRECT_FULL_VIDEO"].includes(String(factory.projectMode || ""))) {
+    if (!["CODEX_DIRECT_FULL_VIDEO", "REFERENCE_DIRECT_FULL_VIDEO", "BATCH_CODEX_DIRECT_FULL_VIDEO"].includes(String(factory.projectMode || ""))) {
       throw new BadRequestException("当前项目不是 Codex 直出视频模式");
     }
     const render = plan.videoRenderJobs[0];
@@ -4338,7 +4381,7 @@ export class VideoFactoryService {
     if (master?.reviewStatus === "RETURNED") {
       const factory = sourceSignals({ sourceSignals: row.sourceSignals || [] }).find((signal) => signal.type === "VIDEO_FACTORY") || {};
       const revision = object(factory.directVideoRevision);
-      if (String(factory.projectMode || "") === "CODEX_DIRECT_FULL_VIDEO" && String(revision.requestedAt || "")) {
+      if (["CODEX_DIRECT_FULL_VIDEO", "BATCH_CODEX_DIRECT_FULL_VIDEO"].includes(String(factory.projectMode || "")) && String(revision.requestedAt || "")) {
         return "FACTORY_GENERATING";
       }
       return "READY_TO_EDIT";
