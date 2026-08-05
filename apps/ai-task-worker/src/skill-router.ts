@@ -130,7 +130,12 @@ export function routeTask(taskPackage: JsonRecord, env: NodeJS.ProcessEnv = proc
   const sourceType = String(
     task.sourceType || taskPackage.sourceType || taskInput.sourceType || taskInput.projectSourceType || "",
   ).trim().toUpperCase();
-  const requestedExecutionMode = String(execution.mode || taskInput.executionMode || "").trim().toUpperCase();
+  const requestedExecutionModeRaw = String(execution.mode || taskInput.executionMode || "").trim().toUpperCase();
+  // BATCH_IMAGE_POST is a creation-time variant of an image-post project.
+  // The runner contract deliberately uses the shared IMAGE_POST route.
+  const requestedExecutionMode = requestedExecutionModeRaw === "BATCH_IMAGE_POST"
+    ? "IMAGE_POST"
+    : requestedExecutionModeRaw;
   const requiredSkill = String(execution.requiredSkill || "").trim();
   const taskRoute = object(taskInput.taskRoute || execution.taskRoute);
   const routeVersion = Number(taskRoute.version || 0);
@@ -161,9 +166,7 @@ export function routeTask(taskPackage: JsonRecord, env: NodeJS.ProcessEnv = proc
       || requiredSkill === "saidian-douyin-image-posts"
     );
   const executionMode = String(
-    requestedExecutionMode === "BATCH_IMAGE_POST"
-      ? "IMAGE_POST"
-      : requestedExecutionMode || (type === "VIDEO" ? "FULL_VIDEO" : isImagePostProject ? "IMAGE_POST" : "DEFAULT"),
+    requestedExecutionMode || (type === "VIDEO" ? "FULL_VIDEO" : isImagePostProject ? "IMAGE_POST" : "DEFAULT"),
   ).trim().toUpperCase();
   const isDouyinViralModule = String(taskInput.factoryModule || "").trim().toUpperCase() === "DOUYIN_VIRAL";
   const isCodexDirectFullVideo = type === "VIDEO"

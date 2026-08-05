@@ -1345,6 +1345,7 @@ export class AiTaskCenterService implements OnModuleInit {
       && (text(task.sourceType).toUpperCase() === "IMAGE_PROJECT"
         || text(input.sourceType).toUpperCase() === "IMAGE_PROJECT"
         || Boolean(input.imageProjectId));
+    const packageExecutionMode = imagePostProject ? "IMAGE_POST" : executionMode;
     const packageInputBase = codexDirectFullVideo
       ? {
         executionMode: "FULL_VIDEO",
@@ -1509,7 +1510,7 @@ export class AiTaskCenterService implements OnModuleInit {
         };
       }),
       execution: {
-        mode: executionMode,
+        mode: packageExecutionMode,
         strategy: ["IMAGE", "ARTICLE"].includes(task.type) || dedicatedDouyin
           ? "CODEX_SKILL"
           : text(modelPolicy.strategy).toUpperCase() || "CODEX_FIRST",
