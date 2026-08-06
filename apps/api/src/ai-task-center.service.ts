@@ -2651,6 +2651,49 @@ export class AiTaskCenterService implements OnModuleInit {
             : "封面和标题已回传，等待用户审核",
         };
       }
+      if (executionMode === "FULL_VIDEO" && taskInput.batchCodexDirectFullVideo === true) {
+        const contentPlanId = text(taskInput.existingContentPlanId);
+        if (!contentPlanId) return { status: "WAITING_INPUT" as AiTaskStatus, message: "批量视频任务缺少关联项目" };
+        const project = await this.prisma.contentPlan.findUnique({ where: { id: contentPlanId } });
+        if (!project) return { status: "WAITING_INPUT" as AiTaskStatus, message: "关联批量视频项目不存在" };
+        const uploaded = await this.prisma.aiTaskOutput.findMany({
+          where: { aiTaskId: task.id, assetId: { not: null }, mimeType: { startsWith: "video/" } },
+          include: { asset: { select: { storageUrl: true } }, }, orderBy: { createdAt: "asc" },
+        });
+        const fileName = (value: string) => value.replace(/\\/g, "/").split("/").pop() || value;
+        const results = Array.isArray(result.batchResults) ? result.batchResults.map(object) : [];
+        const ready = results.filter((item) => text(item.status).toUpperCase() === "READY");
+        const failed = results.filter((item) => text(item.status).toUpperCase() !== "READY");
+        let registered = 0;
+        for (const item of ready) {
+          const path = text(item.outputFile);
+          const output = uploaded.find((candidate) => {
+            const metadata = object(candidate.metadata);
+            const saved = text(metadata.workspaceOutputPath || metadata.outputFile || metadata.path);
+            return saved === path || fileName(saved) === fileName(path) || fileName(candidate.title) === fileName(path);
+          });
+          if (!output?.assetId) continue;
+          await this.videoFactory.registerLocalMaster(project.id, output.assetId, task.id, actor);
+          await this.prisma.aiTaskOutput.update({ where: { id: output.id }, data: {
+            kind: "VIDEO_MASTER", contentPlanId: project.id, reviewStatus: "PENDING",
+            metadata: json({ ...object(output.metadata), videoKey: text(item.videoKey), title: text(item.title), tags: strings(item.tags), batchStatus: "READY" }),
+          } });
+          registered += 1;
+        }
+        const signals = Array.isArray(project.sourceSignals) ? project.sourceSignals.map(object) : [];
+        const nextSignals = signals.map((signal) => signal.type === "VIDEO_FACTORY" ? {
+          ...signal, brief: { ...object(signal.brief), batchDirect: { ...object(object(signal.brief).batchDirect), results: results.map((item) => ({
+            videoKey: text(item.videoKey), status: text(item.status).toUpperCase() === "READY" ? "READY" : "FAILED",
+            failureReason: text(item.failureReason),
+          })) } },
+        } : signal);
+        await this.prisma.contentPlan.update({ where: { id: project.id }, data: {
+          sourceSignals: json(nextSignals), productionStage: registered ? "VIDEO_REVIEW" : "EDITING",
+          masterVideoStatus: registered ? "READY_FOR_REVIEW" : project.masterVideoStatus,
+        } });
+        if (!registered) return { status: "WAITING_INPUT" as AiTaskStatus, message: "批量视频未回传可审核成片" };
+        return { status: "PENDING_REVIEW" as AiTaskStatus, message: failed.length ? `批量视频部分完成：已回传 ${registered} 条，${failed.length} 条失败可单独重试` : `批量视频已回传 ${registered} 条，等待审核` };
+      }
       const existingContentPlanId = text(taskInput.existingContentPlanId);
       const directFullVideo = executionMode === "FULL_VIDEO"
         && (taskInput.codexDirectFullVideo === true || taskInput.referenceDirectFullVideo === true);
@@ -3036,7 +3079,7 @@ export class AiTaskCenterService implements OnModuleInit {
           if (!returned) return { groupKey: text(expected.groupKey), status: "MISSING", pages: [], tags: [], title: "", publishCopy: "" };
           return {
             groupKey: text(expected.groupKey),
-            status: "READY",
+            status: text(returned.status).toUpperCase() === "FAILED" ? "FAILED" : "READY",
             title: text(returned.title || returned.postTitle || returned.topic),
             publishCopy: text(returned.publishCopy || returned.body || returned.copy || returned.caption),
             tags: strings(returned.tags || returned.hashtags || returned.labels),
@@ -3047,8 +3090,8 @@ export class AiTaskCenterService implements OnModuleInit {
         const title = text(imagePost.title || imagePost.postTitle || imagePost.topic) || groups.find((group) => group.title)?.title || plan.topic;
         const publishCopy = text(imagePost.publishCopy || imagePost.body || imagePost.copy || imagePost.caption) || groups.find((group) => group.publishCopy)?.publishCopy || "";
         const tags = strings(imagePost.tags || imagePost.hashtags || imagePost.labels).length ? strings(imagePost.tags || imagePost.hashtags || imagePost.labels) : groups.flatMap((group) => group.tags);
-        if ((!groups.length && !pages.length && !publishCopy && !title) || (batchGroups.length && groups.some((group) => group.status !== "READY" || !group.pages.length || !group.title || !group.publishCopy))) {
-          return { status: "WAITING_INPUT" as AiTaskStatus, message: "图文制作任务已返回，但缺少图文页、标题或发布文案" };
+        if ((!groups.length && !pages.length && !title) || (batchGroups.length && !groups.some((group) => group.status === "READY" && group.pages.length && group.title))) {
+          return { status: "WAITING_INPUT" as AiTaskStatus, message: "图文制作任务未返回可审核图文页和标题" };
         }
         const previous = plan.variants.find((variant) => variant.platform === "DOUYIN");
         const metadata = {

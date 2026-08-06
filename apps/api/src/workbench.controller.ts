@@ -6,6 +6,7 @@ import {
   ForbiddenException,
   Get,
   Headers,
+  NotFoundException,
   Param,
   Patch,
   Post,
@@ -279,6 +280,13 @@ function compileBatchCodexDirectFullVideoPrompt(project: Record<string, any>, br
     "保持未被退回的批量清单、脚本结构、画面节奏、可用素材和成片规格；只修复退回原因涉及的视频画面、文案、配音、节奏或合规问题。完成时必须回传修改后的成片及简短修改说明。",
   ] : [];
   const requirement = String(batch.taskRequirement || "").trim();
+  const mandatoryRules = [
+    "每条视频的钩子、脚本方向、核心场景、主镜头源和剪辑节奏必须不同；不得仅替换文案、BGM、音色或裁切。",
+    "主画面必须使用对应产品的真实可剪辑视频素材；暗、灰、模糊、抖动或对比不足的镜头直接淘汰。",
+    "封面、标题、标签、字幕和成片不得出现批量、组号、任务编号、口播/无口播或其他内部制作标识。",
+    "每条成功视频必须回传其 videoKey、成片、封面、标题和标签；发布文案不是必填回传项。",
+    "批量结果按 videoKey 独立回传。失败项必须写明 failureReason；已成功项必须保留并可审核，失败项仅单独重试。",
+  ];
   const base = requirement
     ? requirement
     : [
@@ -295,7 +303,7 @@ function compileBatchCodexDirectFullVideoPrompt(project: Record<string, any>, br
       "这是本地素材库直出模式：主画面只能读取本地已同步的“对应产品型号 + 视觉校验通过 + 可剪辑 VIDEO”清单；禁止使用其他型号、未校验素材、图片、音频或包装资源作为主镜头。各视频在脚本方向、开场、画面节奏上尽量错开，避免整批重复。包装资源只能用于 BGM、音效、贴纸、花字、字体和特效层。",
       "不得向系统回传中间脚本、镜头、素材匹配或素材绑定；完成时按批量清单回传每条视频的真实主成片路径、成片元数据、简短审核说明，以及任务整体批量清单。",
     ].join("\n");
-  return [base, ...revisionLines].join("\n");
+  return [base, ...mandatoryRules, ...revisionLines].join("\n");
 }
 
 function batchImageBriefValue(brief: Record<string, unknown>) {
@@ -2183,6 +2191,33 @@ export class WorkbenchController {
       },
     );
     return { project: submittedProject, task };
+  }
+
+  @Post("data-center/video-projects/:id/batch-retry")
+  async retryBatchCodexVideo(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    const videoKey = String(body.videoKey || "").trim();
+    if (!videoKey) throw new BadRequestException("请选择需要重试的视频");
+    const project = await this.videoFactory.project(id) as Record<string, any>;
+    if (project.createdBy !== employee.name) throw new ForbiddenException("只能重试自己创建的批量视频项目");
+    const factory = (Array.isArray(project.sourceSignals) ? project.sourceSignals : []).find((item: Record<string, unknown>) => item?.type === "VIDEO_FACTORY") || {};
+    const batch = batchBriefValue(object(factory.brief));
+    const result = (Array.isArray(batch.results) ? batch.results : []).map(object).find((item) => String(item.videoKey || "") === videoKey);
+    if (String(result?.status || "").toUpperCase() !== "FAILED") throw new BadRequestException("只能重试回传失败的视频");
+    const previous = await this.prisma.aiTask.findFirst({ where: { sourceType: "VIDEO_FACTORY_PROJECT", sourceId: id }, orderBy: { createdAt: "desc" } });
+    if (!previous) throw new NotFoundException("未找到原批量视频任务");
+    const input = object(previous.input);
+    const retry = await this.aiTasks.createTask({
+      type: "VIDEO", title: `${project.topic} · 重试 ${videoKey}`, platform: previous.platform, productModel: previous.productModel,
+      ownerEmployeeId: employee.employeeId!, reviewerEmployeeId: employee.employeeId!, sourceType: "VIDEO_FACTORY_PROJECT", sourceId: id,
+      idempotencyKey: `${previous.idempotencyKey}:retry:${videoKey}:${Date.now()}`, instructions: previous.instructions,
+      input: { ...input, retryVideoKeys: [videoKey], batchCodexDirectFullVideo: true }, modelPolicy: object(previous.modelPolicy), estimatedCost: 0, skipPaidBudget: true,
+    }, employee.name);
+    return { task: retry, videoKey };
   }
 
   @Post("data-center/video-projects/:id/script-transfer-to-codex")

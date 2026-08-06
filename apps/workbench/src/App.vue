@@ -1208,17 +1208,22 @@ function batchVideos(project?: Row) {
   const products = Array.isArray(cfg?.products) ? cfg.products as Array<Row> : [];
   const split = String(cfg?.voiceoverSplit || "HALF").toUpperCase();
   const videos: Array<Row> = [];
+  const returned = Array.isArray(cfg?.results) ? cfg!.results as Array<Row> : [];
   products.forEach((product, productIndex) => {
     const count = Math.max(0, Number(product.count || 0));
     const voiced = split === "ALL" ? count : split === "NONE" ? 0 : Math.floor(count / 2);
     const model = String(product.model || "未标注产品");
     for (let index = 0; index < count; index += 1) {
+      const videoKey = `${productIndex + 1}-${index + 1}`;
+      const result = returned.find((item) => String(item.videoKey || "") === videoKey);
       videos.push({
-        videoKey: `${productIndex + 1}-${index + 1}`,
+        videoKey,
         product: model,
         productShort: model.split(" · ")[0],
         type: index < voiced ? "口播" : "无口播",
         displayName: `${model.split(" · ")[0]} · 视频 ${productIndex + 1}-${index + 1}`,
+        resultStatus: String(result?.status || "").toUpperCase(),
+        failureReason: String(result?.failureReason || ""),
       });
     }
   });
@@ -1308,12 +1313,14 @@ function batchProgressStats(project?: Row) {
   const videos = batchVideos(project);
   const task = activeProjectVideoTask(project);
   const status = String(task?.status || "").toUpperCase();
+  const returnedReady = videos.filter((video) => String(video.resultStatus || "") === "READY").length;
+  const returnedFailed = videos.filter((video) => String(video.resultStatus || "") === "FAILED").length;
   const renderJobs = Array.isArray(project?.videoRenderJobs) ? project!.videoRenderJobs : [];
   const succeededRenders = renderJobs.filter((job: Row) => String(job.status || "").toUpperCase() === "SUCCEEDED").length;
-  const done = ["COMPLETED", "SUCCEEDED"].includes(status)
+  const done = returnedReady || (["COMPLETED", "SUCCEEDED"].includes(status)
     ? videos.length
-    : Math.max(0, Math.min(videos.length, succeededRenders));
-  const failed = status === "FAILED" ? videos.length : 0;
+    : Math.max(0, Math.min(videos.length, succeededRenders)));
+  const failed = returnedFailed || (status === "FAILED" ? videos.length : 0);
   return { total: videos.length, products: batchProductsCount(project), done, failed };
 }
 
@@ -1344,6 +1351,14 @@ async function downloadBatchVideo(video: Row) {
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : "成片下载失败");
   }
+}
+
+async function retryBatchVideo(video: Row) {
+  const projectId = activeVideoProjectId.value;
+  if (!projectId) return;
+  await post(`/api/v1/workbench/data-center/video-projects/${projectId}/batch-retry`, { videoKey: String(video.videoKey || "") });
+  ElMessage.success("已仅重试该条视频");
+  await refreshTaskVideoProject();
 }
 
 async function approveBatchVideo() {
@@ -5052,8 +5067,12 @@ onBeforeUnmount(() => {
                         <article v-for="(video, index) in batchVideos(taskVideoProjectDetail)" :key="`review-${video.videoKey}`" class="batch-video-card">
                           <div class="v-head">
                             <b>{{ video.displayName }}</b>
-                            <el-tag size="small" type="success">成片待审核</el-tag>
+                            <el-tag size="small" :type="video.resultStatus === 'FAILED' ? 'danger' : 'success'">{{ video.resultStatus === 'FAILED' ? '未回传' : '成片待审核' }}</el-tag>
                           </div>
+                          <template v-if="video.resultStatus === 'FAILED'">
+                            <div class="batch-video-thumb"><span>{{ video.failureReason || '该条视频未回传' }}</span></div>
+                          </template>
+                          <template v-else>
                           <div class="batch-video-thumb"><span class="play">▶</span><span style="margin-left:8px;font-size:12px">00:{{ String(18 + index * 3).padStart(2, '0') }}</span></div>
                           <template v-if="batchConfigOf(taskVideoProjectDetail)?.generateCoverTitle !== false">
                             <div class="batch-cover-line">
@@ -5065,10 +5084,12 @@ onBeforeUnmount(() => {
                               </div>
                             </div>
                           </template>
+                          </template>
                           <div class="preview-actions" style="margin-top:10px">
-                            <el-button size="small" @click="previewBatchVideo(video)">预览成片</el-button>
-                            <el-button size="small" @click="downloadBatchVideo(video)">下载成片</el-button>
-                            <el-button size="small" type="danger" plain @click="rejectBatchVideo(video)">退回</el-button>
+                            <el-button v-if="video.resultStatus !== 'FAILED'" size="small" @click="previewBatchVideo(video)">预览成片</el-button>
+                            <el-button v-if="video.resultStatus !== 'FAILED'" size="small" @click="downloadBatchVideo(video)">下载成片</el-button>
+                            <el-button v-if="video.resultStatus === 'FAILED'" size="small" type="primary" @click="retryBatchVideo(video)">仅重试这一条</el-button>
+                            <el-button v-else size="small" type="danger" plain @click="rejectBatchVideo(video)">退回</el-button>
                           </div>
                         </article>
                       </div>

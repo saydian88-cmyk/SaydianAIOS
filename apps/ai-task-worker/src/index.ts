@@ -299,6 +299,7 @@ function outputSchema(
   requestedCardCount = 10,
   codexDirectFullVideo = false,
   imagePostProject = false,
+  batchCodexDirectFullVideo = false,
 ) {
   if (type === "VIDEO") {
     // Direct-output work does not return a project script or a material-binding payload.
@@ -319,8 +320,28 @@ function outputSchema(
             },
             required: ["productModel", "taskMode", "finalReviewOnly"],
           },
+          ...(batchCodexDirectFullVideo ? {
+            batchResults: {
+              type: "array",
+              minItems: 1,
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  videoKey: { type: "string" },
+                  status: { type: "string", enum: ["READY", "FAILED"] },
+                  outputFile: { type: "string" },
+                  coverFile: { type: "string" },
+                  title: { type: "string" },
+                  tags: { type: "array", items: { type: "string" } },
+                  failureReason: { type: "string" },
+                },
+                required: ["videoKey", "status", "outputFile", "coverFile", "title", "tags", "failureReason"],
+              },
+            },
+          } : {}),
         },
-        required: ["summary", "outputFiles", "delivery"],
+        required: ["summary", "outputFiles", "delivery", ...(batchCodexDirectFullVideo ? ["batchResults"] : [])],
       };
     }
     if (executionMode === "COVER_TITLE") {
@@ -883,7 +904,7 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
     : [];
   const isCodexDirectFullVideo = type === "VIDEO"
     && executionMode === "FULL_VIDEO"
-    && taskInput.codexDirectFullVideo === true;
+    && (taskInput.codexDirectFullVideo === true || taskInput.batchCodexDirectFullVideo === true);
   const isReferenceDirectFullVideo = type === "VIDEO"
     && executionMode === "FULL_VIDEO"
     && taskInput.referenceDirectFullVideo === true;
@@ -946,7 +967,8 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
     ].join("\n\n");
   }
   if (isCodexDirectFullVideo) {
-    const directInput = record(taskInput.codexDirectInput);
+    const batchDirect = taskInput.batchCodexDirectFullVideo === true;
+    const directInput = batchDirect ? record(taskInput.batchDirectInput) : record(taskInput.codexDirectInput);
     const creativeMode = String(directInput.creativeMode || "FULL_VIDEO").toUpperCase();
     const revision = record(directInput.revision || taskInput.revision);
     const isRevision = Boolean(String(revision.reviewNote || "").trim());
@@ -957,7 +979,9 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
       "MANDATORY_SKILL_PATH: G:\\codex\\xcodeplace\\CodexHome\\skills\\video-editing-from-media-library\\SKILL.md. Read and execute this exact full local Skill. The dispatcher only routes the task and the share edition is forbidden for this local direct render.",
       "Read the active local-library configuration and the verified-editing-videos-by-product manifest. Do not download, request, or return any system task assets.",
       "The full editing Skill must independently learn, search and select VIDEO footage from the complete local library. The dispatcher must not preselect footage, create a candidate whitelist, or require system materialBindings. Use exact-product verified local VIDEO entries and never use another product model, unverified media, images, audio, packaging, cover, sticker, transition or template resources as primary footage.",
-      "DIRECT_CONTINUOUS_EXECUTION: Do not stop for user approval of the script, shot plan, material selection, production plan, packaging, or any other intermediate artifact. Create and validate those artifacts internally, repair any correctable issue, continue directly through rendering, and return only the final VIDEO_MASTER for user review.",
+      batchDirect
+        ? "BATCH_PARTIAL_RESULT_CONTRACT: Execute every videoKey independently. Return batchResults with READY or FAILED for every requested key. READY must name the matching real VIDEO_MASTER outputFile, coverFile, title and tags; FAILED must include failureReason. Never discard READY items because other keys failed."
+        : "DIRECT_CONTINUOUS_EXECUTION: Do not stop for user approval of the script, shot plan, material selection, production plan, packaging, or any other intermediate artifact. Create and validate those artifacts internally, repair any correctable issue, continue directly through rendering, and return only the final VIDEO_MASTER for user review.",
       "If the local library is not initialized or not ready, fail explicitly with the missing local configuration or index. Do not return a system-task WAITING_INPUT result.",
       "The employee UI only receives the final review node, but internal script, shot plan, material coverage, composition, packaging, audio and delivery QA steps remain mandatory.",
       "EXECUTION_FIRST_CONTRACT: Follow every editing requirement while producing the video; post-render validation is only the final safety net. Before creating or modifying the final HyperFrames composition or starting any render, write production-plan.json and pass the full Skill script validate_direct_production_plan.py. Save PRODUCTION_PLAN_OK to logs/production-plan-validator.log.",
@@ -2282,6 +2306,7 @@ async function execute(claimed: JsonRecord) {
       Number(requirements.exactCount || 10),
       isCodexDirectFullVideoTask(packaged),
       isImagePostProjectTask(packaged),
+      Boolean(record(packaged.input).batchCodexDirectFullVideo),
     );
     const startedAt = new Date();
     let result: JsonRecord | undefined;
