@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Let a completed legacy direct-video task use its existing `sourceId` to attach the uploaded master to its video project when `existingContentPlanId` is absent.
+**Goal:** Let completed legacy direct-video tasks attach already uploaded masters to their video project when an old project link or batch result manifest is absent.
 
-**Architecture:** The video finalization path resolves the project identifier once. It keeps `existingContentPlanId` as the preferred explicit link and falls back to `sourceId` only for `VIDEO_FACTORY_PROJECT` tasks. The 15-second video reconciliation loop replays only waiting direct-video tasks that already have an uploaded master, so the existing registration path returns `PENDING_REVIEW` without rendering again.
+**Architecture:** The video finalization path resolves the project identifier once. It keeps `existingContentPlanId` as the preferred explicit link and falls back to `sourceId` only for `VIDEO_FACTORY_PROJECT` tasks. When an older batch worker has uploaded a video but omitted `batchResults`, the uploaded master is registered with a warning status instead of being discarded. The 15-second video reconciliation loop replays only waiting direct-video tasks that already have an uploaded master, so the existing registration path returns `PENDING_REVIEW` without rendering again.
 
 **Tech Stack:** NestJS, Prisma, Vitest, TypeScript.
 

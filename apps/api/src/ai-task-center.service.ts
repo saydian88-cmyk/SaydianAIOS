@@ -100,6 +100,10 @@ export function resolveDirectVideoProjectId(task: { input: unknown; sourceType?:
   return text(task.sourceType).toUpperCase() === "VIDEO_FACTORY_PROJECT" ? text(task.sourceId) : "";
 }
 
+export function shouldReviewUploadedBatchWithoutResultManifest(uploadedOutputCount: number, readyResultCount: number) {
+  return uploadedOutputCount > 0 && readyResultCount === 0;
+}
+
 /**
  * Resolve only business routes that are unambiguous from structured task data.
  * Titles and instructions are deliberately excluded: they are display/creative
@@ -2766,7 +2770,7 @@ export class AiTaskCenterService implements OnModuleInit {
         };
       }
       if (executionMode === "FULL_VIDEO" && taskInput.batchCodexDirectFullVideo === true) {
-        const contentPlanId = text(taskInput.existingContentPlanId);
+        const contentPlanId = resolveDirectVideoProjectId(task);
         if (!contentPlanId) return { status: "WAITING_INPUT" as AiTaskStatus, message: "批量视频任务缺少关联项目" };
         const project = await this.prisma.contentPlan.findUnique({ where: { id: contentPlanId } });
         if (!project) return { status: "WAITING_INPUT" as AiTaskStatus, message: "关联批量视频项目不存在" };
@@ -2778,6 +2782,7 @@ export class AiTaskCenterService implements OnModuleInit {
         const results = Array.isArray(result.batchResults) ? result.batchResults.map(object) : [];
         const ready = results.filter((item) => text(item.status).toUpperCase() === "READY");
         const failed = results.filter((item) => text(item.status).toUpperCase() !== "READY");
+        const legacyUploadedOnly = shouldReviewUploadedBatchWithoutResultManifest(uploaded.length, ready.length);
         let registered = 0;
         for (const item of ready) {
           const path = text(item.outputFile);
@@ -2794,6 +2799,17 @@ export class AiTaskCenterService implements OnModuleInit {
           } });
           registered += 1;
         }
+        if (legacyUploadedOnly) {
+          for (const output of uploaded) {
+            if (!output.assetId) continue;
+            await this.videoFactory.registerLocalMaster(project.id, output.assetId, task.id, actor);
+            await this.prisma.aiTaskOutput.update({ where: { id: output.id }, data: {
+              kind: "VIDEO_MASTER", contentPlanId: project.id, reviewStatus: "PENDING",
+              metadata: json({ ...object(output.metadata), batchStatus: "READY_WITHOUT_MANIFEST" }),
+            } });
+            registered += 1;
+          }
+        }
         const signals = Array.isArray(project.sourceSignals) ? project.sourceSignals.map(object) : [];
         const nextSignals = signals.map((signal) => signal.type === "VIDEO_FACTORY" ? {
           ...signal, brief: { ...object(signal.brief), batchDirect: { ...object(object(signal.brief).batchDirect), results: results.map((item) => ({
@@ -2806,7 +2822,9 @@ export class AiTaskCenterService implements OnModuleInit {
           masterVideoStatus: registered ? "READY_FOR_REVIEW" : project.masterVideoStatus,
         } });
         if (!registered) return { status: "WAITING_INPUT" as AiTaskStatus, message: "批量视频未回传可审核成片" };
-        return { status: "PENDING_REVIEW" as AiTaskStatus, message: failed.length ? `批量视频部分完成：已回传 ${registered} 条，${failed.length} 条失败可单独重试` : `批量视频已回传 ${registered} 条，等待审核` };
+        return { status: "PENDING_REVIEW" as AiTaskStatus, message: legacyUploadedOnly
+          ? `批量视频已回传 ${registered} 条，但缺少其余结果清单；已保留现有成品，等待审核`
+          : failed.length ? `批量视频部分完成：已回传 ${registered} 条，${failed.length} 条失败可单独重试` : `批量视频已回传 ${registered} 条，等待审核` };
       }
       const existingContentPlanId = resolveDirectVideoProjectId(task);
       const directFullVideo = executionMode === "FULL_VIDEO"

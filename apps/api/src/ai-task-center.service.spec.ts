@@ -10,6 +10,7 @@ import {
   runnerCanClaimTask,
   runnerTaskTypeCapabilities,
   resolveDirectVideoProjectId,
+  shouldReviewUploadedBatchWithoutResultManifest,
   shouldSendUploadedFailureToReview,
   videoScriptOutputMetadata,
 } from "./ai-task-center.service";
@@ -66,6 +67,12 @@ describe("AiTaskCenterService", () => {
       sourceType: "VIDEO_FACTORY_PROJECT",
       sourceId: "project-1",
     })).toBe("project-1");
+  });
+
+  it("keeps uploaded batch masters reviewable when an older runner omitted the result manifest", () => {
+    expect(shouldReviewUploadedBatchWithoutResultManifest(1, 0)).toBe(true);
+    expect(shouldReviewUploadedBatchWithoutResultManifest(0, 0)).toBe(false);
+    expect(shouldReviewUploadedBatchWithoutResultManifest(1, 1)).toBe(false);
   });
 
   it("sends a task with uploaded outputs to employee review instead of terminal failure", () => {
