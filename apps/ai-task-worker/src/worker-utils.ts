@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
 export function safeName(value: string) {
   return value.replace(/[^a-zA-Z0-9._-]+/gu, "-").replace(/^-+|-+$/gu, "") || "asset";
 }
@@ -28,4 +32,25 @@ export function availableClaimRouteKeys(
   if (activeVideoCount < maxVideoConcurrency) keys.push(...videoRouteKeys);
   if (activeImageCount < maxImageConcurrency) keys.push("IMAGE_POST");
   return keys;
+}
+
+export function hasHyperframesRenderEvidence(value: unknown) {
+  const evidence = asRecord(value);
+  if (String(evidence.engine || "").toUpperCase() === "HYPERFRAMES") return true;
+  const project = asRecord(evidence.project);
+  const commands = Array.isArray(evidence.commands) ? evidence.commands.map(asRecord) : [];
+  const hasSuccessfulRender = commands.some((command) => String(command.name || "").toLowerCase() === "render"
+    && (Number(command.exitCode) === 0 || command.success === true || command.passed === true));
+  if (!hasSuccessfulRender) return false;
+  const text = [
+    String(evidence.project || ""),
+    String(project.id || ""),
+    String(project.path || ""),
+    String(project.composition || ""),
+    ...commands.flatMap((command) => [
+      String(command.command || command.name || ""),
+      String(command.logPath || command.log || ""),
+    ]),
+  ].join(" ");
+  return /hyperframes/iu.test(text);
 }

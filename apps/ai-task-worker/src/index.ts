@@ -4,7 +4,7 @@ import type { Dirent } from "node:fs";
 import { copyFile, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
-import { safeName, sha256, verifySha256 } from "./worker-utils";
+import { hasHyperframesRenderEvidence, safeName, sha256, verifySha256 } from "./worker-utils";
 import {
   detectSkill,
   routeTask,
@@ -1970,18 +1970,9 @@ async function validateMandatoryVideoEvidence(
     throw new Error("Production-plan gate must complete before render evidence is created");
   }
   const commands = Array.isArray(renderEvidence.commands) ? renderEvidence.commands.map(record) : [];
-  // Render evidence stores project metadata as an object. Stringifying that
-  // object produces only "[object Object]", which made a completed
-  // HyperFrames render indistinguishable from a non-HyperFrames artifact.
-  const project = record(renderEvidence.project);
-  const projectEvidence = [
-    String(renderEvidence.project || ""),
-    String(project.id || ""),
-    String(project.path || ""),
-    String(project.composition || ""),
-  ].join(" ");
-  const inferredHyperframes = /hyperframes/iu.test(`${projectEvidence} ${commands.map((item) => String(item.command || item.name || "")).join(" ")}`);
-  if (String(renderEvidence.engine || "").toUpperCase() !== "HYPERFRAMES" && !inferredHyperframes) {
+  // Some downstream Skill versions use a generic project label while their
+  // successful command-log paths retain the HyperFrames provenance.
+  if (!hasHyperframesRenderEvidence(renderEvidence)) {
     throw new Error("直出成片未使用完整版Skill规定的 HyperFrames 渲染链");
   }
   for (const name of ["doctor", "lint", "validate", "inspect", "render"]) {
