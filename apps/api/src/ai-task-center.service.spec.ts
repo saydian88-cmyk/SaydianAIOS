@@ -9,6 +9,7 @@ import {
   aiTaskTargetNodeCode,
   runnerCanClaimTask,
   runnerTaskTypeCapabilities,
+  resolveDirectVideoProjectId,
   shouldSendUploadedFailureToReview,
   videoScriptOutputMetadata,
 } from "./ai-task-center.service";
@@ -59,6 +60,14 @@ function serviceWith(overrides: Record<string, unknown> = {}) {
 }
 
 describe("AiTaskCenterService", () => {
+  it("uses the legacy video project source id when a direct-video task lacks an explicit project id", () => {
+    expect(resolveDirectVideoProjectId({
+      input: {},
+      sourceType: "VIDEO_FACTORY_PROJECT",
+      sourceId: "project-1",
+    })).toBe("project-1");
+  });
+
   it("sends a task with uploaded outputs to employee review instead of terminal failure", () => {
     expect(shouldSendUploadedFailureToReview(1)).toBe(true);
     expect(shouldSendUploadedFailureToReview(0)).toBe(false);

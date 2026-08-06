@@ -94,6 +94,12 @@ export function shouldSendUploadedFailureToReview(uploadedOutputCount: number) {
   return uploadedOutputCount > 0;
 }
 
+export function resolveDirectVideoProjectId(task: { input: unknown; sourceType?: string | null; sourceId?: string | null }) {
+  const explicitProjectId = text(object(task.input).existingContentPlanId);
+  if (explicitProjectId) return explicitProjectId;
+  return text(task.sourceType).toUpperCase() === "VIDEO_FACTORY_PROJECT" ? text(task.sourceId) : "";
+}
+
 /**
  * Resolve only business routes that are unambiguous from structured task data.
  * Titles and instructions are deliberately excluded: they are display/creative
@@ -2516,11 +2522,34 @@ export class AiTaskCenterService implements OnModuleInit {
   @Interval(15_000)
   async reconcileVideoTasks() {
     const tasks = await this.prisma.aiTask.findMany({
-      where: { type: "VIDEO", status: { in: ["RUNNING", "QUALITY_CHECK"] } },
+      where: { type: "VIDEO", status: { in: ["RUNNING", "QUALITY_CHECK", "WAITING_INPUT"] } },
       include: { outputs: true },
       take: 20,
     });
     for (const task of tasks) {
+      const taskInput = object(task.input);
+      const directFullVideo = text(taskInput.executionMode).toUpperCase() === "FULL_VIDEO"
+        && (taskInput.codexDirectFullVideo === true || taskInput.referenceDirectFullVideo === true);
+      const uploadedMaster = task.outputs.some((item) => item.assetId && (item.kind === "VIDEO_MASTER" || text(item.mimeType).startsWith("video/")));
+      if (task.status === "WAITING_INPUT" && directFullVideo && uploadedMaster && resolveDirectVideoProjectId(task)) {
+        const domain = await this.finalizeDomain(task as Awaited<ReturnType<AiTaskCenterService["ensureRunnerTask"]>>, object(task.output), "system-direct-video-reconcile");
+        if (domain.status !== "WAITING_INPUT") {
+          await this.prisma.aiTask.update({
+            where: { id: task.id },
+            data: {
+              status: domain.status,
+              progress: domain.status === "RUNNING" ? 65 : 100,
+              progressMessage: domain.message,
+              finishedAt: domain.status === "PENDING_REVIEW" || domain.status === "COMPLETED" ? new Date() : null,
+            },
+          });
+          const linkedOpsTaskId = await this.syncSourceOpsTask(task, domain.status, domain.message);
+          if (domain.status === "PENDING_REVIEW" && task.reviewerEmployeeId) {
+            await this.notify(task.id, task.reviewerEmployeeId, "AI_TASK_REVIEW", "AI结果等待审核", task.title, linkedOpsTaskId);
+          }
+          continue;
+        }
+      }
       const projectId = task.outputs.find((item) => item.contentPlanId)?.contentPlanId;
       if (!projectId) continue;
       const project = await this.prisma.contentPlan.findUnique({
@@ -2779,7 +2808,7 @@ export class AiTaskCenterService implements OnModuleInit {
         if (!registered) return { status: "WAITING_INPUT" as AiTaskStatus, message: "批量视频未回传可审核成片" };
         return { status: "PENDING_REVIEW" as AiTaskStatus, message: failed.length ? `批量视频部分完成：已回传 ${registered} 条，${failed.length} 条失败可单独重试` : `批量视频已回传 ${registered} 条，等待审核` };
       }
-      const existingContentPlanId = text(taskInput.existingContentPlanId);
+      const existingContentPlanId = resolveDirectVideoProjectId(task);
       const directFullVideo = executionMode === "FULL_VIDEO"
         && (taskInput.codexDirectFullVideo === true || taskInput.referenceDirectFullVideo === true);
       if (directFullVideo) {
