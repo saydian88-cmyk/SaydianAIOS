@@ -2257,6 +2257,30 @@ export class AiTaskCenterService implements OnModuleInit {
     return this.task(id);
   }
 
+  /** Replays a stored batch image payload that an older completion route did not project into its image project. */
+  async reconcileBatchImageTask(id: string) {
+    const task = await this.prisma.aiTask.findUnique({ where: { id } });
+    const input = object(task?.input);
+    if (!task || task.type !== "IMAGE" || text(input.executionMode).toUpperCase() !== "BATCH_IMAGE_POST") return this.task(id);
+    if (task.status !== "PENDING_REVIEW" || !Object.keys(object(task.output)).length) return this.task(id);
+
+    const domain = await this.finalizeDomain(task, object(task.output), "system-batch-image-reconcile");
+    await this.prisma.aiTask.update({
+      where: { id },
+      data: {
+        status: domain.status,
+        progress: domain.status === "WAITING_INPUT" ? Math.min(Math.max(task.progress || 60, 60), 90) : 100,
+        progressMessage: domain.message,
+        finishedAt: ["PENDING_REVIEW", "COMPLETED"].includes(domain.status) ? new Date() : null,
+      },
+    });
+    await this.syncSourceOpsTask(task, domain.status, domain.message);
+    if (domain.status === "PENDING_REVIEW" && task.reviewerEmployeeId) {
+      await this.notify(id, task.reviewerEmployeeId, "AI_TASK_REVIEW", "AI结果等待审核", task.title);
+    }
+    return this.task(id);
+  }
+
   async runnerFail(token: string, id: string, body: JsonRecord) {
     const node = await this.runner(token, text(body.nodeCode));
     const task = await this.ensureRunnerTask(node.nodeCode, id);
@@ -3029,7 +3053,7 @@ export class AiTaskCenterService implements OnModuleInit {
     if (task.type === "IMAGE") {
       const input = object(task.input);
       if ((text(task.sourceType) === "IMAGE_PROJECT" || text(input.sourceType) === "IMAGE_PROJECT" || Boolean(input.imageProjectId))
-        && text(input.executionMode).toUpperCase() === "IMAGE_POST") {
+        && ["IMAGE_POST", "BATCH_IMAGE_POST"].includes(text(input.executionMode).toUpperCase())) {
         const contentPlanId = text(task.sourceId || input.imageProjectId);
         const plan = contentPlanId
           ? await this.prisma.contentPlan.findUnique({ where: { id: contentPlanId }, include: { variants: true } })

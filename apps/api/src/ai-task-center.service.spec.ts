@@ -100,6 +100,25 @@ describe("AiTaskCenterService", () => {
     })).toBe("DEFAULT");
   });
 
+  it("replays a completed batch image result that an older worker left outside the project", async () => {
+    const task = {
+      id: "batch-image-task-1", type: "IMAGE", status: "PENDING_REVIEW", taskNo: "AIT-BATCH-1",
+      progress: 100, sourceType: "IMAGE_PROJECT", sourceId: "image-project-1", reviewerEmployeeId: null,
+      input: { executionMode: "BATCH_IMAGE_POST", batchImageDirect: { groups: [{ groupKey: "1-1" }] } },
+      output: { imagePost: { groups: [{ groupKey: "1-1", status: "READY", title: "已回传标题", pages: [{ title: "第一页" }] }] } },
+    };
+    const update = vi.fn().mockResolvedValue({});
+    const { service } = serviceWith({ aiTask: { findUnique: vi.fn().mockResolvedValue(task), update } });
+    (service as any).finalizeDomain = vi.fn().mockResolvedValue({ status: "PENDING_REVIEW", message: "图文已写入项目" });
+    (service as any).syncSourceOpsTask = vi.fn().mockResolvedValue(undefined);
+    (service as any).task = vi.fn().mockResolvedValue({ id: task.id, status: "PENDING_REVIEW" });
+
+    await (service as any).reconcileBatchImageTask(task.id);
+
+    expect((service as any).finalizeDomain).toHaveBeenCalledWith(task, task.output, "system-batch-image-reconcile");
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ progress: 100, progressMessage: "图文已写入项目" }) }));
+  });
+
   it("lets an employee mark at most three unfinished owned AI tasks urgent", async () => {
     const task = {
       id: "ai-task-urgent",

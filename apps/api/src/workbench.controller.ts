@@ -1346,12 +1346,21 @@ export class WorkbenchController {
     @Param("id") id: string,
   ) {
     const employee = this.requirePermission(authorization, "DATA_CENTER_VIEW");
-    const project = await this.prisma.contentPlan.findFirst({
+    let project = await this.prisma.contentPlan.findFirst({
       where: { id, kind: "SHORT_POST", assignedEmployeeId: employee.employeeId, productionStage: { not: "IMAGE_ARCHIVED" } },
       include: { variants: true, aiTaskOutputs: { orderBy: { createdAt: "desc" } } },
     });
     if (!project) throw new ForbiddenException("图文项目不存在或无权查看");
-    const aiTask = await this.prisma.aiTask.findFirst({ where: { sourceType: "IMAGE_PROJECT", sourceId: id }, orderBy: { createdAt: "desc" }, include: { outputs: { orderBy: { createdAt: "desc" } } } });
+    let aiTask = await this.prisma.aiTask.findFirst({ where: { sourceType: "IMAGE_PROJECT", sourceId: id }, orderBy: { createdAt: "desc" }, include: { outputs: { orderBy: { createdAt: "desc" } } } });
+    if (aiTask && project.productionStage === "IMAGE_GENERATING" && String((aiTask.input as Record<string, unknown>)?.executionMode || "").toUpperCase() === "BATCH_IMAGE_POST") {
+      await this.aiTasks.reconcileBatchImageTask(aiTask.id);
+      project = await this.prisma.contentPlan.findFirst({
+        where: { id, kind: "SHORT_POST", assignedEmployeeId: employee.employeeId, productionStage: { not: "IMAGE_ARCHIVED" } },
+        include: { variants: true, aiTaskOutputs: { orderBy: { createdAt: "desc" } } },
+      });
+      aiTask = await this.prisma.aiTask.findFirst({ where: { sourceType: "IMAGE_PROJECT", sourceId: id }, orderBy: { createdAt: "desc" }, include: { outputs: { orderBy: { createdAt: "desc" } } } });
+    }
+    if (!project) throw new ForbiddenException("图文项目不存在或无权查看");
     const variants = await this.imageProjectVariantsWithDownloadUrls(project.variants as Record<string, any>[]);
     const firstSignal = Array.isArray(project.sourceSignals) ? object(project.sourceSignals[0]) : {};
     const imageBrief = object(firstSignal.brief);
