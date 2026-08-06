@@ -63,12 +63,13 @@ describe("AiTaskCenterService", () => {
     const { service } = serviceWith({ aiTask: { findMany } });
     const cutoff = new Date("2026-08-03T00:00:00.000Z");
 
-    await (service as any).terminalCleanupCandidates(cutoff);
+    await (service as any).terminalCleanupCandidates(cutoff, "node-1");
 
     expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({
         status: { in: ["FAILED", "CANCELLED"] },
         updatedAt: { lte: cutoff },
+        attempts: { some: { workerNodeId: "node-1" } },
       }),
     }));
   });

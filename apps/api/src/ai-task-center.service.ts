@@ -567,25 +567,34 @@ export class AiTaskCenterService implements OnModuleInit {
     return tasks.map(normalizeTaskOutputSizes);
   }
 
-  private async terminalCleanupCandidates(cutoff: Date) {
+  private async terminalCleanupCandidates(cutoff: Date, workerNodeId: string) {
     return this.prisma.aiTask.findMany({
-      where: { status: { in: ["FAILED", "CANCELLED"] }, updatedAt: { lte: cutoff } },
+      where: {
+        status: { in: ["FAILED", "CANCELLED"] },
+        updatedAt: { lte: cutoff },
+        attempts: { some: { workerNodeId } },
+      },
       select: { id: true, taskNo: true },
       take: 200,
     });
   }
 
   async runnerTerminalCleanupCandidates(token: string, body: JsonRecord) {
-    await this.runner(token, text(body.nodeCode));
+    const node = await this.runner(token, text(body.nodeCode));
     const cutoff = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
-    return { tasks: await this.terminalCleanupCandidates(cutoff) };
+    return { tasks: await this.terminalCleanupCandidates(cutoff, node.id) };
   }
 
   async runnerPurgeTerminalTask(token: string, id: string, body: JsonRecord) {
-    await this.runner(token, text(body.nodeCode));
+    const node = await this.runner(token, text(body.nodeCode));
     const cutoff = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
     const task = await this.prisma.aiTask.findFirst({
-      where: { id, status: { in: ["FAILED", "CANCELLED"] }, updatedAt: { lte: cutoff } },
+      where: {
+        id,
+        status: { in: ["FAILED", "CANCELLED"] },
+        updatedAt: { lte: cutoff },
+        attempts: { some: { workerNodeId: node.id } },
+      },
       select: { id: true, taskNo: true },
     });
     if (!task) return { purged: false };
