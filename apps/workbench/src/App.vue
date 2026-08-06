@@ -2482,6 +2482,13 @@ function codexDirectTaskMessage(project?: Row) {
     : "等待远程 Codex 领取直出成片任务"));
 }
 
+function taskQualityWarnings(task?: Row) {
+  const warnings = task?.projection?.aiTask?.output?.qualityWarnings;
+  return Array.isArray(warnings)
+    ? warnings.filter((warning): warning is Row => Boolean(warning && typeof warning === "object"))
+    : [];
+}
+
 function scriptGenerationMessages(project?: Row) {
   const task = activeProjectGenerationTask(project);
   if (!task) return systemScriptConversation(project);
@@ -6140,6 +6147,18 @@ onBeforeUnmount(() => {
         :closable="false"
         show-icon
       />
+      <section v-if="taskQualityWarnings(taskDetail).length" class="task-detail-section">
+        <h3>质量提醒</h3>
+        <el-alert
+          v-for="warning in taskQualityWarnings(taskDetail)"
+          :key="`${warning.validator}:${warning.summary}`"
+          type="warning"
+          :title="String(warning.summary || '存在可优化项')"
+          :description="`${warning.validator || '官方校验'} · ${warning.recommendation || '成片可交付；如需优化，请在审核中退回并说明具体画面问题。'}`"
+          :closable="false"
+          show-icon
+        />
+      </section>
       <section class="task-detail-section task-detail-scroll">
         <div class="task-detail-section-heading">
           <h3>任务说明</h3>

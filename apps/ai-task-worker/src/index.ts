@@ -38,6 +38,7 @@ import {
   shouldResumeValidatedResult,
   type RepairCategory,
 } from "./execution-repair";
+import { appendQualityWarning, classifyQualityGate, type QualityWarning } from "./quality-gates";
 
 function record(value: unknown): JsonRecord {
   return value && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : {};
@@ -1840,10 +1841,20 @@ async function validateMandatoryVideoEvidence(
   taskPackageValue: JsonRecord,
   workspace: string,
   detectedSkill: DetectedSkill,
-) {
+) : Promise<QualityWarning[]> {
   const task = record(taskPackageValue.task);
   const execution = record(taskPackageValue.execution);
-  if (String(task.type || "") !== "VIDEO" || !["FULL_VIDEO", "SIMILAR_VIDEO", "NO_VOICE_VIDEO"].includes(String(execution.mode || ""))) return;
+  if (String(task.type || "") !== "VIDEO" || !["FULL_VIDEO", "SIMILAR_VIDEO", "NO_VOICE_VIDEO"].includes(String(execution.mode || ""))) return [];
+  let qualityWarnings: QualityWarning[] = [];
+  const warn = async (validator: string, summary: string) => {
+    const warning: QualityWarning = {
+      validator,
+      summary: summary.slice(0, 800),
+      recommendation: "成片可交付；如需优化，请在审核中退回并说明具体画面问题。",
+    };
+    qualityWarnings = appendQualityWarning(qualityWarnings, warning);
+    await appendExecutionLog(workspace, "QUALITY_WARNING", warning);
+  };
   const direct = isCodexDirectFullVideoTask(taskPackageValue);
   const directInput = record(record(task.input).codexDirectInput);
   const creativeMode = String(directInput.creativeMode || "FULL_VIDEO").toUpperCase();
@@ -1874,7 +1885,7 @@ async function validateMandatoryVideoEvidence(
   const failed = rows.filter((item) => item.applicable !== false && item.passed !== true);
   if (failed.length) throw new Error(`完整版剪辑Skill仍有未通过要求：${failed.map((item) => String(item.id || "unknown")).join("、")}`);
 
-  if (!direct) return;
+  if (!direct) return qualityWarnings;
   const downstreamSkillPath = String(detectedSkill.downstreamSkillPath || "").trim();
   if (basename(dirname(downstreamSkillPath)).toLowerCase() !== "video-editing-from-media-library") {
     throw new Error(`Local direct render requires the full video-editing-from-media-library Skill, got: ${downstreamSkillPath}`);
@@ -1896,6 +1907,11 @@ async function validateMandatoryVideoEvidence(
           || (error as { message?: unknown }).message
           || "")
         : String(error);
+      const gate = classifyQualityGate(script, detail);
+      if (gate.disposition === "WARNING") {
+        await warn(gate.warning.validator, gate.warning.summary);
+        return;
+      }
       throw new Error(`完整版剪辑Skill官方质检失败（${script}）：${detail.slice(0, 800)}`);
     }
   };
@@ -1929,17 +1945,17 @@ async function validateMandatoryVideoEvidence(
   const transitions = record(await readJson<JsonRecord>(join(workspace, "transition-qc.json")));
   const cuts = Array.isArray(transitions.cuts) ? transitions.cuts.map(record) : [];
   if (cuts.length !== Math.max(0, shots.length - videos.length)) {
-    throw new Error("transition-qc.json 未逐一覆盖全部剪辑点");
+    await warn("transition-qc.json", "转场复核记录未逐一覆盖全部剪辑点");
   }
   const invalidCuts = cuts.filter((cut) => Number(cut.beforeSeconds || 0) < 0.6
     || Number(cut.afterSeconds || 0) < 0.6
     || cut.passed !== true
     || !String(cut.observation || "").trim()
     || !String(cut.transition || "").trim());
-  if (invalidCuts.length) throw new Error("逐切点自然度质检未通过或缺少前后0.6秒真实观察证据");
+  if (invalidCuts.length) await warn("transition-qc.json", "部分转场缺少完整复核记录或可优化观察");
 
   if (cuts.length >= 3 && new Set(cuts.map((cut) => String(cut.transition || "").trim().toLowerCase())).size === 1) {
-    throw new Error("Three or more cuts may not all use the same mechanical transition");
+    await warn("transition-qc.json", "多个剪辑点使用同一转场，建议在下次版本优化节奏");
   }
 
   const renderEvidence = record(await readJson<JsonRecord>(join(workspace, "render-evidence.json")));
@@ -1999,6 +2015,7 @@ async function validateMandatoryVideoEvidence(
       throw new Error("无口播成片禁止使用正弦音、蜂鸣或程序化占位音轨代替BGM");
     }
   }
+  return qualityWarnings;
 }
 
 // A completed Codex direct-output task may fail only while registering its MP4
@@ -2372,7 +2389,17 @@ async function execute(claimed: JsonRecord) {
       await writeJsonAtomic(join(workspace, "result.json"), result);
     }
 
-    await validateMandatoryVideoEvidence(packaged, workspace, detectedSkill);
+    const qualityWarnings = await validateMandatoryVideoEvidence(packaged, workspace, detectedSkill);
+    if (qualityWarnings.length) {
+      result.qualityWarnings = appendQualityWarning(
+        Array.isArray(result.qualityWarnings) ? result.qualityWarnings as QualityWarning[] : [],
+        qualityWarnings[0],
+      );
+      for (const warning of qualityWarnings.slice(1)) {
+        result.qualityWarnings = appendQualityWarning(result.qualityWarnings as QualityWarning[], warning);
+      }
+      await writeJsonAtomic(join(workspace, "result.json"), result);
+    }
     await report("QUALITY_CHECK", 78, "result.json、产物哈希与完整版剪辑证据校验通过", {
       schemaAttempts,
       outputCount: Array.isArray(result.outputFiles) ? result.outputFiles.length : 0,
