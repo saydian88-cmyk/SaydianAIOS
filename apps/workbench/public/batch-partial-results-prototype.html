@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>批量任务部分回传原型</title>
+  <style>
+    * { box-sizing: border-box; } body { margin: 0; background: #f7f7f5; color: #202624; font: 14px Arial, sans-serif; }
+    main { max-width: 1100px; margin: 32px auto; padding: 28px; background: #fff; border: 1px solid #e6e4df; border-radius: 14px; }
+    h1 { margin: 0 0 8px; font-size: 24px; } p { color: #66706b; line-height: 1.6; }
+    .summary { display: flex; gap: 12px; margin: 24px 0; } .metric { flex: 1; padding: 18px; border: 1px solid #e5e9e6; border-radius: 10px; }
+    .metric b { display: block; font-size: 28px; margin-bottom: 5px; } .ok { color: #198754; } .fail { color: #d54a45; }
+    .notice { padding: 13px 16px; background: #fff8e8; border: 1px solid #f2dfa8; border-radius: 8px; color: #76550b; }
+    .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-top: 20px; }
+    article { border: 1px solid #e5e9e6; border-radius: 10px; overflow: hidden; } header { display: flex; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid #edf0ed; font-weight: 700; }
+    .media { height: 150px; display: grid; place-items: center; background: linear-gradient(135deg,#61716c,#c7c0a9); color: #fff; } .body { padding: 14px 16px; }
+    .tag { padding: 3px 8px; border-radius: 99px; font-size: 12px; background: #e7f7ed; color: #198754; } .tag.bad { background: #ffebea; color: #d54a45; }
+    button { padding: 8px 12px; border-radius: 6px; border: 1px solid #2684e8; background: #2684e8; color: #fff; cursor: pointer; } button.ghost { background: #fff; color: #52605a; border-color: #ccd3ce; }
+    .actions { display: flex; gap: 8px; margin-top: 12px; } .failure { background: #fff7f6; }
+    @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } .summary { flex-wrap: wrap; } .metric { min-width: 40%; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>W8 · W8Ultra · 批量 Codex 直出</h1>
+    <p>批量任务已部分完成。已成功项目可直接审核；失败项目单独重试，不影响已成功成片。</p>
+    <section class="summary">
+      <div class="metric"><b>5</b>计划视频</div><div class="metric"><b class="ok">3</b>已回传</div><div class="metric"><b class="fail">2</b>待重试</div><div class="metric"><b>60%</b>完成进度</div>
+    </section>
+    <div class="notice">部分完成：3 条成片已可审核。2 条未生成成功，请查看原因后仅重试失败条目。</div>
+    <section class="grid">
+      <article><header>W8 · 视频 1 <span class="tag">已回传</span></header><div class="media">可播放成片 + 封面</div><div class="body"><b>给父母的健康关爱，不必等到提醒才开始</b><p>#赛电 #健康管理 #父母关爱 #智能手表 #送礼</p><div class="actions"><button>审核成片</button><button class="ghost">查看标题标签</button></div></div></article>
+      <article><header>W8Ultra · 视频 2 <span class="tag">已回传</span></header><div class="media">可播放成片 + 封面</div><div class="body"><b>忙也能把健康提醒留在手腕上</b><p>#赛电 #日常健康 #智能穿戴 #关爱家人 #手表</p><div class="actions"><button>审核成片</button><button class="ghost">查看标题标签</button></div></div></article>
+      <article><header>W8Ultra · 视频 3 <span class="tag">已回传</span></header><div class="media">可播放成片 + 封面</div><div class="body"><b>每天一个小习惯，给健康多一份关注</b><p>#赛电 #健康生活 #智能手表 #日常陪伴 #送父母</p><div class="actions"><button>审核成片</button><button class="ghost">查看标题标签</button></div></div></article>
+      <article class="failure"><header>W8 · 视频 2 <span class="tag bad">未回传</span></header><div class="body"><b>生成失败</b><p>未找到满足当前画面要求的可剪辑真实视频素材。</p><div class="actions"><button>仅重试这一条</button></div></div></article>
+      <article class="failure"><header>W8Ultra · 视频 1 <span class="tag bad">未回传</span></header><div class="body"><b>生成失败</b><p>最终成片文件未生成，未登记为成功结果。</p><div class="actions"><button>仅重试这一条</button></div></div></article>
+    </section>
+  </main>
+</body>
+</html>
