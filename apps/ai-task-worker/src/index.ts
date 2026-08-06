@@ -899,9 +899,10 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
   const type = String(task.type || "");
   const executionMode = String(execution.mode || "");
   const taskInput = record(task.input);
-  const batchImageGroups = Array.isArray(record(taskInput.batchImageDirect).groups)
-    ? record(taskInput.batchImageDirect).groups
-    : [];
+    const batchImageDirect = record(taskInput.batchImageDirect);
+    const batchImageGroups = Array.isArray(batchImageDirect.groups)
+      ? batchImageDirect.groups
+      : [];
   const isCodexDirectFullVideo = type === "VIDEO"
     && executionMode === "FULL_VIDEO"
     && (taskInput.codexDirectFullVideo === true || taskInput.batchCodexDirectFullVideo === true);
