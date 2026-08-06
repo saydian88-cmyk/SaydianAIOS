@@ -3071,18 +3071,21 @@ export class AiTaskCenterService implements OnModuleInit {
           include: { asset: { select: { storageUrl: true } } },
         });
         const outputFileName = (value: string) => value.replace(/\\/g, "/").split("/").pop() || value;
+        const claimedImageOutputIds = new Set<string>();
         const outputForPage = (page: JsonRecord, index: number) => {
           const requestedPath = text(page.outputFile || page.file || page.filePath || page.path);
           const requestedName = outputFileName(requestedPath);
-          return uploadedImages.find((output) => {
+          const matched = uploadedImages.find((output) => {
             const metadata = object(output.metadata);
             const savedPath = text(metadata.workspaceOutputPath || metadata.outputFile || metadata.filePath || metadata.path);
-            return Boolean(requestedPath) && (
+            return !claimedImageOutputIds.has(output.id) && Boolean(requestedPath) && (
               savedPath === requestedPath
               || outputFileName(savedPath) === requestedName
               || outputFileName(output.title) === requestedName
             );
-          }) || (uploadedImages.length === 1 ? uploadedImages[0] : uploadedImages[index]);
+          }) || uploadedImages.find((output) => !claimedImageOutputIds.has(output.id));
+          if (matched) claimedImageOutputIds.add(matched.id);
+          return matched;
         };
         const bindPages = (rawPages: unknown, offset = 0) => Array.isArray(rawPages)
           ? rawPages.map(object).filter((item) => text(item.title || item.pageTitle || item.text)).map((page, index) => {
@@ -3105,9 +3108,10 @@ export class AiTaskCenterService implements OnModuleInit {
           const returnedPages = Array.isArray(returned.pages) ? returned.pages : [];
           const pages = bindPages(returnedPages, batchPageOffset);
           batchPageOffset += returnedPages.length;
+          const ready = pages.length > 0 && pages.every((page) => Boolean(text(page.imageAssetId)));
           return {
             groupKey: text(expected.groupKey),
-            status: text(returned.status).toUpperCase() === "FAILED" ? "FAILED" : "READY",
+            status: text(returned.status).toUpperCase() === "FAILED" || !ready ? "FAILED" : "READY",
             title: text(returned.title || returned.postTitle || returned.topic),
             publishCopy: text(returned.publishCopy || returned.body || returned.copy || returned.caption),
             tags: strings(returned.tags || returned.hashtags || returned.labels),

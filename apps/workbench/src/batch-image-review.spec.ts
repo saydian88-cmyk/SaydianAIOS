@@ -19,4 +19,12 @@ describe("batchImageReviewGroup", () => {
     ] } }] };
     expect(batchImagePreviewPages(twoGroups, { groupKey: "2-1" })).toEqual([{ title: "乙页", imageUrl: "https://example.com/b.jpg" }]);
   });
+
+  it("does not mark a group ready when its image is reused by another group", () => {
+    const duplicateImage = { variants: [{ metadata: { groups: [
+      { groupKey: "1-1", title: "甲", publishCopy: "甲文案", pages: [{ imageUrl: "https://example.com/same.jpg" }] },
+      { groupKey: "2-1", title: "乙", publishCopy: "乙文案", pages: [{ imageUrl: "https://example.com/same.jpg" }] },
+    ] } }] };
+    expect(batchImageReviewGroup(duplicateImage, { groupKey: "1-1" }).status).toBe("MISSING");
+  });
 });
