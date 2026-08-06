@@ -59,4 +59,12 @@ describe("worker utils", () => {
     expect((instruction as (groupCount: number) => string)(0)).toContain("empty array []");
     expect((instruction as (groupCount: number) => string)(2)).toContain("one complete result per groupKey");
   });
+
+  it("leaves image material selection to the downstream skill", () => {
+    const instruction = (workerUtils as Record<string, unknown>).imagePostMaterialSelectionInstruction;
+    expect(instruction).toBeTypeOf("function");
+    const value = (instruction as () => string)();
+    expect(value).toContain("independently select");
+    expect(value).not.toContain("F:\\");
+  });
 });

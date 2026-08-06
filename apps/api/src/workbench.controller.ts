@@ -1206,8 +1206,6 @@ export class WorkbenchController {
         assignedEmployeeId: employee.employeeId, targetPlatforms: ["DOUYIN"],
       },
     });
-    const materialRoots = ["F:\\赛电品牌素材库\\图片素材", "F:\\赛电品牌素材库\\产品规格书"];
-    if (imageType === "对比类" || brief.competitor) materialRoots.push("F:\\赛电品牌素材库\\图文制作资源\\竞品产品图");
     const task = await this.aiTasks.createTask({
       type: "IMAGE", title: `${plan.topic} 图文制作`, platform: "DOUYIN", productModel,
       ownerEmployeeId: employee.employeeId, reviewerEmployeeId: employee.employeeId,
@@ -1226,7 +1224,6 @@ export class WorkbenchController {
         finalEmployeePrompt: requirement,
         prompt: requirement,
         brief,
-        materialRoots,
       },
       modelPolicy: { strategy: "CODEX_FIRST", allowExternalGeneration: false, allowFallback: false }, estimatedCost: 0, skipPaidBudget: true,
     }, employee.name) as Record<string, any>;
@@ -1311,7 +1308,6 @@ export class WorkbenchController {
         targetPlatforms: ["DOUYIN"],
       },
     });
-    const materialRoots = ["F:\\赛电品牌素材库\\图片素材", "F:\\赛电品牌素材库\\产品规格书"];
     const finalRequirement = compileBatchImagePostPrompt(plan as unknown as Record<string, any>, brief);
     const task = await this.aiTasks.createTask({
       type: "IMAGE",
@@ -1334,7 +1330,6 @@ export class WorkbenchController {
         finalEmployeePrompt: finalRequirement,
         prompt: finalRequirement,
         brief,
-        materialRoots,
         batchImageDirect: brief.batchDirect,
       },
       modelPolicy: { strategy: "CODEX_FIRST", allowExternalGeneration: false, allowFallback: false },
@@ -1532,9 +1527,7 @@ export class WorkbenchController {
         creativeIntent: projectBrief.creativeIntent,
         additionalPrompt: projectBrief.additionalPrompt,
       })).trim();
-      const materialRoots = ["F:\\赛电品牌素材库\\图片素材", "F:\\赛电品牌素材库\\产品规格书"];
-      if (projectBrief.imageType === "对比类" || projectBrief.competitor) materialRoots.push("F:\\赛电品牌素材库\\图文制作资源\\竞品产品图");
-      await this.aiTasks.createTask({ type: "IMAGE", title: `${project.topic} 图文修改`, platform: "DOUYIN", productModel: project.productModel, ownerEmployeeId: employee.employeeId, reviewerEmployeeId: employee.employeeId, sourceType: "IMAGE_PROJECT", sourceId: id, idempotencyKey: `ai-task:image-project:${id}:return:${project.workflowVersion + 1}`, instructions: `${requirement}\n\n请仅根据以下审核意见修改现有图文：${note}`, input: { sourceType: "IMAGE_PROJECT", executionMode: "IMAGE_POST", skillName: "saidian-douyin-image-posts", imageProjectId: id, requirement, projectPrompt: requirement, finalEmployeePrompt: requirement, prompt: requirement, brief: projectBrief, materialRoots, revisionOf: id, revisionFeedback: note }, modelPolicy: { strategy: "CODEX_FIRST", allowExternalGeneration: false, allowFallback: false }, estimatedCost: 0, skipPaidBudget: true }, employee.name);
+      await this.aiTasks.createTask({ type: "IMAGE", title: `${project.topic} 图文修改`, platform: "DOUYIN", productModel: project.productModel, ownerEmployeeId: employee.employeeId, reviewerEmployeeId: employee.employeeId, sourceType: "IMAGE_PROJECT", sourceId: id, idempotencyKey: `ai-task:image-project:${id}:return:${project.workflowVersion + 1}`, instructions: `${requirement}\n\n请仅根据以下审核意见修改现有图文：${note}`, input: { sourceType: "IMAGE_PROJECT", executionMode: "IMAGE_POST", skillName: "saidian-douyin-image-posts", imageProjectId: id, requirement, projectPrompt: requirement, finalEmployeePrompt: requirement, prompt: requirement, brief: projectBrief, revisionOf: id, revisionFeedback: note }, modelPolicy: { strategy: "CODEX_FIRST", allowExternalGeneration: false, allowFallback: false }, estimatedCost: 0, skipPaidBudget: true }, employee.name);
     }
     return this.imageProject(authorization, id);
   }
@@ -1590,7 +1583,6 @@ export class WorkbenchController {
     if (!approve) {
       const batch = batchImageBriefValue(imageBrief);
       const requirement = String(batch.taskRequirement || compileBatchImagePostPrompt(project as unknown as Record<string, any>, imageBrief));
-      const materialRoots = ["F:\\赛电品牌素材库\\图片素材", "F:\\赛电品牌素材库\\产品规格书"];
       await this.aiTasks.createTask({
         type: "IMAGE",
         title: `${project.topic} 批量图文修改`,
@@ -1612,7 +1604,6 @@ export class WorkbenchController {
           finalEmployeePrompt: requirement,
           prompt: requirement,
           brief: imageBrief,
-          materialRoots,
           batchImageDirect: batch,
           revisionOf: id,
           revisionFeedback: note,

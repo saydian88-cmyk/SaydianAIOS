@@ -4,7 +4,7 @@ import type { Dirent } from "node:fs";
 import { copyFile, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
-import { directSingleMasterFinalExemptions, hasHyperframesRenderEvidence, imagePostGroupsInstruction, safeName, sha256, verifySha256 } from "./worker-utils";
+import { directSingleMasterFinalExemptions, hasHyperframesRenderEvidence, imagePostGroupsInstruction, imagePostMaterialSelectionInstruction, safeName, sha256, verifySha256 } from "./worker-utils";
 import {
   detectSkill,
   routeTask,
@@ -926,7 +926,7 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
       `Read and execute the dispatcher Skill first: ${detectedSkill.skillPath}`,
       `The dispatcher must automatically invoke the downstream image-post Skill: ${detectedSkill.downstreamSkillPath || "saidian-douyin-image-posts"}.`,
       "This is an IMAGE_PROJECT / IMAGE_POST task. Do not use the generic $imagegen-only route.",
-      "Use the portable SaiDian library as the first source: F:\\赛电品牌素材库\\图片素材 for product images, F:\\赛电品牌素材库\\产品规格书 for product facts, and F:\\赛电品牌素材库\\图文制作资源\\竞品产品图 only when the employee explicitly requested a comparison.",
+      imagePostMaterialSelectionInstruction(),
       "Never move, rename, overwrite, or delete source material. Do not show internal model codes unless the employee's final instruction explicitly requires them.",
       "The following is the final employee-edited requirement. It is the only creative requirement to execute. Do not append restrictions or empty default fields that the employee did not provide.",
       finalEmployeePrompt,
