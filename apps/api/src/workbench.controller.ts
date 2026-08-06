@@ -2217,7 +2217,11 @@ export class WorkbenchController {
     const factory = (Array.isArray(project.sourceSignals) ? project.sourceSignals : []).find((item: Record<string, unknown>) => item?.type === "VIDEO_FACTORY") || {};
     const batch = batchBriefValue(object(factory.brief));
     const result = (Array.isArray(batch.results) ? batch.results : []).map(object).find((item) => String(item.videoKey || "") === videoKey);
-    if (String(result?.status || "").toUpperCase() !== "FAILED") throw new BadRequestException("只能重试回传失败的视频");
+    const reviewableRender = (Array.isArray(project.videoRenderJobs) ? project.videoRenderJobs : [])
+      .find((job: Record<string, unknown>) => String(object(job.input).videoKey || "") === videoKey && Boolean(object(job.outputAsset).id));
+    if (String(result?.status || "").toUpperCase() === "READY" && reviewableRender) {
+      throw new BadRequestException("该条视频已回传可审核成片，无需重试");
+    }
     const previous = await this.prisma.aiTask.findFirst({ where: { sourceType: "VIDEO_FACTORY_PROJECT", sourceId: id }, orderBy: { createdAt: "desc" } });
     if (!previous) throw new NotFoundException("未找到原批量视频任务");
     const input = object(previous.input);

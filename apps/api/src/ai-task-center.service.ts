@@ -104,6 +104,75 @@ export function shouldReviewUploadedBatchWithoutResultManifest(uploadedOutputCou
   return uploadedOutputCount > 0 && readyResultCount === 0;
 }
 
+export type BatchCodexPlannedResult = {
+  videoKey: string;
+  ready: boolean;
+  failureReason: string;
+  outputId: string;
+  assetId: string;
+  coverAssetId: string;
+  coverUrl: string;
+  title: string;
+  tags: string[];
+  coverFile: string;
+};
+
+/**
+ * Decide which manifest results can be reviewed against actually uploaded
+ * masters. A manifest READY entry without a matching uploaded video is planned
+ * as FAILED so the employee sees a consistent retryable state instead of a
+ * review card whose preview reports the master was never returned.
+ */
+export function planBatchCodexResults(
+  rawItems: Array<Record<string, unknown>>,
+  uploaded: Array<Record<string, unknown>>,
+  covers: Array<Record<string, unknown>>,
+): BatchCodexPlannedResult[] {
+  const usedUploadIds = new Set<string>();
+  const normalizePath = (value: string) => value.replace(/\\/g, "/").replace(/^\.\//, "").trim();
+  const fileName = (value: string) => value.replace(/\\/g, "/").split("/").pop() || value;
+  const matchOutput = (videoKey: string, outputFile: string) => uploaded.find((candidate) => {
+    if (usedUploadIds.has(String(candidate.id || "")) || !candidate.assetId) return false;
+    const metadata = object(candidate.metadata);
+    const saved = text(metadata.workspaceOutputPath || metadata.outputFile || metadata.path);
+    return (videoKey && text(metadata.videoKey) === videoKey)
+      || (saved && outputFile && normalizePath(saved) === normalizePath(outputFile))
+      || (saved && outputFile && fileName(saved) === fileName(outputFile))
+      || (outputFile && fileName(text(candidate.title)) === fileName(outputFile));
+  });
+  const coverFor = (videoKey: string, coverFile: string) => covers.find((candidate) => {
+    const metadata = object(candidate.metadata);
+    const saved = text(metadata.workspaceOutputPath || metadata.outputFile || metadata.path);
+    return (videoKey && text(metadata.videoKey) === videoKey)
+      || (coverFile && saved && normalizePath(saved) === normalizePath(coverFile))
+      || (coverFile && saved && fileName(saved) === fileName(coverFile));
+  });
+  return rawItems.map((item) => {
+    const videoKey = text(item.videoKey);
+    const manifestReady = text(item.status).toUpperCase() === "READY";
+    const outputFile = text(item.outputFile);
+    const output = manifestReady ? matchOutput(videoKey, outputFile) : undefined;
+    const ready = Boolean(output?.assetId);
+    if (ready && output) usedUploadIds.add(String(output.id || ""));
+    const cover = ready ? coverFor(videoKey, text(item.coverFile)) : undefined;
+    const coverAsset = object(cover?.asset);
+    return {
+      videoKey,
+      ready,
+      failureReason: ready ? "" : text(item.failureReason) || (manifestReady
+        ? `成片文件未匹配到已上传成品${outputFile ? `：${outputFile}` : ""}`
+        : "未回传可用成品"),
+      outputId: ready ? String(output!.id || "") : "",
+      assetId: ready ? String(output!.assetId || "") : "",
+      coverAssetId: ready && cover ? String(cover.assetId || "") : "",
+      coverUrl: ready && cover ? text(coverAsset.storageUrl) : "",
+      title: text(item.title),
+      tags: strings(item.tags),
+      coverFile: text(item.coverFile),
+    };
+  });
+}
+
 export function isRecoverableDirectVideoInput(input: unknown) {
   const taskInput = object(input);
   return text(taskInput.executionMode).toUpperCase() === "FULL_VIDEO"
@@ -2782,43 +2851,44 @@ export class AiTaskCenterService implements OnModuleInit {
           where: { aiTaskId: task.id, assetId: { not: null }, mimeType: { startsWith: "video/" } },
           include: { asset: { select: { storageUrl: true } }, }, orderBy: { createdAt: "asc" },
         });
-        const fileName = (value: string) => value.replace(/\\/g, "/").split("/").pop() || value;
+        const coverOutputs = await this.prisma.aiTaskOutput.findMany({
+          where: { aiTaskId: task.id, assetId: { not: null }, mimeType: { startsWith: "image/" } },
+          include: { asset: { select: { storageUrl: true } } },
+          orderBy: { createdAt: "asc" },
+        });
         const results = Array.isArray(result.batchResults) ? result.batchResults.map(object) : [];
         const ready = results.filter((item) => text(item.status).toUpperCase() === "READY");
-        const failed = results.filter((item) => text(item.status).toUpperCase() !== "READY");
         const legacyUploadedOnly = shouldReviewUploadedBatchWithoutResultManifest(uploaded.length, ready.length);
+        const planned = planBatchCodexResults(results, uploaded, coverOutputs);
+        const failedCount = planned.filter((item) => !item.ready).length;
         let registered = 0;
-        for (const item of ready) {
-          const path = text(item.outputFile);
-          const output = uploaded.find((candidate) => {
-            const metadata = object(candidate.metadata);
-            const saved = text(metadata.workspaceOutputPath || metadata.outputFile || metadata.path);
-            return saved === path || fileName(saved) === fileName(path) || fileName(candidate.title) === fileName(path);
-          });
-          if (!output?.assetId) continue;
-          await this.videoFactory.registerLocalMaster(project.id, output.assetId, task.id, actor, text(item.videoKey));
-          await this.prisma.aiTaskOutput.update({ where: { id: output.id }, data: {
+        for (const plan of planned) {
+          if (!plan.ready || !plan.outputId || !plan.assetId) continue;
+          const output = uploaded.find((candidate) => String(candidate.id || "") === plan.outputId);
+          await this.videoFactory.registerLocalMaster(project.id, plan.assetId, task.id, actor, plan.videoKey);
+          await this.prisma.aiTaskOutput.update({ where: { id: plan.outputId }, data: {
             kind: "VIDEO_MASTER", contentPlanId: project.id, reviewStatus: "PENDING",
-            metadata: json({ ...object(output.metadata), videoKey: text(item.videoKey), title: text(item.title), tags: strings(item.tags), batchStatus: "READY" }),
+            metadata: json({ ...object(output?.metadata), videoKey: plan.videoKey, title: plan.title, tags: plan.tags, batchStatus: "READY" }),
           } });
           registered += 1;
         }
-        if (legacyUploadedOnly) {
-          for (const output of uploaded) {
-            if (!output.assetId) continue;
-            await this.videoFactory.registerLocalMaster(project.id, output.assetId, task.id, actor);
-            await this.prisma.aiTaskOutput.update({ where: { id: output.id }, data: {
-              kind: "VIDEO_MASTER", contentPlanId: project.id, reviewStatus: "PENDING",
-              metadata: json({ ...object(output.metadata), batchStatus: "READY_WITHOUT_MANIFEST" }),
-            } });
-            registered += 1;
-          }
+        const usedOutputIds = new Set(planned.filter((item) => item.outputId).map((item) => item.outputId));
+        for (const output of uploaded) {
+          if (usedOutputIds.has(String(output.id || "")) || !output.assetId) continue;
+          await this.videoFactory.registerLocalMaster(project.id, String(output.assetId), task.id, actor);
+          await this.prisma.aiTaskOutput.update({ where: { id: output.id }, data: {
+            kind: "VIDEO_MASTER", contentPlanId: project.id, reviewStatus: "PENDING",
+            metadata: json({ ...object(output.metadata), batchStatus: "READY_WITHOUT_MANIFEST" }),
+          } });
+          registered += 1;
         }
         const signals = Array.isArray(project.sourceSignals) ? project.sourceSignals.map(object) : [];
         const nextSignals = signals.map((signal) => signal.type === "VIDEO_FACTORY" ? {
-          ...signal, brief: { ...object(signal.brief), batchDirect: { ...object(object(signal.brief).batchDirect), results: results.map((item) => ({
-            videoKey: text(item.videoKey), status: text(item.status).toUpperCase() === "READY" ? "READY" : "FAILED",
-            title: text(item.title), tags: strings(item.tags), coverFile: text(item.coverFile), failureReason: text(item.failureReason),
+          ...signal, brief: { ...object(signal.brief), batchDirect: { ...object(object(signal.brief).batchDirect), results: planned.map((plan) => ({
+            videoKey: plan.videoKey, status: plan.ready ? "READY" : "FAILED",
+            title: plan.title, tags: plan.tags, coverFile: plan.coverFile,
+            coverAssetId: plan.coverAssetId, coverUrl: plan.coverUrl,
+            failureReason: plan.failureReason,
           })) } },
         } : signal);
         await this.prisma.contentPlan.update({ where: { id: project.id }, data: {
@@ -2828,7 +2898,7 @@ export class AiTaskCenterService implements OnModuleInit {
         if (!registered) return { status: "WAITING_INPUT" as AiTaskStatus, message: "批量视频未回传可审核成片" };
         return { status: "PENDING_REVIEW" as AiTaskStatus, message: legacyUploadedOnly
           ? `批量视频已回传 ${registered} 条，但缺少其余结果清单；已保留现有成品，等待审核`
-          : failed.length ? `批量视频部分完成：已回传 ${registered} 条，${failed.length} 条失败可单独重试` : `批量视频已回传 ${registered} 条，等待审核` };
+          : failedCount ? `批量视频部分完成：已回传 ${registered} 条，${failedCount} 条失败可单独重试` : `批量视频已回传 ${registered} 条，等待审核` };
       }
       const existingContentPlanId = resolveDirectVideoProjectId(task);
       const directFullVideo = executionMode === "FULL_VIDEO"

@@ -345,6 +345,9 @@ const packagingPreviewVariant = ref<Row>();
 const packagingPreviewProject = ref<Row>();
 const packagingPreviewUrl = ref("");
 const reviewingPackagingVariantId = ref("");
+const batchCoverPreviewVisible = ref(false);
+const batchCoverPreviewVideo = ref<Row>();
+const batchCoverPreviewUrl = ref("");
 const packagingCoverUrls = reactive<Record<string, string>>({});
 const loadingPackagingCoverIds = new Set<string>();
 const failedPackagingCoverIds = new Set<string>();
@@ -1226,16 +1229,24 @@ function batchVideos(project?: Row) {
     for (let index = 0; index < count; index += 1) {
       const videoKey = `${productIndex + 1}-${index + 1}`;
       const result = returned.find((item) => String(item.videoKey || "") === videoKey);
+      const job = batchVideoJobFor(project, videoKey, videos.length);
+      const manifestStatus = String(result?.status || "").toUpperCase();
+      const hasReviewableMaster = Boolean(job?.outputAsset);
+      const resultStatus = manifestStatus === "FAILED"
+        ? "FAILED"
+        : hasReviewableMaster ? "READY" : "FAILED";
       videos.push({
         videoKey,
         product: model,
         productShort: model.split(" · ")[0],
         type: index < voiced ? "口播" : "无口播",
         displayName: `${model.split(" · ")[0]} · 视频 ${productIndex + 1}-${index + 1}`,
-        resultStatus: String(result?.status || "").toUpperCase(),
+        resultStatus,
         resultTitle: String(result?.title || ""),
         resultTags: Array.isArray(result?.tags) ? result.tags.map(String).filter(Boolean) : [],
         failureReason: String(result?.failureReason || ""),
+        coverUrl: String(result?.coverUrl || ""),
+        coverAssetId: String(result?.coverAssetId || ""),
       });
     }
   });
@@ -1337,11 +1348,18 @@ function batchProgressStats(project?: Row) {
 }
 
 function batchVideoRenderJob(project?: Row, videoKey?: string) {
+  const index = batchVideos(project).findIndex((video) => video.videoKey === videoKey);
+  return batchVideoJobFor(project, videoKey, index);
+}
+
+function batchVideoJobFor(project?: Row, videoKey?: string, index = -1) {
   const jobs = reviewableVideoRenderJobs(project);
   const matched = jobs.find((job: Row) => String((job.input as Row | undefined)?.videoKey || "") === String(videoKey || ""));
   if (matched) return matched;
-  const index = batchVideos(project).findIndex((video) => video.videoKey === videoKey);
-  return index >= 0 ? jobs[index] : jobs[0];
+  const ordered = [...jobs].sort(
+    (a, b) => new Date(String(a.createdAt || "")).getTime() - new Date(String(b.createdAt || "")).getTime(),
+  );
+  return index >= 0 ? ordered[index] : ordered[0];
 }
 
 async function previewBatchVideo(video: Row) {
@@ -1351,6 +1369,20 @@ async function previewBatchVideo(video: Row) {
     return;
   }
   ElMessage.warning("该条成片尚未回传，请稍后刷新");
+}
+
+function openBatchCoverPreview(video: Row) {
+  if (video.coverUrl) {
+    batchCoverPreviewUrl.value = String(video.coverUrl || "");
+    batchCoverPreviewVideo.value = video;
+    batchCoverPreviewVisible.value = true;
+    return;
+  }
+  ElMessage.warning("该条封面图尚未回传，可先预览成片画面");
+}
+
+function discardBatchCoverUrl(video: Row) {
+  video.coverUrl = "";
 }
 
 async function downloadBatchVideo(video: Row) {
@@ -5095,7 +5127,10 @@ onBeforeUnmount(() => {
                           <div class="batch-video-thumb"><span class="play">▶</span><span style="margin-left:8px;font-size:12px">00:{{ String(18 + index * 3).padStart(2, '0') }}</span></div>
                           <template v-if="batchConfigOf(taskVideoProjectDetail)?.generateCoverTitle !== false">
                             <div class="batch-cover-line">
-                              <button class="batch-cover-thumb" type="button" @click="ElMessage.info('点击封面放大查看（原型示意）')"><div><b>赛电 {{ video.productShort }}</b><span>{{ batchVideoCoverMeta(video, index).coverText }}</span></div></button>
+                              <button class="batch-cover-thumb" type="button" @click="openBatchCoverPreview(video)">
+                                <img v-if="video.coverUrl" :src="video.coverUrl" :alt="`${video.displayName} 封面`" @error="discardBatchCoverUrl(video)" />
+                                <template v-else><div><b>赛电 {{ video.productShort }}</b><span>{{ batchVideoCoverMeta(video, index).coverText }}</span></div></template>
+                              </button>
                               <div>
                                 <div class="batch-cover-title">{{ batchVideoCoverMeta(video, index).title }}</div>
                                 <div class="batch-tags"><el-tag v-for="tag in batchVideoCoverMeta(video, index).tags" :key="tag" size="small" type="info">{{ tag }}</el-tag></div>
@@ -6611,6 +6646,22 @@ onBeforeUnmount(() => {
         :loading="reviewingPackagingVariantId === packagingPreviewVariant.id"
         @click="reviewProjectPackaging(true)"
       >包装审核通过</el-button>
+    </template>
+  </el-dialog>
+
+  <el-dialog v-model="batchCoverPreviewVisible" title="封面放大查看" width="min(560px, 92vw)" destroy-on-close>
+    <div v-if="batchCoverPreviewVideo" class="batch-cover-preview">
+      <img v-if="batchCoverPreviewUrl" :src="batchCoverPreviewUrl" :alt="`${batchCoverPreviewVideo.displayName || '视频'} 封面`" />
+      <div class="batch-cover-preview-meta">
+        <h3>{{ batchCoverPreviewVideo.resultTitle || '标题未回传' }}</h3>
+        <div v-if="batchCoverPreviewVideo.resultTags?.length" class="batch-tags">
+          <el-tag v-for="tag in batchCoverPreviewVideo.resultTags" :key="tag" size="small" type="info">{{ tag }}</el-tag>
+        </div>
+        <p v-else>标签未回传</p>
+      </div>
+    </div>
+    <template #footer>
+      <el-button type="primary" @click="batchCoverPreviewVisible = false">关闭</el-button>
     </template>
   </el-dialog>
 

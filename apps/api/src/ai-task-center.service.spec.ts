@@ -10,6 +10,7 @@ import {
   runnerCanClaimTask,
   runnerTaskTypeCapabilities,
   isRecoverableDirectVideoInput,
+  planBatchCodexResults,
   resolveDirectVideoProjectId,
   shouldReviewUploadedBatchWithoutResultManifest,
   shouldSendUploadedFailureToReview,
@@ -79,6 +80,63 @@ describe("AiTaskCenterService", () => {
   it("includes batch direct-video tasks in completed-output reconciliation", () => {
     expect(isRecoverableDirectVideoInput({ executionMode: "FULL_VIDEO", batchCodexDirectFullVideo: true })).toBe(true);
     expect(isRecoverableDirectVideoInput({ executionMode: "FULL_VIDEO" })).toBe(false);
+  });
+
+  it("plans manifest READY items only when a matching uploaded master exists", () => {
+    const planned = planBatchCodexResults(
+      [
+        { videoKey: "1-1", status: "READY", outputFile: "out/1-1.mp4", title: "标题A", tags: ["#a"], coverFile: "out/1-1.jpg" },
+        { videoKey: "1-2", status: "READY", outputFile: "out/1-2.mp4", title: "标题B", tags: ["#b"], coverFile: "out/1-2.jpg" },
+        { videoKey: "1-3", status: "FAILED", failureReason: "缺素材" },
+      ],
+      [
+        { id: "out-1-1", assetId: "asset-1-1", title: "1-1.mp4", metadata: { workspaceOutputPath: "out/1-1.mp4" } },
+        { id: "out-1-2", assetId: "asset-1-2", title: "1-2.mp4", metadata: { workspaceOutputPath: "out/1-2.mp4" } },
+      ],
+      [
+        { id: "cover-1-1", assetId: "asset-cover-1-1", metadata: { videoKey: "1-1" }, asset: { storageUrl: "https://oss/1-1.jpg" } },
+      ],
+    );
+
+    expect(planned).toHaveLength(3);
+    expect(planned[0]).toMatchObject({
+      videoKey: "1-1",
+      ready: true,
+      outputId: "out-1-1",
+      assetId: "asset-1-1",
+      coverAssetId: "asset-cover-1-1",
+      coverUrl: "https://oss/1-1.jpg",
+      failureReason: "",
+    });
+    expect(planned[1]).toMatchObject({
+      videoKey: "1-2",
+      ready: true,
+      outputId: "out-1-2",
+      assetId: "asset-1-2",
+    });
+    expect(planned[2]).toMatchObject({
+      videoKey: "1-3",
+      ready: false,
+      failureReason: "缺素材",
+    });
+  });
+
+  it("marks a manifest READY item without an uploaded master as retryable failed", () => {
+    const planned = planBatchCodexResults(
+      [
+        { videoKey: "2-1", status: "READY", outputFile: "out/missing.mp4", title: "缺失成片" },
+      ],
+      [],
+      [],
+    );
+
+    expect(planned[0]).toMatchObject({
+      videoKey: "2-1",
+      ready: false,
+      outputId: "",
+      assetId: "",
+      failureReason: expect.stringContaining("未匹配到已上传成品"),
+    });
   });
 
   it("sends a task with uploaded outputs to employee review instead of terminal failure", () => {
