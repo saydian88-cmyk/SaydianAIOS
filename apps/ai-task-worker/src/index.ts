@@ -774,6 +774,7 @@ function outputSchema(
               title: { type: "string" },
               publishCopy: { type: "string" },
               tags: { type: "array", items: { type: "string" } },
+              groups: { type: "array", items: { type: "object", additionalProperties: false, properties: { groupKey: { type: "string" }, title: { type: "string" }, publishCopy: { type: "string" }, tags: { type: "array", items: { type: "string" } }, pages: { type: "array", minItems: 1, items: { type: "object", additionalProperties: false, properties: { pageNo: { type: "number" }, title: { type: "string" }, copy: { type: "string" }, outputFile: { type: "string" } }, required: ["pageNo", "title", "copy", "outputFile"] } } }, required: ["groupKey", "title", "publishCopy", "tags", "pages"] } },
               pages: {
                 type: "array",
                 minItems: 1,
@@ -902,6 +903,7 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
       finalEmployeePrompt,
       "Create the requested image-post pages and return the real output files in outputFiles. Also return imageBrief as a concise execution summary so the current task center can register the result.",
       "Return imagePost with title, publishCopy, tags and pages. Every imagePost.pages entry must name its matching generated image in outputFile; use exactly the same relative file path as outputFiles. Do not return a page without its generated image file.",
+      "For a batch image project, also return imagePost.groups: one complete result per groupKey in batchImageDirect.groups. Never put type, page number, group number, or task identifiers in any final image or public copy.",
       "The output must comply with the output schema. Every output file must exist inside the current task workspace.",
       `Task package JSON:\n${JSON.stringify(taskPackage, null, 2)}`,
     ].join("\n\n");

@@ -3017,8 +3017,8 @@ export class AiTaskCenterService implements OnModuleInit {
             );
           }) || (uploadedImages.length === 1 ? uploadedImages[0] : uploadedImages[index]);
         };
-        const pages = Array.isArray(imagePost.pages)
-          ? imagePost.pages.map(object).filter((item) => text(item.title || item.pageTitle || item.text)).map((page, index) => {
+        const bindPages = (rawPages: unknown, offset = 0) => Array.isArray(rawPages)
+          ? rawPages.map(object).filter((item) => text(item.title || item.pageTitle || item.text)).map((page, index) => {
             const output = outputForPage(page, index);
             return {
               ...page,
@@ -3028,16 +3028,33 @@ export class AiTaskCenterService implements OnModuleInit {
             };
           })
           : [];
-        const title = text(imagePost.title || imagePost.postTitle || imagePost.topic) || plan.topic;
-        const publishCopy = text(imagePost.publishCopy || imagePost.body || imagePost.copy || imagePost.caption);
-        const tags = strings(imagePost.tags || imagePost.hashtags || imagePost.labels);
-        if (!pages.length && !publishCopy && !title) {
+        const batchGroupValue = object(input.batchImageDirect).groups;
+        const batchGroups: JsonRecord[] = Array.isArray(batchGroupValue) ? batchGroupValue.map(object) : [];
+        const returnedGroups: JsonRecord[] = Array.isArray(imagePost.groups) ? imagePost.groups.map(object) : [];
+        const groups: Array<{ groupKey: string; status: string; title: string; publishCopy: string; tags: string[]; pages: JsonRecord[] }> = batchGroups.map((expected: JsonRecord, groupIndex: number) => {
+          const returned = returnedGroups.find((item) => text(item.groupKey) === text(expected.groupKey));
+          if (!returned) return { groupKey: text(expected.groupKey), status: "MISSING", pages: [], tags: [], title: "", publishCopy: "" };
+          return {
+            groupKey: text(expected.groupKey),
+            status: "READY",
+            title: text(returned.title || returned.postTitle || returned.topic),
+            publishCopy: text(returned.publishCopy || returned.body || returned.copy || returned.caption),
+            tags: strings(returned.tags || returned.hashtags || returned.labels),
+            pages: bindPages(returned.pages, groupIndex),
+          };
+        });
+        const pages: JsonRecord[] = groups.length ? groups.flatMap((group) => group.pages) : bindPages(imagePost.pages);
+        const title = text(imagePost.title || imagePost.postTitle || imagePost.topic) || groups.find((group) => group.title)?.title || plan.topic;
+        const publishCopy = text(imagePost.publishCopy || imagePost.body || imagePost.copy || imagePost.caption) || groups.find((group) => group.publishCopy)?.publishCopy || "";
+        const tags = strings(imagePost.tags || imagePost.hashtags || imagePost.labels).length ? strings(imagePost.tags || imagePost.hashtags || imagePost.labels) : groups.flatMap((group) => group.tags);
+        if ((!groups.length && !pages.length && !publishCopy && !title) || (batchGroups.length && groups.some((group) => group.status !== "READY" || !group.pages.length || !group.title || !group.publishCopy))) {
           return { status: "WAITING_INPUT" as AiTaskStatus, message: "图文制作任务已返回，但缺少图文页、标题或发布文案" };
         }
         const previous = plan.variants.find((variant) => variant.platform === "DOUYIN");
         const metadata = {
           ...object(previous?.metadata),
           pages,
+          ...(groups.length ? { groups } : {}),
           tags,
           publishCopy,
           imageProjectTaskId: task.id,

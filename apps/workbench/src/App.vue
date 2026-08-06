@@ -16,6 +16,7 @@ import {
   VideoCamera,
 } from "@element-plus/icons-vue";
 import { api, clearToken, getToken, post, setToken, uploadWithProgress } from "./api";
+import { batchImageReviewGroup } from "./batch-image-review";
 import TaskRichTextContent from "./components/TaskRichTextContent.vue";
 import TaskRichTextEditor from "./components/TaskRichTextEditor.vue";
 
@@ -881,14 +882,17 @@ function batchImagePublishRecord(groupKey: string) {
   return batchImagePublishForm.value[groupKey];
 }
 
-function batchImageCopyMeta(index: number) {
-  const pools = [
-    { title: "爸妈的健康，从看得见的日常开始", tags: ["赛电", "智能手表", "健康关爱", "送爸妈", "真实体验"] },
-    { title: "买给父母前，先看这组真实使用", tags: ["赛电", "智能手表", "父母礼物", "血压监测", "日常守护"] },
-    { title: "健康手表怎么选，先避开这几个坑", tags: ["赛电", "智能手表", "避坑", "健康生活", "实用好物"] },
-    { title: "一张图看懂适不适合爸妈", tags: ["赛电", "智能手表", "科普", "老人健康", "随时守护"] },
-  ];
-  return pools[index % pools.length];
+function batchImageReviewResult(project: Row | undefined, group: Row) {
+  return batchImageReviewGroup(project, group);
+}
+
+function batchImageFirstPageUrl(project: Row | undefined, group: Row) {
+  const page = batchImageReviewResult(project, group).pages[0] as Row | undefined;
+  return page ? imageProjectPageUrl(page) : "";
+}
+
+function batchImageReadyForReview(project?: Row) {
+  return batchImageGroups(project).every((group) => batchImageReviewResult(project, group).status === "READY");
 }
 
 function batchImageProgressStats(project?: Row) {
@@ -4793,18 +4797,20 @@ onBeforeUnmount(() => {
                     <h4>批量图文审核</h4>
                     <p>每组图文、标题、标签和发布文案集中审核，可整批通过，也可填写原因退回。</p>
                     <div class="group-grid">
-                      <article v-for="(group, index) in batchImageGroups(taskImageProjectDetail)" :key="`review-${group.groupKey}`" class="group-card">
+                      <article v-for="group in batchImageGroups(taskImageProjectDetail)" :key="`review-${group.groupKey}`" class="group-card">
                         <div class="g-head"><b>{{ String(group.product || '').split(' · ')[0] }} · 第{{ group.groupKey }}组</b><el-tag size="small" type="success">图文待审核</el-tag></div>
-                        <div class="group-thumb"><div><div style="font-size:22px">▦</div><div style="margin-top:6px;font-size:12px">{{ group.type }} · 图文已生成</div></div></div>
-                        <div class="copy-line">
-                          <div class="copy-title">{{ batchImageCopyMeta(index).title }}</div>
-                          <div class="tags"><el-tag v-for="tag in batchImageCopyMeta(index).tags" :key="tag" size="small" type="info">#{{ tag }}</el-tag></div>
-                          <div class="note">标签至少 5 个 · 发布文案已随图文生成</div>
+                        <div v-if="batchImageReviewResult(taskImageProjectDetail, group).status === 'READY'" class="group-thumb"><img :src="batchImageFirstPageUrl(taskImageProjectDetail, group)" :alt="batchImageReviewResult(taskImageProjectDetail, group).title" /></div>
+                        <div v-else class="group-thumb"><div><div style="font-size:22px">!</div><div style="margin-top:6px;font-size:12px">该组图文未回传</div></div></div>
+                        <div v-if="batchImageReviewResult(taskImageProjectDetail, group).status === 'READY'" class="copy-line">
+                          <div class="copy-title">{{ batchImageReviewResult(taskImageProjectDetail, group).title }}</div>
+                          <div class="tags"><el-tag v-for="tag in batchImageReviewResult(taskImageProjectDetail, group).tags" :key="tag" size="small" type="info">#{{ tag }}</el-tag></div>
+                          <div class="note">{{ batchImageReviewResult(taskImageProjectDetail, group).publishCopy }}</div>
                         </div>
+                        <div v-else class="copy-line"><div class="copy-title">未回传</div><div class="note">请重新执行或退回该组后再审核。</div></div>
                         <div class="group-actions">
-                          <el-button size="small" @click="openImageProjectPreview">预览图文</el-button>
-                          <el-button size="small" @click="copyTaskContent(batchImageCopyMeta(index).title + '\n' + batchImageCopyMeta(index).tags.map((tag: string) => '#' + tag).join(' '), '标题与标签')">复制标题标签</el-button>
-                          <el-button size="small" @click="copyTaskContent(batchImageCopyMeta(index).title + '。' + batchImageCopyMeta(index).tags.join(' '), '发布文案')">复制文案</el-button>
+                          <el-button size="small" :disabled="batchImageReviewResult(taskImageProjectDetail, group).status !== 'READY'" @click="openImageProjectPreview">预览图文</el-button>
+                          <el-button size="small" :disabled="batchImageReviewResult(taskImageProjectDetail, group).status !== 'READY'" @click="copyTaskContent(batchImageReviewResult(taskImageProjectDetail, group).title + '\n' + batchImageReviewResult(taskImageProjectDetail, group).tags.map((tag: string) => '#' + tag).join(' '), '标题与标签')">复制标题标签</el-button>
+                          <el-button size="small" :disabled="batchImageReviewResult(taskImageProjectDetail, group).status !== 'READY'" @click="copyTaskContent(batchImageReviewResult(taskImageProjectDetail, group).publishCopy, '发布文案')">复制文案</el-button>
                           <el-button size="small" type="danger" plain @click="rejectBatchImage(group)">退回</el-button>
                         </div>
                       </article>
@@ -4813,7 +4819,7 @@ onBeforeUnmount(() => {
                     <div class="preview-actions">
                       <el-button @click="refreshImageProject">刷新当前项目</el-button>
                       <el-button type="danger" plain @click="rejectBatchImage()">整批退回</el-button>
-                      <el-button type="success" @click="approveBatchImage">整批审核通过</el-button>
+                      <el-button type="success" :disabled="!batchImageReadyForReview(taskImageProjectDetail)" @click="approveBatchImage">整批审核通过</el-button>
                     </div>
                   </section>
                   <section v-else class="task-video-stage-panel">
