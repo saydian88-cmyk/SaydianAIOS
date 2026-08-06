@@ -38,7 +38,7 @@
 
 - [ ] 编写 3 条 READY、2 条 FAILED 仍可登记 READY 的失败测试。
 - [ ] 运行测试，确认当前整体结果协议不能表达部分成功。
-- [ ] 增加视频 `videoKey` 和图文 `groupKey` 的 READY/FAILED 结果及失败原因。
+- [ ] 增加视频 `videoKey`（成片、封面、标题、标签）和图文 `groupKey`（图片、标题、标签）的 READY/FAILED 结果及 `failureReason`；发布文案不列为必填字段。
 - [ ] 持久化成功资源与失败记录，禁止用占位内容补齐失败项。
 - [ ] 运行 worker/API 测试并提交 `feat: retain partial batch results`。
 
