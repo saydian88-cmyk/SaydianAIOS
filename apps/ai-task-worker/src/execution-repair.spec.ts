@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import * as repair from "./execution-repair";
 import {
   classifyExecutionFailure,
+  recoveryMode,
   requiresRenderedEvidenceReview,
   shouldResumeValidatedResult,
 } from "./execution-repair";
@@ -48,9 +49,16 @@ describe("classifyExecutionFailure", () => {
     expect(requiresRenderedEvidenceReview(result.category)).toBe(true);
   });
 
-  it("does not reuse a saved result while evidence review is pending", () => {
-    expect(shouldResumeValidatedResult(true, "RENDER_EVIDENCE")).toBe(false);
+  it("reuses a saved result while repairing evidence only", () => {
+    expect(shouldResumeValidatedResult(true, "RENDER_EVIDENCE")).toBe(true);
     expect(shouldResumeValidatedResult(true, "TRANSIENT_TRANSFER")).toBe(true);
+  });
+
+  it("chooses the smallest recoverable stage for each repair category", () => {
+    expect(recoveryMode("TRANSIENT_TRANSFER")).toBe("RESUME_RESULT");
+    expect(recoveryMode("RENDER_EVIDENCE")).toBe("REPAIR_EVIDENCE");
+    expect(recoveryMode("RESULT_CONTRACT")).toBe("REPAIR_EVIDENCE");
+    expect(recoveryMode("NONE")).toBe("FULL_RERUN");
   });
 
   it("caps internal recovery across changing failure fingerprints", () => {

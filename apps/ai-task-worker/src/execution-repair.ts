@@ -29,8 +29,14 @@ export function requiresRenderedEvidenceReview(category?: RepairCategory | strin
   return category === "RENDER_EVIDENCE";
 }
 
+export function recoveryMode(category?: RepairCategory | string) {
+  if (category === "TRANSIENT_TRANSFER") return "RESUME_RESULT";
+  if (category === "RENDER_EVIDENCE" || category === "RESULT_CONTRACT") return "REPAIR_EVIDENCE";
+  return "FULL_RERUN";
+}
+
 export function shouldResumeValidatedResult(resumeCandidate: boolean, category?: RepairCategory | string) {
-  return resumeCandidate && !requiresRenderedEvidenceReview(category);
+  return resumeCandidate && recoveryMode(category) !== "FULL_RERUN";
 }
 
 export function hasExhaustedInternalRepairs(attempts: Record<string, number>, maximum: number) {

@@ -34,6 +34,7 @@ import { availableClaimRouteKeys, videoRouteKeys } from "./worker-utils";
 import {
   classifyExecutionFailure,
   hasExhaustedInternalRepairs,
+  recoveryMode,
   repairHyperFramesRuntime,
   requiresRenderedEvidenceReview,
   shouldResumeValidatedResult,
@@ -2278,6 +2279,7 @@ async function execute(claimed: JsonRecord) {
       (resumeEligible || resumeDirectOutputUpload)
       && ["LOCAL_RENDER", "QUALITY_CHECK", "UPLOADING", "FINALIZING", "COMPLETE"].includes(String(taskState.stage || ""))
     ), repairState.lastCategory);
+    const resumeMode = recoveryMode(repairState.lastCategory);
     state = taskState;
     await saveWorkspaceState(workspace, taskState);
     await appendExecutionLog(workspace, "SKILL_SELECTED", {
@@ -2335,7 +2337,11 @@ async function execute(claimed: JsonRecord) {
             ...record(result.execution),
             resumed: true,
           };
-          await appendExecutionLog(workspace, "RESUME_RESULT", { stage: taskState.stage });
+          await appendExecutionLog(
+            workspace,
+            resumeMode === "REPAIR_EVIDENCE" ? "RESUME_EVIDENCE_REPAIRED" : "RESUME_RESULT",
+            { stage: taskState.stage, category: repairState.lastCategory || "NONE" },
+          );
         } catch (error) {
           await appendExecutionLog(workspace, "RESUME_REJECTED", {
             reason: error instanceof Error ? error.message : String(error),
