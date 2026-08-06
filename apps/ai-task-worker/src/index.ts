@@ -4,7 +4,7 @@ import type { Dirent } from "node:fs";
 import { copyFile, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
-import { hasHyperframesRenderEvidence, safeName, sha256, verifySha256 } from "./worker-utils";
+import { directSingleMasterFinalExemptions, hasHyperframesRenderEvidence, safeName, sha256, verifySha256 } from "./worker-utils";
 import {
   detectSkill,
   routeTask,
@@ -1883,10 +1883,27 @@ async function validateMandatoryVideoEvidence(
       throw new Error(`完整版剪辑Skill证据缺失或无效：${file}`);
     }
   }
-  const checklist = await readJson<JsonRecord>(join(workspace, "requirements-check.json"));
-  const rows = Array.isArray(checklist?.items)
+  let checklist = await readJson<JsonRecord>(join(workspace, "requirements-check.json"));
+  let rows = Array.isArray(checklist?.items)
     ? checklist.items.map(record)
     : Array.isArray(checklist?.requirements) ? checklist.requirements.map(record) : [];
+  if (direct) {
+    const existingIds = new Set(rows.map((item) => String(item.id || "")));
+    const exemptions = directSingleMasterFinalExemptions()
+      .filter((item) => !existingIds.has(item.id))
+      .map((item) => ({
+        ...item,
+        passed: false,
+        evidence: [],
+        not_applicable_reason: "Direct single-master delivery is registered by the task system; batch packaging, cover/title and final-folder artifacts are not part of this task output.",
+        waiver: null,
+      }));
+    if (exemptions.length) {
+      checklist = { ...checklist, requirements: [...rows, ...exemptions] };
+      rows = checklist.requirements as JsonRecord[];
+      await writeJsonAtomic(join(workspace, "requirements-check.json"), checklist);
+    }
+  }
   if (!rows.length) throw new Error("requirements-check.json 没有逐项验收记录");
   const failed = rows.filter((item) => item.applicable !== false && item.passed !== true);
   if (failed.length) throw new Error(`完整版剪辑Skill仍有未通过要求：${failed.map((item) => String(item.id || "unknown")).join("、")}`);

@@ -54,3 +54,12 @@ export function hasHyperframesRenderEvidence(value: unknown) {
   ].join(" ");
   return /hyperframes/iu.test(text);
 }
+
+export function directSingleMasterFinalExemptions() {
+  return [
+    { id: "batch_sequence_consistent", applicable: false },
+    { id: "cover_title_complete", applicable: false },
+    { id: "final_folder_clean", applicable: false },
+    { id: "final_delivery_validator_passed", applicable: false },
+  ];
+}

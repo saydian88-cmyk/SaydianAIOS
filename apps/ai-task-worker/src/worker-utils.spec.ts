@@ -41,4 +41,15 @@ describe("worker utils", () => {
       ],
     })).toBe(true);
   });
+
+  it("marks batch-only final delivery checks as not applicable for a direct single-master task", () => {
+    const exemptions = (workerUtils as Record<string, unknown>).directSingleMasterFinalExemptions;
+    expect(exemptions).toBeTypeOf("function");
+    expect((exemptions as () => Array<{ id: string; applicable: boolean }>)()).toEqual([
+      { id: "batch_sequence_consistent", applicable: false },
+      { id: "cover_title_complete", applicable: false },
+      { id: "final_folder_clean", applicable: false },
+      { id: "final_delivery_validator_passed", applicable: false },
+    ]);
+  });
 });
