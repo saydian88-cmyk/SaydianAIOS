@@ -4,7 +4,7 @@ import type { Dirent } from "node:fs";
 import { copyFile, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
-import { directSingleMasterFinalExemptions, hasHyperframesRenderEvidence, safeName, sha256, verifySha256 } from "./worker-utils";
+import { directSingleMasterFinalExemptions, hasHyperframesRenderEvidence, imagePostGroupsInstruction, safeName, sha256, verifySha256 } from "./worker-utils";
 import {
   detectSkill,
   routeTask,
@@ -878,6 +878,9 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
   const type = String(task.type || "");
   const executionMode = String(execution.mode || "");
   const taskInput = record(task.input);
+  const batchImageGroups = Array.isArray(record(taskInput.batchImageDirect).groups)
+    ? record(taskInput.batchImageDirect).groups
+    : [];
   const isCodexDirectFullVideo = type === "VIDEO"
     && executionMode === "FULL_VIDEO"
     && taskInput.codexDirectFullVideo === true;
@@ -907,7 +910,7 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
       finalEmployeePrompt,
       "Create the requested image-post pages and return the real output files in outputFiles. Also return imageBrief as a concise execution summary so the current task center can register the result.",
       "Return imagePost with title, publishCopy, tags and pages. Every imagePost.pages entry must name its matching generated image in outputFile; use exactly the same relative file path as outputFiles. Do not return a page without its generated image file.",
-      "For a batch image project, also return imagePost.groups: one complete result per groupKey in batchImageDirect.groups. Never put type, page number, group number, or task identifiers in any final image or public copy.",
+      `${imagePostGroupsInstruction(batchImageGroups.length)} Never put type, page number, group number, or task identifiers in any final image or public copy.`,
       "The output must comply with the output schema. Every output file must exist inside the current task workspace.",
       `Task package JSON:\n${JSON.stringify(taskPackage, null, 2)}`,
     ].join("\n\n");

@@ -63,3 +63,9 @@ export function directSingleMasterFinalExemptions() {
     { id: "final_delivery_validator_passed", applicable: false },
   ];
 }
+
+export function imagePostGroupsInstruction(groupCount: number) {
+  return groupCount > 0
+    ? "This is a batch image project. Return imagePost.groups with one complete result per groupKey in batchImageDirect.groups."
+    : "This is a single image project. Return imagePost.groups as an empty array []. Put the complete result only in imagePost.title, publishCopy, tags and pages.";
+}

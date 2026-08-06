@@ -52,4 +52,11 @@ describe("worker utils", () => {
       { id: "final_delivery_validator_passed", applicable: false },
     ]);
   });
+
+  it("requires a single image post to return an empty groups array", () => {
+    const instruction = (workerUtils as Record<string, unknown>).imagePostGroupsInstruction;
+    expect(instruction).toBeTypeOf("function");
+    expect((instruction as (groupCount: number) => string)(0)).toContain("empty array []");
+    expect((instruction as (groupCount: number) => string)(2)).toContain("one complete result per groupKey");
+  });
 });
