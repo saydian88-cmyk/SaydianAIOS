@@ -104,6 +104,12 @@ export function shouldReviewUploadedBatchWithoutResultManifest(uploadedOutputCou
   return uploadedOutputCount > 0 && readyResultCount === 0;
 }
 
+export function isRecoverableDirectVideoInput(input: unknown) {
+  const taskInput = object(input);
+  return text(taskInput.executionMode).toUpperCase() === "FULL_VIDEO"
+    && (taskInput.codexDirectFullVideo === true || taskInput.referenceDirectFullVideo === true || taskInput.batchCodexDirectFullVideo === true);
+}
+
 /**
  * Resolve only business routes that are unambiguous from structured task data.
  * Titles and instructions are deliberately excluded: they are display/creative
@@ -2531,9 +2537,7 @@ export class AiTaskCenterService implements OnModuleInit {
       take: 20,
     });
     for (const task of tasks) {
-      const taskInput = object(task.input);
-      const directFullVideo = text(taskInput.executionMode).toUpperCase() === "FULL_VIDEO"
-        && (taskInput.codexDirectFullVideo === true || taskInput.referenceDirectFullVideo === true);
+      const directFullVideo = isRecoverableDirectVideoInput(task.input);
       const uploadedMaster = task.outputs.some((item) => item.assetId && (item.kind === "VIDEO_MASTER" || text(item.mimeType).startsWith("video/")));
       if (task.status === "WAITING_INPUT" && directFullVideo && uploadedMaster && resolveDirectVideoProjectId(task)) {
         const domain = await this.finalizeDomain(task as Awaited<ReturnType<AiTaskCenterService["ensureRunnerTask"]>>, object(task.output), "system-direct-video-reconcile");

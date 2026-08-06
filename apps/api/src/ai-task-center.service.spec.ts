@@ -9,6 +9,7 @@ import {
   aiTaskTargetNodeCode,
   runnerCanClaimTask,
   runnerTaskTypeCapabilities,
+  isRecoverableDirectVideoInput,
   resolveDirectVideoProjectId,
   shouldReviewUploadedBatchWithoutResultManifest,
   shouldSendUploadedFailureToReview,
@@ -73,6 +74,11 @@ describe("AiTaskCenterService", () => {
     expect(shouldReviewUploadedBatchWithoutResultManifest(1, 0)).toBe(true);
     expect(shouldReviewUploadedBatchWithoutResultManifest(0, 0)).toBe(false);
     expect(shouldReviewUploadedBatchWithoutResultManifest(1, 1)).toBe(false);
+  });
+
+  it("includes batch direct-video tasks in completed-output reconciliation", () => {
+    expect(isRecoverableDirectVideoInput({ executionMode: "FULL_VIDEO", batchCodexDirectFullVideo: true })).toBe(true);
+    expect(isRecoverableDirectVideoInput({ executionMode: "FULL_VIDEO" })).toBe(false);
   });
 
   it("sends a task with uploaded outputs to employee review instead of terminal failure", () => {
