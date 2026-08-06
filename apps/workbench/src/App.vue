@@ -1223,6 +1223,8 @@ function batchVideos(project?: Row) {
         type: index < voiced ? "口播" : "无口播",
         displayName: `${model.split(" · ")[0]} · 视频 ${productIndex + 1}-${index + 1}`,
         resultStatus: String(result?.status || "").toUpperCase(),
+        resultTitle: String(result?.title || ""),
+        resultTags: Array.isArray(result?.tags) ? result.tags.map(String).filter(Boolean) : [],
         failureReason: String(result?.failureReason || ""),
       });
     }
@@ -1265,6 +1267,7 @@ function buildBatchTaskRequirement() {
       ? "全部无口播"
       : "一半口播、一半无口播（按每个产品各半分配，奇数条时无口播多一条）";
   const cover = videoFactoryForm.batchGenerateCoverTitle;
+  const additionalPrompt = videoFactoryForm.additionalPrompt.trim();
   return `模式：BATCH_CODEX_DIRECT_FULL_VIDEO
 执行目标：作为批量 Codex 直出项目，一次任务内直接生成全部 ${total} 条视频并交付最终成片。内部脚本、素材匹配和剪辑由 Codex 自动完成，不回传员工端，只回传总体进度和最终成品${cover ? "，并为每条视频生成封面、标题和标签" : ""}。
 
@@ -1276,8 +1279,7 @@ ${productLines}
 多使用几种音色、尽量不重复：${videoFactoryForm.batchVoiceVariety ? "是（默认）" : "否"}
 ${cover ? "同时生成封面标题：是（员工提交后直接获得最终成品；每条视频的标签至少 5 个）" : "同时生成封面标题：否（封面标题在后续单独步骤生成）"}
 
-用户补充提示词：
-${videoFactoryForm.additionalPrompt.trim() || "（无，尽量给 AI 更多自由发挥空间）"}
+${additionalPrompt ? `用户补充提示词：\n${additionalPrompt}\n` : ""}
 
 画面约束：只使用所选产品的真实素材，不得混用其他产品素材。各视频在脚本方向、开场、画面节奏上尽量错开，避免整批重复。最终以批量任务整体交付，等待员工审核。`;
 }
@@ -1326,6 +1328,8 @@ function batchProgressStats(project?: Row) {
 
 function batchVideoRenderJob(project?: Row, videoKey?: string) {
   const jobs = reviewableVideoRenderJobs(project);
+  const matched = jobs.find((job: Row) => String((job.input as Row | undefined)?.videoKey || "") === String(videoKey || ""));
+  if (matched) return matched;
   const index = batchVideos(project).findIndex((video) => video.videoKey === videoKey);
   return index >= 0 ? jobs[index] : jobs[0];
 }
@@ -1431,6 +1435,11 @@ async function submitBatchPublish() {
 }
 
 function batchVideoCoverMeta(video: Row, index: number) {
+  const resultTitle = String(video.resultTitle || "").trim();
+  const resultTags = Array.isArray(video.resultTags) ? video.resultTags.map(String).filter(Boolean) : [];
+  if (resultTitle || resultTags.length) {
+    return { title: resultTitle || "标题未回传", coverText: resultTitle || "封面未回传", tags: resultTags };
+  }
   const model = String(video.productShort || "赛电");
   const pools = [
     { title: "上班来电话不用先摸手机", coverText: "抬腕操作 清晰直观", tags: [`#赛电${model}`, "#智能手表", "#健康关爱", "#血压监测", "#送爸妈"] },

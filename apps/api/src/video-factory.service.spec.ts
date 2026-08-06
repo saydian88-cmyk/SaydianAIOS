@@ -570,11 +570,12 @@ describe("VideoFactoryService model routing", () => {
     });
     prisma.videoRenderJob.upsert.mockResolvedValue({ id: "render-local" });
 
-    const result = await service.registerLocalMaster("plan-1", "asset-master", "task-1", "Codex执行器");
+    const result = await service.registerLocalMaster("plan-1", "asset-master", "task-1", "Codex执行器", "1-2");
 
     expect(result.id).toBe("render-local");
     expect(prisma.videoRenderJob.upsert).toHaveBeenCalledWith(expect.objectContaining({
       create: expect.objectContaining({
+        input: expect.objectContaining({ videoKey: "1-2" }),
         contentPlanId: "plan-1",
         status: "SUCCEEDED",
         renderer: "CODEX_LOCAL_FFMPEG",

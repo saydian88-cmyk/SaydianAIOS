@@ -287,6 +287,7 @@ function compileBatchCodexDirectFullVideoPrompt(project: Record<string, any>, br
     "每条成功视频必须回传其 videoKey、成片、封面、标题和标签；发布文案不是必填回传项。",
     "批量结果按 videoKey 独立回传。失败项必须写明 failureReason；已成功项必须保留并可审核，失败项仅单独重试。",
   ];
+  const additionalPrompt = String(batch.additionalPrompt || "").trim();
   const base = requirement
     ? requirement
     : [
@@ -298,7 +299,7 @@ function compileBatchCodexDirectFullVideoPrompt(project: Record<string, any>, br
       `每条视频使用不同 BGM：${batch.bgmVariety !== false ? "是（默认）" : "否"}`,
       `多使用几种音色、尽量不重复：${batch.voiceVariety !== false ? "是（默认）" : "否"}`,
       `同时生成封面和标题：${generateCoverTitle ? "是（每条视频标签至少 5 个）" : "否（封面标题在后续单独步骤生成）"}`,
-      `用户补充提示词：${String(batch.additionalPrompt || "").trim() || "（无，尽量给 AI 更多自由发挥空间）"}`,
+      ...(additionalPrompt ? [`用户补充提示词：${additionalPrompt}`] : []),
       "请在同一个任务内完成全部视频的脚本、素材匹配、剪辑和最终成片。内部脚本、素材匹配和剪辑由 Codex 自动完成，不回传系统；只回传总体进度和最终成品。无需脚本审核、无需素材补全确认，员工只审核最终成片。",
       "这是本地素材库直出模式：主画面只能读取本地已同步的“对应产品型号 + 视觉校验通过 + 可剪辑 VIDEO”清单；禁止使用其他型号、未校验素材、图片、音频或包装资源作为主镜头。各视频在脚本方向、开场、画面节奏上尽量错开，避免整批重复。包装资源只能用于 BGM、音效、贴纸、花字、字体和特效层。",
       "不得向系统回传中间脚本、镜头、素材匹配或素材绑定；完成时按批量清单回传每条视频的真实主成片路径、成片元数据、简短审核说明，以及任务整体批量清单。",

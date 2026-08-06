@@ -2673,7 +2673,7 @@ export class AiTaskCenterService implements OnModuleInit {
             return saved === path || fileName(saved) === fileName(path) || fileName(candidate.title) === fileName(path);
           });
           if (!output?.assetId) continue;
-          await this.videoFactory.registerLocalMaster(project.id, output.assetId, task.id, actor);
+          await this.videoFactory.registerLocalMaster(project.id, output.assetId, task.id, actor, text(item.videoKey));
           await this.prisma.aiTaskOutput.update({ where: { id: output.id }, data: {
             kind: "VIDEO_MASTER", contentPlanId: project.id, reviewStatus: "PENDING",
             metadata: json({ ...object(output.metadata), videoKey: text(item.videoKey), title: text(item.title), tags: strings(item.tags), batchStatus: "READY" }),
@@ -2684,7 +2684,7 @@ export class AiTaskCenterService implements OnModuleInit {
         const nextSignals = signals.map((signal) => signal.type === "VIDEO_FACTORY" ? {
           ...signal, brief: { ...object(signal.brief), batchDirect: { ...object(object(signal.brief).batchDirect), results: results.map((item) => ({
             videoKey: text(item.videoKey), status: text(item.status).toUpperCase() === "READY" ? "READY" : "FAILED",
-            failureReason: text(item.failureReason),
+            title: text(item.title), tags: strings(item.tags), coverFile: text(item.coverFile), failureReason: text(item.failureReason),
           })) } },
         } : signal);
         await this.prisma.contentPlan.update({ where: { id: project.id }, data: {

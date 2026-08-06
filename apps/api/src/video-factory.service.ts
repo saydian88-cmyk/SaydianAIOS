@@ -850,7 +850,7 @@ export class VideoFactoryService {
     });
   }
 
-  async registerLocalMaster(contentPlanId: string, assetId: string, taskId: string, actor: string) {
+  async registerLocalMaster(contentPlanId: string, assetId: string, taskId: string, actor: string, videoKey = "") {
     const asset = await this.prisma.asset.findUnique({ where: { id: assetId } });
     if (!asset) throw new NotFoundException("视频成品不存在");
     const renderJob = await this.prisma.videoRenderJob.upsert({
@@ -860,7 +860,7 @@ export class VideoFactoryService {
         contentPlanId,
         status: "SUCCEEDED",
         renderer: "CODEX_LOCAL_FFMPEG",
-        input: { source: "AI_TASK", taskId },
+        input: { source: "AI_TASK", taskId, ...(videoKey ? { videoKey } : {}) },
         output: { source: "CODEX_LOCAL", assetId },
         outputAssetId: assetId,
         outputPath: asset.storageUrl || asset.sourcePath,
