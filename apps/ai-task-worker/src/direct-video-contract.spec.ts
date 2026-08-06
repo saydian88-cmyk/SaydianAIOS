@@ -1,0 +1,43 @@
+import { describe, expect, it } from "vitest";
+import { assertCodexDirectMasterOutput } from "./direct-video-contract";
+
+const batchTask = {
+  task: {
+    type: "VIDEO",
+    input: {
+      batchCodexDirectFullVideo: true,
+      batchDirectInput: {
+        products: [{ model: "W8Ultra-R", count: 2 }, { model: "W8Ultra", count: 2 }],
+      },
+    },
+  },
+  execution: { mode: "FULL_VIDEO" },
+};
+
+describe("batch Codex direct-video result contract", () => {
+  it("accepts several masters and preserves a partial batch result", () => {
+    expect(() => assertCodexDirectMasterOutput({
+      summary: "2 completed, 2 failed",
+      outputFiles: [
+        { kind: "VIDEO_MASTER", path: "out/1-1.mp4" },
+        { kind: "VIDEO_MASTER", path: "out/2-1.mp4" },
+      ],
+      batchResults: [
+        { videoKey: "1-1", status: "READY", outputFile: "out/1-1.mp4", failureReason: "" },
+        { videoKey: "1-2", status: "FAILED", outputFile: "", failureReason: "render failed" },
+        { videoKey: "2-1", status: "READY", outputFile: "out/2-1.mp4", failureReason: "" },
+        { videoKey: "2-2", status: "FAILED", outputFile: "", failureReason: "render failed" },
+      ],
+    }, batchTask)).not.toThrow();
+  });
+
+  it("rejects a batch result that omits a requested video key", () => {
+    expect(() => assertCodexDirectMasterOutput({
+      summary: "only one result",
+      outputFiles: [{ kind: "VIDEO_MASTER", path: "out/1-1.mp4" }],
+      batchResults: [
+        { videoKey: "1-1", status: "READY", outputFile: "out/1-1.mp4", failureReason: "" },
+      ],
+    }, batchTask)).toThrow("batchResults");
+  });
+});
