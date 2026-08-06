@@ -33,6 +33,12 @@ export function shouldResumeValidatedResult(resumeCandidate: boolean, category?:
   return resumeCandidate && !requiresRenderedEvidenceReview(category);
 }
 
+export function hasExhaustedInternalRepairs(attempts: Record<string, number>, maximum: number) {
+  const total = Object.values(attempts)
+    .reduce((sum, attempt) => sum + Math.max(0, Number(attempt) || 0), 0);
+  return total >= Math.max(1, maximum);
+}
+
 export function classifyExecutionFailure(message: string): RepairDecision {
   const normalized = message.trim().replace(/\s+/g, " ").slice(0, 4_000);
   const matched = patterns.find(([, pattern]) => pattern.test(normalized));

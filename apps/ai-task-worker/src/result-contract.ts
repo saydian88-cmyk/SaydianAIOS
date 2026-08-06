@@ -53,7 +53,16 @@ export function openAiStrictSchema(value: unknown): unknown {
   const schema = Object.fromEntries(
     Object.entries(value).map(([key, item]) => [key, openAiStrictSchema(item)]),
   );
-  if (schema.type === "object") schema.additionalProperties = false;
+  if (schema.type === "object") {
+    schema.additionalProperties = false;
+    // OpenAI strict JSON Schema requires every declared object property to
+    // appear in `required`; optional values must instead be represented with
+    // a nullable schema. Keeping a subset here makes the request fail before
+    // Codex can start the downstream Skill.
+    if (schema.properties && typeof schema.properties === "object" && !Array.isArray(schema.properties)) {
+      schema.required = Object.keys(schema.properties);
+    }
+  }
   return schema;
 }
 

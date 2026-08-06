@@ -43,6 +43,19 @@ describe("unified result contract", () => {
     expect(strict.properties.outputFiles.items.properties.metadata.additionalProperties).toBe(false);
   });
 
+  it("requires every declared property for OpenAI strict schemas", () => {
+    const strict = openAiStrictSchema({
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        groups: { type: "array", items: { type: "string" } },
+      },
+      required: ["title"],
+    }) as Record<string, any>;
+
+    expect(strict.required).toEqual(["title", "groups"]);
+  });
+
   it("retries a schema-invalid result and accepts the corrected result", async () => {
     const execute = vi.fn()
       .mockResolvedValueOnce({ summary: 1, outputFiles: [] })

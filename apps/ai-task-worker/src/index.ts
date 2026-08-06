@@ -33,6 +33,7 @@ import {
 import { availableClaimRouteKeys, videoRouteKeys } from "./worker-utils";
 import {
   classifyExecutionFailure,
+  hasExhaustedInternalRepairs,
   repairHyperFramesRuntime,
   requiresRenderedEvidenceReview,
   shouldResumeValidatedResult,
@@ -111,6 +112,9 @@ async function attemptExecutionRepair(workspace: string, message: string) {
   const decision = classifyExecutionFailure(message);
   if (!decision.recoverable) return { repaired: false, decision, exhausted: false };
   const repairState = await loadExecutionRepairState(workspace);
+  if (hasExhaustedInternalRepairs(repairState.attempts, maxInternalRepairs)) {
+    return { repaired: false, decision, exhausted: true };
+  }
   const previousAttempts = Number(repairState.attempts[decision.fingerprint] || 0);
   if (previousAttempts >= maxInternalRepairs) return { repaired: false, decision, exhausted: true };
 

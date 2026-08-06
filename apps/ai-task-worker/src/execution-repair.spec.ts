@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import * as repair from "./execution-repair";
 import {
   classifyExecutionFailure,
   requiresRenderedEvidenceReview,
@@ -42,5 +43,15 @@ describe("classifyExecutionFailure", () => {
   it("does not reuse a saved result while evidence review is pending", () => {
     expect(shouldResumeValidatedResult(true, "RENDER_EVIDENCE")).toBe(false);
     expect(shouldResumeValidatedResult(true, "TRANSIENT_TRANSFER")).toBe(true);
+  });
+
+  it("caps internal recovery across changing failure fingerprints", () => {
+    const exhausted = (repair as Record<string, unknown>).hasExhaustedInternalRepairs;
+    expect(exhausted).toBeTypeOf("function");
+    expect((exhausted as (attempts: Record<string, number>, maximum: number) => boolean)({
+      first: 1,
+      second: 1,
+      third: 1,
+    }, 3)).toBe(true);
   });
 });
