@@ -96,6 +96,32 @@ describe("skill task router", () => {
     });
   });
 
+  it("accepts legacy batch-image task routes after normalizing their creation mode", () => {
+    expect(routeTask({
+      task: {
+        type: "IMAGE",
+        sourceType: "IMAGE_PROJECT",
+        input: {
+          executionMode: "BATCH_IMAGE_POST",
+          imageProjectId: "image-project-1",
+          taskRoute: {
+            version: 1,
+            domain: "IMAGE_PROJECT",
+            projectMode: "IMAGE_POST",
+            stage: "IMAGE_POST",
+            executionMode: "BATCH_IMAGE_POST",
+            requiredSkill: "saidian-douyin-image-posts",
+          },
+        },
+      },
+      execution: { mode: "IMAGE_POST", strategy: "CODEX_SKILL", requiredSkill: "saidian-douyin-image-posts" },
+    }, { ...process.env, CODEX_HOME: routeOnlyCodexHome })).toMatchObject({
+      key: "saidian-ai-task-dispatcher",
+      executionMode: "IMAGE_POST",
+      downstreamSkillName: "saidian-douyin-image-posts",
+    });
+  });
+
   it("routes an image project when legacy rows only retain the project signal in input", () => {
     expect(routeTask({
       task: { type: "IMAGE", input: { imageProjectId: "image-project-1", executionMode: "IMAGE_POST" } },

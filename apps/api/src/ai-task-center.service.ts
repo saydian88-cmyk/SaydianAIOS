@@ -861,7 +861,7 @@ export class AiTaskCenterService implements OnModuleInit {
     const failureReason = text(task.failureReason);
     const isLegacyImageRoutingFailure = task.sourceType === "IMAGE_PROJECT"
       && task.type === "IMAGE"
-      && /requiredSkill|fixed route|固定路由|imagegen/i.test(failureReason);
+      && /requiredSkill|fixed route|固定路由|imagegen|taskRoute|execution envelope|TASK_ROUTE_CONFLICT/i.test(failureReason);
     // Two recovery attempts may already have been consumed by a stale worker
     // that was still running the pre-IMAGE_POST router. Keep one final bounded
     // attempt so the repaired envelope can be claimed by the upgraded worker.
@@ -887,6 +887,11 @@ export class AiTaskCenterService implements OnModuleInit {
           executionMode: "IMAGE_POST",
           sourceType: "IMAGE_PROJECT",
           imageProjectId: text(taskInput.imageProjectId) || text(task.sourceId),
+          taskRoute: aiTaskRoute({
+            type: task.type,
+            sourceType: "IMAGE_PROJECT",
+            input: { ...taskInput, executionMode: "IMAGE_POST", sourceType: "IMAGE_PROJECT" },
+          }),
           imageProjectRoutingRecoveryAttemptedAt: new Date().toISOString(),
           imageProjectRoutingRecoveryAttempts: priorImageRoutingRecoveryAttempts + 1,
         })

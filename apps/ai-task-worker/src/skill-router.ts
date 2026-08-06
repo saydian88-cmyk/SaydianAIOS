@@ -142,7 +142,12 @@ export function routeTask(taskPackage: JsonRecord, env: NodeJS.ProcessEnv = proc
   const routeDomain = String(taskRoute.domain || "").trim().toUpperCase();
   const routeProjectMode = String(taskRoute.projectMode || "").trim().toUpperCase();
   const routeStage = String(taskRoute.stage || "").trim().toUpperCase();
-  const routeExecutionMode = String(taskRoute.executionMode || "").trim().toUpperCase();
+  const routeExecutionModeRaw = String(taskRoute.executionMode || "").trim().toUpperCase();
+  // Older batch-image tasks persisted their creation mode in taskRoute. Both
+  // names represent the same shared IMAGE_POST runner contract.
+  const routeExecutionMode = routeExecutionModeRaw === "BATCH_IMAGE_POST"
+    ? "IMAGE_POST"
+    : routeExecutionModeRaw;
   const routeRequiredSkill = String(taskRoute.requiredSkill || "").trim();
   if (Object.keys(taskRoute).length) {
     if (routeVersion !== 1 || !routeDomain || !routeProjectMode || !routeStage || !routeExecutionMode || !routeRequiredSkill) {
