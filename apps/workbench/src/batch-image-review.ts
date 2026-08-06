@@ -22,3 +22,7 @@ export function batchImageReviewGroup(project: Record<string, any> | undefined, 
     ? { status: "READY", groupKey, title, publishCopy, tags, pages }
     : { status: "MISSING", groupKey, title, publishCopy, tags, pages };
 }
+
+export function batchImagePreviewPages(project: Record<string, any> | undefined, group: Record<string, unknown>) {
+  return batchImageReviewGroup(project, group).pages;
+}

@@ -406,22 +406,30 @@ export class WorkbenchController {
     return variants.map((variant) => {
       const metadata = object(variant.metadata);
       if (!Array.isArray(metadata.pages)) return variant;
+      const withDownloadUrl = (rawPage: unknown) => {
+        const page = object(rawPage);
+        const storedUrl = String(page.imageUrl || page.storageUrl || page.fileUrl || page.url || "").trim();
+        const objectKeyFromUrl = /^oss:\/\/[^/]+\/(.+)$/u.exec(storedUrl)?.[1] || "";
+        const objectKey = objectKeyByAssetId.get(String(page.imageAssetId || "").trim()) || objectKeyFromUrl;
+        if (!objectKey) return page;
+        try {
+          return { ...page, downloadUrl: this.ossStorage.signedDownloadUrl(objectKey) };
+        } catch {
+          return page;
+        }
+      };
+      const groups = Array.isArray(metadata.groups)
+        ? metadata.groups.map((rawGroup: unknown) => {
+          const group = object(rawGroup);
+          return { ...group, pages: Array.isArray(group.pages) ? group.pages.map(withDownloadUrl) : [] };
+        })
+        : undefined;
       return {
         ...variant,
         metadata: {
           ...metadata,
-          pages: metadata.pages.map((rawPage: unknown) => {
-            const page = object(rawPage);
-            const storedUrl = String(page.imageUrl || page.storageUrl || page.fileUrl || page.url || "").trim();
-            const objectKeyFromUrl = /^oss:\/\/[^/]+\/(.+)$/u.exec(storedUrl)?.[1] || "";
-            const objectKey = objectKeyByAssetId.get(String(page.imageAssetId || "").trim()) || objectKeyFromUrl;
-            if (!objectKey) return page;
-            try {
-              return { ...page, downloadUrl: this.ossStorage.signedDownloadUrl(objectKey) };
-            } catch {
-              return page;
-            }
-          }),
+          pages: metadata.pages.map(withDownloadUrl),
+          ...(groups ? { groups } : {}),
         },
       };
     });
@@ -1352,7 +1360,7 @@ export class WorkbenchController {
     });
     if (!project) throw new ForbiddenException("图文项目不存在或无权查看");
     let aiTask = await this.prisma.aiTask.findFirst({ where: { sourceType: "IMAGE_PROJECT", sourceId: id }, orderBy: { createdAt: "desc" }, include: { outputs: { orderBy: { createdAt: "desc" } } } });
-    if (aiTask && project.productionStage === "IMAGE_GENERATING" && String((aiTask.input as Record<string, unknown>)?.executionMode || "").toUpperCase() === "BATCH_IMAGE_POST") {
+    if (aiTask && String((aiTask.input as Record<string, unknown>)?.executionMode || "").toUpperCase() === "BATCH_IMAGE_POST" && aiTask.status === "PENDING_REVIEW") {
       await this.aiTasks.reconcileBatchImageTask(aiTask.id);
       project = await this.prisma.contentPlan.findFirst({
         where: { id, kind: "SHORT_POST", assignedEmployeeId: employee.employeeId, productionStage: { not: "IMAGE_ARCHIVED" } },

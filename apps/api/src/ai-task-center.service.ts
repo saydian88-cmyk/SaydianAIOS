@@ -3098,16 +3098,20 @@ export class AiTaskCenterService implements OnModuleInit {
         const batchGroupValue = object(input.batchImageDirect).groups;
         const batchGroups: JsonRecord[] = Array.isArray(batchGroupValue) ? batchGroupValue.map(object) : [];
         const returnedGroups: JsonRecord[] = Array.isArray(imagePost.groups) ? imagePost.groups.map(object) : [];
-        const groups: Array<{ groupKey: string; status: string; title: string; publishCopy: string; tags: string[]; pages: JsonRecord[] }> = batchGroups.map((expected: JsonRecord, groupIndex: number) => {
+        let batchPageOffset = 0;
+        const groups: Array<{ groupKey: string; status: string; title: string; publishCopy: string; tags: string[]; pages: JsonRecord[] }> = batchGroups.map((expected: JsonRecord) => {
           const returned = returnedGroups.find((item) => text(item.groupKey) === text(expected.groupKey));
           if (!returned) return { groupKey: text(expected.groupKey), status: "MISSING", pages: [], tags: [], title: "", publishCopy: "" };
+          const returnedPages = Array.isArray(returned.pages) ? returned.pages : [];
+          const pages = bindPages(returnedPages, batchPageOffset);
+          batchPageOffset += returnedPages.length;
           return {
             groupKey: text(expected.groupKey),
             status: text(returned.status).toUpperCase() === "FAILED" ? "FAILED" : "READY",
             title: text(returned.title || returned.postTitle || returned.topic),
             publishCopy: text(returned.publishCopy || returned.body || returned.copy || returned.caption),
             tags: strings(returned.tags || returned.hashtags || returned.labels),
-            pages: bindPages(returned.pages, groupIndex),
+            pages,
           };
         });
         const pages: JsonRecord[] = groups.length ? groups.flatMap((group) => group.pages) : bindPages(imagePost.pages);

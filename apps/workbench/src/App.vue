@@ -16,7 +16,7 @@ import {
   VideoCamera,
 } from "@element-plus/icons-vue";
 import { api, clearToken, getToken, post, setToken, uploadWithProgress } from "./api";
-import { batchImageReviewGroup } from "./batch-image-review";
+import { batchImagePreviewPages, batchImageReviewGroup } from "./batch-image-review";
 import TaskRichTextContent from "./components/TaskRichTextContent.vue";
 import TaskRichTextEditor from "./components/TaskRichTextEditor.vue";
 
@@ -376,6 +376,7 @@ const activeImageProjectId = ref("");
 const taskImageProjectDetail = ref<Row>({});
 const imageProjectPreviewVisible = ref(false);
 const imageProjectPreviewIndex = ref(0);
+const batchImagePreviewPageSet = ref<Array<Row>>([]);
 const reviewingImageProject = ref(false);
 const downloadingImageProject = ref(false);
 const imageProjectForm = reactive({
@@ -971,10 +972,19 @@ function imageProjectPageUrl(page: Row) {
   return String(page.downloadUrl || page.imageUrl || page.fileUrl || page.storageUrl || page.url || "");
 }
 
-const imageProjectPreviewPages = computed(() => imageProjectPages(taskImageProjectDetail.value));
+const imageProjectPreviewPages = computed(() => batchImagePreviewPageSet.value.length ? batchImagePreviewPageSet.value : imageProjectPages(taskImageProjectDetail.value));
 const currentImageProjectPreviewPage = computed(() => imageProjectPreviewPages.value[imageProjectPreviewIndex.value]);
 
 function openImageProjectPreview() {
+  batchImagePreviewPageSet.value = [];
+  imageProjectPreviewIndex.value = 0;
+  imageProjectPreviewVisible.value = true;
+}
+
+function openBatchImagePreview(group: Row) {
+  const pages = batchImagePreviewPages(taskImageProjectDetail.value, group) as Array<Row>;
+  if (!pages.length) return ElMessage.warning("该组暂无可预览图文");
+  batchImagePreviewPageSet.value = pages;
   imageProjectPreviewIndex.value = 0;
   imageProjectPreviewVisible.value = true;
 }
@@ -4832,7 +4842,7 @@ onBeforeUnmount(() => {
                         </div>
                         <div v-else class="copy-line"><div class="copy-title">未回传</div><div class="note">请重新执行或退回该组后再审核。</div></div>
                         <div class="group-actions">
-                          <el-button size="small" :disabled="batchImageReviewResult(taskImageProjectDetail, group).status !== 'READY'" @click="openImageProjectPreview">预览图文</el-button>
+                          <el-button size="small" :disabled="batchImageReviewResult(taskImageProjectDetail, group).status !== 'READY'" @click="openBatchImagePreview(group)">预览图文</el-button>
                           <el-button size="small" :disabled="batchImageReviewResult(taskImageProjectDetail, group).status !== 'READY'" @click="copyTaskContent(batchImageReviewResult(taskImageProjectDetail, group).title + '\n' + batchImageReviewResult(taskImageProjectDetail, group).tags.map((tag: string) => '#' + tag).join(' '), '标题与标签')">复制标题标签</el-button>
                           <el-button size="small" :disabled="batchImageReviewResult(taskImageProjectDetail, group).status !== 'READY'" @click="copyTaskContent(batchImageReviewResult(taskImageProjectDetail, group).publishCopy, '发布文案')">复制文案</el-button>
                           <el-button size="small" type="danger" plain @click="rejectBatchImage(group)">退回</el-button>
