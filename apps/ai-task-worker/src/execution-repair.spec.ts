@@ -19,6 +19,14 @@ describe("classifyExecutionFailure", () => {
     expect(result.category).toBe("HYPERFRAMES_RUNTIME");
   });
 
+  it("keeps Codex model-manager shutdown timeouts inside the runner", () => {
+    const result = classifyExecutionFailure(
+      "ERROR codex_models_manager::manager: failed to refresh available models: timeout waiting for child process to exit",
+    );
+    expect(result.recoverable).toBe(true);
+    expect(result.category).toBe("CODEX_RUNTIME");
+  });
+
   it("does not hide a missing business input", () => {
     const result = classifyExecutionFailure("Required reference video was not supplied by the user");
     expect(result.recoverable).toBe(false);

@@ -20,7 +20,7 @@ export interface RepairDecision {
 const patterns: Array<[RepairCategory, RegExp]> = [
   ["RENDER_EVIDENCE", /validate_rendered_composition|reviewed_from_render|composition-qc|render evidence|production-plan|shot-plan|validator|ffmpeg|ffprobe/i],
   ["HYPERFRAMES_RUNTIME", /gsap|hyperframes/i],
-  ["CODEX_RUNTIME", /codex.*(?:idle timeout|executable|spawn|interrupted)|(?:idle timeout|executable|spawn).*codex/i],
+  ["CODEX_RUNTIME", /codex.*(?:idle timeout|executable|spawn|interrupted|models?_manager|refresh available models|timeout waiting for child process)|(?:idle timeout|executable|spawn|timeout waiting for child process).*codex/i],
   ["RESULT_CONTRACT", /result\.json|schema|must have required property|additional properties|video_master/i],
   ["TRANSIENT_TRANSFER", /upload|oss|callback|heartbeat|fetch failed|econnreset|etimedout|http 5\d\d|statuscode["':\s]*5\d\d|5\d\d[^\n]{0,120}internal server error/i],
 ];
