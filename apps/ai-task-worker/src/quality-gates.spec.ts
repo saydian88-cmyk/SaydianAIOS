@@ -18,4 +18,15 @@ describe("classifyQualityGate", () => {
       "ERROR: VIDEO_MASTER file is missing",
     )).toEqual({ disposition: "BLOCKING" });
   });
+
+  it("returns an employee reminder when a real deliverable already exists", () => {
+    expect(classifyQualityGate(
+      "validate_hard_requirements.py",
+      "ERROR: final-folder-clean is missing",
+      true,
+    )).toMatchObject({
+      disposition: "WARNING",
+      warning: { validator: "validate_hard_requirements.py" },
+    });
+  });
 });

@@ -90,6 +90,10 @@ function object(value: unknown): JsonRecord {
   return value && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : {};
 }
 
+export function shouldSendUploadedFailureToReview(uploadedOutputCount: number) {
+  return uploadedOutputCount > 0;
+}
+
 /**
  * Resolve only business routes that are unambiguous from structured task data.
  * Titles and instructions are deliberately excluded: they are display/creative
@@ -874,8 +878,13 @@ export class AiTaskCenterService implements OnModuleInit {
 
   async retry(id: string, actor: string) {
     const task = await this.ensureTask(id);
-    if (!["FAILED", "RETURNED", "RETRY"].includes(task.status)) throw new BadRequestException("任务当前不能重试");
+    const retryingReviewWarning = task.status === "PENDING_REVIEW" && Boolean(text(task.failureReason));
+    if (!["FAILED", "RETURNED", "RETRY"].includes(task.status) && !retryingReviewWarning) throw new BadRequestException("任务当前不能重试");
     const taskInput = object(task.input);
+    const uploadedOutputCount = retryingReviewWarning
+      ? await this.prisma.aiTaskOutput.count({ where: { aiTaskId: id } })
+      : 0;
+    const isUploadedOutputRecovery = retryingReviewWarning && shouldSendUploadedFailureToReview(uploadedOutputCount);
     const isDirectOutputTask = task.type === "VIDEO"
       && text(taskInput.executionMode).toUpperCase() === "FULL_VIDEO"
       && (taskInput.codexDirectFullVideo === true || taskInput.referenceDirectFullVideo === true);
@@ -902,7 +911,7 @@ export class AiTaskCenterService implements OnModuleInit {
     // attempt so the repaired envelope can be claimed by the upgraded worker.
     const isImageProjectRoutingRecovery = isLegacyImageRoutingFailure
       && priorImageRoutingRecoveryAttempts < 3;
-    if (task.retryCount >= task.maxRetries && !isDirectOutputRecovery && !isImageProjectRoutingRecovery) {
+    if (task.retryCount >= task.maxRetries && !isDirectOutputRecovery && !isImageProjectRoutingRecovery && !isUploadedOutputRecovery) {
       throw new BadRequestException("任务已达到最大重试次数");
     }
     const recoveryInput = isDirectOutputRecovery
@@ -939,10 +948,12 @@ export class AiTaskCenterService implements OnModuleInit {
         // MP4 was already rendered but could not be registered by the API.
         // Keep the exhausted count intact: a later worker failure remains
         // terminal, so this never turns into unlimited retries.
-        ...(isDirectOutputRecovery || isImageProjectRoutingRecovery ? {} : { retryCount: { increment: 1 } }),
+        ...(isDirectOutputRecovery || isImageProjectRoutingRecovery || isUploadedOutputRecovery ? {} : { retryCount: { increment: 1 } }),
         ...(recoveryInput ? { input: recoveryInput } : {}),
         progress: 0,
-        progressMessage: isDirectOutputRecovery
+        progressMessage: isUploadedOutputRecovery
+          ? "正在续跑已回传成品的校验或对接步骤，不会重新生成内容"
+          : isDirectOutputRecovery
           ? "正在恢复已生成成片并重新登记，不会重新剪辑"
           : isImageProjectRoutingRecovery
             ? "正在使用修复后的图文制作路由重新执行"
@@ -956,7 +967,9 @@ export class AiTaskCenterService implements OnModuleInit {
     await this.syncSourceOpsTask(
       updated,
       "RETRY",
-      isDirectOutputRecovery
+      isUploadedOutputRecovery
+        ? "正在续跑已回传成品的校验或对接步骤，不会重新生成内容"
+        : isDirectOutputRecovery
         ? "正在恢复已生成成片并重新登记，不会重新剪辑"
         : isImageProjectRoutingRecovery
           ? "正在使用修复后的图文制作路由重新执行"
@@ -964,15 +977,17 @@ export class AiTaskCenterService implements OnModuleInit {
     );
     await this.audit(
       actor,
-      isDirectOutputRecovery
+      isUploadedOutputRecovery
+        ? "AI_TASK_UPLOADED_OUTPUT_RECOVERY"
+        : isDirectOutputRecovery
         ? "AI_TASK_OUTPUT_REGISTRATION_RECOVERY"
         : isImageProjectRoutingRecovery
           ? "AI_TASK_IMAGE_ROUTING_RECOVERY"
           : "AI_TASK_RETRY",
       id,
       {
-        retryCount: isDirectOutputRecovery || isImageProjectRoutingRecovery ? task.retryCount : task.retryCount + 1,
-        recoveryOnly: isDirectOutputRecovery || isImageProjectRoutingRecovery,
+        retryCount: isDirectOutputRecovery || isImageProjectRoutingRecovery || isUploadedOutputRecovery ? task.retryCount : task.retryCount + 1,
+        recoveryOnly: isDirectOutputRecovery || isImageProjectRoutingRecovery || isUploadedOutputRecovery,
         imageProjectRoutingRecovery: isImageProjectRoutingRecovery,
       },
     );
@@ -2324,26 +2339,30 @@ export class AiTaskCenterService implements OnModuleInit {
       orderBy: { attemptNo: "desc" },
     });
     const nextRetry = task.retryCount + 1;
-    const terminal = nextRetry >= task.maxRetries;
+    const uploadedOutputCount = await this.prisma.aiTaskOutput.count({ where: { aiTaskId: id } });
+    const reviewUploadedFailure = shouldSendUploadedFailureToReview(uploadedOutputCount);
+    const terminal = !reviewUploadedFailure && nextRetry >= task.maxRetries;
+    const status: AiTaskStatus = reviewUploadedFailure ? "PENDING_REVIEW" : terminal ? "FAILED" : "RETRY";
     const message = text(body.error || body.message) || "Codex执行失败";
     await this.prisma.$transaction([
       this.prisma.aiTask.update({
         where: { id },
         data: {
-          status: terminal ? "FAILED" : "RETRY",
+          status,
           retryCount: nextRetry,
           failureReason: message,
-          progressMessage: terminal ? "任务执行失败" : "等待自动重试",
+          progress: reviewUploadedFailure ? 100 : task.progress,
+          progressMessage: reviewUploadedFailure ? "成品已回传，等待员工审核" : terminal ? "任务执行失败" : "等待自动重试",
           lockedAt: null,
           lockedBy: null,
           heartbeatAt: null,
-          finishedAt: terminal ? new Date() : null,
+          finishedAt: terminal || reviewUploadedFailure ? new Date() : null,
         },
       }),
       this.prisma.aiTaskAttempt.updateMany({
         where: { aiTaskId: id, workerNodeId: node.id, status: "RUNNING" },
         data: {
-          status: "FAILED",
+          status: reviewUploadedFailure ? "SUCCEEDED" : "FAILED",
           failureReason: message,
           exitCode: number(body.exitCode),
           logs: json({ ...object(activeAttempt?.logs), ...object(body.logs) }),
@@ -2353,18 +2372,25 @@ export class AiTaskCenterService implements OnModuleInit {
       this.prisma.aiWorkerNode.update({
         where: { id: node.id },
         data: {
-          status: "ERROR",
+          status: reviewUploadedFailure ? "ONLINE" : "ERROR",
           currentTaskId: null,
           currentSkill: null,
           lastHeartbeatAt: new Date(),
-          lastError: message,
+          lastError: reviewUploadedFailure ? null : message,
         },
       }),
     ]);
     const contentPlanId = text(object(task.input).existingContentPlanId);
     if (contentPlanId && terminal) await this.videoFactory.syncProjectTaskState(contentPlanId, "FAILED");
-    const employeeMessage = terminal ? "AI执行未完成，请在任务详情中查看处理建议。" : "AI执行暂未完成，系统正在自动重试。";
-    const linkedOpsTaskId = await this.syncSourceOpsTask(task, terminal ? "FAILED" : "RETRY", employeeMessage);
+    const employeeMessage = reviewUploadedFailure
+      ? "成品已回传，但校验或对接出现提醒，请在任务详情中查看问题后决定是否重试。"
+      : terminal
+        ? "AI执行未完成，请在任务详情中查看处理建议。"
+        : "AI执行暂未完成，系统正在自动重试。";
+    const linkedOpsTaskId = await this.syncSourceOpsTask(task, status, employeeMessage);
+    if (reviewUploadedFailure && task.reviewerEmployeeId) {
+      await this.notify(id, task.reviewerEmployeeId, "AI_TASK_REVIEW", "成品已回传，请留意校验或对接提醒", message, linkedOpsTaskId);
+    }
     if (terminal && task.ownerEmployeeId) {
       await this.notify(id, task.ownerEmployeeId, "AI_TASK_FAILED", "AI任务执行未完成", employeeMessage, linkedOpsTaskId);
     }

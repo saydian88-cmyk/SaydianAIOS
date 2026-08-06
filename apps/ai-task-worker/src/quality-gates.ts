@@ -8,9 +8,9 @@ export type QualityGate =
   | { disposition: "BLOCKING" }
   | { disposition: "WARNING"; warning: QualityWarning };
 
-export function classifyQualityGate(script: string, detail: string): QualityGate {
+export function classifyQualityGate(script: string, detail: string, hasDeliverable = false): QualityGate {
   const value = `${script}\n${detail}`;
-  if (/validate_rendered_composition|reviewed_from_render|contrast|timeline_track_too_dense|transition-qc/i.test(value)) {
+  if (hasDeliverable || /validate_rendered_composition|reviewed_from_render|contrast|timeline_track_too_dense|transition-qc/i.test(value)) {
     return {
       disposition: "WARNING",
       warning: {

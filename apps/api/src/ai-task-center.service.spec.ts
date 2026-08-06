@@ -9,6 +9,7 @@ import {
   aiTaskTargetNodeCode,
   runnerCanClaimTask,
   runnerTaskTypeCapabilities,
+  shouldSendUploadedFailureToReview,
   videoScriptOutputMetadata,
 } from "./ai-task-center.service";
 
@@ -58,6 +59,11 @@ function serviceWith(overrides: Record<string, unknown> = {}) {
 }
 
 describe("AiTaskCenterService", () => {
+  it("sends a task with uploaded outputs to employee review instead of terminal failure", () => {
+    expect(shouldSendUploadedFailureToReview(1)).toBe(true);
+    expect(shouldSendUploadedFailureToReview(0)).toBe(false);
+  });
+
   it("selects only terminal tasks unchanged for at least three days for cleanup", async () => {
     const findMany = vi.fn().mockResolvedValue([]);
     const { service } = serviceWith({ aiTask: { findMany } });

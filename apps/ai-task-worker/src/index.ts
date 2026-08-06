@@ -1857,6 +1857,11 @@ async function validateOutputArtifacts(result: JsonRecord, workspace: string) {
   return result;
 }
 
+function hasReviewableDeliverable(result: JsonRecord) {
+  return Array.isArray(result.outputFiles)
+    && result.outputFiles.map(record).some((item) => Boolean(String(item.path || "").trim()));
+}
+
 async function verifyImagePostSkillRuntime(taskPackageValue: JsonRecord, detectedSkill: DetectedSkill) {
   if (!isImagePostProjectTask(taskPackageValue)) return;
   if (detectedSkill.key !== "saidian-ai-task-dispatcher") {
@@ -2447,7 +2452,16 @@ async function execute(claimed: JsonRecord) {
       await writeJsonAtomic(join(workspace, "result.json"), result);
     }
 
-    const qualityWarnings = await validateMandatoryVideoEvidence(packaged, workspace, detectedSkill);
+    let qualityWarnings: QualityWarning[] = [];
+    try {
+      qualityWarnings = await validateMandatoryVideoEvidence(packaged, workspace, detectedSkill);
+    } catch (error) {
+      const summary = error instanceof Error ? error.message : String(error);
+      const gate = classifyQualityGate("mandatory-delivery-validation", summary, hasReviewableDeliverable(result));
+      if (gate.disposition === "BLOCKING") throw error;
+      qualityWarnings = [gate.warning];
+      await appendExecutionLog(workspace, "QUALITY_WARNING", gate.warning);
+    }
     if (qualityWarnings.length) {
       result.qualityWarnings = appendQualityWarning(
         Array.isArray(result.qualityWarnings) ? result.qualityWarnings as QualityWarning[] : [],
