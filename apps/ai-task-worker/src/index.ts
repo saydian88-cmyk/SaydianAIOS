@@ -799,7 +799,7 @@ function outputSchema(
               title: { type: "string" },
               publishCopy: { type: "string" },
               tags: { type: "array", items: { type: "string" } },
-              groups: { type: "array", items: { type: "object", additionalProperties: false, properties: { groupKey: { type: "string" }, title: { type: "string" }, publishCopy: { type: "string" }, tags: { type: "array", items: { type: "string" } }, pages: { type: "array", minItems: 1, items: { type: "object", additionalProperties: false, properties: { pageNo: { type: "number" }, title: { type: "string" }, copy: { type: "string" }, outputFile: { type: "string" } }, required: ["pageNo", "title", "copy", "outputFile"] } } }, required: ["groupKey", "title", "publishCopy", "tags", "pages"] } },
+              groups: { type: "array", items: { type: "object", additionalProperties: false, properties: { groupKey: { type: "string" }, title: { type: "string" }, publishCopy: { type: "string" }, tags: { type: "array", items: { type: "string" } }, pages: { type: "array", minItems: 5, items: { type: "object", additionalProperties: false, properties: { pageNo: { type: "number" }, title: { type: "string" }, copy: { type: "string" }, outputFile: { type: "string" } }, required: ["pageNo", "title", "copy", "outputFile"] } } }, required: ["groupKey", "title", "publishCopy", "tags", "pages"] } },
               pages: {
                 type: "array",
                 minItems: 1,

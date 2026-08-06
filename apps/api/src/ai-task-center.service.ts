@@ -3071,6 +3071,12 @@ export class AiTaskCenterService implements OnModuleInit {
           include: { asset: { select: { storageUrl: true } } },
         });
         const outputFileName = (value: string) => value.replace(/\\/g, "/").split("/").pop() || value;
+        const normalizePublicCopy = (value: unknown) => text(value)
+          .replace(/\\\\r\\\\n/g, "\n")
+          .replace(/\\\\n|\\\\r/g, "\n")
+          .replace(/\\\\t/g, "\t")
+          .replace(/\r\n?/g, "\n")
+          .trim();
         const claimedImageOutputIds = new Set<string>();
         const outputForPage = (page: JsonRecord, index: number) => {
           const requestedPath = text(page.outputFile || page.file || page.filePath || page.path);
@@ -3092,6 +3098,7 @@ export class AiTaskCenterService implements OnModuleInit {
             const output = outputForPage(page, index);
             return {
               ...page,
+              copy: normalizePublicCopy(page.copy || page.description),
               imageUrl: text(output?.url || output?.asset?.storageUrl),
               imageAssetId: text(output?.assetId),
               outputFile: text(page.outputFile || page.file || page.filePath || object(output?.metadata).workspaceOutputPath),
@@ -3108,19 +3115,19 @@ export class AiTaskCenterService implements OnModuleInit {
           const returnedPages = Array.isArray(returned.pages) ? returned.pages : [];
           const pages = bindPages(returnedPages, batchPageOffset);
           batchPageOffset += returnedPages.length;
-          const ready = pages.length > 0 && pages.every((page) => Boolean(text(page.imageAssetId)));
+          const ready = pages.length >= 5 && pages.every((page) => Boolean(text(page.imageAssetId)));
           return {
             groupKey: text(expected.groupKey),
             status: text(returned.status).toUpperCase() === "FAILED" || !ready ? "FAILED" : "READY",
             title: text(returned.title || returned.postTitle || returned.topic),
-            publishCopy: text(returned.publishCopy || returned.body || returned.copy || returned.caption),
+            publishCopy: normalizePublicCopy(returned.publishCopy || returned.body || returned.copy || returned.caption),
             tags: strings(returned.tags || returned.hashtags || returned.labels),
             pages,
           };
         });
         const pages: JsonRecord[] = groups.length ? groups.flatMap((group) => group.pages) : bindPages(imagePost.pages);
         const title = text(imagePost.title || imagePost.postTitle || imagePost.topic) || groups.find((group) => group.title)?.title || plan.topic;
-        const publishCopy = text(imagePost.publishCopy || imagePost.body || imagePost.copy || imagePost.caption) || groups.find((group) => group.publishCopy)?.publishCopy || "";
+        const publishCopy = normalizePublicCopy(imagePost.publishCopy || imagePost.body || imagePost.copy || imagePost.caption) || groups.find((group) => group.publishCopy)?.publishCopy || "";
         const tags = strings(imagePost.tags || imagePost.hashtags || imagePost.labels).length ? strings(imagePost.tags || imagePost.hashtags || imagePost.labels) : groups.flatMap((group) => group.tags);
         if ((!groups.length && !pages.length && !title) || (batchGroups.length && !groups.some((group) => group.status === "READY" && group.pages.length && group.title))) {
           return { status: "WAITING_INPUT" as AiTaskStatus, message: "图文制作任务未返回可审核图文页和标题" };

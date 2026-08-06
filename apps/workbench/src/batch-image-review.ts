@@ -19,7 +19,7 @@ export function batchImageReviewGroup(project: Record<string, any> | undefined, 
     ? variant.metadata.groups.filter((item: Record<string, unknown>) => String(item.groupKey || "") !== groupKey)
     : [];
   const pageSources = new Set(pages.map((page: Record<string, unknown>) => String(page.imageAssetId || page.imageUrl || page.downloadUrl || "").trim()).filter(Boolean));
-  const hasRealPages = pages.length > 0 && pageSources.size === pages.length;
+  const hasRealPages = pages.length >= 5 && pageSources.size === pages.length;
   const reused = otherGroups.some((other: Record<string, unknown>) => Array.isArray(other.pages)
     && other.pages.some((page: Record<string, unknown>) => pageSources.has(String(page.imageAssetId || page.imageUrl || page.downloadUrl || "").trim())));
   const title = String(stored.title || "").trim();

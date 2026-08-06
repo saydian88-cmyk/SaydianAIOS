@@ -66,6 +66,6 @@ export function directSingleMasterFinalExemptions() {
 
 export function imagePostGroupsInstruction(groupCount: number) {
   return groupCount > 0
-    ? "This is a batch image project. Return imagePost.groups with one complete result per groupKey in batchImageDirect.groups."
+    ? "This is a batch image project. Return imagePost.groups with one complete result per groupKey in batchImageDirect.groups. Each group must contain at least five distinct real output pages: one cover and at least four inner pages. Every page must point to a different outputFiles file, and no file may be reused by another page or group. Write publishCopy as a Xiaohongshu-style note with 120-260 Chinese characters, several short natural paragraphs, 2-5 relevant common symbols or emoji, a scene-led hook, practical value and a natural interaction ending. Return real line-break characters in publishCopy; never return literal escape text such as \\n, \\r or \\t."
     : "This is a single image project. Return imagePost.groups as an empty array []. Put the complete result only in imagePost.title, publishCopy, tags and pages.";
 }
