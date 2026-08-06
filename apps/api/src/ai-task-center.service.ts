@@ -567,6 +567,32 @@ export class AiTaskCenterService implements OnModuleInit {
     return tasks.map(normalizeTaskOutputSizes);
   }
 
+  private async terminalCleanupCandidates(cutoff: Date) {
+    return this.prisma.aiTask.findMany({
+      where: { status: { in: ["FAILED", "CANCELLED"] }, updatedAt: { lte: cutoff } },
+      select: { id: true, taskNo: true },
+      take: 200,
+    });
+  }
+
+  async runnerTerminalCleanupCandidates(token: string, body: JsonRecord) {
+    await this.runner(token, text(body.nodeCode));
+    const cutoff = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+    return { tasks: await this.terminalCleanupCandidates(cutoff) };
+  }
+
+  async runnerPurgeTerminalTask(token: string, id: string, body: JsonRecord) {
+    await this.runner(token, text(body.nodeCode));
+    const cutoff = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+    const task = await this.prisma.aiTask.findFirst({
+      where: { id, status: { in: ["FAILED", "CANCELLED"] }, updatedAt: { lte: cutoff } },
+      select: { id: true, taskNo: true },
+    });
+    if (!task) return { purged: false };
+    await this.prisma.aiTask.delete({ where: { id: task.id } });
+    return { purged: true, taskNo: task.taskNo };
+  }
+
   async task(id: string) {
     const task = await this.prisma.aiTask.findUnique({ where: { id }, include: this.includeTask(true) });
     if (!task) throw new NotFoundException("AI任务不存在");

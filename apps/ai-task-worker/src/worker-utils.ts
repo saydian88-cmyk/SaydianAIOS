@@ -73,3 +73,7 @@ export function imagePostGroupsInstruction(groupCount: number) {
 export function imagePostMaterialSelectionInstruction() {
   return "The downstream image-post Skill must independently select suitable real source materials from the full approved SaiDian media library. The system supplies only the requested product boundary, creative requirement, compliance boundary and delivery contract; it must not prescribe asset folders, source priority, or a specific material type.";
 }
+
+export function directHyperframesLintInstruction() {
+  return "Every timed <video> and <audio> element in the HyperFrames composition must have its own unique id. Run HyperFrames lint after writing the composition; it must finish with zero errors before recording lint as successful. Run the official `hyperframes check` command and record its successful output in render-evidence.json as the validate command.";
+}

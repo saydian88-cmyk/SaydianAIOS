@@ -58,6 +58,21 @@ function serviceWith(overrides: Record<string, unknown> = {}) {
 }
 
 describe("AiTaskCenterService", () => {
+  it("selects only terminal tasks unchanged for at least three days for cleanup", async () => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    const { service } = serviceWith({ aiTask: { findMany } });
+    const cutoff = new Date("2026-08-03T00:00:00.000Z");
+
+    await (service as any).terminalCleanupCandidates(cutoff);
+
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        status: { in: ["FAILED", "CANCELLED"] },
+        updatedAt: { lte: cutoff },
+      }),
+    }));
+  });
+
   it("builds a previewable result from the selected video script", () => {
     expect(videoScriptOutputMetadata([
       { title: "候选一", selected: false },

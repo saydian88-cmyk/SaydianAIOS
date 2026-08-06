@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { api, post } from "../api";
+import { filteredOverviewTasks } from "../ai-task-list";
 
 type Row = Record<string, any>;
 const emit = defineEmits<{ navigate: [key: string] }>();
@@ -101,18 +102,13 @@ const wecom = reactive<Row>({
 });
 
 const visibleTasks = computed(() => {
-  const selected = tasks.value.filter((task) => {
-    if (filters.type && task.type !== filters.type) return false;
-    if (filters.platform && task.platform !== filters.platform) return false;
-    if (filters.keyword && !`${task.taskNo} ${task.title}`.toLowerCase().includes(filters.keyword.toLowerCase())) return false;
-    return true;
-  });
+  const selected = filteredOverviewTasks(tasks.value, filters);
   if (activeTab.value === "pending") return selected.filter((task) => pendingStatuses.includes(task.status));
   if (activeTab.value === "running") return selected.filter((task) => runningStatuses.includes(task.status));
   if (activeTab.value === "review") return selected.filter((task) => task.status === "PENDING_REVIEW");
   if (activeTab.value === "completed") return selected.filter((task) => task.status === "COMPLETED");
   if (activeTab.value === "failed") return selected.filter((task) => ["FAILED", "CANCELLED"].includes(task.status));
-  return selected.slice(0, 12);
+  return selected;
 });
 
 const typeCountRows = computed(() => {

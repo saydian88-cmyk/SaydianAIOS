@@ -136,6 +136,23 @@ export class AiTaskCenterController {
     return this.tasks.runnerMaterialIndex(this.runnerToken(authorization), { nodeCode, cursor });
   }
 
+  @Get("runner/terminal-cleanup")
+  terminalCleanupCandidates(
+    @Headers("authorization") authorization: string | undefined,
+    @Query("nodeCode") nodeCode: string,
+  ) {
+    return this.tasks.runnerTerminalCleanupCandidates(this.runnerToken(authorization), { nodeCode });
+  }
+
+  @Post("runner/tasks/:id/purge")
+  purgeTerminalTask(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.tasks.runnerPurgeTerminalTask(this.runnerToken(authorization), id, body);
+  }
+
   @Get("runner/material-mirror-index")
   materialMirrorIndex(
     @Headers("authorization") authorization: string | undefined,

@@ -1,10 +1,10 @@
 import "dotenv/config";
 import { execFile, spawn } from "node:child_process";
 import type { Dirent } from "node:fs";
-import { copyFile, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
-import { directSingleMasterFinalExemptions, hasHyperframesRenderEvidence, imagePostGroupsInstruction, imagePostMaterialSelectionInstruction, safeName, sha256, verifySha256 } from "./worker-utils";
+import { directHyperframesLintInstruction, directSingleMasterFinalExemptions, hasHyperframesRenderEvidence, imagePostGroupsInstruction, imagePostMaterialSelectionInstruction, safeName, sha256, verifySha256 } from "./worker-utils";
 import {
   detectSkill,
   routeTask,
@@ -73,8 +73,10 @@ const executionRepairSkillPath = resolve(String(
 const maxInternalRepairs = Math.max(1, Number(process.env.AI_TASK_MAX_INTERNAL_REPAIRS || 3));
 const maxVideoConcurrency = Math.max(1, Number(process.env.AI_TASK_MAX_VIDEO_CONCURRENCY || 1));
 const maxImageConcurrency = Math.max(1, Number(process.env.AI_TASK_MAX_IMAGE_CONCURRENCY || 2));
+const terminalCleanupMs = Math.max(60_000, Number(process.env.AI_TASK_TERMINAL_CLEANUP_MS || 15 * 60_000));
 let lastMaterialSyncAt = 0;
 let materialSyncInFlight: Promise<void> | undefined;
+let lastTerminalCleanupAt = 0;
 
 function activeKindCount(activeTasks: Map<string, { kind: "VIDEO" | "IMAGE"; promise: Promise<void> }>, kind: "VIDEO" | "IMAGE") {
   let count = 0;
@@ -999,6 +1001,7 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
       `The configured real Python executable is ${pythonExecutable}. Use this exact executable for every Python validator; do not rely on the Windows Store python alias or conclude that Python is missing before testing this path.`,
       "Use the exact schemas required by the official validators: requirements-check.json must use a requirements array; shot-plan.json must use the full Skill shot-plan schema including a visual_reference object; composition-qc.json must use a non-empty videos array. Run the validators instead of inventing substitute schemas.",
       "render-evidence.json must identify the HyperFrames project and contain successful doctor, lint, validate, inspect and render command records with non-empty log files. A plain FFmpeg concat is not the full editing Skill and must not be delivered.",
+      directHyperframesLintInstruction(),
       "RERENDER_GATE: After the first real MP4 is rendered, freeze the composition and run post-render QA. Start another render only when a QA record explicitly has passed=false and records the failed check ID, affected time range, corrective action, new version, and renderReason referencing that check. If QA passed, preserve the first master and proceed directly to evidence packaging and return; never rerender merely to improve logs, rename output, localize dependencies, or make an unrequested subjective refinement.",
       "Never create, inject, or substitute an incomplete GSAP shim, proxy timeline, or ad-hoc animation runtime. Use the installed validated HyperFrames animation dependency. Every render must record renderReason=INITIAL_RENDER or the exact failed QA ID; without it, a second render is forbidden.",
       "OFFLINE_HYPERFRAMES_RUNTIME: The runner has preinstalled the official GSAP 3.14.2 file at .runtime/hyperframes/gsap-3.14.2.min.js in the task workspace. Copy that exact official file into the HyperFrames project or reference it with the correct project-relative path before validate/render. Do not use npm/CDN, and do not create a shim or substitute runtime.",
@@ -2550,6 +2553,25 @@ async function execute(claimed: JsonRecord) {
   if (retryInternally) await execute(claimed);
 }
 
+async function purgeTerminalWorkspaces(activeTasks: Map<string, { kind: "VIDEO" | "IMAGE"; promise: Promise<void> }>) {
+  if (Date.now() - lastTerminalCleanupAt < terminalCleanupMs) return;
+  lastTerminalCleanupAt = Date.now();
+  const response = record(await api<JsonRecord>(`/api/v1/ai-tasks/runner/terminal-cleanup?nodeCode=${encodeURIComponent(nodeCode)}`));
+  const candidates = Array.isArray(response.tasks) ? response.tasks.map(record) : [];
+  for (const candidate of candidates) {
+    const id = String(candidate.id || "");
+    const taskNo = String(candidate.taskNo || "");
+    if (!id || !taskNo || activeTasks.has(id)) continue;
+    const workspace = resolve(workRoot, safeName(taskNo));
+    if (dirname(workspace) !== workRoot) continue;
+    await rm(workspace, { recursive: true, force: true });
+    await api(`/api/v1/ai-tasks/runner/tasks/${id}/purge`, {
+      method: "POST",
+      body: JSON.stringify({ nodeCode }),
+    });
+  }
+}
+
 async function main() {
   await mkdir(workRoot, { recursive: true });
   // Material indexing must never delay task claiming. This is especially
@@ -2558,6 +2580,7 @@ async function main() {
   const activeTasks = new Map<string, { kind: "VIDEO" | "IMAGE"; promise: Promise<void> }>();
   for (;;) {
     try {
+      await purgeTerminalWorkspaces(activeTasks);
       const activeVideo = activeKindCount(activeTasks, "VIDEO");
       const activeImage = activeKindCount(activeTasks, "IMAGE");
       const supportedRouteKeys = availableClaimRouteKeys(

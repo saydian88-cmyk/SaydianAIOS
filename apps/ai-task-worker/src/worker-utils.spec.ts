@@ -67,4 +67,11 @@ describe("worker utils", () => {
     expect(value).toContain("independently select");
     expect(value).not.toContain("F:\\");
   });
+
+  it("requires direct HyperFrames videos to pass lint without media identifier errors", () => {
+    const instruction = (workerUtils as Record<string, unknown>).directHyperframesLintInstruction;
+    expect(instruction).toBeTypeOf("function");
+    expect((instruction as () => string)()).toContain("unique id");
+    expect((instruction as () => string)()).toContain("zero errors");
+  });
 });
