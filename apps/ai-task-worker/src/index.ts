@@ -34,6 +34,8 @@ import { availableClaimRouteKeys, videoRouteKeys } from "./worker-utils";
 import {
   classifyExecutionFailure,
   repairHyperFramesRuntime,
+  requiresRenderedEvidenceReview,
+  shouldResumeValidatedResult,
   type RepairCategory,
 } from "./execution-repair";
 
@@ -2203,10 +2205,11 @@ async function execute(claimed: JsonRecord) {
     // Preserve the resume decision before progress reporting changes the saved stage.
     // A previous attempt may already have a validated result and only need to retry
     // its upload; rerunning Codex in that case would create a duplicate video.
-    const resumeWithValidatedResult = Boolean(directRecoveryResult) || (
+    const repairState = await loadExecutionRepairState(workspace);
+    const resumeWithValidatedResult = shouldResumeValidatedResult(Boolean(directRecoveryResult) || (
       (resumeEligible || resumeDirectOutputUpload)
       && ["LOCAL_RENDER", "QUALITY_CHECK", "UPLOADING", "FINALIZING", "COMPLETE"].includes(String(taskState.stage || ""))
-    );
+    ), repairState.lastCategory);
     state = taskState;
     await saveWorkspaceState(workspace, taskState);
     await appendExecutionLog(workspace, "SKILL_SELECTED", {
@@ -2298,7 +2301,6 @@ async function execute(claimed: JsonRecord) {
         skillVersion: detectedSkill.version,
         assetCount: Array.isArray(packaged.assets) ? packaged.assets.length : 0,
       });
-      const repairState = await loadExecutionRepairState(workspace);
       let internalCorrection = repairState.lastReason
         ? [
           `Execution recovery is active under ${executionRepairSkillPath}.`,
@@ -2306,6 +2308,10 @@ async function execute(claimed: JsonRecord) {
           `Failure: ${repairState.lastReason}`,
           `Applied action: ${repairState.lastAction || "resume-from-existing-checkpoint"}.`,
           "Continue the original downstream Skill from valid artifacts. Do not weaken validation or fabricate success.",
+          ...(requiresRenderedEvidenceReview(repairState.lastCategory || "NONE") ? [
+            "RENDERED_EVIDENCE_RECOVERY: A real VIDEO_MASTER already exists. Preserve the composition and do not re-render unless an actual review finds a visual defect.",
+            "Inspect the existing rendered master, then rebuild composition-qc.json from that inspection with reviewed_from_render=true and a start/mid/end sample for every shot. Run validate_rendered_composition.py and return only after it passes.",
+          ] : []),
         ].join("\n")
         : "";
       const generated = await runWithSchemaRetry(

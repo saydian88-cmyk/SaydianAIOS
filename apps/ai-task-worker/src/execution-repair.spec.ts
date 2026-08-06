@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { classifyExecutionFailure } from "./execution-repair";
+import {
+  classifyExecutionFailure,
+  requiresRenderedEvidenceReview,
+  shouldResumeValidatedResult,
+} from "./execution-repair";
 
 describe("classifyExecutionFailure", () => {
   it("keeps a GSAP runtime failure inside the runner", () => {
@@ -24,5 +28,19 @@ describe("classifyExecutionFailure", () => {
     const result = classifyExecutionFailure('涓婁紶澶辫触 500: {"statusCode":500,"message":"Internal server error"}');
     expect(result.recoverable).toBe(true);
     expect(result.category).toBe("TRANSIENT_TRANSFER");
+  });
+
+  it("restarts the downstream review when rendered-composition evidence is invalid", () => {
+    const result = classifyExecutionFailure(
+      "完整视频剪辑Skill官方质检失败（validate_rendered_composition.py）：reviewed_from_render 应为 true",
+    );
+
+    expect(result.category).toBe("RENDER_EVIDENCE");
+    expect(requiresRenderedEvidenceReview(result.category)).toBe(true);
+  });
+
+  it("does not reuse a saved result while evidence review is pending", () => {
+    expect(shouldResumeValidatedResult(true, "RENDER_EVIDENCE")).toBe(false);
+    expect(shouldResumeValidatedResult(true, "TRANSIENT_TRANSFER")).toBe(true);
   });
 });
