@@ -71,7 +71,7 @@ export function imagePostGroupsInstruction(groupCount: number) {
 }
 
 export function imagePostMaterialSelectionInstruction() {
-  return "The downstream image-post Skill must independently select suitable real source materials from the full approved SaiDian media library. The system supplies only the requested product boundary, creative requirement, compliance boundary and delivery contract; it must not prescribe asset folders, source priority, or a specific material type.";
+  return "The downstream image-post Skill must independently select suitable real source materials from the full approved SaiDian media library. The system supplies only the requested product boundary, creative requirement, compliance boundary and delivery contract; it must not prescribe asset folders, source priority, or a specific material type. Before creating final pages, create an internal group plan for every requested group with a distinct hook, copy angle, page logic and main-source direction. Raw product detail images and untreated video frames are source material only, never final pages. The Skill must self-check and rebuild every incomplete, repeated or unpolished group before returning final files.";
 }
 
 export function directHyperframesLintInstruction() {

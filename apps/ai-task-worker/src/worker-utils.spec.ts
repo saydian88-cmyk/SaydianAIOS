@@ -65,6 +65,8 @@ describe("worker utils", () => {
     expect(instruction).toBeTypeOf("function");
     const value = (instruction as () => string)();
     expect(value).toContain("independently select");
+    expect(value).toContain("internal group plan");
+    expect(value).toContain("self-check and rebuild");
     expect(value).not.toContain("F:\\");
   });
 
