@@ -2128,7 +2128,9 @@ async function recoverDirectOutputResult(
   // A stale earlier result may contain only the first batch master. Rebuild the
   // complete batch below instead of treating that partial result as recoverable.
   const savedMaster = savedOutputs.find((item) => String(item.kind || "").toUpperCase() === "VIDEO_MASTER");
-  if (!batchRequests.length && savedMaster) {
+  const outputNames = await readdir(outputsRoot).catch(() => [] as string[]);
+  const outputMasterCount = outputNames.filter((name) => extname(name).toLowerCase() === ".mp4").length;
+  if (!batchRequests.length && outputMasterCount <= 1 && savedMaster) {
     const requested = String(savedMaster.path || "");
     const absolute = resolve(workspace, requested);
     const relativePath = relative(workspace, absolute);
@@ -2160,12 +2162,25 @@ async function recoverDirectOutputResult(
     if (info?.isFile() && info.size > 0) masters.push({ name, size: info.size });
   }
   if (!masters.length) return undefined;
-  if (batchRequests.length) {
+  const inferredBatchRequests = !batchRequests.length && masters.length > 1
+    ? (() => {
+      const counts = new Map<string, number>();
+      const groups: string[] = [];
+      return [...masters].sort((left, right) => left.name.localeCompare(right.name)).map((master) => {
+        const model = master.name.match(/W\d+(?:Ultra(?:-R)?|S)?/i)?.[0] || "视频";
+        if (!groups.includes(model)) groups.push(model);
+        const ordinal = (counts.get(model) || 0) + 1;
+        counts.set(model, ordinal);
+        return { videoKey: `${groups.indexOf(model) + 1}-${ordinal}`, productModel: model, ordinal };
+      });
+    })()
+    : batchRequests;
+  if (inferredBatchRequests.length) {
     const imageNames = (await readdir(outputsRoot)).filter((name) => [".jpg", ".jpeg", ".png", ".webp"].includes(extname(name).toLowerCase()));
     const unusedMasters = [...masters];
     const outputFiles: JsonRecord[] = [];
     const batchResults: JsonRecord[] = [];
-    for (const request of batchRequests) {
+    for (const request of inferredBatchRequests) {
       const escapedModel = request.productModel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const modelPattern = escapedModel ? new RegExp(`${escapedModel}(?![a-z0-9-])`, "iu") : undefined;
       const masterIndex = unusedMasters.findIndex((candidate) => !modelPattern || modelPattern.test(candidate.name));
