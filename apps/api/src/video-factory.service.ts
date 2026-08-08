@@ -65,6 +65,10 @@ type ProjectCreateInput = {
   batchVoiceVariety?: boolean;
   batchGenerateCoverTitle?: boolean;
   batchTaskRequirement?: string;
+  libraryEntryId?: string;
+  libraryReuseMode?: "CONFIG_REUSE" | "REFERENCE_DIRECT";
+  targetLanguage?: "ZH" | "EN";
+  referenceAssetId?: string;
 };
 
 type GenerateInput = {
@@ -485,6 +489,71 @@ export class VideoFactoryService {
     private readonly oss: OssStorageService,
     private readonly wecom: WecomNotificationService,
   ) {}
+
+  private librarySnapshot(plan: { topic: string; productModel?: string | null; audience: string; objective: string; hook: string; createdBy: string; targetPlatforms: IntegrationKind[]; sourceSignals: unknown }) {
+    const factory = sourceSignals(plan).find((item) => item.type === "VIDEO_FACTORY") || {};
+    const brief = object(factory.brief);
+    return {
+      prompt: String(brief.additionalPrompt || plan.objective || ""),
+      reference: String(brief.reference || ""),
+      project: {
+        topic: plan.topic,
+        productModel: plan.productModel || "",
+        audience: plan.audience,
+        objective: plan.objective,
+        hook: plan.hook,
+        platform: plan.targetPlatforms[0] || "DOUYIN",
+        voiceoverMode: String(factory.voiceoverMode || "AUTO"),
+        videoType: String(brief.videoType || ""),
+        keywords: String(brief.keywords || ""),
+        scene: String(brief.scene || ""),
+        painPoint: String(brief.painPoint || ""),
+        additionalPrompt: String(brief.additionalPrompt || ""),
+      },
+    };
+  }
+
+  private async upsertLibraryEntry(
+    tx: Prisma.TransactionClient,
+    plan: { id: string; topic: string; productModel?: string | null; audience: string; objective: string; hook: string; createdBy: string; targetPlatforms: IntegrationKind[]; sourceSignals: unknown },
+    assetId: string,
+    renderJobId: string | undefined,
+    actor: string,
+  ) {
+    const snapshot = this.librarySnapshot(plan);
+    const product = plan.productModel
+      ? await tx.product.findUnique({ where: { modelCode: plan.productModel }, select: { category: true } })
+      : null;
+    await tx.contentLibraryEntry.upsert({
+      where: { contentPlanId_outputAssetId: { contentPlanId: plan.id, outputAssetId: assetId } },
+      create: {
+        contentPlanId: plan.id,
+        outputAssetId: assetId,
+        renderJobId,
+        title: plan.topic,
+        productModel: plan.productModel,
+        productCategory: product?.category || null,
+        platform: String(plan.targetPlatforms[0] || "DOUYIN"),
+        createdBy: plan.createdBy,
+        snapshot: snapshot as Prisma.InputJsonValue,
+      },
+      update: {
+        title: plan.topic,
+        productModel: plan.productModel,
+        productCategory: product?.category || null,
+        platform: String(plan.targetPlatforms[0] || "DOUYIN"),
+        createdBy: plan.createdBy,
+        snapshot: snapshot as Prisma.InputJsonValue,
+        visibilityStatus: "ACTIVE",
+        hiddenAt: null,
+        hiddenBy: null,
+        hiddenWithProject: false,
+      },
+    });
+    await tx.auditLog.create({
+      data: { actor, action: "VIDEO_LIBRARY_ENTRY_UPSERT", entityType: "ContentLibraryEntry", entityId: `${plan.id}:${assetId}`, after: { contentPlanId: plan.id, assetId } },
+    });
+  }
 
   private async notifyProjectMilestone(
     contentPlanId: string,
@@ -1676,6 +1745,12 @@ export class VideoFactoryService {
             scriptEngineStatus: Object.fromEntries(brief.scriptEngines.map((engine) => [engine, "PENDING"])),
             keywordIds,
             externalVideoIds: input.externalVideoIds || [],
+            ...(input.libraryEntryId ? {
+              libraryEntryId: input.libraryEntryId,
+              libraryReuseMode: input.libraryReuseMode || "CONFIG_REUSE",
+              targetLanguage: input.targetLanguage || "ZH",
+              referenceAssetId: input.referenceAssetId || null,
+            } : {}),
             externalReferencePolicy: referenceDirect ? "REFERENCE_STYLE_AND_BGM" : (codexDirect || batchDirect) ? "NONE" : "STRUCTURE_ONLY",
             routingMode: directFullVideo ? "CODEX_DIRECT" : "SYSTEM_FIRST",
             allowFallback: false,
@@ -4117,7 +4192,7 @@ export class VideoFactoryService {
     return job;
   }
 
-  async archiveProject(id: string, actor: string, allowAdminOverride = false) {
+  async archiveProject(id: string, actor: string, allowAdminOverride = false, hideLibraryEntries = false) {
     const plan = await this.prisma.contentPlan.findUnique({
       where: { id },
       include: {
@@ -4221,6 +4296,10 @@ export class VideoFactoryService {
           status: "CANCELLED",
         },
       }),
+      ...(hideLibraryEntries ? [this.prisma.contentLibraryEntry.updateMany({
+        where: { contentPlanId: id, category: "VIDEO", visibilityStatus: "ACTIVE" },
+        data: { visibilityStatus: "HIDDEN", hiddenAt: archivedAt, hiddenBy: actor, hiddenWithProject: true },
+      })] : []),
       this.prisma.auditLog.create({
         data: {
           actor,
@@ -4235,6 +4314,7 @@ export class VideoFactoryService {
             cancelledAiTasks: aiTaskCount,
             cancelledGenerationJobs: generationJobCount,
             cancelledRenderJobs: renderJobCount,
+            hideLibraryEntries,
           },
         },
       }),
@@ -4246,6 +4326,7 @@ export class VideoFactoryService {
       cancelledAiTasks: aiTaskCount,
       cancelledGenerationJobs: generationJobCount,
       cancelledRenderJobs: renderJobCount,
+      hiddenLibraryEntries: hideLibraryEntries,
     };
   }
 
@@ -4339,6 +4420,10 @@ export class VideoFactoryService {
           purgeAfter: null,
           deletedByEmployeeId: null,
         },
+      }),
+      this.prisma.contentLibraryEntry.updateMany({
+        where: { contentPlanId: id, hiddenWithProject: true },
+        data: { visibilityStatus: "ACTIVE", hiddenAt: null, hiddenBy: null, hiddenWithProject: false },
       }),
       this.prisma.auditLog.create({
         data: {
@@ -4716,7 +4801,10 @@ export class VideoFactoryService {
       where: { outputAssetId: assetId },
       include: { shot: true, contentPlan: { select: { sourceSignals: true } } },
     });
-    const render = await this.prisma.videoRenderJob.findFirst({ where: { outputAssetId: assetId } });
+    const render = await this.prisma.videoRenderJob.findFirst({
+      where: { outputAssetId: assetId },
+      include: { contentPlan: true },
+    });
     if (!generation && !render) throw new BadRequestException("该素材不是视频工厂输出");
     const failedCheck = await this.prisma.videoQualityCheck.findFirst({ where: { assetId, status: "FAILED" } });
     if (approved && failedCheck) throw new BadRequestException("自动质检未通过，不能批准使用");
@@ -4765,6 +4853,7 @@ export class VideoFactoryService {
             ? { masterVideoStatus: "APPROVED", productionStage: "PLATFORM_PACKAGING" }
             : { masterVideoStatus: "RETURNED", productionStage: "EDITING" },
         });
+        if (approved) await this.upsertLibraryEntry(tx, render.contentPlan, assetId, render.id, actor);
       }
       const reviewedAt = new Date();
       await tx.videoQualityCheck.updateMany({

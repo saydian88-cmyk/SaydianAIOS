@@ -638,6 +638,7 @@ model Asset {
   videoRenderOutputs     VideoRenderJob[]      @relation("VideoRenderOutput")
   videoQualityChecks     VideoQualityCheck[]
   aiTaskOutputs          AiTaskOutput[]
+  libraryEntries         ContentLibraryEntry[]
 
   @@index([sha256])
   @@index([model, status])
@@ -1615,6 +1616,7 @@ model ContentPlan {
   videoRenderJobs     VideoRenderJob[]
   videoQualityChecks  VideoQualityCheck[]
   aiTaskOutputs       AiTaskOutput[]
+  libraryEntries      ContentLibraryEntry[]
 
   @@index([planDate, kind])
   @@index([status])
@@ -1816,6 +1818,35 @@ model VideoRenderJob {
 
   @@index([status, createdAt])
   @@index([contentPlanId, createdAt])
+}
+
+model ContentLibraryEntry {
+  id                String   @id @default(cuid())
+  category          String   @default("VIDEO")
+  contentPlanId     String
+  outputAssetId     String
+  renderJobId       String?
+  title             String
+  productModel      String?
+  productCategory   String?
+  platform          String?
+  createdBy         String?
+  snapshot          Json     @default("{}")
+  visibilityStatus  String   @default("ACTIVE")
+  hiddenAt          DateTime?
+  hiddenBy          String?
+  hiddenWithProject Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  contentPlan ContentPlan @relation(fields: [contentPlanId], references: [id], onDelete: Cascade)
+  outputAsset Asset      @relation(fields: [outputAssetId], references: [id], onDelete: Restrict)
+
+  @@unique([contentPlanId, outputAssetId])
+  @@index([category, visibilityStatus, createdAt])
+  @@index([productModel, platform])
+  @@index([productCategory, createdAt])
+  @@index([createdBy, createdAt])
 }
 
 model VideoQualityCheck {

@@ -521,6 +521,27 @@ export class WorkbenchController {
     return this.workbench.outputs(query);
   }
 
+  @Get("video-library")
+  videoLibrary(
+    @Headers("authorization") authorization: string | undefined,
+    @Query() query: Record<string, string | undefined>,
+  ) {
+    this.employee(authorization);
+    return this.workbench.videoLibrary(query);
+  }
+
+  @Get("video-library/:id")
+  videoLibraryEntry(@Headers("authorization") authorization: string | undefined, @Param("id") id: string) {
+    this.employee(authorization);
+    return this.workbench.videoLibraryEntry(id);
+  }
+
+  @Get("video-library/:id/url")
+  videoLibraryUrl(@Headers("authorization") authorization: string | undefined, @Param("id") id: string) {
+    this.employee(authorization);
+    return this.workbench.videoLibraryUrl(id);
+  }
+
   @Get("outputs/:outputId/url")
   outputUrl(
     @Headers("authorization") authorization: string | undefined,
@@ -1998,11 +2019,17 @@ export class WorkbenchController {
     if (String(factory.projectMode || "") !== "REFERENCE_DIRECT_FULL_VIDEO") {
       throw new ForbiddenException("当前项目不是参考视频直出模式");
     }
-    const referenceVideoUrl = String(brief.reference || "").trim();
+    const referenceAssetId = String(factory.referenceAssetId || "").trim();
+    const referenceAsset = referenceAssetId
+      ? await this.prisma.asset.findFirst({ where: { id: referenceAssetId, reviewStatus: "APPROVED", availabilityStatus: "ACTIVE", deletedAt: null }, select: { objectKey: true } })
+      : null;
+    const referenceVideoUrl = referenceAsset?.objectKey
+      ? this.ossStorage.signedDownloadUrl(referenceAsset.objectKey, 21_600)
+      : String(brief.reference || "").trim();
     const revision = factory.directVideoRevision && typeof factory.directVideoRevision === "object"
       ? factory.directVideoRevision as Record<string, unknown>
       : {};
-    if (!referenceVideoUrl) throw new ForbiddenException("请填写参考视频链接");
+    if (!referenceVideoUrl || (referenceAsset?.objectKey && !await this.ossStorage.objectExists(referenceAsset.objectKey))) throw new ForbiddenException("参考视频已失效，请重新选择成品");
     const task = await this.aiTasks.createTask({
       type: "VIDEO",
       title: `${project.topic} · 参考视频直出`,
@@ -2013,7 +2040,7 @@ export class WorkbenchController {
       sourceType: "VIDEO_FACTORY_PROJECT",
       sourceId: project.id,
       idempotencyKey: `ai-task:video-project:${project.id}:reference-direct:v${project.workflowVersion}`,
-      instructions: compileReferenceDirectFullVideoPrompt(project, brief),
+      instructions: compileReferenceDirectFullVideoPrompt(project, { ...brief, reference: referenceVideoUrl }),
       input: {
         executionMode: "FULL_VIDEO",
         referenceDirectFullVideo: true,
@@ -2032,7 +2059,7 @@ export class WorkbenchController {
           ...(Object.keys(revision).length ? { revision } : {}),
         },
         workflowGuard: { projectId: project.id, workflowVersion: project.workflowVersion, stage: "FULL_VIDEO", allowedProjectStages: ["PROJECT_BRIEF", "EDITING"] },
-        projectBrief: brief,
+        projectBrief: { ...brief, reference: referenceVideoUrl },
         ...(Object.keys(revision).length ? { revision } : {}),
         requiredOutputs: ["master_video", "master_video_path", "source_asset_bindings", "reference_access_report", "review_summary"],
       },
@@ -2524,12 +2551,13 @@ export class WorkbenchController {
   archiveVideoProject(
     @Headers("authorization") authorization: string | undefined,
     @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
   ) {
     const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
     if (!employee.roles.some((role) => ["CONTENT_OPERATOR", "VIDEO_SPECIALIST"].includes(role))) {
       throw new ForbiddenException("只有运营和视频专员可以删除视频项目");
     }
-    return this.videoFactory.archiveProject(id, employee.name);
+    return this.videoFactory.archiveProject(id, employee.name, false, body.hideLibraryEntries === true);
   }
 
   @Get("data-center/video-projects-recycle-bin")
@@ -2854,6 +2882,72 @@ export class WorkbenchController {
       replaceFeature: Boolean(body.replaceFeature),
       feature: body.feature ? String(body.feature) : undefined,
     }, employee.name);
+  }
+
+  @Post("video-library/:id/create-project")
+  async createProjectFromVideoLibrary(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const employee = this.requirePermission(authorization, "CONTENT_SUBMIT");
+    if (!employee.employeeId || !employee.roles.some((role) => ["CONTENT_OPERATOR", "VIDEO_SPECIALIST"].includes(role))) {
+      throw new ForbiddenException("当前岗位不能创建视频项目");
+    }
+    const entry = await this.prisma.contentLibraryEntry.findFirst({
+      where: { id, category: "VIDEO", visibilityStatus: "ACTIVE", outputAsset: { is: { reviewStatus: "APPROVED", availabilityStatus: "ACTIVE", deletedAt: null, objectKey: { not: null } } } },
+      include: { outputAsset: true },
+    });
+    if (!entry?.outputAsset.objectKey || !await this.ossStorage.objectExists(entry.outputAsset.objectKey)) {
+      if (entry) await this.prisma.contentLibraryEntry.update({ where: { id: entry.id }, data: { visibilityStatus: "HIDDEN", hiddenAt: new Date(), hiddenBy: "SYSTEM_STORAGE_CHECK" } });
+      throw new NotFoundException("参考成品不可用");
+    }
+    const snapshot = object(entry.snapshot);
+    const source = object(snapshot.project);
+    const mode = body.mode === "REFERENCE_DIRECT" ? "REFERENCE_DIRECT" : "CONFIG_REUSE";
+    const language = body.targetLanguage === "EN" ? "EN" : "ZH";
+    const productModel = String(body.productModel || source.productModel || entry.productModel || "").trim();
+    const extraPrompt = String(body.additionalPrompt || "").trim();
+    const originalPrompt = String(source.additionalPrompt || snapshot.prompt || "").trim();
+    const languagePrompt = language === "EN" ? "输出语言：英文。" : "输出语言：中文。";
+    const additionalPrompt = [originalPrompt, extraPrompt, languagePrompt].filter(Boolean).join("\n");
+    const project = await this.videoFactory.createProject({
+      projectMode: mode === "REFERENCE_DIRECT" ? "REFERENCE_DIRECT_FULL_VIDEO" : "STANDARD",
+      referenceVideoUrl: mode === "REFERENCE_DIRECT" ? `asset:${entry.outputAssetId}` : undefined,
+      referenceDirectTaskRequirement: mode === "REFERENCE_DIRECT"
+        ? `以成品库参考视频为结构和节奏参考。${additionalPrompt}`
+        : undefined,
+      platform: String(source.platform || entry.platform || "DOUYIN"),
+      voiceoverMode: String(source.voiceoverMode || "AUTO"),
+      productModel,
+      topic: String(body.topic || source.topic || entry.title),
+      audience: String(source.audience || "目标用户"),
+      objective: `${String(source.objective || "参考成品重新创作")}\n来源成品：${entry.title}`,
+      videoType: String(source.videoType || "场景种草型"),
+      keywords: String(source.keywords || source.topic || entry.title),
+      reference: mode === "CONFIG_REUSE" ? String(source.reference || "") : undefined,
+      hook: String(source.hook || ""),
+      scene: String(source.scene || ""),
+      painPoint: String(source.painPoint || ""),
+      additionalPrompt,
+      deferScriptGeneration: true,
+      libraryEntryId: entry.id,
+      libraryReuseMode: mode,
+      targetLanguage: language,
+      referenceAssetId: mode === "REFERENCE_DIRECT" ? entry.outputAssetId : undefined,
+    }, employee.name) as Record<string, any>;
+    const submitted = mode === "REFERENCE_DIRECT"
+      ? await this.submitReferenceDirectFullVideoTask(authorization, String(project.id))
+      : await this.submitVideoScriptTask(authorization, String(project.id));
+    const finalProject = submitted.project as Record<string, any>;
+    const task = await this.workbench.ensureVideoProjectTask({ employeeId: employee.employeeId, name: employee.name }, {
+      id: String(finalProject.id), productionNo: finalProject.productionNo ? String(finalProject.productionNo) : null,
+      topic: finalProject.topic ? String(finalProject.topic) : null, productionStage: finalProject.productionStage ? String(finalProject.productionStage) : null,
+    });
+    await this.prisma.auditLog.create({
+      data: { actor: employee.name, action: "VIDEO_LIBRARY_PROJECT_CREATE", entityType: "ContentLibraryEntry", entityId: entry.id, after: { projectId: finalProject.id, mode, targetLanguage: language, productModel } },
+    });
+    return { ...finalProject, linkedTask: task, mode };
   }
 
   @Post("data-center/video-projects/:id/packaging")

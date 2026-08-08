@@ -51,6 +51,18 @@ const outputLibraryLoading = ref(false);
 const outputPreviewVisible = ref(false);
 const outputPreview = ref<Row>();
 const outputPreviewUrl = ref("");
+const videoLibrary = ref<Row[]>([]);
+const videoLibraryLoading = ref(false);
+const videoLibraryFilters = reactive({ search: "", productModel: "", productCategory: "", platform: "", createdBy: "", dateFrom: "", dateTo: "" });
+const videoLibraryCategories = ref<string[]>([]);
+const videoLibraryPage = ref(1);
+const videoLibraryTotal = ref(0);
+const videoLibraryDetailVisible = ref(false);
+const videoLibraryDetail = ref<Row>();
+const videoLibraryPreviewUrl = ref("");
+const videoLibraryCreateVisible = ref(false);
+const videoLibraryCreating = ref(false);
+const videoLibraryCreateForm = reactive({ mode: "CONFIG_REUSE", productModel: "", additionalPrompt: "", targetLanguage: "ZH" });
 const tasks = ref<Row[]>([]);
 const taskScope = ref("MINE");
 const taskStatus = ref("");
@@ -1702,9 +1714,76 @@ async function loadOutputLibrary(category = outputCategory.value) {
   }
 }
 
+async function loadVideoLibrary() {
+  videoLibraryLoading.value = true;
+  try {
+    const query = new URLSearchParams(Object.entries(videoLibraryFilters)
+      .filter(([, value]) => String(value || "").trim())
+      .map(([key, value]) => [key, String(value)]));
+    query.set("page", String(videoLibraryPage.value));
+    query.set("pageSize", "10");
+    const result = await api<Row>(`/api/v1/workbench/video-library?${query.toString()}`);
+    videoLibrary.value = result.items || [];
+    videoLibraryTotal.value = Number(result.total || 0);
+    videoLibraryCategories.value = result.categories || [];
+  } finally {
+    videoLibraryLoading.value = false;
+  }
+}
+
+async function switchOutputCategory(category: string) {
+  outputCategory.value = category;
+  if (category === "VIDEO") await loadVideoLibrary();
+  else await loadOutputLibrary(category);
+}
+
+async function openVideoLibraryEntry(entry: Row) {
+  videoLibraryDetailVisible.value = true;
+  videoLibraryDetail.value = undefined;
+  videoLibraryPreviewUrl.value = "";
+  try {
+    const [detail, preview] = await Promise.all([
+      api<Row>(`/api/v1/workbench/video-library/${entry.id}`),
+      api<Row>(`/api/v1/workbench/video-library/${entry.id}/url`),
+    ]);
+    videoLibraryDetail.value = detail;
+    videoLibraryPreviewUrl.value = preview.url || "";
+  } catch (error) {
+    videoLibraryDetailVisible.value = false;
+    ElMessage.error(error instanceof Error ? error.message : "成品加载失败");
+  }
+}
+
+function openVideoLibraryCreate() {
+  const entry = videoLibraryDetail.value;
+  if (!entry) return;
+  videoLibraryCreateForm.mode = "CONFIG_REUSE";
+  videoLibraryCreateForm.productModel = entry.productModel || entry.contentPlan?.productModel || "";
+  videoLibraryCreateForm.additionalPrompt = "";
+  videoLibraryCreateForm.targetLanguage = "ZH";
+  videoLibraryCreateVisible.value = true;
+}
+
+async function createVideoLibraryProject() {
+  const entry = videoLibraryDetail.value;
+  if (!entry?.id) return;
+  if (!videoLibraryCreateForm.productModel) return ElMessage.warning("请选择产品型号");
+  videoLibraryCreating.value = true;
+  try {
+    await post(`/api/v1/workbench/video-library/${entry.id}/create-project`, { ...videoLibraryCreateForm });
+    videoLibraryCreateVisible.value = false;
+    videoLibraryDetailVisible.value = false;
+    active.value = "tasks";
+    await loadTasks();
+    ElMessage.success("已创建新项目，已加入任务中心");
+  } finally {
+    videoLibraryCreating.value = false;
+  }
+}
+
 async function openOutputLibrary(category: string) {
   active.value = "outputs";
-  await loadOutputLibrary(category);
+  await switchOutputCategory(category);
 }
 
 function outputCategoryLabel(output: Row) {
@@ -2336,6 +2415,11 @@ function projectReferenceVideoUrl(project?: Row) {
 }
 
 function openProjectReferenceVideo(project: Row) {
+  const libraryEntryId = videoLibraryEntryId(project);
+  if (libraryEntryId) {
+    void openVideoLibraryEntry({ id: libraryEntryId });
+    return;
+  }
   const referenceUrl = projectReferenceVideoUrl(project);
   if (!referenceUrl) return ElMessage.warning("当前项目没有可查看的参考视频链接");
   try {
@@ -3496,15 +3580,25 @@ function videoProjectHasActiveJob(project: Row) {
     || project.videoRenderJobs?.some((job: Row) => activeStatuses.includes(job.status));
 }
 
+function videoLibraryEntryId(project?: Row) {
+  const factory = (project?.sourceSignals || []).find((item: Row) => item?.type === "VIDEO_FACTORY") || {};
+  return String(factory.libraryEntryId || "");
+}
+
 async function archiveVideoProject(project: Row) {
   await ElMessageBox.confirm(
     `确认删除“${project.topic}”？系统会同步取消该项目尚未完成的 AI、素材生成和剪辑任务，并从员工任务与视频工厂同时移除。项目在回收站保留 3 天。`,
     "删除视频项目",
     { confirmButtonText: "确认删除", cancelButtonText: "取消", type: "warning" },
   );
+  const hideLibraryEntries = await ElMessageBox.confirm(
+    "该项目已有审核通过的成品。是否同时从全员成品库隐藏？恢复项目时会自动恢复展示。",
+    "成品库处理",
+    { confirmButtonText: "隐藏成品", cancelButtonText: "保留为团队参考", type: "info" },
+  ).then(() => true).catch(() => false);
   archivingVideoProjectId.value = project.id;
   try {
-    await post(`/api/v1/workbench/data-center/video-projects/${project.id}/archive`);
+    await post(`/api/v1/workbench/data-center/video-projects/${project.id}/archive`, { hideLibraryEntries });
     ElMessage.success("视频项目、员工任务及未完成 AI 任务已同步处理");
     if (expandedTaskVideoProjectId.value === project.id) {
       expandedTaskVideoProjectId.value = "";
@@ -4031,7 +4125,7 @@ async function switchPage(page: string) {
   active.value = page;
   if (page === "home") await loadDashboard();
   if (page === "tasks") await loadTasks();
-  if (page === "outputs") await loadOutputLibrary();
+  if (page === "outputs") await loadVideoLibrary();
   if (page === "team") await loadOperationTeam();
   if (page === "data") await loadDataCenter();
   if (page === "live") await loadLive();
@@ -4629,31 +4723,35 @@ onBeforeUnmount(() => {
 
       <template v-else-if="active === 'outputs'">
         <section class="toolbar section-card output-library-toolbar">
-          <div>
-            <p class="eyebrow">CREATION LIBRARY</p>
-            <h2>成品库</h2>
-          </div>
-          <el-radio-group v-model="outputCategory" @change="loadOutputLibrary(String($event))">
-            <el-radio-button value="VIDEO">视频</el-radio-button>
-            <el-radio-button value="IMAGE">图片</el-radio-button>
-            <el-radio-button value="ARTICLE">软文</el-radio-button>
-          </el-radio-group>
+          <div><p class="eyebrow">VIDEO CREATION LIBRARY</p><h2>视频成品库</h2><small>全员可参考已审核通过的成片、提示词与发布结果</small></div>
+          <el-radio-group v-model="outputCategory" @change="switchOutputCategory(String($event))"><el-radio-button value="VIDEO">视频</el-radio-button><el-radio-button value="IMAGE">图片</el-radio-button><el-radio-button value="ARTICLE">软文</el-radio-button></el-radio-group>
         </section>
-        <section v-loading="outputLibraryLoading" class="section-card">
+        <section v-if="outputCategory === 'VIDEO'" class="toolbar section-card">
+          <el-input v-model="videoLibraryFilters.search" clearable placeholder="搜索标题、产品或创建人" @keyup.enter="loadVideoLibrary" />
+          <el-select v-model="videoLibraryFilters.productModel" clearable filterable placeholder="产品型号"><el-option v-for="product in productOptions" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" /></el-select>
+          <el-select v-model="videoLibraryFilters.productCategory" clearable placeholder="产品分类"><el-option v-for="category in videoLibraryCategories" :key="category" :label="category" :value="category" /></el-select>
+          <el-select v-model="videoLibraryFilters.platform" clearable placeholder="平台"><el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" /></el-select>
+          <el-input v-model="videoLibraryFilters.createdBy" clearable placeholder="创建人" />
+          <el-date-picker v-model="videoLibraryFilters.dateFrom" type="date" value-format="YYYY-MM-DD" placeholder="入库开始日期" />
+          <el-date-picker v-model="videoLibraryFilters.dateTo" type="date" value-format="YYYY-MM-DD" placeholder="入库结束日期" />
+          <el-button type="primary" @click="videoLibraryPage = 1; loadVideoLibrary()">筛选</el-button>
+          <el-button @click="Object.assign(videoLibraryFilters, { search: '', productModel: '', productCategory: '', platform: '', createdBy: '', dateFrom: '', dateTo: '' }); videoLibraryPage = 1; loadVideoLibrary()">重置</el-button>
+        </section>
+        <section v-if="outputCategory === 'VIDEO'" v-loading="videoLibraryLoading" class="section-card">
+          <div v-if="videoLibrary.length" class="output-library-grid">
+            <button v-for="entry in videoLibrary" :key="entry.id" class="output-library-card" @click="openVideoLibraryEntry(entry)">
+              <span class="output-library-cover"><el-icon><VideoCamera /></el-icon><em>视频</em></span>
+              <span class="output-library-copy"><strong>{{ entry.title }}</strong><small>{{ entry.productModel || '品牌通用' }} · {{ platformLabel(entry.platform) }}</small><span>{{ entry.createdBy || '系统' }} · {{ entry.outputAsset?.durationSeconds || '—' }}秒</span><span>{{ formatTime(entry.createdAt) }}</span></span>
+            </button>
+          </div>
+          <el-empty v-else description="暂无已审核通过的视频成品" />
+          <el-pagination v-if="videoLibraryTotal > 10" v-model:current-page="videoLibraryPage" small background layout="prev, pager, next" :page-size="10" :total="videoLibraryTotal" @current-change="loadVideoLibrary" />
+        </section>
+        <section v-else v-loading="outputLibraryLoading" class="section-card">
           <div v-if="outputLibrary.length" class="output-library-grid">
             <button v-for="output in outputLibrary" :key="output.id" class="output-library-card" @click="openSystemOutput(output)">
-              <span class="output-library-cover">
-                <el-icon><VideoCamera v-if="isVideoOutput(output)" /><Files v-else /></el-icon>
-                <em>{{ outputCategoryLabel(output) }}</em>
-              </span>
-              <span class="output-library-copy">
-                <strong>{{ output.title }}</strong>
-                <small>{{ output.aiTask?.taskNo }} · {{ output.aiTask?.platform ? platformLabel(output.aiTask.platform) : '全平台' }}</small>
-                <span v-if="outputPublishedVariants(output).length" class="output-published-platforms">
-                  已发布：{{ outputPublishedVariants(output).map((variant: Row) => platformLabel(variant.platform)).join("、") }}
-                </span>
-                <span>{{ formatTime(output.createdAt) }}</span>
-              </span>
+              <span class="output-library-cover"><el-icon><VideoCamera v-if="isVideoOutput(output)" /><Files v-else /></el-icon><em>{{ outputCategoryLabel(output) }}</em></span>
+              <span class="output-library-copy"><strong>{{ output.title }}</strong><small>{{ output.aiTask?.taskNo }} · {{ output.aiTask?.platform ? platformLabel(output.aiTask.platform) : '全平台' }}</small><span>{{ formatTime(output.createdAt) }}</span></span>
             </button>
           </div>
           <el-empty v-else description="该分类暂无成品" />
@@ -5814,6 +5912,7 @@ onBeforeUnmount(() => {
                 <div class="factory-project-head-actions">
                   <el-tag>{{ videoProjectStageLabel(project.productionStage) }}</el-tag>
                   <el-button @click="refreshActiveVideoProject">刷新</el-button>
+                  <el-button v-if="videoLibraryEntryId(project)" plain @click="openProjectReferenceVideo(project)">查看参考成品</el-button>
                   <el-button
                     v-if="canGenerateVideoScript"
                     type="danger"
@@ -7561,5 +7660,28 @@ onBeforeUnmount(() => {
       <el-button v-if="systemScriptConversationProject" @click="refreshSystemScriptConversationProject">只刷新当前项目</el-button>
       <el-button type="primary" @click="systemScriptConversationVisible = false">关闭</el-button>
     </template>
+  </el-dialog>
+
+  <el-dialog v-model="videoLibraryDetailVisible" :title="videoLibraryDetail?.title || '视频成品详情'" width="min(900px, 96vw)" destroy-on-close>
+    <div v-if="videoLibraryDetail" class="video-library-detail">
+      <video v-if="videoLibraryPreviewUrl" :src="videoLibraryPreviewUrl" controls playsinline preload="metadata" style="width:100%;max-height:58vh;background:#111;border-radius:10px" />
+      <div class="task-meta"><span>{{ videoLibraryDetail.productModel || '品牌通用' }}</span><span>{{ platformLabel(videoLibraryDetail.platform) }}</span><span>{{ videoLibraryDetail.createdBy || '系统' }}</span><span>{{ formatTime(videoLibraryDetail.createdAt) }}</span></div>
+      <section><h3>生成提示词</h3><pre>{{ videoLibraryDetail.snapshot?.prompt || videoLibraryDetail.snapshot?.project?.additionalPrompt || '未记录额外提示词' }}</pre><el-button size="small" @click="copyTaskContent(videoLibraryDetail.snapshot?.prompt || videoLibraryDetail.snapshot?.project?.additionalPrompt || '', '生成提示词')">复制提示词</el-button></section>
+      <section v-if="videoLibraryDetail.snapshot?.reference"><h3>原始参考链接</h3><a :href="videoLibraryDetail.snapshot.reference" target="_blank" rel="noopener noreferrer">打开原始参考</a></section>
+      <section><h3>来源项目</h3><p>{{ videoLibraryDetail.contentPlan?.productionNo || '—' }} · {{ videoLibraryDetail.contentPlan?.topic }}</p></section>
+      <section v-if="videoLibraryDetail.contentPlan?.variants?.some((item: Row) => item.manualPublishUrl)"><h3>发布链接</h3><a v-for="variant in videoLibraryDetail.contentPlan.variants.filter((item: Row) => item.manualPublishUrl)" :key="variant.id" :href="variant.manualPublishUrl" target="_blank" rel="noopener noreferrer">查看 {{ platformLabel(variant.platform) }} 作品</a></section>
+    </div>
+    <template #footer><el-button @click="videoLibraryDetailVisible = false">关闭</el-button><el-button v-if="canGenerateVideoScript" type="primary" @click="openVideoLibraryCreate">一键生成类似视频</el-button></template>
+  </el-dialog>
+
+  <el-dialog v-model="videoLibraryCreateVisible" title="从成品生成类似视频" width="min(650px, 94vw)" destroy-on-close>
+    <el-alert title="新项目会加入你的任务中心；项目详情可随时快速查看本成品作为参考。" type="info" :closable="false" />
+    <el-form label-position="top" style="margin-top:16px">
+      <el-form-item label="生成模式"><el-radio-group v-model="videoLibraryCreateForm.mode"><el-radio-button value="CONFIG_REUSE">复用项目配置</el-radio-button><el-radio-button value="REFERENCE_DIRECT">参考视频直出</el-radio-button></el-radio-group></el-form-item>
+      <el-form-item label="替换产品" required><el-select v-model="videoLibraryCreateForm.productModel" filterable><el-option v-for="product in productOptions" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" /></el-select></el-form-item>
+      <el-form-item label="目标语言"><el-radio-group v-model="videoLibraryCreateForm.targetLanguage"><el-radio-button value="ZH">中文</el-radio-button><el-radio-button value="EN">英文</el-radio-button></el-radio-group></el-form-item>
+      <el-form-item label="补充提示词"><el-input v-model="videoLibraryCreateForm.additionalPrompt" type="textarea" :rows="4" placeholder="说明本次希望调整的卖点、场景、节奏或风格" /></el-form-item>
+    </el-form>
+    <template #footer><el-button @click="videoLibraryCreateVisible = false">取消</el-button><el-button type="primary" :loading="videoLibraryCreating" @click="createVideoLibraryProject">创建项目</el-button></template>
   </el-dialog>
 </template>

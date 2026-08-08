@@ -55,6 +55,8 @@ docker compose --env-file "$production_env" --env-file "$images" -f "$compose" r
 docker compose --env-file "$production_env" --env-file "$images" -f "$compose" run --rm ops-api \
   node_modules/.bin/tsx prisma/backfill-video-factory.ts
 docker compose --env-file "$production_env" --env-file "$images" -f "$compose" run --rm ops-api \
+  node_modules/.bin/tsx scripts/backfill-video-content-library.ts
+docker compose --env-file "$production_env" --env-file "$images" -f "$compose" run --rm ops-api \
   node_modules/.bin/tsx prisma/backfill-task-projection-v2.ts --apply
 if ! docker compose --env-file "$production_env" --env-file "$images" -f "$compose" up -d --remove-orphans; then
   echo "compose startup did not reach healthy state yet; continuing with bounded health verification" >&2

@@ -289,6 +289,18 @@ export class OssStorageService {
     return this.client().signatureUrl(objectKey, { expires: expiresSeconds, method: "GET" });
   }
 
+  async objectExists(objectKey: string): Promise<boolean> {
+    try {
+      await this.client().head(objectKey);
+      return true;
+    } catch (error) {
+      const status = typeof error === "object" && error ? Number((error as { status?: unknown }).status ?? 0) : 0;
+      const code = typeof error === "object" && error ? String((error as { code?: unknown }).code ?? "") : "";
+      if (status === 404 || code === "NoSuchKey" || code === "NoSuchObject") return false;
+      throw error;
+    }
+  }
+
   async downloadBuffer(objectKey: string): Promise<Buffer> {
     const result = await this.client().get(objectKey);
     return Buffer.isBuffer(result.content) ? result.content : Buffer.from(result.content);

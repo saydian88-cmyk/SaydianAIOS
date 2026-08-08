@@ -237,6 +237,92 @@ export class WorkbenchService {
     throw new NotFoundException("成品暂无可预览文件");
   }
 
+  private async backfillVideoLibrary() {
+    const rows = await this.prisma.videoRenderJob.findMany({
+      where: { status: "SUCCEEDED", outputAsset: { is: { reviewStatus: "APPROVED", availabilityStatus: "ACTIVE" } } },
+      include: { outputAsset: true, contentPlan: true }, orderBy: { finishedAt: "desc" }, take: 500,
+    });
+    await Promise.all(rows.map((row) => {
+      const signals = Array.isArray(row.contentPlan.sourceSignals) ? row.contentPlan.sourceSignals as Array<Record<string, unknown>> : [];
+      const factory = signals.find((item) => item.type === "VIDEO_FACTORY") || {};
+      const brief = object(factory.brief);
+      return this.prisma.contentLibraryEntry.upsert({
+        where: { contentPlanId_outputAssetId: { contentPlanId: row.contentPlanId, outputAssetId: row.outputAssetId! } },
+        create: {
+          contentPlanId: row.contentPlanId, outputAssetId: row.outputAssetId!, renderJobId: row.id,
+          title: row.contentPlan.topic, productModel: row.contentPlan.productModel,
+          platform: String(row.contentPlan.targetPlatforms[0] || "DOUYIN"), createdBy: row.contentPlan.createdBy,
+          snapshot: { prompt: String(brief.additionalPrompt || row.contentPlan.objective || ""), reference: String(brief.reference || ""), project: { topic: row.contentPlan.topic, productModel: row.contentPlan.productModel || "", audience: row.contentPlan.audience, objective: row.contentPlan.objective, hook: row.contentPlan.hook, platform: row.contentPlan.targetPlatforms[0] || "DOUYIN", voiceoverMode: String(factory.voiceoverMode || "AUTO"), videoType: String(brief.videoType || ""), keywords: String(brief.keywords || ""), scene: String(brief.scene || ""), painPoint: String(brief.painPoint || ""), additionalPrompt: String(brief.additionalPrompt || "") } } as Prisma.InputJsonValue,
+        }, update: {},
+      });
+    }));
+  }
+
+  async videoLibrary(query: Record<string, string | undefined>) {
+    const search = value(query.search);
+    const productModel = value(query.productModel);
+    const productCategory = value(query.productCategory);
+    const platform = value(query.platform);
+    const createdBy = value(query.createdBy);
+    const dateFrom = date(query.dateFrom);
+    const dateTo = date(query.dateTo);
+    if (dateTo && /^\d{4}-\d{2}-\d{2}$/.test(value(query.dateTo))) dateTo.setHours(23, 59, 59, 999);
+    const pageSize = Math.min(Math.max(Number(query.pageSize) || 10, 1), 30);
+    const page = Math.max(Number(query.page) || 1, 1);
+    const where: Prisma.ContentLibraryEntryWhereInput = {
+        category: "VIDEO", visibilityStatus: "ACTIVE",
+        outputAsset: { is: { reviewStatus: "APPROVED", availabilityStatus: "ACTIVE", deletedAt: null, objectKey: { not: null } } },
+        ...(productModel ? { productModel } : {}),
+        ...(productCategory ? { productCategory } : {}),
+        ...(platform ? { platform } : {}),
+        ...(createdBy ? { createdBy } : {}),
+        ...(dateFrom || dateTo ? { createdAt: { ...(dateFrom ? { gte: dateFrom } : {}), ...(dateTo ? { lte: dateTo } : {}) } } : {}),
+        ...(search ? { OR: [{ title: { contains: search, mode: "insensitive" } }, { productModel: { contains: search, mode: "insensitive" } }, { createdBy: { contains: search, mode: "insensitive" } }] } : {}),
+    };
+    const [items, total, categoryRows] = await Promise.all([
+      this.prisma.contentLibraryEntry.findMany({
+      where,
+      include: {
+        outputAsset: { select: { id: true, displayName: true, fileName: true, durationSeconds: true, width: true, height: true, objectKey: true, sourceSnapshot: true, reviewStatus: true, availabilityStatus: true, deletedAt: true } },
+        contentPlan: { select: { id: true, productionNo: true, topic: true, variants: { select: { id: true, platform: true, title: true, manualPublishUrl: true, manualPublishedAt: true } } } },
+      }, orderBy: { createdAt: "desc" }, skip: (page - 1) * pageSize, take: pageSize,
+      }),
+      this.prisma.contentLibraryEntry.count({ where }),
+      this.prisma.contentLibraryEntry.findMany({ where: { category: "VIDEO", visibilityStatus: "ACTIVE", productCategory: { not: null } }, select: { productCategory: true }, distinct: ["productCategory"], orderBy: { productCategory: "asc" } }),
+    ]);
+    const available = await Promise.all(items.map(async (item) => {
+      if (!item.outputAsset.objectKey || await this.oss.objectExists(item.outputAsset.objectKey)) return item;
+      await this.prisma.contentLibraryEntry.update({ where: { id: item.id }, data: { visibilityStatus: "HIDDEN", hiddenAt: new Date(), hiddenBy: "SYSTEM_STORAGE_CHECK" } });
+      return null;
+    }));
+    return { items: available.filter(Boolean).map((item) => ({ ...item!, previewUrl: `/api/v1/workbench/video-library/${item!.id}/url` })), total, page, pageSize, categories: categoryRows.map((item) => item.productCategory).filter(Boolean) };
+  }
+
+  async videoLibraryEntry(id: string) {
+    const item = await this.prisma.contentLibraryEntry.findFirst({
+      where: { id, category: "VIDEO", visibilityStatus: "ACTIVE", outputAsset: { is: { reviewStatus: "APPROVED", availabilityStatus: "ACTIVE", deletedAt: null, objectKey: { not: null } } } },
+      include: {
+        outputAsset: { select: { id: true, displayName: true, fileName: true, durationSeconds: true, width: true, height: true, objectKey: true, sourceSnapshot: true, reviewStatus: true, availabilityStatus: true, deletedAt: true } },
+        contentPlan: { select: { id: true, productionNo: true, topic: true, productModel: true, audience: true, objective: true, hook: true, variants: { select: { id: true, platform: true, title: true, body: true, manualPublishUrl: true, manualPublishedAt: true } } } },
+      },
+    });
+    if (!item) throw new NotFoundException("Video library entry not found");
+    if (!item.outputAsset.objectKey || !await this.oss.objectExists(item.outputAsset.objectKey)) {
+      await this.prisma.contentLibraryEntry.update({ where: { id }, data: { visibilityStatus: "HIDDEN", hiddenAt: new Date(), hiddenBy: "SYSTEM_STORAGE_CHECK" } });
+      throw new NotFoundException("Video asset is unavailable");
+    }
+    return { ...item, previewUrl: `/api/v1/workbench/video-library/${item.id}/url` };
+  }
+
+  async videoLibraryUrl(id: string) {
+    const item = await this.prisma.contentLibraryEntry.findFirst({ where: { id, category: "VIDEO", visibilityStatus: "ACTIVE", outputAsset: { is: { reviewStatus: "APPROVED", availabilityStatus: "ACTIVE", deletedAt: null, objectKey: { not: null } } } }, include: { outputAsset: true } });
+    if (!item?.outputAsset?.objectKey || !await this.oss.objectExists(item.outputAsset.objectKey)) {
+      if (item) await this.prisma.contentLibraryEntry.update({ where: { id }, data: { visibilityStatus: "HIDDEN", hiddenAt: new Date(), hiddenBy: "SYSTEM_STORAGE_CHECK" } });
+      throw new NotFoundException("Video preview is unavailable");
+    }
+    return { url: this.oss.signedDownloadUrl(item.outputAsset.objectKey, 1_800) };
+  }
+
   async tasks(session: SessionPayload, query: Record<string, string | undefined>) {
     const status = value(query.status).toUpperCase();
     const statusGroups: Record<string, string[]> = {
