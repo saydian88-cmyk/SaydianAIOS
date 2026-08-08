@@ -15,6 +15,7 @@
     "prisma:backfill:v2": "tsx prisma/backfill-asset-v2.ts",
     "prisma:backfill:video-factory": "tsx prisma/backfill-video-factory.ts",
     "prisma:backfill:task-projection-v2": "tsx prisma/backfill-task-projection-v2.ts",
+    "prisma:quarantine:douyin-masters": "tsx prisma/quarantine-invalid-douyin-masters.ts",
     "aliyun:media:setup": "tsx scripts/setup-aliyun-media.ts"
   },
   "dependencies": {

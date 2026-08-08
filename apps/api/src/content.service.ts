@@ -1466,7 +1466,7 @@ export class ContentService {
       },
       update: {},
     });
-    const metricHours = [3, 72, 168, 720];
+    const metricHours = [1, 24, 72, 168];
     await this.prisma.$transaction([
       this.prisma.contentVariant.update({ where: { id: variantId }, data: { status: "PUBLISHED", manualPublishUrl: remoteUrl || null, manualExternalId: remoteId || null, manualPublishedAt: publishedAt } }),
       this.prisma.contentPlan.update({ where: { id: variant.contentPlanId }, data: { status: "PUBLISHED", productionStage: "TRACKING", publishedAt } }),

@@ -9,6 +9,7 @@ import { OssStorageService } from "./oss-storage.service";
 import { PrismaService } from "./prisma.service";
 import { localDateKey } from "./utils";
 import { WecomNotificationService } from "./wecom-notification.service";
+import { canonicalVideoShotKey, validateVideoMasterMetadata } from "./video-output-validation";
 import {
   DEFAULT_VIDEO_POLICY_CONFIG,
   normalizeTopicText,
@@ -47,6 +48,7 @@ type ProjectCreateInput = {
   requestedModelId?: string;
   routingMode?: string;
   allowFallback?: boolean;
+  allowExternalGeneration?: boolean;
   deferScriptGeneration?: boolean;
   healthContentAllowed?: boolean;
   soundPrompt?: string;
@@ -76,6 +78,7 @@ type GenerateInput = {
   requestedModelId?: string;
   routingMode?: string;
   allowFallback?: boolean;
+  allowExternalGeneration?: boolean;
   prepareOnly?: boolean;
 };
 
@@ -102,6 +105,8 @@ type TopicCardApprovalInput = {
   executionMode: Exclude<VideoExecutionMode, "TOPIC_CARD_BATCH">;
   ownerId: string;
   reviewerId: string;
+  allowExternalGeneration?: boolean;
+  requestedModelId?: string;
 };
 
 const PROVIDER_SEEDS = [
@@ -197,6 +202,17 @@ function strings(value: unknown): string[] {
 
 function object(value: unknown): JsonRow {
   return value && typeof value === "object" && !Array.isArray(value) ? value as JsonRow : {};
+}
+
+function parsedBodyValue(value: unknown) {
+  if (typeof value !== "string") return value;
+  const source = value.trim();
+  if (!source) return undefined;
+  try {
+    return JSON.parse(source) as unknown;
+  } catch {
+    throw new BadRequestException("成片证据字段不是有效JSON");
+  }
 }
 
 function cleanVoiceoverText(value: unknown) {
@@ -393,25 +409,6 @@ export function partitionVideoShotAssetIds(
     matchedVideoAssetIds,
     auxiliaryImageAssetIds: Array.from(new Set([...auxiliaryImageAssetIds, ...imageAssetIds])),
   };
-}
-
-export function applyVideoShotImageFallback<T extends {
-  matchedAssetIds: string[];
-  matchedVideoAssetIds: string[];
-  auxiliaryImageAssetIds: string[];
-  reason: string;
-}>(coverage: T[], approvedImageAssetIds: string[]): T[] {
-  if (!approvedImageAssetIds.length) return coverage;
-  return coverage.map((shot, index) => {
-    if (shot.matchedVideoAssetIds.length || shot.auxiliaryImageAssetIds.length) return shot;
-    const fallbackId = approvedImageAssetIds[index % approvedImageAssetIds.length];
-    return {
-      ...shot,
-      matchedAssetIds: Array.from(new Set([...shot.matchedAssetIds, fallbackId])),
-      auxiliaryImageAssetIds: [fallbackId],
-      reason: `${shot.reason}；使用已审核产品图保持产品外观一致`,
-    };
-  });
 }
 
 export function videoFactoryModule(plan: { sourceSignals: unknown }) {
@@ -920,8 +917,72 @@ export class VideoFactoryService {
   }
 
   async registerLocalMaster(contentPlanId: string, assetId: string, taskId: string, actor: string, videoKey = "") {
-    const asset = await this.prisma.asset.findUnique({ where: { id: assetId } });
+    const [asset, plan, projectAssets] = await Promise.all([
+      this.prisma.asset.findUnique({ where: { id: assetId }, include: { versions: { orderBy: { version: "desc" }, take: 1 } } }),
+      this.prisma.contentPlan.findUnique({ where: { id: contentPlanId }, include: { videoShots: true } }),
+      this.prisma.contentAsset.findMany({
+        where: { contentPlanId, role: { not: "VIDEO_FACTORY_MASTER" } },
+        select: { assetId: true },
+      }),
+    ]);
     if (!asset) throw new NotFoundException("视频成品不存在");
+    if (!plan) throw new NotFoundException("视频项目不存在");
+    const dedicatedDouyin = videoFactoryModule(plan) === "DOUYIN_VIRAL";
+    const sourceMetadata = object(object(asset.sourceSnapshot).metadata);
+    const versionMetadata = object(asset.versions[0]?.technicalMetadata);
+    const expectedShotLineIds = new Set(plan.videoShots
+      .map((shot) => String(object(shot.metadata).lineId || "").trim())
+      .filter(Boolean));
+    const validation = validateVideoMasterMetadata({
+      ...sourceMetadata,
+      ...versionMetadata,
+      width: asset.width || versionMetadata.width || sourceMetadata.width,
+      height: asset.height || versionMetadata.height || sourceMetadata.height,
+      durationSeconds: asset.durationSeconds || versionMetadata.durationSeconds || sourceMetadata.durationSeconds,
+      codec: asset.versions[0]?.codec || versionMetadata.codec || sourceMetadata.codec,
+      frameRate: versionMetadata.frameRate || sourceMetadata.frameRate,
+    }, {
+      requireMaterialUsage: dedicatedDouyin,
+      allowedAssetIds: new Set(projectAssets.map((item) => item.assetId)),
+      ...(expectedShotLineIds.size ? { expectedShotLineIds } : {}),
+    });
+    if (dedicatedDouyin) {
+      const requiredChecks = new Set(["OUTPUT_VALIDITY", "MATERIAL_TRACE", "CONTENT_ALIGNMENT"]);
+      for (const check of validation.metadata.qualityChecks) requiredChecks.delete(check.checkType);
+      if (requiredChecks.size) validation.hardBlockers.push(`缺少质检项：${Array.from(requiredChecks).join("、")}`);
+      const usedAssetIds = [...new Set(validation.metadata.materialUsage.map((item) => item.assetId).filter(Boolean))];
+      const usedAssets = usedAssetIds.length ? await this.prisma.asset.findMany({
+        where: {
+          id: { in: usedAssetIds },
+          reviewStatus: "APPROVED",
+          availabilityStatus: "ACTIVE",
+          rightsStatus: { in: ["COMMERCIAL", "EDIT_ONLY"] },
+          deletedAt: null,
+        },
+        select: { id: true, sha256: true },
+      }) : [];
+      const usedAssetMap = new Map(usedAssets.map((item) => [item.id, item.sha256]));
+      for (const usage of validation.metadata.materialUsage) {
+        if (!usedAssetMap.has(usage.assetId)) validation.hardBlockers.push(`素材${usage.assetId || "未填写"}未审核、未启用或不可商用`);
+        else if (usedAssetMap.get(usage.assetId) !== usage.sha256) validation.hardBlockers.push(`素材${usage.assetId}哈希与登记值不一致`);
+      }
+    }
+    if (validation.hardBlockers.length) {
+      const blockers = [...new Set(validation.hardBlockers)];
+      await this.prisma.$transaction([
+        this.prisma.asset.update({
+          where: { id: asset.id },
+          data: { reviewStatus: "RETURNED", availabilityStatus: "INACTIVE", status: "PENDING", reviewedBy: actor, reviewedAt: new Date() },
+        }),
+        this.prisma.videoQualityCheck.create({
+          data: { contentPlanId, assetId, checkType: "OUTPUT_VALIDITY", status: "FAILED", score: 0, findings: blockers as unknown as Prisma.InputJsonValue },
+        }),
+        this.prisma.auditLog.create({
+          data: { actor, action: "VIDEO_MASTER_ADMISSION_REJECTED", entityType: "Asset", entityId: asset.id, after: { reason: "INVALID_VIDEO_MASTER", blockers } },
+        }),
+      ]);
+      throw new BadRequestException(`成片未通过准入：${blockers.join("；")}`);
+    }
     const renderJob = await this.prisma.videoRenderJob.upsert({
       where: { idempotencyKey: `video-render:codex-local:${contentPlanId}:${assetId}` },
       create: {
@@ -951,6 +1012,34 @@ export class VideoFactoryService {
       where: { contentPlanId, assetId, renderJobId: null },
       data: { renderJobId: renderJob.id },
     });
+    for (const check of validation.metadata.qualityChecks) {
+      const existingCheck = await this.prisma.videoQualityCheck.findFirst({
+        where: { contentPlanId, assetId, checkType: check.checkType },
+        orderBy: { createdAt: "desc" },
+      });
+      const data = {
+        renderJobId: renderJob.id,
+        status: check.status,
+        score: check.score,
+        findings: check.findings as Prisma.InputJsonValue,
+      };
+      if (existingCheck) await this.prisma.videoQualityCheck.update({ where: { id: existingCheck.id }, data });
+      else await this.prisma.videoQualityCheck.create({ data: { contentPlanId, assetId, checkType: check.checkType, ...data } });
+    }
+    const existingFinalReview = await this.prisma.videoQualityCheck.findFirst({
+      where: { contentPlanId, assetId, checkType: "FINAL_REVIEW" },
+      orderBy: { createdAt: "desc" },
+    });
+    if (existingFinalReview) {
+      await this.prisma.videoQualityCheck.update({
+        where: { id: existingFinalReview.id },
+        data: { renderJobId: renderJob.id, status: "REVIEW_REQUIRED", score: 0, findings: [] },
+      });
+    } else {
+      await this.prisma.videoQualityCheck.create({
+        data: { contentPlanId, assetId, renderJobId: renderJob.id, checkType: "FINAL_REVIEW", status: "REVIEW_REQUIRED", score: 0, findings: [] },
+      });
+    }
     await this.prisma.contentPlan.update({
       where: { id: contentPlanId },
       data: { masterVideoPath: asset.storageUrl || asset.sourcePath },
@@ -1465,6 +1554,32 @@ export class VideoFactoryService {
     ]);
     if (!product || card.missingFacts.some((item) => item.includes("产品"))) throw new BadRequestException("缺少已审核产品事实，暂不能执行");
     if (employees.length !== new Set([input.ownerId, input.reviewerId]).size) throw new BadRequestException("负责人或审核人不存在");
+    if (input.executionMode === "FULL_VIDEO") {
+      const criticalModules = new Set(["PRODUCT", "DEMO", "FUNCTION", "FEATURE", "PROOF"]);
+      const missingShots = card.materialCoverage.missingShots || [];
+      const criticalMissing = missingShots.filter((item) => criticalModules.has(String(item.moduleType || "").toUpperCase()));
+      if (criticalMissing.length) {
+        throw new BadRequestException(`产品关键镜头未覆盖：${criticalMissing.map((item) => item.description || item.moduleType).join("、")}`);
+      }
+      if (card.materialCoverage.coveragePercent < 100 && !input.allowExternalGeneration) {
+        throw new BadRequestException("真实素材覆盖不足，请补充素材，或明确开启外部模型补充非产品场景");
+      }
+      if (card.materialCoverage.coveragePercent < 100 && input.allowExternalGeneration) {
+        const model = input.requestedModelId
+          ? await this.prisma.videoModelConfig.findFirst({
+            where: { id: input.requestedModelId, enabled: true, provider: { enabled: true, state: "HEALTHY" } },
+            include: { provider: true },
+          })
+          : await this.prisma.videoModelConfig.findFirst({
+            where: {
+              enabled: true,
+              provider: { enabled: true, state: "HEALTHY", code: { in: ["VOLCENGINE_SEEDANCE", "KLING"] } },
+            },
+            include: { provider: true },
+          });
+        if (!model) throw new BadRequestException("外部补镜头模型尚未通过健康检查，请先配置并检查 Seedance 或 Kling");
+      }
+    }
     return {
       plan,
       card,
@@ -1481,6 +1596,8 @@ export class VideoFactoryService {
       reviewerEmployeeId: input.reviewerId,
       approvedAiTaskId: aiTaskId,
       approvedExecutionMode: input.executionMode,
+      approvedAllowExternalGeneration: input.allowExternalGeneration === true,
+      approvedRequestedModelId: input.requestedModelId || undefined,
     };
     const signals = sourceSignals(prepared.plan);
     const nextSignals = [
@@ -1540,6 +1657,7 @@ export class VideoFactoryService {
     routingMode?: string;
     requestedModelId?: string;
     allowFallback?: boolean;
+    allowExternalGeneration?: boolean;
   }, actor: string) {
     const platform = integrationKind(input.platform);
     const productionNo = `VF-${localDateKey(new Date()).replaceAll("-", "")}-${randomUUID().slice(0, 6).toUpperCase()}`;
@@ -1573,7 +1691,8 @@ export class VideoFactoryService {
             factoryModule: input.factoryModule === "DOUYIN_VIRAL" ? "DOUYIN_VIRAL" : "GENERAL_VIDEO_FACTORY",
             routingMode: input.routingMode === "FIXED" ? "FIXED" : "AUTO",
             requestedModelId: input.requestedModelId || undefined,
-            allowFallback: input.allowFallback !== false,
+            allowFallback: input.allowFallback === true,
+            allowExternalGeneration: input.allowExternalGeneration === true,
           }] as unknown as Prisma.InputJsonValue,
           evidenceIds: [],
           status: ContentStatus.DRAFT,
@@ -2784,6 +2903,7 @@ export class VideoFactoryService {
       return {
         ...shot,
         sequence: index,
+        lineId: String(shot.lineId || `line_${String(index + 1).padStart(2, "0")}`),
         durationSeconds: Math.max(2, Math.min(12, Math.round(number(shot.durationSeconds, 4)))),
         selectedAssetIds,
         missingReason: selectedAssetIds.length
@@ -2836,10 +2956,8 @@ export class VideoFactoryService {
         : []),
     ];
     const platform = plan.targetPlatforms[0] || IntegrationKind.DOUYIN;
+    const canonicalShotKeys = shots.map((shot) => canonicalVideoShotKey(shot.lineId, shot.sequence));
     await this.prisma.$transaction(async (tx) => {
-      await tx.videoShot.deleteMany({
-        where: { contentPlanId: plan.id, requirementKey: { startsWith: "system-v4-" } },
-      });
       await tx.contentPlan.update({
         where: { id: plan.id },
         data: {
@@ -2848,7 +2966,7 @@ export class VideoFactoryService {
           scoreBreakdown: selected.scoreBreakdown as Prisma.InputJsonValue,
           outline: shots as unknown as Prisma.InputJsonValue,
           shootRequirements: shots.map((shot) => ({
-            key: `codex-v3-${shot.sequence}`,
+            key: canonicalVideoShotKey(shot.lineId, shot.sequence),
             title: shot.title,
             description: shot.description,
             moduleType: shot.moduleType,
@@ -2870,22 +2988,43 @@ export class VideoFactoryService {
           body: selected.script,
           mediaType: "VIDEO",
           coverSpec: { text: selected.hook, ratio: "9:16" },
-          metadata: { cta: selected.cta, templateCode: selected.templateCode },
+          metadata: {
+            cta: selected.cta,
+            templateCode: selected.templateCode,
+            hashtags: strings(selected.hashtags),
+            publicationPackage: {
+              title: selected.title || plan.topic,
+              coverText: selected.hook,
+              commentGuide: selected.cta || "结合本条内容提出一个具体使用问题",
+              publishTimeSuggestion: "由运营结合账号近7日活跃时段确认",
+            },
+          },
         },
         update: {
           title: selected.title || plan.topic,
           body: selected.script,
           coverSpec: { text: selected.hook, ratio: "9:16" },
-          metadata: { cta: selected.cta, templateCode: selected.templateCode },
+          metadata: {
+            cta: selected.cta,
+            templateCode: selected.templateCode,
+            hashtags: strings(selected.hashtags),
+            publicationPackage: {
+              title: selected.title || plan.topic,
+              coverText: selected.hook,
+              commentGuide: selected.cta || "结合本条内容提出一个具体使用问题",
+              publishTimeSuggestion: "由运营结合账号近7日活跃时段确认",
+            },
+          },
         },
       });
       for (const shot of shots) {
         const selectedAssetId = shot.selectedAssetIds[0] || null;
+        const requirementKey = canonicalVideoShotKey(shot.lineId, shot.sequence);
         await tx.videoShot.upsert({
-          where: { contentPlanId_requirementKey: { contentPlanId: plan.id, requirementKey: `codex-v3-${shot.sequence}` } },
+          where: { contentPlanId_requirementKey: { contentPlanId: plan.id, requirementKey } },
           create: {
             contentPlanId: plan.id,
-            requirementKey: `codex-v3-${shot.sequence}`,
+            requirementKey,
             sequence: shot.sequence,
             title: shot.title,
             description: shot.description,
@@ -3004,6 +3143,7 @@ export class VideoFactoryService {
     if (!shot) throw new BadRequestException("当前脚本行不存在");
     const sequence = Math.max(0, Math.round(number(shot.sequence, lineIndex)));
     const lineId = String(shot.lineId || `line_${String(sequence + 1).padStart(2, "0")}`);
+    const requirementKey = canonicalVideoShotKey(lineId, sequence);
     const requestedAssetIds = strings(shot.selectedAssetIds);
     const approvedAssets = requestedAssetIds.length
       ? await this.prisma.asset.findMany({
@@ -3013,11 +3153,11 @@ export class VideoFactoryService {
       : [];
     const approvedIds = new Set(approvedAssets.map((asset) => asset.id));
     const selectedAssetIds = requestedAssetIds.filter((assetId) => approvedIds.has(assetId));
-    await this.prisma.videoShot.upsert({
-      where: { contentPlanId_requirementKey: { contentPlanId, requirementKey: `system-v4-${lineId}` } },
+    const canonicalShot = await this.prisma.videoShot.upsert({
+      where: { contentPlanId_requirementKey: { contentPlanId, requirementKey } },
       create: {
         contentPlanId,
-        requirementKey: `system-v4-${lineId}`,
+        requirementKey,
         sequence,
         title: String(shot.title || shot.description || lineId),
         description: String(shot.description || shot.visual || shot.voiceover || ""),
@@ -3044,6 +3184,17 @@ export class VideoFactoryService {
         subtitle: String(shot.subtitle || ""),
         assetIds: selectedAssetIds,
         selectedAssetId: selectedAssetIds[0] || null,
+      },
+    });
+    await this.prisma.videoShot.deleteMany({
+      where: {
+        contentPlanId,
+        id: { not: canonicalShot.id },
+        OR: [
+          { requirementKey: `system-v4-${lineId}` },
+          { requirementKey: `codex-v3-${sequence}` },
+          { metadata: { path: ["lineId"], equals: lineId } },
+        ],
       },
     });
     return this.project(contentPlanId);
@@ -3667,7 +3818,8 @@ export class VideoFactoryService {
             assetGapTaskId: context.assetGapTask?.id,
             requestedModelId: input.requestedModelId,
             routingMode: input.routingMode || "AUTO",
-            allowFallback: input.allowFallback !== false,
+            allowFallback: input.allowFallback === true,
+            allowExternalGeneration: input.allowExternalGeneration === true,
             externalReferencePolicy: "STRUCTURE_ONLY",
             voiceoverMode: context.voiceoverMode,
             accountType: context.accountType,
@@ -3693,7 +3845,15 @@ export class VideoFactoryService {
                 text: context.platform === "TIKTOK" ? primary.coverTextEn : primary.coverTextZh,
                 ratio: "9:16",
               },
-              metadata: { hashtags: primary.hashtags },
+              metadata: {
+                hashtags: primary.hashtags,
+                publicationPackage: {
+                  title: context.platform === "TIKTOK" ? primary.titleEn : primary.titleZh,
+                  coverText: context.platform === "TIKTOK" ? primary.coverTextEn : primary.coverTextZh,
+                  commentGuide: "结合本条内容提出一个具体使用问题",
+                  publishTimeSuggestion: "由运营结合账号近7日活跃时段确认",
+                },
+              },
             }],
           },
         },
@@ -3767,7 +3927,8 @@ export class VideoFactoryService {
       objective: `基于已审核成片生成相似视频。${replacementNotes.join("；")}`,
       routingMode: String(factory.routingMode || "AUTO"),
       requestedModelId: factory.requestedModelId ? String(factory.requestedModelId) : undefined,
-      allowFallback: factory.allowFallback !== false,
+      allowFallback: factory.allowFallback === true,
+      allowExternalGeneration: factory.allowExternalGeneration === true,
     }, actor);
 
     const createdSignals = sourceSignals(created);
@@ -3807,7 +3968,8 @@ export class VideoFactoryService {
       candidateIndex: 0,
       routingMode: String(factory.routingMode || "AUTO"),
       requestedModelId: factory.requestedModelId ? String(factory.requestedModelId) : undefined,
-      allowFallback: factory.allowFallback !== false,
+      allowFallback: factory.allowFallback === true,
+      allowExternalGeneration: factory.allowExternalGeneration === true,
     }, actor);
     return this.project(created.id);
   }
@@ -3828,9 +3990,13 @@ export class VideoFactoryService {
     const selected = candidates[candidateIndex];
     if (!selected) throw new BadRequestException("项目没有可执行脚本");
     const selectedRecord = selected as unknown as Record<string, unknown>;
-    const selectedShots = Array.isArray(selectedRecord.shots)
+    const rawSelectedShots = Array.isArray(selectedRecord.shots)
       ? selectedRecord.shots as Array<Record<string, unknown>>
       : [];
+    const selectedShots: Array<Record<string, unknown> & { lineId: string }> = Array.from(new Map<string, Record<string, unknown> & { lineId: string }>(rawSelectedShots.map((shot, index) => {
+      const lineId = String(shot.lineId || `line_${String(index + 1).padStart(2, "0")}`).trim();
+      return [lineId, { ...shot, lineId }];
+    })).values());
     const selectedOutline = Array.isArray(selectedRecord.outline)
       ? strings(selectedRecord.outline)
       : selectedShots.map((shot) => String(shot.visual || shot.description || shot.voiceover || "")).filter(Boolean);
@@ -3863,7 +4029,7 @@ export class VideoFactoryService {
       include: { tags: { include: { tag: true } } },
     }) : [];
     const preMatchedShots = selectedShots;
-    let coverage: Array<{ description: string; matchedAssetIds: string[]; matchedVideoAssetIds: string[]; auxiliaryImageAssetIds: string[]; coverage: "EXISTING" | "MISSING"; reason: string }> = preMatchedShots.map((shot) => {
+    let coverage: Array<{ lineId: string; moduleType: string; description: string; matchedAssetIds: string[]; matchedVideoAssetIds: string[]; auxiliaryImageAssetIds: string[]; coverage: "EXISTING" | "MISSING"; reason: string }> = preMatchedShots.map((shot, index) => {
       const selectedAssetIds = strings(shot.selectedAssetIds);
       const { matchedVideoAssetIds, auxiliaryImageAssetIds } = partitionVideoShotAssetIds(
         selectedAssetIds,
@@ -3871,17 +4037,19 @@ export class VideoFactoryService {
         assets,
       );
       return {
+        lineId: String(shot.lineId || `line_${String(index + 1).padStart(2, "0")}`),
+        moduleType: String(shot.moduleType || (index === 0 ? "HOOK" : index === preMatchedShots.length - 1 ? "CTA" : "SCENE")).toUpperCase(),
         description: String(shot.visual || shot.description || shot.voiceover || ""),
         matchedAssetIds: Array.from(new Set([...selectedAssetIds, ...auxiliaryImageAssetIds])),
         matchedVideoAssetIds,
         auxiliaryImageAssetIds,
-        coverage: matchedVideoAssetIds.length ? "EXISTING" : "MISSING",
-        reason: String(shot.materialMatchReason || shot.missingReason || (matchedVideoAssetIds.length ? "脚本生成阶段已完成素材预匹配" : "缺少匹配的连续视频镜头")),
+        coverage: matchedVideoAssetIds.length || auxiliaryImageAssetIds.length ? "EXISTING" : "MISSING",
+        reason: String(shot.materialMatchReason || shot.missingReason || (matchedVideoAssetIds.length || auxiliaryImageAssetIds.length ? "脚本生成阶段已按分镜完成素材预匹配" : "缺少明确匹配的真实素材")),
       };
     });
     if (!coverage.length) {
       try {
-        coverage = (await this.aiContent.analyzeVideoAssetCoverage({
+        const analyzed = (await this.aiContent.analyzeVideoAssetCoverage({
           productModel: plan.productModel,
           script: selected,
           assets: assets.map((asset) => ({
@@ -3892,31 +4060,38 @@ export class VideoFactoryService {
             tags: asset.tags.map((item) => item.tag.label),
           })),
         })).shots;
+        coverage = analyzed.map((item, index) => ({
+          ...item,
+          lineId: `line_${String(index + 1).padStart(2, "0")}`,
+          moduleType: index === 0 ? "HOOK" : index === analyzed.length - 1 ? "CTA" : "SCENE",
+        }));
       } catch {
-        const videoIds = assets.filter((asset) => asset.kind === "VIDEO").map((asset) => asset.id);
         coverage = selectedOutline.map((description, index) => ({
+          lineId: `line_${String(index + 1).padStart(2, "0")}`,
+          moduleType: index === 0 ? "HOOK" : index === selectedOutline.length - 1 ? "CTA" : "SCENE",
           description,
-          matchedAssetIds: videoIds[index] ? [videoIds[index]] : [],
-          matchedVideoAssetIds: videoIds[index] ? [videoIds[index]] : [],
+          matchedAssetIds: [],
+          matchedVideoAssetIds: [],
           auxiliaryImageAssetIds: [],
-          coverage: videoIds[index] ? "EXISTING" : "MISSING",
-          reason: videoIds[index] ? "使用已审核真实视频素材" : "缺少匹配的连续视频镜头",
+          coverage: "MISSING",
+          reason: "自动素材匹配失败，未按文件顺序替代，请重新匹配或补充素材",
         }));
       }
     }
     if (!coverage.length) throw new BadRequestException("未能生成分镜素材清单");
-    coverage = applyVideoShotImageFallback(
-      coverage,
-      assets.filter((asset) => asset.kind === "IMAGE").map((asset) => asset.id),
-    );
-
     const signals = sourceSignals(plan);
     const factorySignal = signals.find((item) => item.type === "VIDEO_FACTORY") || {};
     const factoryModule = videoFactoryModule(plan);
     const routingMode = String(input.routingMode || factorySignal.routingMode || "AUTO").toUpperCase();
     const requestedModelId = String(input.requestedModelId || factorySignal.requestedModelId || "").trim() || undefined;
-    const allowFallback = input.allowFallback ?? factorySignal.allowFallback !== false;
-    if (!input.prepareOnly && coverage.some((shot) => shot.coverage === "MISSING")) {
+    const allowExternalGeneration = input.allowExternalGeneration === true;
+    const allowFallback = allowExternalGeneration && (input.allowFallback ?? factorySignal.allowFallback === true);
+    const criticalModules = new Set(["PRODUCT", "DEMO", "FUNCTION", "FEATURE", "PROOF"]);
+    const criticalMissing = coverage.filter((shot) => shot.coverage === "MISSING" && criticalModules.has(shot.moduleType));
+    if (factoryModule === "DOUYIN_VIRAL" && criticalMissing.length) {
+      throw new BadRequestException(`产品关键镜头缺失：${criticalMissing.map((shot) => shot.description).join("、")}。请补充已审核真实素材后再生成完整视频`);
+    }
+    if (!input.prepareOnly && allowExternalGeneration && coverage.some((shot) => shot.coverage === "MISSING")) {
       const modelRequirements = Array.from(new Map(coverage
         .filter((shot) => shot.coverage === "MISSING")
         .map((shot) => {
@@ -3931,29 +4106,50 @@ export class VideoFactoryService {
 
     await this.prisma.$transaction(async (tx) => {
       await tx.videoGenerationJob.deleteMany({ where: { contentPlanId: id, status: { in: ["PENDING", "RETRY"] } } });
-      await tx.videoShot.deleteMany({ where: { contentPlanId: id } });
       const requirements: Array<Record<string, unknown>> = [];
+      const canonicalShotKeys: string[] = [];
       for (let index = 0; index < coverage.length; index += 1) {
         const item = coverage[index];
-        const requirementKey = `factory-shot-${index + 1}`;
+        const requirementKey = canonicalVideoShotKey(item.lineId, index);
+        canonicalShotKeys.push(requirementKey);
         const selectedAssetId = item.matchedVideoAssetIds[0] || null;
-        const shot = await tx.videoShot.create({
-          data: {
+        const shot = await tx.videoShot.upsert({
+          where: { contentPlanId_requirementKey: { contentPlanId: id, requirementKey } },
+          create: {
             contentPlanId: id,
             requirementKey,
             sequence: index,
             title: `镜头${index + 1}`,
             description: item.description,
-            moduleType: index === 0 ? "HOOK" : index === coverage.length - 1 ? "CTA" : "SCENE",
+            moduleType: item.moduleType,
             status: selectedAssetId ? "DONE" : "OPEN",
-            sourcePreference: selectedAssetId ? "REAL_ASSET" : (input.prepareOnly ? "REAL_ASSET_FIRST" : "AI_GENERATED"),
+            sourcePreference: selectedAssetId ? "REAL_ASSET" : (allowExternalGeneration && !input.prepareOnly ? "AI_GENERATED" : "REAL_ASSET_FIRST"),
             durationSeconds: 5,
             prompt: item.description,
             assetIds: item.matchedAssetIds,
             selectedAssetId,
             requestedModelId,
             metadata: {
-              lineId: String(preMatchedShots[index]?.lineId || `line_${String(index + 1).padStart(2, "0")}`),
+              lineId: item.lineId,
+              candidateIndex,
+              candidateGeneratedAt: String((selected as unknown as Record<string, unknown>).generatedAt || ""),
+              reason: item.reason,
+              imageAssetIds: item.auxiliaryImageAssetIds,
+            },
+          },
+          update: {
+            sequence: index,
+            title: `镜头${index + 1}`,
+            description: item.description,
+            moduleType: item.moduleType,
+            status: selectedAssetId ? "DONE" : "OPEN",
+            sourcePreference: selectedAssetId ? "REAL_ASSET" : (allowExternalGeneration && !input.prepareOnly ? "AI_GENERATED" : "REAL_ASSET_FIRST"),
+            prompt: item.description,
+            assetIds: item.matchedAssetIds,
+            selectedAssetId,
+            requestedModelId,
+            metadata: {
+              lineId: item.lineId,
               candidateIndex,
               candidateGeneratedAt: String((selected as unknown as Record<string, unknown>).generatedAt || ""),
               reason: item.reason,
@@ -3961,7 +4157,7 @@ export class VideoFactoryService {
             },
           },
         });
-        if (!selectedAssetId && !input.prepareOnly) {
+        if (!selectedAssetId && !input.prepareOnly && allowExternalGeneration) {
           const modelScenario = factoryModule === "DOUYIN_VIRAL"
             ? douyinViralModelScenario(item.description)
             : "SCENE";
@@ -3992,7 +4188,7 @@ export class VideoFactoryService {
           id: requirementKey,
           videoFactoryShotId: shot.id,
           description: item.description,
-          status: selectedAssetId ? "DONE" : "IN_PROGRESS",
+          status: selectedAssetId ? "DONE" : (allowExternalGeneration && !input.prepareOnly ? "IN_PROGRESS" : "OPEN"),
           coverage: selectedAssetId ? "EXISTING" : "MISSING",
           assetIds: item.matchedAssetIds,
           videoAssetIds: item.matchedVideoAssetIds,
@@ -4000,9 +4196,20 @@ export class VideoFactoryService {
           reason: item.reason,
           note: selectedAssetId
             ? "使用已审核真实素材"
-            : (input.prepareOnly ? "等待真人补拍或由员工发起AI生成" : "AI生成任务已排队"),
+            : (allowExternalGeneration && !input.prepareOnly ? "外部生成任务已排队" : "等待补充已审核真实素材或明确开启外部生成"),
         });
       }
+      await tx.videoShot.deleteMany({
+        where: {
+          contentPlanId: id,
+          requirementKey: { notIn: canonicalShotKeys },
+          OR: [
+            { requirementKey: { startsWith: "system-v4-" } },
+            { requirementKey: { startsWith: "codex-v3-" } },
+            { requirementKey: { startsWith: "factory-shot-" } },
+          ],
+        },
+      });
       if (assets.length) {
         await tx.contentAsset.createMany({
           data: assets.map((asset) => ({ contentPlanId: id, assetId: asset.id, role: "VIDEO_FACTORY_SOURCE" })),
@@ -4011,7 +4218,7 @@ export class VideoFactoryService {
       }
       const allMaterialsReady = requirements.every((item) => item.status === "DONE");
       const automaticBindingFingerprint = coverage
-        .map((item, index) => [`factory-shot-${index + 1}`, item.matchedVideoAssetIds[0] || "", "", ""].join(":"))
+        .map((item, index) => [canonicalVideoShotKey(item.lineId, index), item.matchedVideoAssetIds[0] || "", "", ""].join(":"))
         .join("|");
       const nextSignals = signals.map((item) => item.type === "VIDEO_FACTORY"
         ? {
@@ -4020,6 +4227,7 @@ export class VideoFactoryService {
           routingMode,
           requestedModelId,
           allowFallback,
+          allowExternalGeneration,
           ...(allMaterialsReady ? {
             materialReview: {
               status: "APPROVED",
@@ -4049,7 +4257,7 @@ export class VideoFactoryService {
           shootRequirements: requirements as Prisma.InputJsonValue,
           productionStage: allMaterialsReady
             ? "READY_TO_EDIT"
-            : (input.prepareOnly ? "SCRIPT_APPROVED" : "FACTORY_GENERATING"),
+            : (allowExternalGeneration && !input.prepareOnly ? "FACTORY_GENERATING" : "SCRIPT_APPROVED"),
           masterVideoStatus: "PENDING",
         },
       });
@@ -4072,11 +4280,18 @@ export class VideoFactoryService {
   async enqueueShot(shotId: string, input: GenerateInput & { prompt?: string; duration?: number }, actor: string) {
     const shot = await this.prisma.videoShot.findUnique({ where: { id: shotId }, include: { contentPlan: true } });
     if (!shot) throw new NotFoundException("视频镜头不存在");
+    const factory = sourceSignals(shot.contentPlan).find((item) => item.type === "VIDEO_FACTORY") || {};
+    if (videoFactoryModule(shot.contentPlan) === "DOUYIN_VIRAL" && factory.allowExternalGeneration !== true) {
+      throw new BadRequestException("该项目未开启外部视觉模型，请在重新创作或选题卡确认时明确开启");
+    }
     const requestedModelId = String(input.requestedModelId || shot.requestedModelId || "").trim() || undefined;
     const routingMode = String(input.routingMode || (requestedModelId ? "FIXED" : "AUTO")).toUpperCase();
     const prompt = String(input.prompt || shot.prompt || shot.description).trim();
     const capability = strings(object(shot.metadata).imageAssetIds).length ? "IMAGE_TO_VIDEO" : "TEXT_TO_VIDEO";
-    await this.resolveModel({ requestedModelId, platform: shot.contentPlan.targetPlatforms[0], scenario: shot.moduleType, capability });
+    const scenario = videoFactoryModule(shot.contentPlan) === "DOUYIN_VIRAL"
+      ? douyinViralModelScenario(shot.description)
+      : shot.moduleType;
+    await this.resolveModel({ requestedModelId, platform: shot.contentPlan.targetPlatforms[0], scenario, capability });
     const revision = await this.prisma.videoGenerationJob.count({ where: { shotId } });
     const job = await this.prisma.videoGenerationJob.create({
       data: {
@@ -4085,7 +4300,7 @@ export class VideoFactoryService {
         shotId: shot.id,
         routingMode,
         requestedModelId,
-        allowFallback: input.allowFallback ?? routingMode === "AUTO",
+        allowFallback: input.allowFallback === true,
         prompt,
         input: {
           platform: shot.contentPlan.targetPlatforms[0],
@@ -4109,6 +4324,9 @@ export class VideoFactoryService {
     });
     if (!plan || plan.kind !== "VIDEO") throw new NotFoundException("智能视频项目不存在");
     if (!plan.videoShots.length) {
+      if (videoFactoryModule(plan) === "DOUYIN_VIRAL") {
+        throw new BadRequestException("抖音爆款项目缺少标准分镜，不能按旧素材数组顺序合成");
+      }
       const requirements = Array.isArray(plan.shootRequirements) ? plan.shootRequirements.map(object) : [];
       const assetIds = Array.from(new Set(requirements.flatMap((item) => strings(item.videoAssetIds).length ? strings(item.videoAssetIds) : strings(item.assetIds))));
       const videoAssets = assetIds.length ? await this.prisma.asset.findMany({ where: { id: { in: assetIds }, kind: "VIDEO" }, select: { id: true } }) : [];
@@ -4180,7 +4398,14 @@ export class VideoFactoryService {
           ratio: "9:16",
           width: 1080,
           height: 1920,
-          shotAssetIds: plan.videoShots.map((shot) => shot.selectedAssetId),
+          shots: plan.videoShots.map((shot) => ({
+            lineId: String(object(shot.metadata).lineId || "").trim(),
+            sequence: shot.sequence,
+            assetId: shot.selectedAssetId,
+            scriptLine: shot.description,
+            sourceIn: number(object(shot.metadata).sourceIn, 0),
+            sourceOut: number(object(shot.metadata).sourceOut, number(object(shot.metadata).sourceIn, 0) + number(shot.durationSeconds, 5)),
+          })),
           hook: plan.hook,
           topic: plan.topic,
           revisionFeedback,
@@ -4513,6 +4738,8 @@ export class VideoFactoryService {
         videoQualityChecks: { orderBy: { createdAt: "desc" }, take: 10 },
         keywordRelations: { include: { keyword: true } },
         aiTaskOutputs: { orderBy: { createdAt: "desc" }, take: 5, include: { aiTask: { select: { taskNo: true, status: true } } } },
+        optimizations: { orderBy: { checkpointHours: "asc" } },
+        libraryEntries: { where: { category: "VIDEO" }, orderBy: { createdAt: "desc" }, take: 1 },
         assignedEmployee: true,
       },
       // Keep the newest created project first.  Activity on an older project
@@ -4550,6 +4777,8 @@ export class VideoFactoryService {
         videoQualityChecks: { orderBy: { createdAt: "desc" } },
         keywordRelations: { include: { keyword: { include: { cluster: true } } } },
         aiTaskOutputs: { orderBy: { createdAt: "desc" }, include: { aiTask: { select: { taskNo: true, status: true } } } },
+        optimizations: { orderBy: { checkpointHours: "asc" } },
+        libraryEntries: { where: { category: "VIDEO" }, orderBy: { createdAt: "desc" }, take: 1 },
         assignedEmployee: true,
       },
     });
@@ -4637,7 +4866,9 @@ export class VideoFactoryService {
         id: true,
         topic: true,
         productModel: true,
+        sourceSignals: true,
         contentAssets: { select: { assetId: true, role: true } },
+        videoShots: { select: { metadata: true } },
       },
     });
     if (!plan) throw new NotFoundException("智能视频项目不存在");
@@ -4649,26 +4880,69 @@ export class VideoFactoryService {
         .map((item) => item.assetId),
     ])];
     const generatedSceneFiles = strings(body.generatedSceneFiles);
-    const metadata = {
-      source: String(body.renderer || "CODEX_LOCAL_FFMPEG"),
+    const suppliedMetadata = object(parsedBodyValue(body.metadata));
+    const metadata: JsonRow = {
+      source: String(suppliedMetadata.source || body.renderer || "CODEX_LOCAL_FFMPEG"),
       codec,
       frameRate,
+      width,
+      height,
+      durationSeconds: duration,
       usedAssetIds: sourceAssetIds,
       generatedSceneFiles,
+      materialUsage: parsedBodyValue(body.materialUsage) || suppliedMetadata.materialUsage || [],
+      qualityChecks: parsedBodyValue(body.qualityChecks) || suppliedMetadata.qualityChecks || [],
+      contentAlignment: parsedBodyValue(body.contentAlignment) || suppliedMetadata.contentAlignment || {},
     };
+    if (videoFactoryModule(plan) === "DOUYIN_VIRAL") {
+      const allowedAssetIds = new Set(plan.contentAssets
+        .filter((item) => item.role !== "VIDEO_FACTORY_MASTER")
+        .map((item) => item.assetId));
+      const expectedShotLineIds = new Set(plan.videoShots
+        .map((shot) => String(object(shot.metadata).lineId || "").trim())
+        .filter(Boolean));
+      const validation = validateVideoMasterMetadata(metadata, {
+        requireMaterialUsage: true,
+        allowedAssetIds,
+        ...(expectedShotLineIds.size ? { expectedShotLineIds } : {}),
+      });
+      const requiredChecks = new Set(["OUTPUT_VALIDITY", "MATERIAL_TRACE", "CONTENT_ALIGNMENT"]);
+      for (const check of validation.metadata.qualityChecks) requiredChecks.delete(check.checkType);
+      if (requiredChecks.size) validation.hardBlockers.push(`缺少质检项：${Array.from(requiredChecks).join("、")}`);
+      const usedAssetIds = [...new Set(validation.metadata.materialUsage.map((item) => item.assetId).filter(Boolean))];
+      const usableAssets = usedAssetIds.length ? await this.prisma.asset.findMany({
+        where: {
+          id: { in: usedAssetIds },
+          reviewStatus: "APPROVED",
+          availabilityStatus: "ACTIVE",
+          rightsStatus: { in: ["COMMERCIAL", "EDIT_ONLY"] },
+          deletedAt: null,
+        },
+        select: { id: true, sha256: true },
+      }) : [];
+      const usableMap = new Map(usableAssets.map((item) => [item.id, item.sha256]));
+      for (const usage of validation.metadata.materialUsage) {
+        if (!usableMap.has(usage.assetId)) validation.hardBlockers.push(`素材${usage.assetId || "未填写"}未审核、未启用或不可商用`);
+        else if (usableMap.get(usage.assetId) !== usage.sha256) validation.hardBlockers.push(`素材${usage.assetId}哈希与登记值不一致`);
+      }
+      if (validation.hardBlockers.length) {
+        throw new BadRequestException(`成片未通过准入：${[...new Set(validation.hardBlockers)].join("；")}`);
+      }
+      Object.assign(metadata, validation.metadata, { outputValidation: { valid: true, hardBlockers: [] } });
+    }
     const existing = await this.prisma.videoRenderJob.findUnique({
       where: { idempotencyKey: `manual-master:${contentPlanId}:${hash}` },
       include: { outputAsset: true },
     });
     if (existing?.outputAsset) {
       const snapshot = object(existing.outputAsset.sourceSnapshot);
-      const sourceSnapshot = {
+      const sourceSnapshot = ({
         ...snapshot,
-        renderer: metadata.source,
+        renderer: String(metadata.source || "MANUAL_UPLOAD"),
         renderJobId: existing.id,
         shotAssetIds: sourceAssetIds,
         metadata: { ...object(snapshot.metadata), ...metadata },
-      };
+      }) as unknown as Prisma.InputJsonValue;
       const asset = await this.prisma.$transaction(async (tx) => {
         const updated = await tx.asset.update({
           where: { id: existing.outputAsset!.id },
@@ -4676,7 +4950,7 @@ export class VideoFactoryService {
         });
         await tx.assetVersion.updateMany({
           where: { assetId: existing.outputAsset!.id },
-          data: { codec, technicalMetadata: metadata },
+          data: { codec, technicalMetadata: metadata as unknown as Prisma.InputJsonValue },
         });
         return updated;
       });
@@ -4726,7 +5000,7 @@ export class VideoFactoryService {
           status: "PENDING",
           qualityScore: 85,
           contentDescription: plan.topic,
-          sourceSnapshot: { renderer: metadata.source, renderJobId, shotAssetIds: sourceAssetIds, metadata },
+          sourceSnapshot: ({ renderer: String(metadata.source || "MANUAL_UPLOAD"), renderJobId, shotAssetIds: sourceAssetIds, metadata }) as unknown as Prisma.InputJsonValue,
           aiIndex: { source: "VIDEO_FACTORY_MANUAL_MASTER", contentPlanId },
           searchText: `${plan.productModel || ""} ${plan.topic} 智能视频成片`,
           indexNeedsReview: true,
@@ -4755,7 +5029,7 @@ export class VideoFactoryService {
               height,
               durationSeconds: duration,
               codec,
-              technicalMetadata: metadata,
+              technicalMetadata: metadata as unknown as Prisma.InputJsonValue,
             },
           },
         },
@@ -4766,9 +5040,9 @@ export class VideoFactoryService {
           idempotencyKey: `manual-master:${contentPlanId}:${hash}`,
           contentPlanId,
           status: "SUCCEEDED",
-          renderer: metadata.source,
+          renderer: String(metadata.source || "MANUAL_UPLOAD"),
           input: { sourceAssetIds, generatedSceneFiles },
-          output: { objectKey, assetId, renderer: metadata.source },
+          output: ({ objectKey, assetId, renderer: String(metadata.source || "MANUAL_UPLOAD") }) as Prisma.InputJsonValue,
           outputAssetId: assetId,
           outputPath: `oss://${objectKey}`,
           actualCost: Number(body.actualCost || 0),
@@ -4782,9 +5056,24 @@ export class VideoFactoryService {
         data: { masterVideoPath: `oss://${objectKey}`, masterVideoStatus: "READY_FOR_REVIEW", productionStage: "VIDEO_REVIEW" },
       });
       await tx.contentAsset.create({ data: { contentPlanId, assetId, role: "VIDEO_FACTORY_MASTER" } });
-      await tx.videoQualityCheck.create({
-        data: { contentPlanId, assetId, renderJobId, checkType: "TECHNICAL", status: "PASSED", score: 95, findings: [{ width, height, duration, codec, frameRate }] },
-      });
+      const metadataChecks = Array.isArray(metadata.qualityChecks) ? metadata.qualityChecks.map(object) : [];
+      if (metadataChecks.length) {
+        await tx.videoQualityCheck.createMany({
+          data: metadataChecks.map((check) => ({
+            contentPlanId,
+            assetId,
+            renderJobId,
+            checkType: String(check.checkType || "").toUpperCase(),
+            status: String(check.status || "REVIEW_REQUIRED").toUpperCase(),
+            score: Math.max(0, Math.min(100, Math.round(Number(check.score) || 0))),
+            findings: (Array.isArray(check.findings) ? check.findings : []) as Prisma.InputJsonValue,
+          })),
+        });
+      } else {
+        await tx.videoQualityCheck.create({
+          data: { contentPlanId, assetId, renderJobId, checkType: "OUTPUT_VALIDITY", status: "PASSED", score: 95, findings: [{ width, height, duration, codec, frameRate }] },
+        });
+      }
       await tx.videoQualityCheck.create({
         data: { contentPlanId, assetId, renderJobId, checkType: "FINAL_REVIEW", status: "REVIEW_REQUIRED", score: 0, findings: [{ message: "请核对字幕、配音、产品外形、功能画面和CTA" }] },
       });
@@ -4794,8 +5083,11 @@ export class VideoFactoryService {
     return jsonSafe({ renderJobId, asset });
   }
 
-  async reviewOutput(assetId: string, approved: boolean, actor: string, note = "") {
-    const asset = await this.prisma.asset.findUnique({ where: { id: assetId } });
+  async reviewOutput(assetId: string, approved: boolean, actor: string, note = "", contentConfirmed = false) {
+    const asset = await this.prisma.asset.findUnique({
+      where: { id: assetId },
+      include: { versions: { orderBy: { version: "desc" }, take: 1 } },
+    });
     if (!asset) throw new NotFoundException("视频成品不存在");
     const generation = await this.prisma.videoGenerationJob.findFirst({
       where: { outputAssetId: assetId },
@@ -4806,8 +5098,35 @@ export class VideoFactoryService {
       include: { contentPlan: true },
     });
     if (!generation && !render) throw new BadRequestException("该素材不是视频工厂输出");
-    const failedCheck = await this.prisma.videoQualityCheck.findFirst({ where: { assetId, status: "FAILED" } });
-    if (approved && failedCheck) throw new BadRequestException("自动质检未通过，不能批准使用");
+    const contentPlan = render?.contentPlan || generation?.contentPlan;
+    const checks = await this.prisma.videoQualityCheck.findMany({ where: { assetId }, orderBy: { createdAt: "desc" } });
+    const latestChecks = new Map<string, typeof checks[number]>();
+    for (const check of checks) if (!latestChecks.has(check.checkType)) latestChecks.set(check.checkType, check);
+    const failedCheck = [...latestChecks.values()].find((check) => check.status === "FAILED");
+    if (approved && failedCheck) throw new BadRequestException(`${failedCheck.checkType}未通过，不能批准使用`);
+    if (approved && contentPlan && videoFactoryModule(contentPlan) === "DOUYIN_VIRAL") {
+      const metadata = {
+        ...object(object(asset.sourceSnapshot).metadata),
+        ...object(asset.versions[0]?.technicalMetadata),
+        width: asset.width,
+        height: asset.height,
+        durationSeconds: asset.durationSeconds,
+        codec: asset.versions[0]?.codec,
+      };
+      const validation = validateVideoMasterMetadata(metadata, { requireMaterialUsage: true });
+      if (!validation.valid) throw new BadRequestException(`成片准入未通过：${validation.hardBlockers.join("；")}`);
+      for (const required of ["OUTPUT_VALIDITY", "MATERIAL_TRACE"] as const) {
+        if (latestChecks.get(required)?.status !== "PASSED") throw new BadRequestException(`${required}未通过，不能批准使用`);
+      }
+      const alignment = latestChecks.get("CONTENT_ALIGNMENT");
+      if (!alignment) throw new BadRequestException("缺少内容一致性质检，不能批准使用");
+      if (alignment.status === "REVIEW_REQUIRED" && (!contentConfirmed || !note.trim())) {
+        throw new BadRequestException("内容一致性需要人工确认，请勾选确认并填写审核说明");
+      }
+      if (!new Set(["PASSED", "REVIEW_REQUIRED"]).has(alignment.status)) {
+        throw new BadRequestException("内容与选题或脚本不一致，不能批准使用");
+      }
+    }
     const finalReview = await this.prisma.videoQualityCheck.findFirst({
       where: { assetId, checkType: "FINAL_REVIEW" },
       orderBy: { createdAt: "desc" },
@@ -4853,13 +5172,44 @@ export class VideoFactoryService {
             ? { masterVideoStatus: "APPROVED", productionStage: "PLATFORM_PACKAGING" }
             : { masterVideoStatus: "RETURNED", productionStage: "EDITING" },
         });
+        await tx.contentVariant.updateMany({
+          where: { contentPlanId: render.contentPlanId },
+          data: approved
+            ? {
+              packagingStatus: "APPROVED",
+              mediaPath: asset.storageUrl || asset.sourcePath,
+              packagedAt: new Date(),
+              packagingReviewedBy: actor,
+              packagingReviewedAt: new Date(),
+              packagingRejectedReason: null,
+            }
+            : {
+              packagingStatus: "RETURNED",
+              packagingReviewedBy: actor,
+              packagingReviewedAt: new Date(),
+              packagingRejectedReason: note || "成片已退回修改",
+            },
+        });
         if (approved) await this.upsertLibraryEntry(tx, render.contentPlan, assetId, render.id, actor);
+        else await tx.contentLibraryEntry.updateMany({
+          where: { contentPlanId: render.contentPlanId, outputAssetId: assetId },
+          data: { visibilityStatus: "HIDDEN", hiddenAt: new Date(), hiddenBy: actor },
+        });
       }
       const reviewedAt = new Date();
-      await tx.videoQualityCheck.updateMany({
-        where: { assetId, status: { in: ["PENDING", "REVIEW_REQUIRED"] } },
-        data: { status: approved ? "PASSED" : "REJECTED", reviewedBy: actor, reviewedAt },
-      });
+      const alignmentReview = latestChecks.get("CONTENT_ALIGNMENT");
+      if (approved && contentConfirmed && alignmentReview?.status === "REVIEW_REQUIRED") {
+        const findings = Array.isArray(alignmentReview.findings) ? alignmentReview.findings : [];
+        await tx.videoQualityCheck.update({
+          where: { id: alignmentReview.id },
+          data: {
+            status: "PASSED",
+            reviewedBy: actor,
+            reviewedAt,
+            findings: [...findings, { type: "MANUAL_CONTENT_CONFIRMATION", message: note, actor }] as Prisma.InputJsonValue,
+          },
+        });
+      }
       if (finalReview) {
         const findings = Array.isArray(finalReview.findings) ? finalReview.findings : [];
         await tx.videoQualityCheck.update({
@@ -4881,11 +5231,36 @@ export class VideoFactoryService {
         });
       }
       await tx.auditLog.create({
-        data: { actor, action: approved ? "VIDEO_FACTORY_OUTPUT_APPROVE" : "VIDEO_FACTORY_OUTPUT_RETURN", entityType: "Asset", entityId: assetId, after: { note } },
+        data: {
+          actor,
+          action: approved ? "VIDEO_FACTORY_OUTPUT_APPROVE" : "VIDEO_FACTORY_OUTPUT_RETURN",
+          entityType: "Asset",
+          entityId: assetId,
+          after: { note, contentConfirmed },
+        },
       });
     });
     if (generation?.contentPlanId) await this.syncCompatibility(generation.contentPlanId);
     return this.project(generation?.contentPlanId || render!.contentPlanId);
+  }
+
+  async outputRevisionTaskId(assetId: string) {
+    const direct = await this.prisma.aiTaskOutput.findFirst({
+      where: { assetId, kind: "VIDEO_MASTER" },
+      orderBy: { createdAt: "desc" },
+      select: { aiTaskId: true },
+    });
+    if (direct?.aiTaskId) return direct.aiTaskId;
+    const render = await this.prisma.videoRenderJob.findFirst({
+      where: { outputAssetId: assetId },
+      orderBy: { createdAt: "desc" },
+      include: { contentPlan: { select: { sourceSignals: true } } },
+    });
+    if (!render) throw new NotFoundException("成片未关联可重新执行的AI任务");
+    const factory = sourceSignals(render.contentPlan).find((item) => item.type === "VIDEO_FACTORY") || {};
+    const taskId = String(factory.videoAiTaskId || factory.aiTaskId || "").trim();
+    if (!taskId) throw new BadRequestException("该历史成片没有可重新执行的AI任务，请从原项目创建新任务");
+    return taskId;
   }
 
   async syncCompatibility(contentPlanId: string) {

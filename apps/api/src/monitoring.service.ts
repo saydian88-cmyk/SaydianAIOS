@@ -253,8 +253,8 @@ export class MonitoringService {
         if (publishJob?.publishedAt && publishJob.contentPlan.kind === "VIDEO") {
           const capturedAt = new Date(point.capturedAt);
           const elapsedHours = Math.max(0, (capturedAt.getTime() - publishJob.publishedAt.getTime()) / 3_600_000);
-          const checkpointHours = [3, 72, 168, 720].filter((checkpoint) => elapsedHours >= checkpoint).at(-1);
-          if ([3, 72, 168, 720].includes(requestedCheckpointHours)) {
+          const checkpointHours = [1, 24, 72, 168].filter((checkpoint) => elapsedHours >= checkpoint).at(-1);
+          if ([1, 24, 72, 168].includes(requestedCheckpointHours)) {
             const historyPoint = {
               checkpointHours: requestedCheckpointHours,
               capturedAt: capturedAt.toISOString(),

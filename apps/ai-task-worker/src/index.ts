@@ -274,6 +274,7 @@ function outputSchema(
   imagePostProject = false,
   batchCodexDirectFullVideo = false,
   batchExpectedResultCount = 1,
+  dedicatedDouyinViral = false,
 ) {
   if (type === "VIDEO") {
     // Direct-output work does not return a project script or a material-binding payload.
@@ -483,6 +484,7 @@ function outputSchema(
       type: "object",
       additionalProperties: false,
       properties: {
+        lineId: { type: "string" },
         moduleType: { type: "string" },
         title: { type: "string" },
         description: { type: "string" },
@@ -495,10 +497,11 @@ function outputSchema(
         sourcePreference: { type: "string" },
         missingReason: { type: "string" },
         alternativePlan: { type: "string" },
+        reshootRequirement: { type: "string" },
       },
       required: [
-        "moduleType", "title", "description", "durationSeconds", "visual", "voiceover", "subtitle",
-        "requiredAssetTags", "selectedAssetIds", "sourcePreference", "missingReason", "alternativePlan",
+        "lineId", "moduleType", "title", "description", "durationSeconds", "visual", "voiceover", "subtitle",
+        "requiredAssetTags", "selectedAssetIds", "sourcePreference", "missingReason", "alternativePlan", "reshootRequirement",
       ],
     };
     const scriptCandidateCount = executionMode === "SCRIPT_ONLY" ? 1 : 3;
@@ -620,6 +623,109 @@ function outputSchema(
       additionalProperties: false,
       properties: {
         ...baseProperties,
+        ...(dedicatedDouyinViral && executionMode === "FULL_VIDEO" ? {
+          outputFiles: {
+            type: "array",
+            minItems: 1,
+            maxItems: 1,
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                path: { type: "string" },
+                kind: { type: "string", enum: ["VIDEO_MASTER"] },
+                title: { type: "string" },
+                metadata: {
+                  type: "object",
+                  additionalProperties: false,
+                  properties: {
+                    description: { type: "string" },
+                    source: { type: "string" },
+                    width: { type: "number", minimum: 1 },
+                    height: { type: "number", minimum: 1 },
+                    durationSeconds: { type: "number", minimum: 1 },
+                    codec: { type: "string" },
+                    frameRate: { type: "string" },
+                    aspectRatio: { type: "string" },
+                    materialUsage: {
+                      type: "array",
+                      minItems: 1,
+                      items: {
+                        type: "object",
+                        additionalProperties: false,
+                        properties: {
+                          assetId: { type: "string" },
+                          sha256: { type: "string" },
+                          lineId: { type: "string" },
+                          scriptLine: { type: "string" },
+                          sequence: { type: "number", minimum: 0 },
+                          moduleType: { type: "string" },
+                          timelineStart: { type: "number", minimum: 0 },
+                          timelineEnd: { type: "number", minimum: 0 },
+                          sourceIn: { type: "number", minimum: 0 },
+                          sourceOut: { type: "number", minimum: 0 },
+                        },
+                        required: [
+                          "assetId", "sha256", "lineId", "scriptLine", "sequence", "moduleType",
+                          "timelineStart", "timelineEnd", "sourceIn", "sourceOut",
+                        ],
+                      },
+                    },
+                    qualityChecks: {
+                      type: "array",
+                      minItems: 3,
+                      items: {
+                        type: "object",
+                        additionalProperties: false,
+                        properties: {
+                          checkType: { type: "string", enum: ["OUTPUT_VALIDITY", "MATERIAL_TRACE", "CONTENT_ALIGNMENT"] },
+                          status: { type: "string", enum: ["PASSED", "REVIEW_REQUIRED", "FAILED"] },
+                          score: { type: "number", minimum: 0, maximum: 100 },
+                          findings: { type: "array", items: { type: "string" } },
+                        },
+                        required: ["checkType", "status", "score", "findings"],
+                      },
+                    },
+                    contentAlignment: {
+                      type: "object",
+                      additionalProperties: false,
+                      properties: {
+                        status: { type: "string", enum: ["PASSED", "REVIEW_REQUIRED", "FAILED"] },
+                        score: { type: "number", minimum: 0, maximum: 100 },
+                        checkedFrames: {
+                          type: "array",
+                          minItems: 3,
+                          items: {
+                            type: "object",
+                            additionalProperties: false,
+                            properties: {
+                              moduleType: { type: "string", enum: ["HOOK", "BODY", "CTA"] },
+                              timestampSeconds: { type: "number", minimum: 0 },
+                              expected: { type: "string" },
+                              observed: { type: "string" },
+                              matched: { type: "boolean" },
+                            },
+                            required: ["moduleType", "timestampSeconds", "expected", "observed", "matched"],
+                          },
+                        },
+                        hardBlockers: { type: "array", items: { type: "string" } },
+                        findings: { type: "array", items: { type: "string" } },
+                      },
+                      required: [
+                        "score", "status", "checkedFrames", "hardBlockers", "findings",
+                      ],
+                    },
+                  },
+                  required: [
+                    "description", "source", "width", "height", "durationSeconds", "codec", "frameRate",
+                    "aspectRatio", "materialUsage", "qualityChecks", "contentAlignment",
+                  ],
+                },
+              },
+              required: ["path", "kind", "title", "metadata"],
+            },
+          },
+        } : {}),
         project: {
           type: "object",
           additionalProperties: false,
@@ -647,6 +753,7 @@ function outputSchema(
                   shots: { type: "array", minItems: 3, items: shotSchema },
                   cta: { type: "string" },
                   score: { type: "number", minimum: 0, maximum: 100 },
+                  scoreReason: { type: "string" },
                   scoreBreakdown: {
                     type: "object",
                     additionalProperties: false,
@@ -681,7 +788,7 @@ function outputSchema(
                   scriptPackage: scriptPackageSchema,
                 },
                 required: [
-                  "title", "hook", "script", "shots", "cta", "score", "scoreBreakdown",
+                  "title", "hook", "script", "shots", "cta", "score", "scoreReason", "scoreBreakdown",
                   "templateCode", "missingAssets", "selected", "scriptPackage",
                 ],
               },
@@ -1070,7 +1177,7 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
         "任务包中的assets与materialBindings是本次任务的唯一素材白名单。",
         "模型选择以execution.videoModelRouting为准：真实素材和本地合成优先；需要外部补镜头时由Seedance 2.0主生成家庭叙事、产品氛围和多镜头，Kling增强人物、手势和运动动作；未配置时返回未配置。",
         executionMode === "FULL_VIDEO"
-          ? "最终必须输出专用Skill质检通过的1080×1920、30fps MP4，并在outputFiles中登记为VIDEO_MASTER。"
+          ? "最终必须输出专用Skill质检通过的1080×1920、30fps MP4，并在outputFiles中登记为VIDEO_MASTER。渲染完成后必须独立执行一次内容一致性质检：从真实成片抽取Hook、中段卖点和CTA画面，逐项对照选题卡、脚本和产品型号，将实际观察结果写入contentAlignment.checkedFrames；不得用计划画面代替真实成片观察。"
           : "本次只执行脚本和分镜阶段，只允许返回1套selected=true的最终完整脚本；outputFiles不得包含VIDEO_MASTER。",
       ].join("\n")
       : [
@@ -1670,6 +1777,7 @@ async function runCodex(
     isImagePostProjectTask(taskPackage),
     Boolean(taskInput.batchCodexDirectFullVideo),
     expectedBatchVideoKeys(taskInput).length,
+    detectedSkill.key === "saydian-douyin-viral-video-generator",
   )), null, 2), "utf8");
   await writeFile(join(workspace, "task.json"), JSON.stringify(task, null, 2), "utf8");
   const resolvedCodexExecutable = await resolveCodexExecutable();
@@ -1818,8 +1926,18 @@ function packageFingerprint(taskPackageValue: JsonRecord) {
   })));
 }
 
-async function validateOutputArtifacts(result: JsonRecord, workspace: string) {
+async function validateOutputArtifacts(result: JsonRecord, workspace: string, taskPackageValue?: JsonRecord) {
   const files = Array.isArray(result.outputFiles) ? result.outputFiles.map(record) : [];
+  const task = record(taskPackageValue?.task);
+  const execution = record(taskPackageValue?.execution);
+  const dedicatedDouyinMaster = String(task.type || "") === "VIDEO"
+    && String(record(task.input).factoryModule || "").toUpperCase() === "DOUYIN_VIRAL"
+    && String(execution.mode || "").toUpperCase() === "FULL_VIDEO";
+  if (dedicatedDouyinMaster && (files.length !== 1 || String(files[0]?.kind || "") !== "VIDEO_MASTER")) {
+    throw new Error("抖音爆款完整视频必须只返回一个真实VIDEO_MASTER");
+  }
+  const allowedAssets = new Map((Array.isArray(taskPackageValue?.assets) ? taskPackageValue.assets.map(record) : [])
+    .map((asset) => [String(asset.id || ""), String(asset.sha256 || "")]));
   for (const item of files) {
     const requested = String(item.path || "");
     const path = resolve(workspace, requested);
@@ -1828,7 +1946,59 @@ async function validateOutputArtifacts(result: JsonRecord, workspace: string) {
     const info = await stat(path);
     if (!info.isFile() || info.size === 0) throw new Error(`输出文件为空：${requested}`);
     const digest = sha256(await readFile(path));
+    const metadata = record(item.metadata);
+    if (dedicatedDouyinMaster && String(item.kind || "") === "VIDEO_MASTER") {
+      const { stdout } = await execFileAsync(ffprobeExecutable, [
+        "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=width,height,codec_name,avg_frame_rate:format=duration",
+        "-of", "json",
+        path,
+      ], { timeout: 60_000, windowsHide: true, maxBuffer: 2 * 1024 * 1024 });
+      const parsed = JSON.parse(stdout) as JsonRecord;
+      const stream = Array.isArray(parsed.streams) ? record(parsed.streams[0]) : {};
+      const format = record(parsed.format);
+      const actual = {
+        width: Number(stream.width || 0),
+        height: Number(stream.height || 0),
+        durationSeconds: Number(format.duration || 0),
+        codec: String(stream.codec_name || ""),
+        frameRate: String(stream.avg_frame_rate || ""),
+      };
+      if (!actual.width || !actual.height || actual.durationSeconds <= 1 || !actual.codec || !actual.frameRate) {
+        throw new Error("抖音爆款成片媒体信息无效");
+      }
+      const usage = Array.isArray(metadata.materialUsage) ? metadata.materialUsage.map(record) : [];
+      if (!usage.length) throw new Error("抖音爆款成片缺少逐镜头素材使用记录");
+      for (const [index, row] of usage.entries()) {
+        const assetId = String(row.assetId || "");
+        const assetHash = String(row.sha256 || "");
+        if (!assetId || !assetHash || allowedAssets.get(assetId) !== assetHash) {
+          throw new Error(`第${index + 1}个镜头素材不在任务白名单或哈希不一致`);
+        }
+        if (!String(row.lineId || "") || !String(row.scriptLine || "")) throw new Error(`第${index + 1}个镜头缺少稳定脚本行关联`);
+        if (Number(row.timelineEnd) <= Number(row.timelineStart) || Number(row.sourceOut) <= Number(row.sourceIn)) {
+          throw new Error(`第${index + 1}个镜头使用区间无效`);
+        }
+      }
+      const checks = Array.isArray(metadata.qualityChecks) ? metadata.qualityChecks.map(record) : [];
+      for (const required of ["OUTPUT_VALIDITY", "MATERIAL_TRACE", "CONTENT_ALIGNMENT"]) {
+        const check = checks.find((row) => String(row.checkType || "").toUpperCase() === required);
+        if (!check || String(check.status || "").toUpperCase() === "FAILED") throw new Error(`抖音爆款成片缺少或未通过${required}`);
+      }
+      const alignment = record(metadata.contentAlignment);
+      const modules = new Set((Array.isArray(alignment.checkedFrames) ? alignment.checkedFrames.map(record) : [])
+        .map((row) => String(row.moduleType || "").toUpperCase()));
+      if (["HOOK", "BODY", "CTA"].some((moduleType) => !modules.has(moduleType))) {
+        throw new Error("内容一致性检查未覆盖Hook、中段和CTA");
+      }
+      if (String(alignment.status || "").toUpperCase() === "FAILED" || (Array.isArray(alignment.hardBlockers) && alignment.hardBlockers.length)) {
+        throw new Error("成片内容与选题、脚本或产品事实不一致");
+      }
+      Object.assign(metadata, actual);
+    }
     item.metadata = {
+      ...metadata,
       ...record(item.metadata),
       sha256: digest,
       sizeBytes: info.size,
@@ -2463,6 +2633,7 @@ async function execute(claimed: JsonRecord) {
       batchDirectTask
         ? Math.max(recoveredBatchResultCount, expectedBatchVideoKeys(record(packagedTask.input)).length)
         : 1,
+      detectedSkill.key === "saydian-douyin-viral-video-generator",
     );
     const startedAt = new Date();
     let result: JsonRecord | undefined;
@@ -2479,7 +2650,7 @@ async function execute(claimed: JsonRecord) {
           if (String(packagedTask.type || "") === "VIDEO" && String(execution.mode || "") === "SCRIPT_ONLY") {
             validateVideoScriptMaterialIds(savedResult, Array.isArray(packaged.assets) ? packaged.assets : []);
           }
-          result = await validateOutputArtifacts(savedResult, workspace);
+          result = await validateOutputArtifacts(savedResult, workspace, packaged);
           assertCodexDirectMasterOutput(result, packaged);
           result.execution = {
             ...record(result.execution),
@@ -2578,7 +2749,7 @@ async function execute(claimed: JsonRecord) {
         resumed: false,
         schemaAttempts,
       };
-      result = await validateOutputArtifacts(result, workspace);
+      result = await validateOutputArtifacts(result, workspace, packaged);
       assertCodexDirectMasterOutput(result, packaged);
       validateResult(result, schema, true);
       if (String(packagedTask.type || "") === "VIDEO" && String(execution.mode || "") === "SCRIPT_ONLY") {

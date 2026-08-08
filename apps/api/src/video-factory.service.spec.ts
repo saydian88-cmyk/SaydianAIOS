@@ -2,7 +2,6 @@ import { BadRequestException } from "@nestjs/common";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { encryptIntegrationValue } from "./integration-secret";
 import {
-  applyVideoShotImageFallback,
   materialReviewApproved,
   partitionVideoShotAssetIds,
   videoFactoryModule,
@@ -45,26 +44,6 @@ describe("video shot asset classification", () => {
       matchedVideoAssetIds: ["video-1"],
       auxiliaryImageAssetIds: ["image-2", "image-1"],
     });
-  });
-
-  it("reuses an approved product image for every uncovered generated shot", () => {
-    expect(applyVideoShotImageFallback([
-      { matchedAssetIds: [], matchedVideoAssetIds: [], auxiliaryImageAssetIds: [], reason: "缺少镜头" },
-      { matchedAssetIds: [], matchedVideoAssetIds: [], auxiliaryImageAssetIds: [], reason: "缺少镜头" },
-    ], ["product-image-1"])).toEqual([
-      {
-        matchedAssetIds: ["product-image-1"],
-        matchedVideoAssetIds: [],
-        auxiliaryImageAssetIds: ["product-image-1"],
-        reason: "缺少镜头；使用已审核产品图保持产品外观一致",
-      },
-      {
-        matchedAssetIds: ["product-image-1"],
-        matchedVideoAssetIds: [],
-        auxiliaryImageAssetIds: ["product-image-1"],
-        reason: "缺少镜头；使用已审核产品图保持产品外观一致",
-      },
-    ]);
   });
 
   it("preserves the dedicated Douyin factory module from a Codex project signal", () => {
@@ -136,6 +115,9 @@ describe("VideoFactoryService model routing", () => {
         upsert: vi.fn(),
       },
       videoQualityCheck: {
+        findFirst: vi.fn(),
+        create: vi.fn(),
+        update: vi.fn(),
         updateMany: vi.fn(),
       },
       approval: {
@@ -566,8 +548,19 @@ describe("VideoFactoryService model routing", () => {
       id: "asset-master",
       storageUrl: "https://oss.example/master.mp4",
       sourcePath: "C:\\tasks\\master.mp4",
+      width: 1080,
+      height: 1920,
+      durationSeconds: 18,
+      sourceSnapshot: { metadata: { frameRate: 30 } },
+      versions: [{ codec: "h264", technicalMetadata: { frameRate: 30 } }],
       createdAt: new Date("2026-07-28T00:00:00.000Z"),
     });
+    prisma.contentPlan.findUnique.mockResolvedValue({
+      id: "plan-1",
+      sourceSignals: [{ type: "VIDEO_FACTORY", factoryModule: "GENERAL_VIDEO_FACTORY" }],
+      videoShots: [],
+    });
+    prisma.contentAsset.findMany.mockResolvedValue([]);
     prisma.videoRenderJob.upsert.mockResolvedValue({ id: "render-local" });
 
     const result = await service.registerLocalMaster("plan-1", "asset-master", "task-1", "Codex执行器", "1-2");

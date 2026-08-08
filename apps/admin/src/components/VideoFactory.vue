@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import { Plus, Refresh } from "@element-plus/icons-vue";
 import { api, patch, post, upload } from "../api";
 
@@ -41,6 +41,10 @@ const masterUploadBusy = ref(false);
 const outputPreviewDialog = ref(false);
 const selectedOutput = ref<Row>();
 const outputPreviewUrl = ref("");
+const revisionAssetId = ref("");
+const publishDialog = ref(false);
+const publishVariant = ref<Row>();
+const publishForm = reactive({ remoteUrl: "", remoteId: "", publishedAt: "" });
 const createDialog = ref(false);
 const providerDialog = ref(false);
 const modelDialog = ref(false);
@@ -72,8 +76,8 @@ const approvalForm = reactive({
   ownerId: "",
   reviewerId: "",
   requestedModelId: "",
-  allowExternalGeneration: true,
-  allowFallback: true,
+  allowExternalGeneration: false,
+  allowFallback: false,
 });
 
 const createForm = reactive({
@@ -89,7 +93,7 @@ const createForm = reactive({
   externalVideoIds: [] as string[],
   assetGapTaskId: "",
   requestedModelId: "",
-  allowFallback: true,
+  allowFallback: false,
   executionMode: "FULL_VIDEO",
   allowExternalGeneration: false,
 });
@@ -162,12 +166,23 @@ const filteredTopicCards = computed(() => topicCards.value.filter((row) => {
     && Number(row.score || 0) >= Number(topicFilters.minScore || 0)
     && Number(card.materialCoverage?.coveragePercent || 0) >= Number(topicFilters.minCoverage || 0);
 }));
-const outputs = computed(() => projects.value.flatMap((project) => {
+const masterOutputs = computed(() => projects.value.flatMap((project) => {
   const latest = [...(project.videoRenderJobs || [])]
     .filter((job: Row) => job.status === "SUCCEEDED" && job.outputAsset)
     .sort((left: Row, right: Row) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())[0];
   return latest ? [{ ...latest, project, outputType: "最终成片" }] : [];
 }));
+const outputs = computed(() => masterOutputs.value.filter((item: Row) => {
+  const asset = item.outputAsset || {};
+  const metadata = asset.sourceSnapshot?.metadata || {};
+  return asset.reviewStatus === "APPROVED"
+    && asset.availabilityStatus === "ACTIVE"
+    && metadata.outputValidation?.valid === true
+    && Number(asset.width || 0) > 0
+    && Number(asset.height || 0) > 0
+    && Number(asset.durationSeconds || 0) > 1;
+}));
+const reviewOutputs = computed(() => masterOutputs.value.filter((item: Row) => item.outputAsset?.reviewStatus === "PENDING"));
 const topicCardOutput = computed(() =>
   (selectedTopicCard.value?.videoRenderJobs || []).find((job: Row) => job.outputAsset)?.outputAsset,
 );
@@ -329,8 +344,8 @@ function openApproval(row: Row, executionMode: "SCRIPT_ONLY" | "FULL_VIDEO") {
     ownerId: row.topicCard?.ownerEmployeeId || row.assignedEmployeeId || "",
     reviewerId: row.topicCard?.reviewerEmployeeId || "",
     requestedModelId: "",
-    allowExternalGeneration: executionMode === "FULL_VIDEO",
-    allowFallback: true,
+    allowExternalGeneration: false,
+    allowFallback: false,
   });
   approvalDialog.value = true;
 }
@@ -378,10 +393,11 @@ async function archiveTopicCard(row: Row) {
 }
 
 function resetCreate() {
+  revisionAssetId.value = "";
   Object.assign(createForm, {
     platform: props.platformScope || "DOUYIN", productModel: "", topic: "", audience: "", objective: "内容种草与商品点击",
     pain: "", scene: "", hook: "",
-    keywordIds: [], externalVideoIds: [], requestedModelId: "", allowFallback: true,
+    keywordIds: [], externalVideoIds: [], requestedModelId: "", allowFallback: false,
     executionMode: "FULL_VIDEO", allowExternalGeneration: false,
     assetGapTaskId: "",
   });
@@ -393,7 +409,7 @@ function openCreate() {
 }
 
 function onCreateModelChange(value: string) {
-  createForm.allowFallback = !value;
+  createForm.allowFallback = false;
   createForm.allowExternalGeneration = Boolean(value);
 }
 
@@ -432,7 +448,7 @@ function createFromGap(task: Row) {
 async function createAndGenerate() {
   if (!createForm.topic.trim()) return ElMessage.warning("请填写视频主题或选择关键词");
   await run(async () => {
-    await post<Row>("/api/v1/ai-tasks", {
+    const payload = {
       type: "VIDEO",
       title: createForm.topic,
       platform: createForm.platform,
@@ -477,10 +493,22 @@ async function createAndGenerate() {
         allowFallback: createForm.allowFallback,
         allowExternalGeneration: createForm.allowExternalGeneration,
       },
-    });
+    };
+    if (revisionAssetId.value) await post<Row>(`/api/v1/video-factory/outputs/${revisionAssetId.value}/revise`, payload);
+    else await post<Row>("/api/v1/ai-tasks", payload);
     createDialog.value = false;
     await reload();
-  }, createForm.executionMode === "SCRIPT_ONLY" ? "脚本任务已进入AI任务中心" : "完整视频任务已进入AI任务中心");
+  }, revisionAssetId.value
+    ? "已保留原版本并创建新的执行版本"
+    : createForm.executionMode === "SCRIPT_ONLY" ? "脚本任务已进入AI任务中心" : "完整视频任务已进入AI任务中心");
+}
+
+function projectFactorySignal(project?: Row) {
+  return (project?.sourceSignals || []).find((item: Row) => item?.type === "VIDEO_FACTORY") || {};
+}
+
+function externalGenerationAllowed(project?: Row) {
+  return projectFactorySignal(project).allowExternalGeneration === true;
 }
 
 async function openProject(id: string) {
@@ -490,6 +518,7 @@ async function openProject(id: string) {
 
 async function generateProject(row: Row, candidateIndex = 0) {
   await run(async () => {
+    const factory = projectFactorySignal(row);
     await post("/api/v1/ai-tasks", {
       type: "VIDEO",
       title: row.topic,
@@ -503,10 +532,15 @@ async function generateProject(row: Row, candidateIndex = 0) {
         factoryModule: factoryModule.value,
         existingContentPlanId: row.id,
         candidateIndex,
+        allowExternalGeneration: factory.allowExternalGeneration === true,
+        requestedModelId: factory.requestedModelId || undefined,
+        allowFallback: factory.allowFallback === true,
       },
       modelPolicy: {
         strategy: "CODEX_FIRST",
-        allowExternalGeneration: false,
+        requestedModelId: factory.requestedModelId || undefined,
+        allowExternalGeneration: factory.allowExternalGeneration === true,
+        allowFallback: factory.allowFallback === true,
       },
     });
     await reload();
@@ -520,7 +554,7 @@ async function generateShot(shot: Row, modelId = "") {
       duration: shot.durationSeconds || 5,
       requestedModelId: modelId || undefined,
       routingMode: modelId ? "FIXED" : "AUTO",
-      allowFallback: !modelId,
+      allowFallback: false,
     });
     await reload();
     if (selectedProject.value) await openProject(selectedProject.value.id);
@@ -555,6 +589,46 @@ async function uploadProjectMaster(event: Event) {
       if (item.assetId && item.role !== "VIDEO_FACTORY_MASTER") sourceAssetIds.add(item.assetId);
     }
     for (const assetId of sourceAssetIds) form.append("sourceAssetIds", assetId);
+    const shots = [...(selectedProject.value.videoShots || [])]
+      .sort((left: Row, right: Row) => Number(left.sequence || 0) - Number(right.sequence || 0));
+    if (!shots.length || shots.some((shot: Row) => !shot.lineId || !shot.selectedAssetId || !shot.selectedAsset?.sha256)) {
+      throw new Error("标准分镜或素材证据不完整，请先补齐每个镜头的已审核素材");
+    }
+    let timeline = 0;
+    const materialUsage = shots.map((shot: Row) => {
+      const duration = Math.max(0.1, Number(shot.durationSeconds || 0));
+      const sourceIn = Math.max(0, Number(shot.sourceInSeconds || 0));
+      const item = {
+        lineId: String(shot.lineId),
+        sequence: Number(shot.sequence || 0),
+        assetId: String(shot.selectedAssetId),
+        sha256: String(shot.selectedAsset.sha256),
+        scriptLine: String(shot.voiceover || shot.subtitle || shot.description || ""),
+        timelineStart: timeline,
+        timelineEnd: timeline + duration,
+        sourceIn,
+        sourceOut: sourceIn + duration,
+        moduleType: String(shot.moduleType || "BODY"),
+      };
+      timeline += duration;
+      return item;
+    });
+    form.append("metadata", JSON.stringify({
+      source: "CODEX_LOCAL_FFMPEG",
+      materialUsage,
+      qualityChecks: [
+        { checkType: "OUTPUT_VALIDITY", status: "PASSED", findings: [] },
+        { checkType: "MATERIAL_TRACE", status: "PASSED", findings: [] },
+        { checkType: "CONTENT_ALIGNMENT", status: "REVIEW_REQUIRED", findings: [{ code: "MANUAL_CONTENT_CONFIRMATION", message: "等待管理员核对产品、Hook、中段卖点与CTA" }] },
+      ],
+      contentAlignment: {
+        status: "REVIEW_REQUIRED",
+        hook: { expected: String(selectedProject.value.hook || ""), status: "REVIEW_REQUIRED" },
+        body: { expected: String(selectedProject.value.objective || ""), status: "REVIEW_REQUIRED" },
+        cta: { expected: "按最终脚本核对行动号召", status: "REVIEW_REQUIRED" },
+        blockers: [],
+      },
+    }));
     await upload(`/api/v1/video-factory/projects/${selectedProject.value.id}/master`, form);
     ElMessage.success("成片已上传，等待人工审核");
     await reload();
@@ -569,7 +643,7 @@ async function uploadProjectMaster(event: Event) {
 
 async function openOutput(assetId: string) {
   await run(async () => {
-    selectedOutput.value = outputs.value.find((item: Row) => item.outputAsset?.id === assetId)
+    selectedOutput.value = masterOutputs.value.find((item: Row) => item.outputAsset?.id === assetId)
       || { outputAsset: { id: assetId } };
     outputPreviewUrl.value = "";
     outputPreviewDialog.value = true;
@@ -582,24 +656,70 @@ function recreateFromOutput(row?: Row) {
   const project = row?.project;
   resetCreate();
   if (project) {
-    createForm.platform = project.platform || "DOUYIN";
+    const factory = projectFactorySignal(project);
+    const card = project.topicCard || {};
+    createForm.platform = project.targetPlatforms?.[0] || project.platform || "DOUYIN";
     createForm.productModel = project.productModel || "";
     createForm.topic = project.topic || row?.outputAsset?.displayName || "";
-    createForm.audience = project.audience || "";
+    createForm.audience = card.audience || project.audience || "";
+    createForm.pain = card.pain || factory.pain || "";
+    createForm.scene = card.scene || factory.scene || "";
+    createForm.hook = card.hookCandidates?.[0] || project.hook || "";
     createForm.objective = project.objective || "基于现有成片调整参数后重新创作";
     createForm.keywordIds = (project.keywordBindings || []).map((item: Row) => item.keywordId).filter(Boolean);
+    createForm.externalVideoIds = Array.isArray(factory.externalVideoIds) ? factory.externalVideoIds.map(String) : [];
+    createForm.assetGapTaskId = String(factory.assetGapTaskId || "");
+    createForm.requestedModelId = String(factory.requestedModelId || "");
+    createForm.allowExternalGeneration = factory.allowExternalGeneration === true;
+    createForm.allowFallback = factory.allowFallback === true;
+    createForm.executionMode = String(factory.executionMode || "FULL_VIDEO");
+    revisionAssetId.value = String(row?.outputAsset?.id || "");
   }
   outputPreviewDialog.value = false;
   createDialog.value = true;
 }
 
 async function reviewOutput(assetId: string, approved: boolean) {
+  let note = "";
+  try {
+    const response = await ElMessageBox.prompt(
+      approved ? "请填写内容一致性确认说明" : "请填写退回原因",
+      approved ? "审核成片" : "退回成片",
+      { inputPlaceholder: approved ? "例如：产品型号、Hook、中段卖点和CTA均与脚本一致" : "说明需要修改的内容", inputValidator: (value) => Boolean(String(value || "").trim()) || "请填写说明" },
+    );
+    note = String(response.value || "").trim();
+  } catch {
+    return;
+  }
   await run(async () => {
-    await post(`/api/v1/video-factory/outputs/${assetId}/review`, { approved });
+    await post(`/api/v1/video-factory/outputs/${assetId}/review`, { approved, note, contentConfirmed: approved });
     await reload();
     if (selectedTopicCard.value) await openTopicCard(selectedTopicCard.value.id);
     if (selectedProject.value) await openProject(selectedProject.value.id);
   }, approved ? "视频已审核通过" : "视频已退回");
+}
+
+function openManualPublish(variant: Row) {
+  publishVariant.value = variant;
+  publishForm.remoteUrl = variant.manualPublishUrl || "";
+  publishForm.remoteId = variant.manualExternalId || "";
+  publishForm.publishedAt = variant.manualPublishedAt ? new Date(variant.manualPublishedAt).toISOString().slice(0, 16) : "";
+  publishDialog.value = true;
+}
+
+async function submitManualPublish() {
+  if (!publishVariant.value) return;
+  if (!publishForm.remoteUrl.trim() && !publishForm.remoteId.trim()) return ElMessage.warning("请填写发布链接或平台内容ID");
+  await run(async () => {
+    await post(`/api/v1/content/variants/${publishVariant.value!.id}/manual-publish`, {
+      remoteUrl: publishForm.remoteUrl.trim() || undefined,
+      remoteId: publishForm.remoteId.trim() || undefined,
+      publishedAt: publishForm.publishedAt || undefined,
+    });
+    publishDialog.value = false;
+    await reload();
+    if (selectedProject.value) await openProject(selectedProject.value.id);
+  }, "发布信息已登记，将按1小时、24小时、72小时和7天回收效果");
 }
 
 function openProvider(row?: Row) {
@@ -746,7 +866,7 @@ onBeforeUnmount(() => {
       <article><span>待确认选题</span><strong>{{ loaded ? topicCards.filter((item: Row) => item.productionStage === 'TOPIC_CARD_RECOMMENDED').length : '—' }}</strong><small>确认前不会创建生产任务</small></article>
       <article><span>视频项目</span><strong>{{ loaded ? projects.length : '—' }}</strong><small>脚本、分镜、成片统一追踪</small></article>
       <article><span>执行中</span><strong>{{ loaded ? runningCount : '—' }}</strong><small>生成与渲染异步处理</small></article>
-      <article><span>待审核成片</span><strong>{{ loaded ? outputs.filter((item: Row) => item.outputAsset?.reviewStatus === 'PENDING').length : '—' }}</strong><small>审核通过前不可发布</small></article>
+      <article><span>待审核成片</span><strong>{{ loaded ? reviewOutputs.length : '—' }}</strong><small>审核通过前不可发布</small></article>
     </div>
 
     <el-segmented v-model="view" :options="[
@@ -809,7 +929,7 @@ onBeforeUnmount(() => {
         <el-table-column label="来源" width="130"><template #default="scope">{{ scope.row.sourcePreference }}</template></el-table-column>
         <el-table-column label="状态" width="125"><template #default="scope"><el-tag :type="tagType(scope.row.status)">{{ label(scope.row.status) }}</el-tag></template></el-table-column>
         <el-table-column label="素材" min-width="185"><template #default="scope">{{ scope.row.selectedAsset?.displayName || scope.row.selectedAsset?.fileName || '待补素材' }}</template></el-table-column>
-        <el-table-column label="操作" width="170"><template #default="scope"><el-button v-if="['OPEN','FAILED'].includes(scope.row.status)" link type="primary" @click="generateShot(scope.row)">AI生成</el-button><el-button v-if="scope.row.selectedAssetId" link @click="openOutput(scope.row.selectedAssetId)">预览</el-button></template></el-table-column>
+        <el-table-column label="操作" width="190"><template #default="scope"><el-button v-if="['OPEN','FAILED'].includes(scope.row.status) && externalGenerationAllowed(scope.row.project)" link type="primary" @click="generateShot(scope.row)">生成缺失镜头</el-button><span v-else-if="['OPEN','FAILED'].includes(scope.row.status)" class="muted-action">等待补充素材</span><el-button v-if="scope.row.selectedAssetId" link @click="openOutput(scope.row.selectedAssetId)">预览</el-button></template></el-table-column>
       </el-table>
     </div>
 
@@ -839,6 +959,13 @@ onBeforeUnmount(() => {
     </div>
 
     <div v-else-if="view === 'quality'" class="data-card">
+      <div class="card-title"><h4>成片待审</h4><small>必须通过输出有效性、素材追踪与内容一致性检查</small></div>
+      <el-table :data="reviewOutputs" stripe max-height="265">
+        <el-table-column label="成片" min-width="250"><template #default="scope"><strong>{{ scope.row.outputAsset.displayName || scope.row.outputAsset.fileName }}</strong><small>{{ scope.row.project.topic }}</small></template></el-table-column>
+        <el-table-column label="媒体信息" min-width="190"><template #default="scope">{{ scope.row.outputAsset.width || '—' }}×{{ scope.row.outputAsset.height || '—' }} · {{ Number(scope.row.outputAsset.durationSeconds || 0).toFixed(1) }}秒<small>{{ scope.row.outputAsset.sourceSnapshot?.metadata?.codec || '未记录编码' }} · {{ scope.row.outputAsset.sourceSnapshot?.metadata?.frameRate || '未记录帧率' }}</small></template></el-table-column>
+        <el-table-column label="操作" width="210" fixed="right"><template #default="scope"><el-button link type="primary" @click="openOutput(scope.row.outputAsset.id)">预览</el-button><el-button link type="success" @click="reviewOutput(scope.row.outputAsset.id, true)">通过</el-button><el-button link type="danger" @click="reviewOutput(scope.row.outputAsset.id, false)">退回</el-button></template></el-table-column>
+      </el-table>
+      <div class="card-title"><h4>质检记录</h4><small>硬性错误不可人工通过</small></div>
       <el-table :data="qualityChecks" stripe height="570">
         <el-table-column label="项目" min-width="230"><template #default="scope">{{ scope.row.project.topic }}</template></el-table-column>
         <el-table-column prop="checkType" label="检查项" width="180" />
@@ -1008,7 +1135,7 @@ onBeforeUnmount(() => {
         <el-form-item label="外部视觉能力" class="full"><el-switch v-model="createForm.allowExternalGeneration" active-text="本地素材不足时允许调用已配置模型" /></el-form-item>
         <el-form-item label="失败策略" class="full"><el-switch v-model="createForm.allowFallback" active-text="允许失败后自动切换模型" /></el-form-item>
       </el-form>
-      <template #footer><el-button @click="createDialog = false">取消</el-button><el-button type="primary" @click="createAndGenerate">{{ createForm.executionMode === 'SCRIPT_ONLY' ? '提交脚本任务' : '提交完整视频任务' }}</el-button></template>
+      <template #footer><el-button @click="createDialog = false">取消</el-button><el-button type="primary" @click="createAndGenerate">{{ revisionAssetId ? '创建重新创作版本' : createForm.executionMode === 'SCRIPT_ONLY' ? '提交脚本任务' : '提交完整视频任务' }}</el-button></template>
     </el-dialog>
 
     <el-dialog v-model="providerDialog" :title="editingProviderId ? '设置视频服务商' : '新增视频服务商'" width="760px" destroy-on-close>
@@ -1064,15 +1191,45 @@ onBeforeUnmount(() => {
           <el-table-column prop="description" label="画面" min-width="300" />
           <el-table-column label="状态" width="125"><template #default="scope"><el-tag :type="tagType(scope.row.status)">{{ label(scope.row.status) }}</el-tag></template></el-table-column>
           <el-table-column label="素材" min-width="180"><template #default="scope">{{ scope.row.selectedAsset?.displayName || '待补素材' }}</template></el-table-column>
-          <el-table-column label="操作" width="250"><template #default="scope"><el-button v-if="scope.row.status === 'OPEN'" link type="primary" @click="generateShot(scope.row)">智能推荐生成</el-button><el-dropdown v-if="scope.row.status === 'OPEN'" @command="generateShot(scope.row, $event)"><el-button link>指定模型</el-button><template #dropdown><el-dropdown-menu><el-dropdown-item v-for="model in shotModels(scope.row)" :key="model.id" :command="model.id">{{ model.provider.displayName }} · {{ model.displayName }}</el-dropdown-item></el-dropdown-menu></template></el-dropdown><el-button v-if="scope.row.selectedAssetId" link @click="openOutput(scope.row.selectedAssetId)">预览</el-button></template></el-table-column>
+          <el-table-column label="操作" width="270"><template #default="scope"><el-button v-if="scope.row.status === 'OPEN' && externalGenerationAllowed(selectedProject)" link type="primary" @click="generateShot(scope.row)">智能推荐生成</el-button><el-dropdown v-if="scope.row.status === 'OPEN' && externalGenerationAllowed(selectedProject)" @command="generateShot(scope.row, $event)"><el-button link>指定模型</el-button><template #dropdown><el-dropdown-menu><el-dropdown-item v-for="model in shotModels(scope.row)" :key="model.id" :command="model.id">{{ model.provider.displayName }} · {{ model.displayName }}</el-dropdown-item></el-dropdown-menu></template></el-dropdown><span v-else-if="scope.row.status === 'OPEN'" class="muted-action">等待补充素材</span><el-button v-if="scope.row.selectedAssetId" link @click="openOutput(scope.row.selectedAssetId)">预览</el-button></template></el-table-column>
         </el-table>
         <div class="detail-actions">
           <input ref="masterUploadInput" class="native-file-input" type="file" accept="video/mp4,.mp4" @change="uploadProjectMaster" />
           <el-button :loading="masterUploadBusy" @click="selectMasterUpload">上传本地成片</el-button>
           <el-button v-if="selectedProject.productionStage === 'READY_TO_EDIT'" type="primary" @click="renderProject(selectedProject)">合成1080×1920成片</el-button>
         </div>
+        <h4>发布包与效果回流</h4>
+        <div class="publication-grid">
+          <article v-for="variant in selectedProject.variants || []" :key="variant.id">
+            <div><strong>{{ variant.title }}</strong><el-tag :type="variant.packagingStatus === 'APPROVED' ? 'success' : 'info'">{{ variant.packagingStatus === 'APPROVED' ? '发布包已通过' : label(variant.packagingStatus) }}</el-tag></div>
+            <p>{{ variant.body }}</p>
+            <small>封面：{{ variant.metadata?.publicationPackage?.coverText || variant.coverSpec?.text || '待设置' }}</small>
+            <small>话题：{{ variant.metadata?.hashtags?.join('、') || '待设置' }}</small>
+            <small>评论引导：{{ variant.metadata?.publicationPackage?.commentGuide || '待设置' }}</small>
+            <small>发布时间：{{ variant.metadata?.publicationPackage?.publishTimeSuggestion || '由运营确认' }}</small>
+            <div class="publication-actions"><span v-if="variant.manualPublishUrl">已登记：{{ variant.manualPublishUrl }}</span><el-button v-if="variant.packagingStatus === 'APPROVED'" size="small" type="primary" plain @click="openManualPublish(variant)">{{ variant.manualPublishUrl ? '修改发布登记' : '登记发布链接' }}</el-button></div>
+          </article>
+        </div>
+        <div v-if="selectedProject.libraryEntries?.[0]" class="metric-checkpoints">
+          <article v-for="hours in [1,24,72,168]" :key="hours">
+            <span>{{ hours === 168 ? '7天' : `${hours}小时` }}</span>
+            <strong>{{ selectedProject.libraryEntries[0].metricHistory?.find((item: Row) => Number(item.checkpointHours) === hours)?.views ?? '待回收' }}</strong>
+            <small>播放</small>
+          </article>
+        </div>
+        <el-alert v-for="item in selectedProject.optimizations || []" :key="item.id" :title="item.summary" type="info" :closable="false" show-icon />
       </template>
     </el-drawer>
+
+    <el-dialog v-model="publishDialog" title="登记抖音发布信息" width="560px" destroy-on-close>
+      <el-form label-position="top">
+        <el-form-item label="作品链接"><el-input v-model="publishForm.remoteUrl" placeholder="填写抖音作品链接" /></el-form-item>
+        <el-form-item label="平台内容ID"><el-input v-model="publishForm.remoteId" placeholder="链接或内容ID至少填写一项" /></el-form-item>
+        <el-form-item label="实际发布时间"><el-date-picker v-model="publishForm.publishedAt" type="datetime" value-format="YYYY-MM-DDTHH:mm" placeholder="留空使用当前时间" /></el-form-item>
+        <el-alert title="登记后仅回收效果并生成优化建议，不会自动发布或复制视频。" type="info" :closable="false" />
+      </el-form>
+      <template #footer><el-button @click="publishDialog = false">取消</el-button><el-button type="primary" @click="submitManualPublish">保存登记</el-button></template>
+    </el-dialog>
   </section>
 </template>
 
@@ -1095,6 +1252,9 @@ onBeforeUnmount(() => {
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 18px; }.form-grid .full { grid-column: 1 / -1; }.form-tip { display: block; margin-top: 6px; color: #8a94a5; }
 .detail-head { display: flex; align-items: center; justify-content: space-between; padding-bottom: 14px; border-bottom: 1px solid #edf0f5; }.detail-head strong, .detail-head span { display: block; }.detail-head strong { font-size: 22px; }.detail-head span { margin-top: 4px; color: #7c8797; }
 .native-file-input { display: none; }
+.muted-action { color: #98a2b3; font-size: 13px; }
 .candidate-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 20px; }.candidate-grid article { padding: 14px; border: 1px solid #e3e8f0; border-radius: 12px; }.candidate-grid strong { display: block; margin: 8px 0; }.candidate-grid p { min-height: 48px; color: #657187; }.candidate-grid small { display: block; margin-bottom: 9px; color: #8a94a5; }.detail-actions { display: flex; justify-content: flex-end; padding-top: 16px; }
+.publication-grid { display: grid; gap: 12px; }.publication-grid article { padding: 14px; border: 1px solid #e3e8f0; border-radius: 12px; }.publication-grid article > div:first-child, .publication-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; }.publication-grid p { color: #526071; white-space: pre-wrap; }.publication-grid small { display: block; margin-top: 5px; color: #7c8797; }.publication-actions { margin-top: 12px; }.publication-actions span { color: #47705a; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.metric-checkpoints { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 14px 0; }.metric-checkpoints article { padding: 12px; border-radius: 10px; background: #f5f7fb; }.metric-checkpoints span, .metric-checkpoints small { display: block; color: #7c8797; }.metric-checkpoints strong { display: block; margin: 5px 0; font-size: 20px; }
 @media (max-width: 1100px) { .factory-summary, .opportunity-grid, .candidate-grid, .topic-card-kpis, .topic-detail-grid { grid-template-columns: 1fr 1fr; }.two-cards, .model-route, .topic-filters { grid-template-columns: 1fr 1fr; }.viral-pipeline { grid-template-columns: 1fr 1fr; }.viral-pipeline i { display: none; } }
 </style>

@@ -15,6 +15,7 @@ import { ContentService } from "./content.service";
 import { OssStorageService } from "./oss-storage.service";
 import { PrismaService } from "./prisma.service";
 import { VideoFactoryService } from "./video-factory.service";
+import { inspectVideoBuffer, validateVideoMasterMetadata } from "./video-output-validation";
 import {
   DEFAULT_VIDEO_POLICY_CONFIG,
   VIDEO_RECIPES,
@@ -50,7 +51,7 @@ export type AiTaskRoute = {
   projectMode: "STANDARD_SMART_VIDEO" | "REFERENCE_DIRECT_FULL_VIDEO" | "CODEX_DIRECT_FULL_VIDEO" | "IMAGE_POST";
   stage: string;
   executionMode: string;
-  requiredSkill: "video-editing-from-media-library" | "saidian-douyin-image-posts";
+  requiredSkill: "video-editing-from-media-library" | "saydian-douyin-viral-video-generator" | "saidian-douyin-image-posts";
 };
 
 export const unifiedWindowsRouteKeys = [
@@ -242,6 +243,19 @@ export function aiTaskRoute(task: {
   const executionMode = text(input.executionMode).toUpperCase();
   const workflowGuard = object(input.workflowGuard);
   const stage = text(workflowGuard.stage || input.stage || executionMode).toUpperCase();
+
+  if (type === "VIDEO"
+    && text(input.factoryModule).toUpperCase() === "DOUYIN_VIRAL"
+    && ["TOPIC_CARD_BATCH", "SCRIPT_ONLY", "FULL_VIDEO"].includes(executionMode)) {
+    return {
+      version: 1,
+      domain: "VIDEO_PROJECT",
+      projectMode: "STANDARD_SMART_VIDEO",
+      stage: stage || executionMode,
+      executionMode,
+      requiredSkill: "saydian-douyin-viral-video-generator",
+    };
+  }
 
   if (type === "VIDEO" && sourceType === "VIDEO_FACTORY_PROJECT"
     && ["FULL_VIDEO", "SCRIPT_ONLY", "SIMILAR_VIDEO", "NO_VOICE_VIDEO", "COVER_TITLE"].includes(executionMode)) {
@@ -469,6 +483,7 @@ function normalizeVideoScriptCandidates(value: unknown): VideoScriptCandidateV3[
         visibleFacts: strings(shot.visibleFacts || shot.visible_facts),
         restrictions: strings(shot.restrictions),
         semanticScore: shot.semanticScore === undefined && shot.semantic_score === undefined ? null : number(shot.semanticScore ?? shot.semantic_score),
+        reshootRequirement: text(shot.reshootRequirement || shot.reshoot_requirement),
       };
     });
     const scoreBreakdown = object(candidate.scoreBreakdown);
@@ -479,6 +494,7 @@ function normalizeVideoScriptCandidates(value: unknown): VideoScriptCandidateV3[
       script: text(candidate.script),
       cta: text(candidate.cta),
       score: Math.max(0, Math.min(100, number(candidate.score) || 0)),
+      scoreReason: text(candidate.scoreReason || candidate.score_reason) || "依据产品相关度、Hook强度、品牌匹配、素材覆盖与转化潜力综合评分",
       scoreBreakdown: Object.fromEntries(Object.entries(scoreBreakdown).map(([key, score]) => [key, number(score) || 0])),
       templateCode: videoRecipe(candidate.templateCode),
       shots,
@@ -2125,8 +2141,8 @@ export class AiTaskCenterService implements OnModuleInit {
     const node = await this.runner(token, text(body.nodeCode));
     const task = await this.ensureRunnerTask(node.nodeCode, id);
     const requestedOpsTaskId = text(object(task.input).opsTaskId) || undefined;
+    const outputKind = text(body.kind) || (file ? "FILE_OUTPUT" : "STRUCTURED_RESULT");
     if (!file) {
-      const outputKind = text(body.kind) || "STRUCTURED_RESULT";
       const version = (await this.prisma.aiTaskOutput.count({
         where: { aiTaskId: id, kind: outputKind },
       })) + 1;
@@ -2150,6 +2166,82 @@ export class AiTaskCenterService implements OnModuleInit {
     if (!this.oss.isConfigured()) throw new BadRequestException(this.oss.configurationMessage());
     const extension = extname(file.originalname) || this.extensionForMime(file.mimetype);
     const sha256 = hash(file.buffer);
+    const kind = (
+      file.mimetype.startsWith("video/") ? "VIDEO"
+      : file.mimetype.startsWith("image/") ? "IMAGE"
+      : file.mimetype.startsWith("audio/") ? "AUDIO"
+      : "DOCUMENT"
+    ) as "VIDEO" | "IMAGE" | "AUDIO" | "DOCUMENT";
+    let metadata = object(body.metadata);
+    const dedicatedDouyinMaster = task.type === "VIDEO"
+      && text(object(task.input).factoryModule).toUpperCase() === "DOUYIN_VIRAL"
+      && outputKind === "VIDEO_MASTER";
+    if (dedicatedDouyinMaster) {
+      if (kind !== "VIDEO" || (!file.originalname.toLowerCase().endsWith(".mp4") && file.mimetype !== "video/mp4")) {
+        throw new BadRequestException("抖音爆款成片必须是可读取的MP4文件");
+      }
+      const technical = await inspectVideoBuffer(file);
+      const allowedAssetIds = new Set<string>();
+      const inputSnapshots = await this.prisma.aiTaskInputSnapshot.findMany({
+        where: { aiTaskId: task.id },
+        select: { payload: true },
+      });
+      for (const snapshot of inputSnapshots) {
+        for (const item of Array.isArray(object(snapshot.payload).assets) ? object(snapshot.payload).assets as unknown[] : []) {
+          const assetId = text(object(item).id);
+          if (assetId) allowedAssetIds.add(assetId);
+        }
+      }
+      const projectId = text(object(task.input).existingContentPlanId || task.sourceId);
+      const projectShots = projectId
+        ? await this.prisma.videoShot.findMany({ where: { contentPlanId: projectId }, select: { metadata: true } })
+        : [];
+      const expectedShotLineIds = new Set(projectShots
+        .map((shot) => text(object(shot.metadata).lineId))
+        .filter(Boolean));
+      if (!allowedAssetIds.size && projectId) {
+        const projectAssets = await this.prisma.contentAsset.findMany({
+          where: { contentPlanId: projectId, role: { not: "VIDEO_FACTORY_MASTER" } },
+          select: { assetId: true },
+        });
+        for (const item of projectAssets) allowedAssetIds.add(item.assetId);
+      }
+      const validation = validateVideoMasterMetadata({
+        ...metadata,
+        ...technical,
+      }, {
+        requireMaterialUsage: true,
+        allowedAssetIds,
+        ...(expectedShotLineIds.size ? { expectedShotLineIds } : {}),
+      });
+      const requiredChecks = new Set(["OUTPUT_VALIDITY", "MATERIAL_TRACE", "CONTENT_ALIGNMENT"]);
+      for (const check of validation.metadata.qualityChecks) requiredChecks.delete(check.checkType);
+      if (requiredChecks.size) validation.hardBlockers.push(`缺少质检项：${Array.from(requiredChecks).join("、")}`);
+      const usedAssetIds = [...new Set(validation.metadata.materialUsage.map((item) => item.assetId).filter(Boolean))];
+      const usedAssets = usedAssetIds.length ? await this.prisma.asset.findMany({
+        where: {
+          id: { in: usedAssetIds },
+          reviewStatus: "APPROVED",
+          availabilityStatus: "ACTIVE",
+          rightsStatus: { in: ["COMMERCIAL", "EDIT_ONLY"] },
+          deletedAt: null,
+        },
+        select: { id: true, sha256: true },
+      }) : [];
+      const usedAssetMap = new Map(usedAssets.map((item) => [item.id, item.sha256]));
+      for (const usage of validation.metadata.materialUsage) {
+        if (!usedAssetMap.has(usage.assetId)) validation.hardBlockers.push(`素材${usage.assetId || "未填写"}未审核、未启用或不可商用`);
+        else if (usedAssetMap.get(usage.assetId) !== usage.sha256) validation.hardBlockers.push(`素材${usage.assetId}哈希与任务包不一致`);
+      }
+      if (validation.hardBlockers.length) {
+        throw new BadRequestException(`抖音爆款成片未通过准入：${[...new Set(validation.hardBlockers)].join("；")}`);
+      }
+      metadata = {
+        ...metadata,
+        ...validation.metadata,
+        outputValidation: { valid: true, hardBlockers: [] },
+      };
+    }
     const stored = await this.oss.uploadBuffer({
       buffer: file.buffer,
       originalName: file.originalname,
@@ -2159,13 +2251,6 @@ export class AiTaskCenterService implements OnModuleInit {
       sourceType: "AI_TASK",
       category: "derived",
     });
-    const kind = (
-      file.mimetype.startsWith("video/") ? "VIDEO"
-      : file.mimetype.startsWith("image/") ? "IMAGE"
-      : file.mimetype.startsWith("audio/") ? "AUDIO"
-      : "DOCUMENT"
-    ) as "VIDEO" | "IMAGE" | "AUDIO" | "DOCUMENT";
-    const metadata = object(body.metadata);
     const width = number(metadata.width);
     const height = number(metadata.height);
     const durationSeconds = number(metadata.durationSeconds);
@@ -2232,16 +2317,43 @@ export class AiTaskCenterService implements OnModuleInit {
       const code = error instanceof Prisma.PrismaClientKnownRequestError ? error.code : "UNKNOWN";
       throw new BadRequestException(`AI成片素材登记失败（${code}）。成片已保留，可直接重试，无需重新剪辑。`);
     }
-    const outputKind = text(body.kind) || `${kind}_OUTPUT`;
+    const normalizedOutputKind = outputKind === "FILE_OUTPUT" ? `${kind}_OUTPUT` : outputKind;
     const existingOutput = await this.prisma.aiTaskOutput.findFirst({
-      where: { aiTaskId: id, kind: outputKind, assetId: asset.id },
+      where: { aiTaskId: id, kind: normalizedOutputKind, assetId: asset.id },
       orderBy: { createdAt: "desc" },
     });
     const version = existingOutput
       ? number(object(existingOutput.metadata).version) || 1
-      : (await this.prisma.aiTaskOutput.count({ where: { aiTaskId: id, kind: outputKind } })) + 1;
-    const isFinal = outputKind === "VIDEO_MASTER"
-      || ["IMAGE", "IMAGE_OUTPUT", "IMAGE_MASTER", "ARTICLE", "ARTICLE_OUTPUT"].includes(outputKind);
+      : (await this.prisma.aiTaskOutput.count({ where: { aiTaskId: id, kind: normalizedOutputKind } })) + 1;
+    await this.prisma.assetVersion.upsert({
+      where: { assetId_version: { assetId: asset.id, version } },
+      create: {
+        assetId: asset.id,
+        version,
+        sha256,
+        sourcePath: `oss://${stored.objectKey}`,
+        objectKey: stored.objectKey,
+        objectVersionId: stored.objectVersionId,
+        etag: stored.etag,
+        storageUrl: stored.storageUrl,
+        createdBy: `Codex:${node.nodeCode}`,
+        originalFileName: file.originalname,
+        mimeType: file.mimetype,
+        extension,
+        sizeBytes: file.size,
+        width: typeof width === "number" && width > 0 ? Math.round(width) : null,
+        height: typeof height === "number" && height > 0 ? Math.round(height) : null,
+        durationSeconds: typeof durationSeconds === "number" && durationSeconds > 0 ? durationSeconds : null,
+        codec: text(metadata.codec) || null,
+        technicalMetadata: json(metadata),
+      },
+      update: {
+        codec: text(metadata.codec) || null,
+        technicalMetadata: json(metadata),
+      },
+    });
+    const isFinal = normalizedOutputKind === "VIDEO_MASTER"
+      || ["IMAGE", "IMAGE_OUTPUT", "IMAGE_MASTER", "ARTICLE", "ARTICLE_OUTPUT"].includes(normalizedOutputKind);
     const outputData = {
       title: text(body.title) || task.title,
       mimeType: file.mimetype,
@@ -2268,7 +2380,7 @@ export class AiTaskCenterService implements OnModuleInit {
         : this.prisma.aiTaskOutput.create({
           data: {
             aiTaskId: id,
-            kind: outputKind,
+            kind: normalizedOutputKind,
             reviewStatus: "PENDING",
             ...outputData,
           },

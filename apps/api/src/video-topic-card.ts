@@ -36,6 +36,55 @@ export type VideoMaterialCoverage = {
   }>;
 };
 
+export type VideoMaterialUsageItem = {
+  lineId: string;
+  sequence: number;
+  assetId: string;
+  sha256: string;
+  scriptLine: string;
+  timelineStart: number;
+  timelineEnd: number;
+  sourceIn: number;
+  sourceOut: number;
+  moduleType: string;
+};
+
+export type VideoContentAlignment = {
+  score: number;
+  status: "PASSED" | "REVIEW_REQUIRED" | "FAILED";
+  checkedFrames: Array<{
+    moduleType: string;
+    timestampSeconds: number;
+    expected: string;
+    observed: string;
+    matched: boolean;
+  }>;
+  hardBlockers: string[];
+  findings: string[];
+};
+
+export type VideoMasterMetadataV2 = {
+  width: number;
+  height: number;
+  durationSeconds: number;
+  codec: string;
+  frameRate: string;
+  materialUsage: VideoMaterialUsageItem[];
+  qualityChecks: Array<{
+    checkType: "OUTPUT_VALIDITY" | "MATERIAL_TRACE" | "CONTENT_ALIGNMENT" | "FINAL_REVIEW" | string;
+    status: "PASSED" | "REVIEW_REQUIRED" | "FAILED";
+    score: number;
+    findings: unknown[];
+  }>;
+  contentAlignment?: VideoContentAlignment;
+};
+
+export type VideoOutputValidation = {
+  valid: boolean;
+  hardBlockers: string[];
+  metadata: VideoMasterMetadataV2;
+};
+
 export type VideoTopicCardPayload = {
   cardNo?: string;
   factoryModule?: "DOUYIN_VIRAL" | "GENERAL_VIDEO_FACTORY";
@@ -84,6 +133,8 @@ export type VideoTopicCardPayload = {
   reviewerEmployeeId?: string;
   approvedAiTaskId?: string;
   approvedExecutionMode?: "SCRIPT_ONLY" | "FULL_VIDEO";
+  approvedAllowExternalGeneration?: boolean;
+  approvedRequestedModelId?: string;
 };
 
 export type VideoShotPlanV3 = {
@@ -106,6 +157,7 @@ export type VideoShotPlanV3 = {
   visibleFacts?: string[];
   restrictions?: string[];
   semanticScore?: number | null;
+  reshootRequirement?: string;
 };
 
 export type VideoScriptCandidateV3 = {
@@ -114,6 +166,7 @@ export type VideoScriptCandidateV3 = {
   script: string;
   cta: string;
   score: number;
+  scoreReason: string;
   scoreBreakdown: Record<string, number>;
   templateCode: VideoRecipeCode;
   shots: VideoShotPlanV3[];

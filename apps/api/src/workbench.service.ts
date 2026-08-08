@@ -13,7 +13,7 @@ const collaborationRoleCodes = ["CONTENT_OPERATOR", "VIDEO_SPECIALIST", "DESIGNE
 const deliverableOutputKinds = [
   "VIDEO_MASTER",
   "IMAGE", "IMAGE_ASSET", "IMAGE_OUTPUT", "IMAGE_GENERATED", "IMAGE_MASTER",
-  "ARTICLE", "ARTICLE_OUTPUT", "ARTICLE_PLAN",
+  "ARTICLE", "ARTICLE_OUTPUT",
 ];
 
 function value(input: unknown) {
@@ -22,6 +22,27 @@ function value(input: unknown) {
 
 function object(input: unknown): Record<string, unknown> {
   return input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : {};
+}
+
+function validDouyinVideoOutput(input: unknown, asset: any, metadataInput: unknown) {
+  const taskInput = object(input);
+  if (value(taskInput.factoryModule).toUpperCase() !== "DOUYIN_VIRAL") return true;
+  const metadata = object(metadataInput);
+  const assetSnapshot = object(asset?.sourceSnapshot);
+  const assetMetadata = object(assetSnapshot.metadata);
+  const validation = object(metadata.outputValidation || assetMetadata.outputValidation);
+  const materialUsage = Array.isArray(metadata.materialUsage)
+    ? metadata.materialUsage
+    : Array.isArray(assetMetadata.materialUsage) ? assetMetadata.materialUsage : [];
+  const codec = value(metadata.codec || assetMetadata.codec);
+  const frameRate = value(metadata.frameRate || assetMetadata.frameRate);
+  return validation.valid === true
+    && Number(asset?.width || metadata.width || 0) > 0
+    && Number(asset?.height || metadata.height || 0) > 0
+    && Number(asset?.durationSeconds || metadata.durationSeconds || 0) > 1
+    && Boolean(codec)
+    && Boolean(frameRate)
+    && materialUsage.length > 0;
 }
 
 function date(input: unknown) {
@@ -119,7 +140,7 @@ export class WorkbenchService {
           }
         : type === "ARTICLE"
           ? {
-              kind: { in: ["ARTICLE", "ARTICLE_OUTPUT", "ARTICLE_PLAN"] },
+              kind: { in: ["ARTICLE", "ARTICLE_OUTPUT"] },
             }
           : {};
     const items = await this.prisma.aiTaskOutput.findMany({
@@ -155,6 +176,7 @@ export class WorkbenchService {
             width: true,
             height: true,
             durationSeconds: true,
+            sourceSnapshot: true,
             reviewStatus: true,
             availabilityStatus: true,
             objectKey: true,
@@ -187,7 +209,8 @@ export class WorkbenchService {
         if (item.kind === "VIDEO_MASTER") {
           return item.asset?.reviewStatus === "APPROVED"
             && item.asset.availabilityStatus === "ACTIVE"
-            && Boolean(item.asset.objectKey || item.url);
+            && Boolean(item.asset.objectKey || item.url)
+            && validDouyinVideoOutput(item.aiTask?.input, item.asset, metadata);
         }
         if (["IMAGE", "IMAGE_ASSET", "IMAGE_OUTPUT", "IMAGE_GENERATED", "IMAGE_MASTER"].includes(item.kind)) {
           return item.asset?.reviewStatus === "APPROVED"
@@ -226,11 +249,14 @@ export class WorkbenchService {
         kind: { in: deliverableOutputKinds },
         reviewStatus: "APPROVED",
       },
-      include: { asset: true },
+      include: { asset: true, aiTask: { select: { input: true } } },
     });
     if (!output) throw new NotFoundException("成品不存在");
     if (output.asset && (output.asset.reviewStatus !== "APPROVED" || output.asset.availabilityStatus !== "ACTIVE")) {
       throw new NotFoundException("成品尚未审核通过");
+    }
+    if (output.kind === "VIDEO_MASTER" && !validDouyinVideoOutput(output.aiTask.input, output.asset, output.metadata)) {
+      throw new NotFoundException("成片未通过有效性和素材追踪检查");
     }
     if (output.asset?.objectKey) return { url: this.oss.signedDownloadUrl(output.asset.objectKey, 1_800) };
     if (output.url) return { url: output.url };
@@ -1982,12 +2008,14 @@ export class WorkbenchService {
     ];
     const outputs = Array.isArray(aiRequest?.outputs) ? aiRequest.outputs : [];
     const deliverables = outputs
-      .filter((item: any) => item.kind !== "OPS_TASK" && item.reviewStatus === "APPROVED")
+      .filter((item: any) => item.kind !== "OPS_TASK"
+        && item.reviewStatus === "APPROVED"
+        && (item.kind !== "VIDEO_MASTER" || validDouyinVideoOutput(aiRequest?.input, item.asset, item.metadata)))
       .map((item: any) => {
         const metadata = object(item.metadata);
         const previewKind = item.kind === "VIDEO_MASTER" || value(item.mimeType).startsWith("video/") ? "VIDEO"
           : value(item.mimeType).startsWith("image/") || ["IMAGE", "IMAGE_ASSET", "IMAGE_OUTPUT", "IMAGE_GENERATED", "IMAGE_MASTER"].includes(item.kind) ? "IMAGE"
-            : ["ARTICLE", "ARTICLE_OUTPUT", "ARTICLE_PLAN"].includes(item.kind) ? "ARTICLE" : "DOCUMENT";
+            : ["ARTICLE", "ARTICLE_OUTPUT"].includes(item.kind) ? "ARTICLE" : "DOCUMENT";
         return {
           id: item.id,
           type: item.kind,

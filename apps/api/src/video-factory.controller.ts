@@ -184,11 +184,13 @@ export class VideoFactoryController {
     const requestedFactoryModule = String(body.factoryModule || "").toUpperCase();
     const requestedModelId = String(body.requestedModelId || "").trim();
     const allowExternalGeneration = executionMode === "FULL_VIDEO" && body.allowExternalGeneration === true;
-    const allowFallback = allowExternalGeneration && body.allowFallback !== false;
+    const allowFallback = allowExternalGeneration && body.allowFallback === true;
     const prepared = await this.factory.prepareTopicCardApproval(id, {
       executionMode: executionMode as "SCRIPT_ONLY" | "FULL_VIDEO",
       ownerId,
       reviewerId,
+      allowExternalGeneration,
+      requestedModelId,
     });
     const task = await this.aiTasks.createTask({
       type: "VIDEO",
@@ -224,6 +226,8 @@ export class VideoFactoryController {
       executionMode: executionMode as "SCRIPT_ONLY" | "FULL_VIDEO",
       ownerId,
       reviewerId,
+      allowExternalGeneration,
+      requestedModelId,
     }, task.id, actor);
     return { card, task };
   }
@@ -246,7 +250,8 @@ export class VideoFactoryController {
       assetGapTaskId: body.assetGapTaskId ? String(body.assetGapTaskId) : undefined,
       requestedModelId: body.requestedModelId ? String(body.requestedModelId) : undefined,
       routingMode: body.routingMode ? String(body.routingMode) : "AUTO",
-      allowFallback: body.allowFallback !== false,
+      allowFallback: body.allowFallback === true,
+      allowExternalGeneration: body.allowExternalGeneration === true,
     }, actor);
   }
 
@@ -256,9 +261,16 @@ export class VideoFactoryController {
     @Query("status") status?: string,
     @Query("platform") platform?: string,
     @Query("productModel") productModel?: string,
+    @Query("page") page?: string,
+    @Query("pageSize") pageSize?: string,
   ) {
     this.actor(authorization);
-    return this.factory.projects({ status, platform, productModel });
+    return this.factory.projects({
+      status,
+      platform,
+      productModel,
+      ...(page || pageSize ? { page: Math.max(1, Number(page) || 1), pageSize: Math.max(1, Number(pageSize) || 20) } : {}),
+    });
   }
 
   @Get("projects/:id")
@@ -287,7 +299,8 @@ export class VideoFactoryController {
       candidateIndex: Number(body.candidateIndex || 0),
       requestedModelId: body.requestedModelId ? String(body.requestedModelId) : undefined,
       routingMode: body.routingMode ? String(body.routingMode) : "AUTO",
-      allowFallback: body.allowFallback !== false,
+      allowFallback: body.allowFallback === true,
+      allowExternalGeneration: body.allowExternalGeneration === true,
     }, this.actor(authorization, requestedActor));
   }
 
@@ -355,6 +368,24 @@ export class VideoFactoryController {
     @Param("id") id: string,
     @Body() body: Record<string, unknown>,
   ) {
-    return this.factory.reviewOutput(id, Boolean(body.approved), this.actor(authorization, requestedActor), String(body.note || ""));
+    return this.factory.reviewOutput(
+      id,
+      Boolean(body.approved),
+      this.actor(authorization, requestedActor),
+      String(body.note || ""),
+      body.contentConfirmed === true,
+    );
+  }
+
+  @Post("outputs/:id/revise")
+  async reviseOutput(
+    @Headers("authorization") authorization: string | undefined,
+    @Headers("x-ops-actor") requestedActor: string | undefined,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const actor = this.actor(authorization, requestedActor);
+    const taskId = await this.factory.outputRevisionTaskId(id);
+    return this.aiTasks.revise(taskId, body, actor);
   }
 }

@@ -10,6 +10,7 @@ import { decryptIntegrationValue } from "./integration-secret";
 import { OssStorageService } from "./oss-storage.service";
 import { PrismaService } from "./prisma.service";
 import { videoFactoryModule, VideoFactoryService } from "./video-factory.service";
+import { inspectVideoBuffer, validateVideoMasterMetadata } from "./video-output-validation";
 
 const execFileAsync = promisify(execFile);
 const execAsync = promisify(exec);
@@ -649,18 +650,8 @@ export class VideoFactoryWorkerService {
   }
 
   async inspectUploadedVideo(file: { originalname: string; buffer: Buffer } | undefined) {
-    if (!file?.buffer?.length) throw new BadRequestException("请选择需要上传的MP4成片");
-    const tempDir = join(opsConfig.derivedOutputDir, "video-factory", "upload-inspection");
-    await mkdir(tempDir, { recursive: true });
-    const tempPath = join(tempDir, `${randomUUID()}${extname(file.originalname) || ".mp4"}`);
-    try {
-      await writeFile(tempPath, file.buffer);
-      const technical = await this.inspectVideo(tempPath);
-      if (!technical.ok) throw new BadRequestException(`成片技术检查失败：${technical.error || "无法读取视频流"}`);
-      return technical;
-    } finally {
-      await rm(tempPath, { force: true });
-    }
+    const technical = await inspectVideoBuffer(file);
+    return { ok: true, ...technical, duration: technical.durationSeconds };
   }
 
   private async hasAudio(path: string) {
@@ -830,22 +821,34 @@ export class VideoFactoryWorkerService {
     if (!job) throw new Error("渲染任务不存在");
     const renderInput = object(job.input);
     const revisionFeedback = String(renderInput.revisionFeedback || "").trim();
-    const assets = job.contentPlan.videoShots
-      .map((shot) => shot.selectedAsset)
-      .filter((asset): asset is NonNullable<typeof asset> => Boolean(asset));
-    if (!assets.length || assets.length !== job.contentPlan.videoShots.length) throw new Error("渲染任务缺少已确认镜头");
+    const renderShots = job.contentPlan.videoShots.map((shot) => {
+      if (!shot.selectedAsset) throw new Error(`分镜${shot.sequence + 1}缺少已确认素材`);
+      return { shot, asset: shot.selectedAsset };
+    });
+    if (!renderShots.length) throw new Error("渲染任务缺少标准分镜");
     const workDir = join(opsConfig.derivedOutputDir, "video-factory", job.id);
     await mkdir(workDir, { recursive: true });
     const normalized: string[] = [];
-    for (let index = 0; index < assets.length; index += 1) {
-      const asset = assets[index]!;
+    const materialUsage: Array<Record<string, unknown>> = [];
+    let timelineCursor = 0;
+    for (let index = 0; index < renderShots.length; index += 1) {
+      const { shot, asset } = renderShots[index]!;
+      const shotMetadata = object(shot.metadata);
+      const lineId = String(shotMetadata.lineId || "").trim();
+      if (videoFactoryModule(job.contentPlan) === "DOUYIN_VIRAL" && !lineId) throw new Error(`分镜${index + 1}缺少稳定lineId`);
+      if (!asset.sha256) throw new Error(`分镜${index + 1}素材缺少哈希，不能形成可追溯成片`);
       const sourcePath = await this.localAssetPath(asset, workDir);
       const normalizedPath = join(workDir, `shot-${String(index + 1).padStart(2, "0")}.mp4`);
-      const duration = Math.max(1, Number(job.contentPlan.videoShots[index].durationSeconds || 5));
+      const sourceIn = Math.max(0, Number(shotMetadata.sourceIn) || 0);
+      const duration = Math.max(1, Number(shot.durationSeconds || 5));
+      const sourceOut = Math.max(sourceIn + duration, Number(shotMetadata.sourceOut) || 0);
       const sourceHasAudio = await this.hasAudio(sourcePath);
+      const primaryInput = asset.kind === "IMAGE"
+        ? ["-y", "-loop", "1", "-i", sourcePath]
+        : ["-y", "-ss", String(sourceIn), "-i", sourcePath];
       const inputs = sourceHasAudio
-        ? ["-y", "-i", sourcePath]
-        : ["-y", "-i", sourcePath, "-f", "lavfi", "-t", String(duration), "-i", "anullsrc=channel_layout=stereo:sample_rate=44100"];
+        ? primaryInput
+        : [...primaryInput, "-f", "lavfi", "-t", String(duration), "-i", "anullsrc=channel_layout=stereo:sample_rate=44100"];
       await execFileAsync("ffmpeg", [
         ...inputs,
         "-map", "0:v:0", "-map", sourceHasAudio ? "0:a:0" : "1:a:0",
@@ -856,6 +859,19 @@ export class VideoFactoryWorkerService {
         normalizedPath,
       ], { timeout: 300_000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 });
       normalized.push(normalizedPath);
+      materialUsage.push({
+        lineId: lineId || `line_${String(index + 1).padStart(2, "0")}`,
+        sequence: shot.sequence,
+        assetId: asset.id,
+        sha256: asset.sha256,
+        scriptLine: shot.description,
+        timelineStart: timelineCursor,
+        timelineEnd: timelineCursor + duration,
+        sourceIn,
+        sourceOut,
+        moduleType: shot.moduleType,
+      });
+      timelineCursor += duration;
     }
     let elapsed = 0;
     const captionTexts = videoRenderCaptionTexts(job.contentPlan);
@@ -906,6 +922,33 @@ export class VideoFactoryWorkerService {
     }
     const technical = await this.inspectVideo(outputPath);
     if (!technical.ok) throw new Error(`主成片技术质检失败：${technical.error || "无法读取视频流"}`);
+    const qualityChecks = [
+      { checkType: "OUTPUT_VALIDITY", status: "PASSED", score: 100, findings: [{ width: technical.width, height: technical.height, duration: technical.duration, codec: technical.codec, frameRate: technical.frameRate }] },
+      { checkType: "MATERIAL_TRACE", status: "PASSED", score: 100, findings: materialUsage.map((item) => ({ lineId: item.lineId, assetId: item.assetId, sha256: item.sha256 })) },
+      { checkType: "CONTENT_ALIGNMENT", status: "REVIEW_REQUIRED", score: 0, findings: [{ message: "请独立核对Hook、中段产品卖点与CTA画面" }] },
+    ];
+    const contentAlignment = {
+      status: "REVIEW_REQUIRED",
+      hook: { expected: job.contentPlan.hook || "", timestamp: 1 },
+      body: { expected: job.contentPlan.topic || "", timestamp: Math.max(1, Math.round(technical.duration / 2)) },
+      cta: { expected: job.contentPlan.objective || "", timestamp: Math.max(1, Math.floor(technical.duration - 1)) },
+      blockers: [],
+    };
+    const admission = validateVideoMasterMetadata({
+      width: technical.width,
+      height: technical.height,
+      durationSeconds: technical.duration,
+      codec: technical.codec,
+      frameRate: technical.frameRate,
+      materialUsage,
+      qualityChecks,
+      contentAlignment,
+    }, {
+      requireMaterialUsage: videoFactoryModule(job.contentPlan) === "DOUYIN_VIRAL",
+      allowedAssetIds: new Set(renderShots.map((item) => item.asset.id)),
+      expectedShotLineIds: new Set(renderShots.map((item, index) => String(object(item.shot.metadata).lineId || `line_${String(index + 1).padStart(2, "0")}`))),
+    });
+    if (!admission.valid) throw new Error(`主成片准入失败：${admission.hardBlockers.join("；")}`);
     const buffer = await readFile(outputPath);
     const hash = createHash("sha256").update(buffer).digest("hex");
     const publicNo = `SD-FINAL-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${randomUUID().slice(0, 6).toUpperCase()}`;
@@ -950,12 +993,16 @@ export class VideoFactoryWorkerService {
         sourceSnapshot: {
           renderer: actualRenderer,
           renderJobId: job.id,
-          shotAssetIds: assets.map((item) => item.id),
+          shotAssetIds: renderShots.map((item) => item.asset.id),
           metadata: {
             source: actualRenderer,
             codec: technical.codec,
             frameRate: technical.frameRate,
-            usedAssetIds: assets.map((item) => item.id),
+            usedAssetIds: renderShots.map((item) => item.asset.id),
+            materialUsage: materialUsage as unknown as Prisma.InputJsonValue,
+            qualityChecks: qualityChecks as unknown as Prisma.InputJsonValue,
+            contentAlignment: contentAlignment as unknown as Prisma.InputJsonValue,
+            outputValidation: { valid: true, hardBlockers: [] },
           },
         },
         aiIndex: { source: "VIDEO_FACTORY_RENDER", contentPlanId: job.contentPlanId },
@@ -990,7 +1037,11 @@ export class VideoFactoryWorkerService {
               renderJobId: job.id,
               codec: technical.codec,
               frameRate: technical.frameRate,
-              usedAssetIds: assets.map((item) => item.id),
+              usedAssetIds: renderShots.map((item) => item.asset.id),
+              materialUsage: materialUsage as unknown as Prisma.InputJsonValue,
+              qualityChecks: qualityChecks as unknown as Prisma.InputJsonValue,
+              contentAlignment: contentAlignment as unknown as Prisma.InputJsonValue,
+              outputValidation: { valid: true, hardBlockers: [] },
             },
           },
         },
@@ -1008,9 +1059,17 @@ export class VideoFactoryWorkerService {
       this.prisma.contentAsset.create({
         data: { contentPlanId: job.contentPlanId, assetId: asset.id, role: "VIDEO_FACTORY_MASTER" },
       }),
-      this.prisma.videoQualityCheck.create({
-        data: { contentPlanId: job.contentPlanId, assetId: asset.id, renderJobId: job.id, checkType: "TECHNICAL", status: "PASSED", score: 95, findings: [{ width: technical.width, height: technical.height, duration: technical.duration, ratio: "9:16" }] },
-      }),
+      ...qualityChecks.map((check) => this.prisma.videoQualityCheck.create({
+        data: {
+          contentPlanId: job.contentPlanId,
+          assetId: asset.id,
+          renderJobId: job.id,
+          checkType: check.checkType,
+          status: check.status,
+          score: check.score,
+          findings: check.findings as Prisma.InputJsonValue,
+        },
+      })),
       this.prisma.videoQualityCheck.create({
         data: { contentPlanId: job.contentPlanId, assetId: asset.id, renderJobId: job.id, checkType: "FINAL_REVIEW", status: "REVIEW_REQUIRED", score: 0, findings: [{ message: "请核对字幕、配音、产品外形、功能画面和CTA" }] },
       }),
