@@ -2309,6 +2309,19 @@ async function execute(claimed: JsonRecord) {
     const detectedSkill = await detectSkill(route);
     currentSkill = detectedSkill.downstreamSkillName || detectedSkill.name;
     const packaged = await downloadInputs(packageValue, workspace);
+    // Retry downloads may carry a compact route-only task. Preserve the
+    // original claimed input so direct-output recovery still knows its batch
+    // keys and never falls back to a partial single-master result.
+    const persistedTask = await readJson<JsonRecord>(join(workspace, "task.json"));
+    const downloadedTask = record(packaged.task);
+    packaged.task = {
+      ...downloadedTask,
+      ...record(persistedTask),
+      input: {
+        ...record(downloadedTask.input),
+        ...record(persistedTask?.input),
+      },
+    };
     await writeJsonAtomic(join(workspace, "task.json"), record(packaged.task));
     const fingerprint = packageFingerprint(packaged);
     const previousState = await loadWorkspaceState(workspace);
