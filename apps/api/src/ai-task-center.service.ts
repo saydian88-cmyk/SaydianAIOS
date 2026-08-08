@@ -1046,7 +1046,10 @@ export class AiTaskCenterService implements OnModuleInit {
       Number(taskInput.outputRegistrationRecoveryAttempts || 0),
       text(taskInput.outputRegistrationRecoveryAttemptedAt) ? 1 : 0,
     );
-    const isDirectOutputRecovery = isDirectOutputTask && priorRecoveryAttempts < 5;
+    // Registration recovery only reuses an already-rendered local deliverable.
+    // It neither spends a business retry nor creates another video, so a prior
+    // upload/schema outage must not permanently strand that deliverable.
+    const isDirectOutputRecovery = isDirectOutputTask;
     const priorImageRoutingRecoveryAttempts = Math.max(
       0,
       Number(taskInput.imageProjectRoutingRecoveryAttempts || 0),
