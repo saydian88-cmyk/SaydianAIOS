@@ -20,13 +20,15 @@ describe("batch Codex direct-video result contract", () => {
       summary: "2 completed, 2 failed",
       outputFiles: [
         { kind: "VIDEO_MASTER", path: "out/1-1.mp4" },
+        { kind: "COVER_IMAGE", path: "out/1-1.jpg", metadata: { videoKey: "1-1" } },
         { kind: "VIDEO_MASTER", path: "out/2-1.mp4" },
+        { kind: "COVER_IMAGE", path: "out/2-1.jpg", metadata: { videoKey: "2-1" } },
       ],
       batchResults: [
-        { videoKey: "1-1", status: "READY", outputFile: "out/1-1.mp4", failureReason: "" },
-        { videoKey: "1-2", status: "FAILED", outputFile: "", failureReason: "render failed" },
-        { videoKey: "2-1", status: "READY", outputFile: "out/2-1.mp4", failureReason: "" },
-        { videoKey: "2-2", status: "FAILED", outputFile: "", failureReason: "render failed" },
+        { videoKey: "1-1", status: "READY", outputFile: "out/1-1.mp4", coverFile: "out/1-1.jpg", failureReason: "" },
+        { videoKey: "1-2", status: "FAILED", outputFile: "", coverFile: "", failureReason: "render failed" },
+        { videoKey: "2-1", status: "READY", outputFile: "out/2-1.mp4", coverFile: "out/2-1.jpg", failureReason: "" },
+        { videoKey: "2-2", status: "FAILED", outputFile: "", coverFile: "", failureReason: "render failed" },
       ],
     }, batchTask)).not.toThrow();
   });
@@ -39,5 +41,18 @@ describe("batch Codex direct-video result contract", () => {
         { videoKey: "1-1", status: "READY", outputFile: "out/1-1.mp4", failureReason: "" },
       ],
     }, batchTask)).toThrow("batchResults");
+  });
+
+  it("rejects a READY result whose cover was not uploaded", () => {
+    expect(() => assertCodexDirectMasterOutput({
+      summary: "one completed",
+      outputFiles: [{ kind: "VIDEO_MASTER", path: "out/1-1.mp4" }],
+      batchResults: [
+        { videoKey: "1-1", status: "READY", outputFile: "out/1-1.mp4", coverFile: "out/1-1.jpg", failureReason: "" },
+        { videoKey: "1-2", status: "FAILED", outputFile: "", coverFile: "", failureReason: "render failed" },
+        { videoKey: "2-1", status: "FAILED", outputFile: "", coverFile: "", failureReason: "render failed" },
+        { videoKey: "2-2", status: "FAILED", outputFile: "", coverFile: "", failureReason: "render failed" },
+      ],
+    }, batchTask)).toThrow("COVER_IMAGE");
   });
 });

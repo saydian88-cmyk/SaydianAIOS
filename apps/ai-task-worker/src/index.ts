@@ -958,7 +958,7 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
       "Read the active local-library configuration and the verified-editing-videos-by-product manifest. Do not download, request, or return any system task assets.",
       "The full editing Skill must independently learn, search and select VIDEO footage from the complete local library. The dispatcher must not preselect footage, create a candidate whitelist, or require system materialBindings. Use exact-product verified local VIDEO entries and never use another product model, unverified media, images, audio, packaging, cover, sticker, transition or template resources as primary footage.",
       batchDirect
-        ? `BATCH_PARTIAL_RESULT_CONTRACT: Execute every requested videoKey independently${retryVideoKeys.length ? `; only execute retryVideoKeys=${retryVideoKeys.join(",")}; do not recreate other videos` : ""}. Return batchResults with READY or FAILED for every requested key. READY must name the matching real VIDEO_MASTER outputFile, coverFile, title and tags; FAILED must include failureReason. Never discard READY items because other keys failed.`
+        ? `BATCH_PARTIAL_RESULT_CONTRACT: Execute every requested videoKey independently${retryVideoKeys.length ? `; only execute retryVideoKeys=${retryVideoKeys.join(",")}; do not recreate other videos` : ""}. Return batchResults with READY or FAILED for every requested key. Every READY item must name its matching real VIDEO_MASTER outputFile, COVER_IMAGE coverFile, title and tags; the COVER_IMAGE must be included in outputFiles with metadata.videoKey equal to that item. FAILED must include failureReason. Never discard READY items because other keys failed.`
         : "DIRECT_CONTINUOUS_EXECUTION: Do not stop for user approval of the script, shot plan, material selection, production plan, packaging, or any other intermediate artifact. Create and validate those artifacts internally, repair any correctable issue, continue directly through rendering, and return only the final VIDEO_MASTER for user review.",
       "If the local library is not initialized or not ready, fail explicitly with the missing local configuration or index. Do not return a system-task WAITING_INPUT result.",
       "The employee UI only receives the final review node, but internal script, shot plan, material coverage, composition, packaging, audio and delivery QA steps remain mandatory.",
@@ -1006,7 +1006,7 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
       "先依据当前型号真实可用 VIDEO 素材调整内部脚本和镜头方案。非核心句缺少直接画面时，自动改写为现有真实素材能够证明的表达，并重新运行素材覆盖、事实和合规检查；不得跨型号替代、不得使用包装资源充当主画面，也不得伪造功能或素材。只有核心功能确实没有真实画面、素材盘完全不可用或必要运行环境无法恢复时，才返回明确硬阻塞。校验、包装、转场、字幕、配音和工程问题必须内部返工，不能直接标记任务失败。",
       "从脚本、镜头、素材选择到剪辑成片都在本地完成；中间产物必须真实落盘并通过校验，但不回传为员工审核节点，员工只审核最终成片。",
       batchDirect
-        ? "每个 READY videoKey 都必须输出一个真实存在的 1080x1920 MP4，并在 outputFiles 中登记为 VIDEO_MASTER；FAILED videoKey 必须保留在 batchResults 并说明阻塞原因，禁止伪造完成。"
+        ? "每个 READY videoKey 都必须输出一个真实存在的 1080x1920 MP4 和一张 JPG/PNG 封面，并分别在 outputFiles 登记为 VIDEO_MASTER、COVER_IMAGE；封面的 metadata.videoKey 必须等于该 videoKey，batchResults.coverFile 必须与封面输出路径完全一致。FAILED videoKey 必须保留在 batchResults 并说明阻塞原因，禁止伪造完成。"
         : "成功时只输出一个真实存在的 1080x1920 MP4，并在 outputFiles 中登记为 VIDEO_MASTER。失败时返回 FAILED 与明确的阻塞原因，禁止伪造完成。",
       "输出必须符合任务 output schema，outputFiles 只能指向当前任务工作区内真实存在的文件。",
     ].join("\n\n");

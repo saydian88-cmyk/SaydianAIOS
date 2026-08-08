@@ -41,6 +41,10 @@ export function assertCodexDirectMasterOutput(result: JsonRecord, taskPackage: J
 
   if (input.batchCodexDirectFullVideo === true) {
     const expectedKeys = expectedBatchVideoKeys(input);
+    const covers = (Array.isArray(result.outputFiles) ? result.outputFiles : [])
+      .map(record)
+      .filter((item) => String(item.kind || "").toUpperCase() === "COVER_IMAGE");
+    const coversRequired = record(input.batchDirectInput).generateCoverTitle !== false;
     const batchResults = Array.isArray(result.batchResults) ? result.batchResults.map(record) : [];
     const byKey = new Map(batchResults.map((item) => [String(item.videoKey || ""), item]));
     const missingKeys = expectedKeys.filter((key) => !byKey.has(key));
@@ -56,6 +60,13 @@ export function assertCodexDirectMasterOutput(result: JsonRecord, taskPackage: J
         const outputFile = String(item.outputFile || "").trim();
         if (!outputFile || !masters.some((master) => String(master.path || "").trim() === outputFile)) {
           throw new Error(`batchResults ${key} 未匹配真实 VIDEO_MASTER`);
+        }
+        const coverFile = String(item.coverFile || "").trim();
+        if (coversRequired && (!coverFile || !covers.some((cover) => (
+          String(cover.path || "").trim() === coverFile
+          && String(record(cover.metadata).videoKey || "") === key
+        )))) {
+          throw new Error(`batchResults ${key} 未匹配真实 COVER_IMAGE`);
         }
       }
     }
