@@ -2073,8 +2073,16 @@ async function recoverDirectOutputResult(
   const outputsRoot = join(workspace, "outputs");
   const savedResult = await readJson<JsonRecord>(join(workspace, "result.json"));
   const savedOutputs = Array.isArray(savedResult?.outputFiles) ? savedResult.outputFiles.map(record) : [];
+  const task = record(taskPackageValue.task);
+  const taskInput = record(task.input);
+  const referenceDirect = taskInput.referenceDirectFullVideo === true;
+  const batchRequests = taskInput.batchCodexDirectFullVideo === true
+    ? batchVideoRequests(taskInput)
+    : [];
+  // A stale earlier result may contain only the first batch master. Rebuild the
+  // complete batch below instead of treating that partial result as recoverable.
   const savedMaster = savedOutputs.find((item) => String(item.kind || "").toUpperCase() === "VIDEO_MASTER");
-  if (savedMaster) {
+  if (!batchRequests.length && savedMaster) {
     const requested = String(savedMaster.path || "");
     const absolute = resolve(workspace, requested);
     const relativePath = relative(workspace, absolute);
@@ -2106,12 +2114,6 @@ async function recoverDirectOutputResult(
     if (info?.isFile() && info.size > 0) masters.push({ name, size: info.size });
   }
   if (!masters.length) return undefined;
-  const task = record(taskPackageValue.task);
-  const taskInput = record(task.input);
-  const referenceDirect = taskInput.referenceDirectFullVideo === true;
-  const batchRequests = taskInput.batchCodexDirectFullVideo === true
-    ? batchVideoRequests(taskInput)
-    : [];
   if (batchRequests.length) {
     const imageNames = (await readdir(outputsRoot)).filter((name) => [".jpg", ".jpeg", ".png", ".webp"].includes(extname(name).toLowerCase()));
     const unusedMasters = [...masters];
