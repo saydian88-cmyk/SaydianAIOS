@@ -30,17 +30,31 @@ export function batchDirectOutputFilesSchema() {
   };
 }
 
-export function expectedBatchVideoKeys(input: JsonRecord) {
+export type BatchVideoRequest = {
+  videoKey: string;
+  productModel: string;
+  ordinal: number;
+};
+
+export function batchVideoRequests(input: JsonRecord): BatchVideoRequest[] {
   const retryKeys = Array.isArray(input.retryVideoKeys)
     ? input.retryVideoKeys.map(String).filter(Boolean)
     : [];
-  if (retryKeys.length) return retryKeys;
+  if (retryKeys.length) return retryKeys.map((videoKey) => ({ videoKey, productModel: "", ordinal: 0 }));
   const batchInput = record(input.batchDirectInput);
   const products = Array.isArray(batchInput.products) ? batchInput.products.map(record) : [];
   return products.flatMap((product, index) => Array.from(
     { length: Math.max(0, Math.round(Number(product.count || 0))) },
-    (_, itemIndex) => `${index + 1}-${itemIndex + 1}`,
+    (_, itemIndex) => ({
+      videoKey: `${index + 1}-${itemIndex + 1}`,
+      productModel: String(product.model || "").trim(),
+      ordinal: itemIndex + 1,
+    }),
   ));
+}
+
+export function expectedBatchVideoKeys(input: JsonRecord) {
+  return batchVideoRequests(input).map((item) => item.videoKey);
 }
 
 export function isCodexDirectFullVideoTask(taskPackage: JsonRecord) {

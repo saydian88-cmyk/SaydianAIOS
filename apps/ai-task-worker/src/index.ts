@@ -41,7 +41,7 @@ import {
   type RepairCategory,
 } from "./execution-repair";
 import { appendQualityWarning, classifyQualityGate, type QualityWarning } from "./quality-gates";
-import { assertCodexDirectMasterOutput, batchDirectOutputFilesSchema, expectedBatchVideoKeys, isCodexDirectFullVideoTask } from "./direct-video-contract";
+import { assertCodexDirectMasterOutput, batchDirectOutputFilesSchema, batchVideoRequests, expectedBatchVideoKeys, isCodexDirectFullVideoTask } from "./direct-video-contract";
 
 function record(value: unknown): JsonRecord {
   return value && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : {};
@@ -948,6 +948,7 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
       ? taskInput.retryVideoKeys.map(String).filter(Boolean)
       : [];
     const directInput = batchDirect ? record(taskInput.batchDirectInput) : record(taskInput.codexDirectInput);
+    const batchRequests = batchDirect ? batchVideoRequests(taskInput) : [];
     const creativeMode = String(directInput.creativeMode || "FULL_VIDEO").toUpperCase();
     const revision = record(directInput.revision || taskInput.revision);
     const isRevision = Boolean(String(revision.reviewNote || "").trim());
@@ -1001,6 +1002,9 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
         productModel: String(directInput.productModel || task.productModel || ""),
         aiPrompt: String(directInput.prompt || ""),
         creativeMode,
+        ...(batchRequests.length ? {
+          requestedVideos: batchRequests.map(({ videoKey, productModel, ordinal }) => ({ videoKey, productModel, ordinal })),
+        } : {}),
         ...(retryVideoKeys.length ? { retryVideoKeys } : {}),
         ...(isRevision ? { revision } : {}),
       }, null, 2),
@@ -2103,6 +2107,76 @@ async function recoverDirectOutputResult(
   const task = record(taskPackageValue.task);
   const taskInput = record(task.input);
   const referenceDirect = taskInput.referenceDirectFullVideo === true;
+  const batchRequests = taskInput.batchCodexDirectFullVideo === true
+    ? batchVideoRequests(taskInput)
+    : [];
+  if (batchRequests.length) {
+    const imageNames = (await readdir(outputsRoot)).filter((name) => [".jpg", ".jpeg", ".png", ".webp"].includes(extname(name).toLowerCase()));
+    const unusedMasters = [...masters];
+    const outputFiles: JsonRecord[] = [];
+    const batchResults: JsonRecord[] = [];
+    for (const request of batchRequests) {
+      const escapedModel = request.productModel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const modelPattern = escapedModel ? new RegExp(`${escapedModel}(?![a-z0-9-])`, "iu") : undefined;
+      const masterIndex = unusedMasters.findIndex((candidate) => !modelPattern || modelPattern.test(candidate.name));
+      if (masterIndex < 0) return undefined;
+      const master = unusedMasters.splice(masterIndex, 1)[0];
+      const masterPath = join("outputs", master.name);
+      const stem = basename(master.name, extname(master.name)).toLowerCase();
+      const coverName = imageNames.find((candidate) => basename(candidate, extname(candidate)).toLowerCase() === `${stem}_封面`)
+        || imageNames.find((candidate) => basename(candidate, extname(candidate)).toLowerCase().startsWith(stem));
+      const coverRequired = record(taskInput.batchDirectInput).generateCoverTitle !== false;
+      if (coverRequired && !coverName) return undefined;
+      const coverPath = coverName ? join("outputs", coverName) : "";
+      outputFiles.push({
+        path: masterPath,
+        kind: "VIDEO_MASTER",
+        title: `${request.productModel} 批量 Codex 成片 ${request.ordinal}`,
+        metadata: {
+          description: "从已验证的本地批量成片恢复上传，不重新渲染。",
+          source: "CODEX_BATCH_DIRECT_OUTPUT_RECOVERY",
+          videoKey: request.videoKey,
+        },
+      });
+      if (coverPath) {
+        outputFiles.push({
+          path: coverPath,
+          kind: "COVER_IMAGE",
+          title: `${request.productModel} 批量 Codex 封面 ${request.ordinal}`,
+          metadata: {
+            description: "与恢复成片对应的本地封面。",
+            source: "CODEX_BATCH_DIRECT_OUTPUT_RECOVERY",
+            videoKey: request.videoKey,
+          },
+        });
+      }
+      batchResults.push({
+        videoKey: request.videoKey,
+        status: "READY",
+        outputFile: masterPath,
+        coverFile: coverPath,
+        title: `${request.productModel} 批量 Codex 成片 ${request.ordinal}`,
+        tags: [],
+        failureReason: "",
+      });
+    }
+    const batchResult: JsonRecord = {
+      summary: `恢复 ${batchResults.length} 条已生成的批量 Codex 成片，仅重新上传并回传。`,
+      outputFiles,
+      delivery: {
+        productModel: String(task.productModel || ""),
+        taskMode: "CODEX_DIRECT_FULL_VIDEO",
+        finalReviewOnly: true,
+      },
+      batchResults,
+      execution: {
+        ...execution,
+        resumed: true,
+        finishedAt: new Date().toISOString(),
+      },
+    };
+    return validateOutputArtifacts(batchResult, workspace);
+  }
   const master = masters.find((item) => /video[_-]?master/iu.test(item.name))
     || [...masters].sort((left, right) => right.size - left.size)[0];
   const result: JsonRecord = {
