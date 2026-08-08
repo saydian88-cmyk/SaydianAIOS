@@ -11,6 +11,7 @@ import {
   runnerTaskTypeCapabilities,
   isRecoverableDirectVideoInput,
   planBatchCodexResults,
+  restoreBatchDirectInput,
   resolveDirectVideoProjectId,
   shouldReviewUploadedBatchWithoutResultManifest,
   shouldSendUploadedFailureToReview,
@@ -64,6 +65,21 @@ function serviceWith(overrides: Record<string, unknown> = {}) {
 }
 
 describe("AiTaskCenterService", () => {
+  it("restores a lost batch payload from the source video project", () => {
+    expect(restoreBatchDirectInput(
+      { executionMode: "FULL_VIDEO", codexDirectFullVideo: true },
+      [{ type: "VIDEO_FACTORY", projectMode: "BATCH_CODEX_DIRECT_FULL_VIDEO", brief: { batchDirect: {
+        products: [{ model: "W8Ultra", count: 2 }, { model: "W8Ultra-R", count: 2 }],
+        voiceoverSplit: "HALF",
+      } } }],
+      "project-1",
+    )).toMatchObject({
+      batchCodexDirectFullVideo: true,
+      existingContentPlanId: "project-1",
+      batchDirectInput: { products: [{ model: "W8Ultra", count: 2 }, { model: "W8Ultra-R", count: 2 }] },
+    });
+  });
+
   it("uses the legacy video project source id when a direct-video task lacks an explicit project id", () => {
     expect(resolveDirectVideoProjectId({
       input: {},
@@ -986,7 +1002,7 @@ describe("AiTaskCenterService", () => {
       {} as never,
     );
 
-    const [listed] = await service.tasks({});
+    const [listed] = (await service.tasks({})) as typeof task[];
     const detailed = await service.task(task.id);
 
     expect(listed.outputs[0].asset?.sizeBytes).toBe("1495435");

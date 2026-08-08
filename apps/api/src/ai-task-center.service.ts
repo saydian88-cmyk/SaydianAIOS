@@ -179,6 +179,47 @@ export function isRecoverableDirectVideoInput(input: unknown) {
     && (taskInput.codexDirectFullVideo === true || taskInput.referenceDirectFullVideo === true || taskInput.batchCodexDirectFullVideo === true);
 }
 
+// Older batch submissions could retain their human-readable brief while losing
+// the structured batch payload sent to the runner. Rebuild that payload from
+// the authoritative video-project brief so the runner never silently turns a
+// multi-video project into a one-video direct render.
+export function restoreBatchDirectInput(inputValue: unknown, sourceSignals: unknown, contentPlanId = "") {
+  const input = object(inputValue);
+  if (input.batchCodexDirectFullVideo === true) return input;
+  const factory = Array.isArray(sourceSignals)
+    ? sourceSignals.map(object).find((item) => text(item.type) === "VIDEO_FACTORY") || {}
+    : {};
+  if (text(factory.projectMode) !== "BATCH_CODEX_DIRECT_FULL_VIDEO") return input;
+  const batch = object(object(factory.brief).batchDirect);
+  const products = Array.isArray(batch.products)
+    ? batch.products.map(object)
+      .map((item) => ({ model: text(item.model), count: Math.round(number(item.count) || 0) }))
+      .filter((item) => item.model && item.count > 0)
+    : [];
+  if (!products.length) return input;
+  return {
+    ...input,
+    executionMode: "FULL_VIDEO",
+    codexDirectFullVideo: true,
+    batchCodexDirectFullVideo: true,
+    skipScriptReview: true,
+    suppressIntermediateProjectUpdates: true,
+    finalReviewOnly: true,
+    existingContentPlanId: text(input.existingContentPlanId) || contentPlanId,
+    executionClass: "CODEX_SKILL",
+    skillName: "video-editing-from-media-library",
+    batchDirectInput: {
+      products,
+      voiceoverSplit: text(batch.voiceoverSplit).toUpperCase() || "HALF",
+      bgmVariety: batch.bgmVariety !== false,
+      voiceVariety: batch.voiceVariety !== false,
+      generateCoverTitle: batch.generateCoverTitle !== false,
+      prompt: text(batch.additionalPrompt),
+    },
+    requiredOutputs: ["batch_manifest", "master_videos", ...(batch.generateCoverTitle !== false ? ["cover_titles"] : []), "review_summary"],
+  };
+}
+
 export function taskListPage(query: Record<string, string | undefined>) {
   const page = Math.max(1, Math.floor(Number(query.page) || 1));
   const pageSize = Math.min(100, Math.max(1, Math.floor(Number(query.pageSize) || 10)));
@@ -1483,9 +1524,20 @@ export class AiTaskCenterService implements OnModuleInit {
   async runnerPackage(token: string, id: string, body: JsonRecord) {
     const node = await this.runner(token, text(body.nodeCode));
     await this.ensureRunnerTask(node.nodeCode, id);
-    const task = await this.task(id);
-    const input = object(task.input);
-    const resolvedTaskRoute = aiTaskRoute(task);
+    let task = await this.task(id);
+    let input = object(task.input);
+    if (task.sourceType === "VIDEO_FACTORY_PROJECT" && task.sourceId && input.batchCodexDirectFullVideo !== true) {
+      const project = await this.prisma.contentPlan.findUnique({
+        where: { id: task.sourceId },
+        select: { sourceSignals: true },
+      });
+      const restoredInput = restoreBatchDirectInput(input, project?.sourceSignals, task.sourceId);
+      if (restoredInput !== input) {
+        await this.prisma.aiTask.update({ where: { id: task.id }, data: { input: json(restoredInput) } });
+        input = restoredInput;
+      }
+    }
+    const resolvedTaskRoute = aiTaskRoute({ ...task, input });
     const modelPolicy = object(task.modelPolicy);
     const dedicatedDouyin = text(input.factoryModule).toUpperCase() === "DOUYIN_VIRAL";
     const executionMode = text(input.executionMode).toUpperCase() || (task.type === "VIDEO" ? "FULL_VIDEO" : "DEFAULT");
