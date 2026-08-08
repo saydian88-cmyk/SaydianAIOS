@@ -98,6 +98,38 @@ describe("unified result contract", () => {
     }, schema, true)).not.toThrow();
   });
 
+  it("accepts worker-added output hash metadata without weakening the Skill schema", () => {
+    const strictOutputSchema = {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        summary: { type: "string" },
+        outputFiles: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              path: { type: "string" },
+              metadata: {
+                type: "object",
+                additionalProperties: false,
+                properties: { videoKey: { type: "string" } },
+                required: ["videoKey"],
+              },
+            },
+            required: ["path", "metadata"],
+          },
+        },
+      },
+      required: ["summary", "outputFiles"],
+    };
+    expect(() => validateResult({
+      summary: "ok",
+      outputFiles: [{ path: "outputs/1-1.mp4", metadata: { videoKey: "1-1", sha256: "abc", sizeBytes: 10 } }],
+    }, strictOutputSchema)).not.toThrow();
+  });
+
   it("accepts resumable dispatcher fields and non-blocking quality warnings", () => {
     const schemaWithWarnings = {
       ...schema,

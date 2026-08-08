@@ -100,7 +100,19 @@ export function finalResultSchema(contentSchema: JsonRecord): JsonRecord {
 export function validateResult(result: JsonRecord, schema: JsonRecord, final = false) {
   const ajv = new Ajv({ allErrors: true, strict: false });
   const validate = ajv.compile(final ? finalResultSchema(schema) : schema);
-  if (validate(result)) return result;
+  // File hashes and byte sizes are added by the worker after the downstream
+  // Skill's result has passed its contract. They are transport evidence, not
+  // Skill-authored fields, so strict output schemas must validate the original
+  // contract without discarding those derived values before upload.
+  const validationResult = structuredClone(result);
+  for (const output of Array.isArray(validationResult.outputFiles) ? validationResult.outputFiles : []) {
+    if (!output || typeof output !== "object" || Array.isArray(output)) continue;
+    const metadata = (output as JsonRecord).metadata;
+    if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) continue;
+    delete (metadata as JsonRecord).sha256;
+    delete (metadata as JsonRecord).sizeBytes;
+  }
+  if (validate(validationResult)) return result;
   const message = (validate.errors || [])
     .map((error) => `${error.instancePath || "/"} ${error.message || "不符合Schema"}`)
     .join("；");
