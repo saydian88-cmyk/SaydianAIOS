@@ -267,8 +267,16 @@ export class WorkbenchService {
     const dateFrom = date(query.dateFrom);
     const dateTo = date(query.dateTo);
     if (dateTo && /^\d{4}-\d{2}-\d{2}$/.test(value(query.dateTo))) dateTo.setHours(23, 59, 59, 999);
-    const pageSize = Math.min(Math.max(Number(query.pageSize) || 10, 1), 30);
+    const sort = value(query.sort).toUpperCase();
+    const pageSize = Math.min(Math.max(Number(query.pageSize) || 12, 1), 30);
     const page = Math.max(Number(query.page) || 1, 1);
+    const orderBy: Prisma.ContentLibraryEntryOrderByWithRelationInput[] = sort === "VIEWS"
+      ? [{ latestViews: "desc" }, { createdAt: "desc" }]
+      : sort === "LIKES"
+        ? [{ latestLikes: "desc" }, { createdAt: "desc" }]
+        : sort === "COMMENTS"
+          ? [{ latestComments: "desc" }, { createdAt: "desc" }]
+          : [{ createdAt: "desc" }];
     const where: Prisma.ContentLibraryEntryWhereInput = {
         category: "VIDEO", visibilityStatus: "ACTIVE",
         outputAsset: { is: { reviewStatus: "APPROVED", availabilityStatus: "ACTIVE", deletedAt: null, objectKey: { not: null } } },
@@ -277,15 +285,21 @@ export class WorkbenchService {
         ...(platform ? { platform } : {}),
         ...(createdBy ? { createdBy } : {}),
         ...(dateFrom || dateTo ? { createdAt: { ...(dateFrom ? { gte: dateFrom } : {}), ...(dateTo ? { lte: dateTo } : {}) } } : {}),
-        ...(search ? { OR: [{ title: { contains: search, mode: "insensitive" } }, { productModel: { contains: search, mode: "insensitive" } }, { createdBy: { contains: search, mode: "insensitive" } }] } : {}),
+        ...(search ? { OR: [{ title: { contains: search, mode: "insensitive" } }, { productModel: { contains: search, mode: "insensitive" } }, { contentPlan: { is: { variants: { some: { title: { contains: search, mode: "insensitive" } } } } } }] } : {}),
     };
     const [items, total, categoryRows] = await Promise.all([
       this.prisma.contentLibraryEntry.findMany({
       where,
       include: {
         outputAsset: { select: { id: true, displayName: true, fileName: true, durationSeconds: true, width: true, height: true, objectKey: true, sourceSnapshot: true, reviewStatus: true, availabilityStatus: true, deletedAt: true } },
-        contentPlan: { select: { id: true, productionNo: true, topic: true, variants: { select: { id: true, platform: true, title: true, manualPublishUrl: true, manualPublishedAt: true } } } },
-      }, orderBy: { createdAt: "desc" }, skip: (page - 1) * pageSize, take: pageSize,
+        contentPlan: { select: {
+          id: true, productionNo: true, topic: true,
+          variants: { select: {
+            id: true, platform: true, title: true, packagingStatus: true, coverPath: true, coverSpec: true, metadata: true, manualPublishUrl: true, manualPublishedAt: true,
+            publishJobs: { select: { remoteUrl: true, publishedAt: true, metrics: { select: { capturedAt: true, views: true, likes: true, comments: true }, orderBy: { capturedAt: "desc" }, take: 4 } } },
+          } },
+        } },
+      }, orderBy, skip: (page - 1) * pageSize, take: pageSize,
       }),
       this.prisma.contentLibraryEntry.count({ where }),
       this.prisma.contentLibraryEntry.findMany({ where: { category: "VIDEO", visibilityStatus: "ACTIVE", productCategory: { not: null } }, select: { productCategory: true }, distinct: ["productCategory"], orderBy: { productCategory: "asc" } }),
@@ -303,7 +317,13 @@ export class WorkbenchService {
       where: { id, category: "VIDEO", visibilityStatus: "ACTIVE", outputAsset: { is: { reviewStatus: "APPROVED", availabilityStatus: "ACTIVE", deletedAt: null, objectKey: { not: null } } } },
       include: {
         outputAsset: { select: { id: true, displayName: true, fileName: true, durationSeconds: true, width: true, height: true, objectKey: true, sourceSnapshot: true, reviewStatus: true, availabilityStatus: true, deletedAt: true } },
-        contentPlan: { select: { id: true, productionNo: true, topic: true, productModel: true, audience: true, objective: true, hook: true, variants: { select: { id: true, platform: true, title: true, body: true, manualPublishUrl: true, manualPublishedAt: true } } } },
+        contentPlan: { select: {
+          id: true, productionNo: true, topic: true, productModel: true, audience: true, objective: true, hook: true,
+          variants: { select: {
+            id: true, platform: true, title: true, body: true, packagingStatus: true, coverPath: true, coverSpec: true, metadata: true, manualPublishUrl: true, manualPublishedAt: true,
+            publishJobs: { select: { remoteUrl: true, publishedAt: true, metrics: { select: { capturedAt: true, views: true, likes: true, comments: true }, orderBy: { capturedAt: "desc" }, take: 4 } } },
+          } },
+        } },
       },
     });
     if (!item) throw new NotFoundException("Video library entry not found");

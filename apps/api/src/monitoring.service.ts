@@ -206,14 +206,17 @@ export class MonitoringService {
     return { rooms, issues };
   }
 
-  async syncMetrics(): Promise<{ snapshots: number }> {
+  async syncMetrics(input: Record<string, unknown> = {}): Promise<{ snapshots: number }> {
     let snapshots = 0;
+    const requestedPublishJobId = String(input.publishJobId || "").trim();
+    const requestedCheckpointHours = Number(input.checkpointHours || 0);
     for (const [kind, adapter] of this.platforms.all()) {
       if (!adapter.capabilities().includes("metrics")) continue;
       const integration = await this.prisma.integration.findUnique({ where: { kind: kind as IntegrationKind } });
       if (!integration) continue;
       const jobs = await this.prisma.publishJob.findMany({
         where: {
+          ...(requestedPublishJobId ? { id: requestedPublishJobId } : {}),
           integrationId: integration.id,
           status: "SUCCEEDED",
           remoteId: { not: null },
@@ -250,7 +253,35 @@ export class MonitoringService {
         if (publishJob?.publishedAt && publishJob.contentPlan.kind === "VIDEO") {
           const capturedAt = new Date(point.capturedAt);
           const elapsedHours = Math.max(0, (capturedAt.getTime() - publishJob.publishedAt.getTime()) / 3_600_000);
-          const checkpointHours = [1, 24, 72, 168].filter((checkpoint) => elapsedHours >= checkpoint).at(-1);
+          const checkpointHours = [3, 72, 168, 720].filter((checkpoint) => elapsedHours >= checkpoint).at(-1);
+          if ([3, 72, 168, 720].includes(requestedCheckpointHours)) {
+            const historyPoint = {
+              checkpointHours: requestedCheckpointHours,
+              capturedAt: capturedAt.toISOString(),
+              views: point.views ?? null,
+              likes: point.likes ?? null,
+              comments: point.comments ?? null,
+            };
+            const entries = await this.prisma.contentLibraryEntry.findMany({
+              where: { contentPlanId: publishJob.contentPlanId, category: "VIDEO", visibilityStatus: "ACTIVE" },
+              select: { id: true, metricHistory: true },
+            });
+            for (const entry of entries) {
+              const history = Array.isArray(entry.metricHistory) ? entry.metricHistory as Array<Record<string, unknown>> : [];
+              await this.prisma.contentLibraryEntry.update({
+                where: { id: entry.id },
+                data: {
+                  latestViews: point.views ?? null,
+                  latestLikes: point.likes ?? null,
+                  latestComments: point.comments ?? null,
+                  latestMetricAt: capturedAt,
+                  latestMetricCheckpointHours: requestedCheckpointHours,
+                  metricHistory: [...history.filter((item) => Number(item.checkpointHours) !== requestedCheckpointHours), historyPoint]
+                    .sort((left, right) => Number(left.checkpointHours) - Number(right.checkpointHours)) as unknown as Prisma.InputJsonValue,
+                },
+              });
+            }
+          }
           if (checkpointHours) {
             const checkpoint = {
               capturedAt: capturedAt.toISOString(),

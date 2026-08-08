@@ -1836,6 +1836,12 @@ model ContentLibraryEntry {
   hiddenAt          DateTime?
   hiddenBy          String?
   hiddenWithProject Boolean  @default(false)
+  latestViews       Int?
+  latestLikes       Int?
+  latestComments    Int?
+  latestMetricAt    DateTime?
+  latestMetricCheckpointHours Int?
+  metricHistory     Json     @default("[]")
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
@@ -1847,6 +1853,9 @@ model ContentLibraryEntry {
   @@index([productModel, platform])
   @@index([productCategory, createdAt])
   @@index([createdBy, createdAt])
+  @@index([category, visibilityStatus, latestViews])
+  @@index([category, visibilityStatus, latestLikes])
+  @@index([category, visibilityStatus, latestComments])
 }
 
 model VideoQualityCheck {

@@ -53,13 +53,16 @@ const outputPreview = ref<Row>();
 const outputPreviewUrl = ref("");
 const videoLibrary = ref<Row[]>([]);
 const videoLibraryLoading = ref(false);
-const videoLibraryFilters = reactive({ search: "", productModel: "", productCategory: "", platform: "", createdBy: "", dateFrom: "", dateTo: "" });
+const videoLibraryFilters = reactive({ search: "", productModel: "", sort: "LATEST" });
 const videoLibraryCategories = ref<string[]>([]);
+const videoLibraryCoverUrls = reactive<Record<string, string>>({});
 const videoLibraryPage = ref(1);
 const videoLibraryTotal = ref(0);
 const videoLibraryDetailVisible = ref(false);
 const videoLibraryDetail = ref<Row>();
 const videoLibraryPreviewUrl = ref("");
+const videoLibraryDetailCoverUrl = ref("");
+const videoLibraryHistoryExpanded = ref(false);
 const videoLibraryCreateVisible = ref(false);
 const videoLibraryCreating = ref(false);
 const videoLibraryCreateForm = reactive({ mode: "CONFIG_REUSE", productModel: "", additionalPrompt: "", targetLanguage: "ZH" });
@@ -1721,14 +1724,85 @@ async function loadVideoLibrary() {
       .filter(([, value]) => String(value || "").trim())
       .map(([key, value]) => [key, String(value)]));
     query.set("page", String(videoLibraryPage.value));
-    query.set("pageSize", "10");
+    query.set("pageSize", "12");
     const result = await api<Row>(`/api/v1/workbench/video-library?${query.toString()}`);
     videoLibrary.value = result.items || [];
     videoLibraryTotal.value = Number(result.total || 0);
     videoLibraryCategories.value = result.categories || [];
+    await Promise.all(videoLibrary.value.map(async (entry) => {
+      try {
+        const cover = await api<Row>(`/api/v1/workbench/video-library/${entry.id}/cover-url`);
+        if (cover.url) {
+          const key = String(entry.id);
+          const previous = videoLibraryCoverUrls[key];
+          if (previous?.startsWith("blob:")) URL.revokeObjectURL(previous);
+          videoLibraryCoverUrls[key] = await authenticatedMediaUrl(String(cover.url));
+        }
+      } catch {
+        delete videoLibraryCoverUrls[String(entry.id)];
+      }
+    }));
   } finally {
     videoLibraryLoading.value = false;
   }
+}
+
+async function authenticatedMediaUrl(url: string) {
+  if (!url.startsWith("/api/")) return url;
+  const headers = new Headers();
+  if (getToken()) headers.set("authorization", `Bearer ${getToken()}`);
+  const response = await fetch(url, { headers });
+  if (!response.ok) throw new Error("媒体文件加载失败");
+  return URL.createObjectURL(await response.blob());
+}
+
+function videoLibraryTitle(entry: Row) {
+  return String(entry.contentPlan?.variants?.find((item: Row) => item.platform === entry.platform && item.packagingStatus === "APPROVED")?.title || entry.title || "未命名成品");
+}
+
+function videoLibraryTags(entry: Row) {
+  const variant = entry.contentPlan?.variants?.find((item: Row) => item.platform === entry.platform && item.packagingStatus === "APPROVED") || {};
+  const metadata = variant.metadata && typeof variant.metadata === "object" ? variant.metadata : {};
+  const coverSpec = variant.coverSpec && typeof variant.coverSpec === "object" ? variant.coverSpec : {};
+  const tags = Array.isArray(metadata.tags) ? metadata.tags : Array.isArray(coverSpec.hashtags) ? coverSpec.hashtags : [];
+  return tags.map((tag: unknown) => String(tag || "").replace(/^#/, "").trim()).filter(Boolean).slice(0, 3);
+}
+
+function videoLibraryMetric(entry: Row, field: "latestViews" | "latestLikes" | "latestComments") {
+  const value = Number(entry[field]);
+  if (!Number.isFinite(value)) return "—";
+  return value >= 10000 ? `${(value / 10000).toFixed(value >= 100000 ? 1 : 2).replace(/\.0$/, "")}万` : value.toLocaleString("zh-CN");
+}
+
+function videoLibraryMetricCheckpoint(entry: Row) {
+  const hours = Number(entry.latestMetricCheckpointHours);
+  return hours === 720 ? "第30天" : hours === 168 ? "第7天" : hours === 72 ? "第3天" : hours === 3 ? "第3小时" : "最新采集";
+}
+
+function videoLibraryPublishedVariants(entry?: Row) {
+  return (entry?.contentPlan?.variants || []).filter((variant: Row) => variant.manualPublishUrl || variant.publishJobs?.some((job: Row) => job.remoteUrl));
+}
+
+function videoLibraryMetricHistory(entry?: Row) {
+  if (Array.isArray(entry?.metricHistory) && entry.metricHistory.length) {
+    return [...entry.metricHistory].sort((left: Row, right: Row) => Number(right.checkpointHours) - Number(left.checkpointHours));
+  }
+  return [];
+}
+
+function videoLibraryMetricRowLabel(metric: Row, index: number) {
+  const hours = Number(metric.checkpointHours) || [720, 168, 72, 3][index];
+  return hours === 720 ? "第30天采集" : hours === 168 ? "第7天采集" : hours === 72 ? "第3天采集" : hours === 3 ? "第3小时采集" : "历史采集";
+}
+
+function openDownload(url: string, fileName: string) {
+  if (!url) return ElMessage.warning("文件暂不可下载");
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.click();
 }
 
 async function switchOutputCategory(category: string) {
@@ -1741,6 +1815,8 @@ async function openVideoLibraryEntry(entry: Row) {
   videoLibraryDetailVisible.value = true;
   videoLibraryDetail.value = undefined;
   videoLibraryPreviewUrl.value = "";
+  videoLibraryDetailCoverUrl.value = "";
+  videoLibraryHistoryExpanded.value = false;
   try {
     const [detail, preview] = await Promise.all([
       api<Row>(`/api/v1/workbench/video-library/${entry.id}`),
@@ -1748,6 +1824,12 @@ async function openVideoLibraryEntry(entry: Row) {
     ]);
     videoLibraryDetail.value = detail;
     videoLibraryPreviewUrl.value = preview.url || "";
+    try {
+      const cover = await api<Row>(`/api/v1/workbench/video-library/${entry.id}/cover-url`);
+      videoLibraryDetailCoverUrl.value = cover.url ? await authenticatedMediaUrl(String(cover.url)) : "";
+    } catch {
+      videoLibraryDetailCoverUrl.value = "";
+    }
   } catch (error) {
     videoLibraryDetailVisible.value = false;
     ElMessage.error(error instanceof Error ? error.message : "成品加载失败");
@@ -4727,25 +4809,22 @@ onBeforeUnmount(() => {
           <el-radio-group v-model="outputCategory" @change="switchOutputCategory(String($event))"><el-radio-button value="VIDEO">视频</el-radio-button><el-radio-button value="IMAGE">图片</el-radio-button><el-radio-button value="ARTICLE">软文</el-radio-button></el-radio-group>
         </section>
         <section v-if="outputCategory === 'VIDEO'" class="toolbar section-card">
-          <el-input v-model="videoLibraryFilters.search" clearable placeholder="搜索标题、产品或创建人" @keyup.enter="loadVideoLibrary" />
+          <el-input v-model="videoLibraryFilters.search" clearable placeholder="搜索视频标题、审核标题或标签" @keyup.enter="videoLibraryPage = 1; loadVideoLibrary()" />
           <el-select v-model="videoLibraryFilters.productModel" clearable filterable placeholder="产品型号"><el-option v-for="product in productOptions" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" /></el-select>
-          <el-select v-model="videoLibraryFilters.productCategory" clearable placeholder="产品分类"><el-option v-for="category in videoLibraryCategories" :key="category" :label="category" :value="category" /></el-select>
-          <el-select v-model="videoLibraryFilters.platform" clearable placeholder="平台"><el-option label="抖音" value="DOUYIN" /><el-option label="TikTok" value="TIKTOK" /></el-select>
-          <el-input v-model="videoLibraryFilters.createdBy" clearable placeholder="创建人" />
-          <el-date-picker v-model="videoLibraryFilters.dateFrom" type="date" value-format="YYYY-MM-DD" placeholder="入库开始日期" />
-          <el-date-picker v-model="videoLibraryFilters.dateTo" type="date" value-format="YYYY-MM-DD" placeholder="入库结束日期" />
-          <el-button type="primary" @click="videoLibraryPage = 1; loadVideoLibrary()">筛选</el-button>
-          <el-button @click="Object.assign(videoLibraryFilters, { search: '', productModel: '', productCategory: '', platform: '', createdBy: '', dateFrom: '', dateTo: '' }); videoLibraryPage = 1; loadVideoLibrary()">重置</el-button>
+          <span class="video-library-sort-label">排序方式</span>
+          <el-select v-model="videoLibraryFilters.sort" @change="videoLibraryPage = 1; loadVideoLibrary()"><el-option label="按最新成品排序（默认）" value="LATEST" /><el-option label="按播放量排序" value="VIEWS" /><el-option label="按点赞量排序" value="LIKES" /><el-option label="按评论量排序" value="COMMENTS" /></el-select>
+          <el-button type="primary" @click="videoLibraryPage = 1; loadVideoLibrary()">搜索</el-button>
+          <el-button @click="Object.assign(videoLibraryFilters, { search: '', productModel: '', sort: 'LATEST' }); videoLibraryPage = 1; loadVideoLibrary()">重置</el-button>
         </section>
         <section v-if="outputCategory === 'VIDEO'" v-loading="videoLibraryLoading" class="section-card">
-          <div v-if="videoLibrary.length" class="output-library-grid">
-            <button v-for="entry in videoLibrary" :key="entry.id" class="output-library-card" @click="openVideoLibraryEntry(entry)">
-              <span class="output-library-cover"><el-icon><VideoCamera /></el-icon><em>视频</em></span>
-              <span class="output-library-copy"><strong>{{ entry.title }}</strong><small>{{ entry.productModel || '品牌通用' }} · {{ platformLabel(entry.platform) }}</small><span>{{ entry.createdBy || '系统' }} · {{ entry.outputAsset?.durationSeconds || '—' }}秒</span><span>{{ formatTime(entry.createdAt) }}</span></span>
+          <div v-if="videoLibrary.length" class="video-library-grid">
+            <button v-for="entry in videoLibrary" :key="entry.id" class="video-library-card" @click="openVideoLibraryEntry(entry)">
+              <span class="video-library-cover"><img v-if="videoLibraryCoverUrls[String(entry.id)]" :src="videoLibraryCoverUrls[String(entry.id)]" :alt="videoLibraryTitle(entry)" /><el-icon v-else><VideoCamera /></el-icon><em>{{ entry.outputAsset?.durationSeconds ? `${Math.round(Number(entry.outputAsset.durationSeconds))}秒` : '视频' }}</em></span>
+              <span class="video-library-copy"><strong>{{ videoLibraryTitle(entry) }}</strong><span v-if="videoLibraryTags(entry).length" class="video-library-tags"><el-tag v-for="tag in videoLibraryTags(entry)" :key="tag" size="small"># {{ tag }}</el-tag></span><small>{{ entry.productModel || '品牌通用' }} · {{ platformLabel(entry.platform) }}</small><span v-if="entry.latestMetricAt" class="video-library-metrics"><i>最新采集 · {{ videoLibraryMetricCheckpoint(entry) }}</i><b>播放 {{ videoLibraryMetric(entry, 'latestViews') }}</b><b>点赞 {{ videoLibraryMetric(entry, 'latestLikes') }}</b><b>评论 {{ videoLibraryMetric(entry, 'latestComments') }}</b></span><span v-else-if="videoLibraryPublishedVariants(entry).length" class="video-library-unpublished">已回传发布链接，等待首次采集</span><span v-else class="video-library-unpublished">尚未回传发布链接</span><span class="video-library-footer">{{ entry.createdBy || '系统' }}<em>{{ formatTime(entry.createdAt) }}</em></span></span>
             </button>
           </div>
           <el-empty v-else description="暂无已审核通过的视频成品" />
-          <el-pagination v-if="videoLibraryTotal > 10" v-model:current-page="videoLibraryPage" small background layout="prev, pager, next" :page-size="10" :total="videoLibraryTotal" @current-change="loadVideoLibrary" />
+          <el-pagination v-if="videoLibraryTotal > 12" v-model:current-page="videoLibraryPage" small background layout="prev, pager, next, jumper" :page-size="12" :total="videoLibraryTotal" @current-change="loadVideoLibrary" />
         </section>
         <section v-else v-loading="outputLibraryLoading" class="section-card">
           <div v-if="outputLibrary.length" class="output-library-grid">
@@ -7662,16 +7741,26 @@ onBeforeUnmount(() => {
     </template>
   </el-dialog>
 
-  <el-dialog v-model="videoLibraryDetailVisible" :title="videoLibraryDetail?.title || '视频成品详情'" width="min(900px, 96vw)" destroy-on-close>
-    <div v-if="videoLibraryDetail" class="video-library-detail">
-      <video v-if="videoLibraryPreviewUrl" :src="videoLibraryPreviewUrl" controls playsinline preload="metadata" style="width:100%;max-height:58vh;background:#111;border-radius:10px" />
-      <div class="task-meta"><span>{{ videoLibraryDetail.productModel || '品牌通用' }}</span><span>{{ platformLabel(videoLibraryDetail.platform) }}</span><span>{{ videoLibraryDetail.createdBy || '系统' }}</span><span>{{ formatTime(videoLibraryDetail.createdAt) }}</span></div>
-      <section><h3>生成提示词</h3><pre>{{ videoLibraryDetail.snapshot?.prompt || videoLibraryDetail.snapshot?.project?.additionalPrompt || '未记录额外提示词' }}</pre><el-button size="small" @click="copyTaskContent(videoLibraryDetail.snapshot?.prompt || videoLibraryDetail.snapshot?.project?.additionalPrompt || '', '生成提示词')">复制提示词</el-button></section>
-      <section v-if="videoLibraryDetail.snapshot?.reference"><h3>原始参考链接</h3><a :href="videoLibraryDetail.snapshot.reference" target="_blank" rel="noopener noreferrer">打开原始参考</a></section>
-      <section><h3>来源项目</h3><p>{{ videoLibraryDetail.contentPlan?.productionNo || '—' }} · {{ videoLibraryDetail.contentPlan?.topic }}</p></section>
-      <section v-if="videoLibraryDetail.contentPlan?.variants?.some((item: Row) => item.manualPublishUrl)"><h3>发布链接</h3><a v-for="variant in videoLibraryDetail.contentPlan.variants.filter((item: Row) => item.manualPublishUrl)" :key="variant.id" :href="variant.manualPublishUrl" target="_blank" rel="noopener noreferrer">查看 {{ platformLabel(variant.platform) }} 作品</a></section>
+  <el-dialog v-model="videoLibraryDetailVisible" title="成品详情" width="min(760px, 96vw)" destroy-on-close>
+    <div v-if="videoLibraryDetail" class="video-library-detail-layout">
+      <div class="video-library-player"><video v-if="videoLibraryPreviewUrl" :src="videoLibraryPreviewUrl" controls playsinline preload="metadata" :poster="videoLibraryDetailCoverUrl || undefined" /></div>
+      <div class="video-library-detail-copy">
+        <h3>{{ videoLibraryTitle(videoLibraryDetail) }}</h3>
+        <div v-if="videoLibraryTags(videoLibraryDetail).length" class="video-library-tags"><el-tag v-for="tag in videoLibraryTags(videoLibraryDetail)" :key="tag" size="small"># {{ tag }}</el-tag></div>
+        <div class="task-meta"><span>{{ videoLibraryDetail.productModel || '品牌通用' }}</span><span>{{ platformLabel(videoLibraryDetail.platform) }}</span><span>{{ Math.round(Number(videoLibraryDetail.outputAsset?.durationSeconds || 0)) || '—' }}秒</span><span>{{ videoLibraryDetail.createdBy || '系统' }}</span></div>
+        <div class="video-library-detail-prompt"><strong>生成提示词：</strong>{{ videoLibraryDetail.snapshot?.prompt || videoLibraryDetail.snapshot?.project?.additionalPrompt || '未记录额外提示词' }}</div>
+        <div v-if="videoLibraryPublishedVariants(videoLibraryDetail).length" class="video-library-publish"><span>已回传发布链接，最新数据已展示</span><el-button v-for="variant in videoLibraryPublishedVariants(videoLibraryDetail)" :key="variant.id" size="small" @click="openDownload(variant.manualPublishUrl || variant.publishJobs?.find((job: Row) => job.remoteUrl)?.remoteUrl, `${platformLabel(variant.platform)}发布视频`)">快捷查看发布视频</el-button></div>
+        <div v-else class="video-library-publish"><span>尚未回传发布链接</span></div>
+        <template v-if="videoLibraryDetail.latestMetricAt">
+          <div class="video-library-history-row"><span>{{ videoLibraryMetricCheckpoint(videoLibraryDetail) }}采集</span><span>播放 {{ videoLibraryMetric(videoLibraryDetail, 'latestViews') }}　点赞 {{ videoLibraryMetric(videoLibraryDetail, 'latestLikes') }}　评论 {{ videoLibraryMetric(videoLibraryDetail, 'latestComments') }}</span></div>
+          <el-button v-if="videoLibraryMetricHistory(videoLibraryDetail).length > 1" class="video-library-history-toggle" link type="primary" @click="videoLibraryHistoryExpanded = !videoLibraryHistoryExpanded">{{ videoLibraryHistoryExpanded ? '收起历史采集数据' : `查看全部 ${videoLibraryMetricHistory(videoLibraryDetail).length} 次采集数据` }}</el-button>
+          <template v-if="videoLibraryHistoryExpanded"><div v-for="(metric, index) in videoLibraryMetricHistory(videoLibraryDetail).slice(1)" :key="metric.capturedAt" class="video-library-history-row"><span>{{ videoLibraryMetricRowLabel(metric, index + 1) }}</span><span>播放 {{ Number(metric.views || 0).toLocaleString('zh-CN') }}　点赞 {{ Number(metric.likes || 0).toLocaleString('zh-CN') }}　评论 {{ Number(metric.comments || 0).toLocaleString('zh-CN') }}</span></div></template>
+        </template>
+        <div v-if="videoLibraryDetail.snapshot?.reference"><a :href="videoLibraryDetail.snapshot.reference" target="_blank" rel="noopener noreferrer">打开原始参考链接</a></div>
+        <small>来源项目：{{ videoLibraryDetail.contentPlan?.productionNo || '—' }} · {{ videoLibraryDetail.contentPlan?.topic }}</small>
+      </div>
     </div>
-    <template #footer><el-button @click="videoLibraryDetailVisible = false">关闭</el-button><el-button v-if="canGenerateVideoScript" type="primary" @click="openVideoLibraryCreate">一键生成类似视频</el-button></template>
+    <template #footer><div class="video-library-detail-actions"><el-button @click="videoLibraryDetailVisible = false">关闭</el-button><el-button :disabled="!videoLibraryDetailCoverUrl" @click="openDownload(videoLibraryDetailCoverUrl, `${videoLibraryTitle(videoLibraryDetail || {})}-封面.jpg`)">下载封面</el-button><el-button :disabled="!videoLibraryPreviewUrl" @click="openDownload(videoLibraryPreviewUrl, `${videoLibraryTitle(videoLibraryDetail || {})}.mp4`)">下载成片</el-button><el-button v-if="canGenerateVideoScript" type="primary" @click="openVideoLibraryCreate">基于此成品生成类似视频</el-button></div></template>
   </el-dialog>
 
   <el-dialog v-model="videoLibraryCreateVisible" title="从成品生成类似视频" width="min(650px, 94vw)" destroy-on-close>

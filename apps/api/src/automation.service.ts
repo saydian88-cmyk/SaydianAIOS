@@ -188,7 +188,7 @@ export class AutomationService {
       case "PROCESS_PUBLISH": return this.content.processPublishJobs();
       case "SYNC_COMMENTS": return this.monitoring.syncComments();
       case "SYNC_LIVE": return this.monitoring.syncLive();
-      case "SYNC_METRICS": return this.monitoring.syncMetrics();
+      case "SYNC_METRICS": return this.monitoring.syncMetrics(payload);
       case "SYNC_JUSHUITAN": {
         const status = await this.operationAnalysis.jushuitanStatus();
         return status.configured

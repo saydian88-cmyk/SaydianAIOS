@@ -1466,7 +1466,7 @@ export class ContentService {
       },
       update: {},
     });
-    const metricHours = [1, 3, 6, 24, 72, 168, 720];
+    const metricHours = [3, 72, 168, 720];
     await this.prisma.$transaction([
       this.prisma.contentVariant.update({ where: { id: variantId }, data: { status: "PUBLISHED", manualPublishUrl: remoteUrl || null, manualExternalId: remoteId || null, manualPublishedAt: publishedAt } }),
       this.prisma.contentPlan.update({ where: { id: variant.contentPlanId }, data: { status: "PUBLISHED", productionStage: "TRACKING", publishedAt } }),
@@ -1672,7 +1672,7 @@ export class ContentService {
       if (receipt.success) {
         succeeded += 1;
         const publishedAt = new Date();
-        const metricHours = [1, 3, 6, 24, 72, 168, 720];
+        const metricHours = [3, 72, 168, 720];
         await this.prisma.$transaction([
           this.prisma.publishJob.update({ where: { id: job.id }, data: { status: "SUCCEEDED", remoteId: receipt.remoteId, remoteUrl: receipt.remoteUrl, receipt: receipt as unknown as Prisma.InputJsonValue, publishedAt } }),
           this.prisma.contentVariant.update({ where: { id: job.variantId }, data: { status: "PUBLISHED" } }),

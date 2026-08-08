@@ -542,6 +542,31 @@ export class WorkbenchController {
     return this.workbench.videoLibraryUrl(id);
   }
 
+  @Get("video-library/:id/cover-url")
+  async videoLibraryCoverUrl(@Headers("authorization") authorization: string | undefined, @Param("id") id: string) {
+    this.employee(authorization);
+    const entry = await this.workbench.videoLibraryEntry(id);
+    const variant = entry.contentPlan.variants.find((item) => item.platform === entry.platform && item.packagingStatus === "APPROVED" && item.coverPath)
+      || entry.contentPlan.variants.find((item) => item.packagingStatus === "APPROVED" && item.coverPath);
+    if (!variant) throw new NotFoundException("该成品暂无已审核封面");
+    const result = await this.content.packagingCoverUrl(entry.contentPlanId, variant.id);
+    return result.url.startsWith("/api/v1/workbench/data-center/") ? { url: `/api/v1/workbench/video-library/${id}/cover` } : result;
+  }
+
+  @Get("video-library/:id/cover")
+  async videoLibraryCover(@Headers("authorization") authorization: string | undefined, @Param("id") id: string) {
+    this.employee(authorization);
+    const entry = await this.workbench.videoLibraryEntry(id);
+    const variant = entry.contentPlan.variants.find((item) => item.platform === entry.platform && item.packagingStatus === "APPROVED" && item.coverPath)
+      || entry.contentPlan.variants.find((item) => item.packagingStatus === "APPROVED" && item.coverPath);
+    if (!variant) throw new NotFoundException("该成品暂无已审核封面");
+    const file = await this.content.packagingCoverFile(entry.contentPlanId, variant.id);
+    return new StreamableFile(createReadStream(file.path), {
+      type: "image/jpeg",
+      disposition: `inline; filename="${file.fileName}"`,
+    });
+  }
+
   @Get("outputs/:outputId/url")
   outputUrl(
     @Headers("authorization") authorization: string | undefined,
