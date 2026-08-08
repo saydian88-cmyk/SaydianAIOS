@@ -55,9 +55,11 @@ const videoLibrary = ref<Row[]>([]);
 const videoLibraryLoading = ref(false);
 const videoLibraryFilters = reactive({ search: "", productModel: "", sort: "LATEST" });
 const videoLibraryCategories = ref<string[]>([]);
+const videoLibraryProductModels = ref<string[]>([]);
 const videoLibraryCoverUrls = reactive<Record<string, string>>({});
 const videoLibraryPage = ref(1);
 const videoLibraryTotal = ref(0);
+const videoLibraryJumpPage = ref(1);
 const videoLibraryDetailVisible = ref(false);
 const videoLibraryDetail = ref<Row>();
 const videoLibraryPreviewUrl = ref("");
@@ -1729,6 +1731,8 @@ async function loadVideoLibrary() {
     videoLibrary.value = result.items || [];
     videoLibraryTotal.value = Number(result.total || 0);
     videoLibraryCategories.value = result.categories || [];
+    videoLibraryProductModels.value = result.productModels || [];
+    videoLibraryJumpPage.value = videoLibraryPage.value;
     await Promise.all(videoLibrary.value.map(async (entry) => {
       try {
         const cover = await api<Row>(`/api/v1/workbench/video-library/${entry.id}/cover-url`);
@@ -1745,6 +1749,18 @@ async function loadVideoLibrary() {
   } finally {
     videoLibraryLoading.value = false;
   }
+}
+
+async function changeVideoLibraryPage(page: number) {
+  videoLibraryPage.value = page;
+  videoLibraryJumpPage.value = page;
+  await loadVideoLibrary();
+}
+
+async function jumpToVideoLibraryPage() {
+  const pageCount = Math.max(1, Math.ceil(videoLibraryTotal.value / 12));
+  const page = Math.min(Math.max(Number(videoLibraryJumpPage.value) || 1, 1), pageCount);
+  await changeVideoLibraryPage(page);
 }
 
 async function authenticatedMediaUrl(url: string) {
@@ -4808,15 +4824,15 @@ onBeforeUnmount(() => {
           <div><p class="eyebrow">VIDEO CREATION LIBRARY</p><h2>视频成品库</h2><small>全员可参考已审核通过的成片、提示词与发布结果</small></div>
           <el-radio-group v-model="outputCategory" @change="switchOutputCategory(String($event))"><el-radio-button value="VIDEO">视频</el-radio-button><el-radio-button value="IMAGE">图片</el-radio-button><el-radio-button value="ARTICLE">软文</el-radio-button></el-radio-group>
         </section>
-        <section v-if="outputCategory === 'VIDEO'" class="toolbar section-card">
+        <section v-if="outputCategory === 'VIDEO'" class="toolbar section-card video-library-toolbar">
           <el-input v-model="videoLibraryFilters.search" clearable placeholder="搜索视频标题、审核标题或标签" @keyup.enter="videoLibraryPage = 1; loadVideoLibrary()" />
-          <el-select v-model="videoLibraryFilters.productModel" clearable filterable placeholder="产品型号"><el-option v-for="product in productOptions" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" /></el-select>
+          <el-select v-model="videoLibraryFilters.productModel" clearable filterable placeholder="全部产品"><el-option v-for="model in videoLibraryProductModels" :key="model" :label="model" :value="model" /></el-select>
           <span class="video-library-sort-label">排序方式</span>
           <el-select v-model="videoLibraryFilters.sort" @change="videoLibraryPage = 1; loadVideoLibrary()"><el-option label="按最新成品排序（默认）" value="LATEST" /><el-option label="按播放量排序" value="VIEWS" /><el-option label="按点赞量排序" value="LIKES" /><el-option label="按评论量排序" value="COMMENTS" /></el-select>
           <el-button type="primary" @click="videoLibraryPage = 1; loadVideoLibrary()">搜索</el-button>
           <el-button @click="Object.assign(videoLibraryFilters, { search: '', productModel: '', sort: 'LATEST' }); videoLibraryPage = 1; loadVideoLibrary()">重置</el-button>
         </section>
-        <section v-if="outputCategory === 'VIDEO'" v-loading="videoLibraryLoading" class="section-card">
+        <section v-if="outputCategory === 'VIDEO'" v-loading="videoLibraryLoading" class="section-card video-library-results">
           <div v-if="videoLibrary.length" class="video-library-grid">
             <button v-for="entry in videoLibrary" :key="entry.id" class="video-library-card" @click="openVideoLibraryEntry(entry)">
               <span class="video-library-cover"><img v-if="videoLibraryCoverUrls[String(entry.id)]" :src="videoLibraryCoverUrls[String(entry.id)]" :alt="videoLibraryTitle(entry)" /><el-icon v-else><VideoCamera /></el-icon><em>{{ entry.outputAsset?.durationSeconds ? `${Math.round(Number(entry.outputAsset.durationSeconds))}秒` : '视频' }}</em></span>
@@ -4824,7 +4840,10 @@ onBeforeUnmount(() => {
             </button>
           </div>
           <el-empty v-else description="暂无已审核通过的视频成品" />
-          <el-pagination v-if="videoLibraryTotal > 12" v-model:current-page="videoLibraryPage" small background layout="prev, pager, next, jumper" :page-size="12" :total="videoLibraryTotal" @current-change="loadVideoLibrary" />
+          <div v-if="videoLibraryTotal > 12" class="video-library-pagination">
+            <el-pagination :current-page="videoLibraryPage" small background layout="prev, pager, next" :page-size="12" :total="videoLibraryTotal" @current-change="changeVideoLibraryPage" />
+            <label class="video-library-jump">跳至 <el-input v-model.number="videoLibraryJumpPage" inputmode="numeric" @keyup.enter="jumpToVideoLibraryPage" /> 页</label>
+          </div>
         </section>
         <section v-else v-loading="outputLibraryLoading" class="section-card">
           <div v-if="outputLibrary.length" class="output-library-grid">

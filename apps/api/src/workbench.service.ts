@@ -287,7 +287,7 @@ export class WorkbenchService {
         ...(dateFrom || dateTo ? { createdAt: { ...(dateFrom ? { gte: dateFrom } : {}), ...(dateTo ? { lte: dateTo } : {}) } } : {}),
         ...(search ? { OR: [{ title: { contains: search, mode: "insensitive" } }, { productModel: { contains: search, mode: "insensitive" } }, { contentPlan: { is: { variants: { some: { title: { contains: search, mode: "insensitive" } } } } } }] } : {}),
     };
-    const [items, total, categoryRows] = await Promise.all([
+    const [items, total, categoryRows, productModelRows] = await Promise.all([
       this.prisma.contentLibraryEntry.findMany({
       where,
       include: {
@@ -303,13 +303,22 @@ export class WorkbenchService {
       }),
       this.prisma.contentLibraryEntry.count({ where }),
       this.prisma.contentLibraryEntry.findMany({ where: { category: "VIDEO", visibilityStatus: "ACTIVE", productCategory: { not: null } }, select: { productCategory: true }, distinct: ["productCategory"], orderBy: { productCategory: "asc" } }),
+      this.prisma.contentLibraryEntry.findMany({
+        where: { category: "VIDEO", visibilityStatus: "ACTIVE", productModel: { not: null }, outputAsset: { is: { reviewStatus: "APPROVED", availabilityStatus: "ACTIVE", deletedAt: null, objectKey: { not: null } } } },
+        select: { productModel: true }, distinct: ["productModel"], orderBy: { productModel: "asc" },
+      }),
     ]);
     const available = await Promise.all(items.map(async (item) => {
       if (!item.outputAsset.objectKey || await this.oss.objectExists(item.outputAsset.objectKey)) return item;
       await this.prisma.contentLibraryEntry.update({ where: { id: item.id }, data: { visibilityStatus: "HIDDEN", hiddenAt: new Date(), hiddenBy: "SYSTEM_STORAGE_CHECK" } });
       return null;
     }));
-    return { items: available.filter(Boolean).map((item) => ({ ...item!, previewUrl: `/api/v1/workbench/video-library/${item!.id}/url` })), total, page, pageSize, categories: categoryRows.map((item) => item.productCategory).filter(Boolean) };
+    return {
+      items: available.filter(Boolean).map((item) => ({ ...item!, previewUrl: `/api/v1/workbench/video-library/${item!.id}/url` })),
+      total, page, pageSize,
+      categories: categoryRows.map((item) => item.productCategory).filter(Boolean),
+      productModels: productModelRows.map((item) => item.productModel).filter(Boolean),
+    };
   }
 
   async videoLibraryEntry(id: string) {
