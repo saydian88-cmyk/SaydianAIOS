@@ -30,6 +30,8 @@ const executionSchema = {
     durationMs: { type: "number", minimum: 0 },
     resumed: { type: "boolean" },
     schemaAttempts: { type: "number", minimum: 1 },
+    projectMode: { type: "string" },
+    stage: { type: "string" },
   },
   required: [
     "skill",
@@ -70,6 +72,19 @@ export function finalResultSchema(contentSchema: JsonRecord): JsonRecord {
   const properties = {
     ...(contentSchema.properties as JsonRecord || {}),
     execution: executionSchema,
+    qualityWarnings: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          validator: { type: "string" },
+          summary: { type: "string" },
+          recommendation: { type: "string" },
+        },
+        required: ["validator", "summary", "recommendation"],
+      },
+    },
   };
   const required = Array.from(new Set([
     ...(Array.isArray(contentSchema.required) ? contentSchema.required.map(String) : []),

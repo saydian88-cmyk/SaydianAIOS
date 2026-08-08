@@ -98,6 +98,37 @@ describe("unified result contract", () => {
     }, schema, true)).not.toThrow();
   });
 
+  it("accepts resumable dispatcher fields and non-blocking quality warnings", () => {
+    const schemaWithWarnings = {
+      ...schema,
+      properties: {
+        ...schema.properties,
+        qualityWarnings: { type: "array" },
+      },
+    };
+    expect(() => validateResult({
+      summary: "ok",
+      outputFiles: [],
+      qualityWarnings: [{ validator: "delivery", summary: "warning", recommendation: "review" }],
+      execution: {
+        skill: "saidian-ai-task-dispatcher",
+        skillVersion: "sha256-test",
+        skillDigest: "digest",
+        strategy: "CODEX_SKILL",
+        executionMode: "FULL_VIDEO",
+        routeReason: "dispatcher route",
+        fallbackOrder: ["APPROVED_REAL_VIDEO"],
+        startedAt: "2026-08-08T04:00:00.000Z",
+        finishedAt: "2026-08-08T04:01:00.000Z",
+        durationMs: 60000,
+        resumed: true,
+        schemaAttempts: 1,
+        projectMode: "CODEX_DIRECT_FULL_VIDEO",
+        stage: "FULL_VIDEO",
+      },
+    }, schemaWithWarnings, true)).not.toThrow();
+  });
+
   it("accepts covered script lines only when they bind real task VIDEO asset IDs", () => {
     expect(() => validateVideoScriptMaterialIds({
       candidates: [{

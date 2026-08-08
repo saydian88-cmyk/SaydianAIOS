@@ -82,6 +82,14 @@ describe("AiTaskCenterService", () => {
     expect(isRecoverableDirectVideoInput({ executionMode: "FULL_VIDEO" })).toBe(false);
   });
 
+  it("routes batch Codex direct video with its direct-output route", () => {
+    expect(aiTaskRoute({
+      type: "VIDEO",
+      sourceType: "VIDEO_FACTORY_PROJECT",
+      input: { executionMode: "FULL_VIDEO", batchCodexDirectFullVideo: true },
+    })).toMatchObject({ projectMode: "CODEX_DIRECT_FULL_VIDEO", requiredSkill: "video-editing-from-media-library" });
+  });
+
   it("plans manifest READY items only when a matching uploaded master exists", () => {
     const planned = planBatchCodexResults(
       [

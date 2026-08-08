@@ -201,7 +201,7 @@ export function aiTaskRoute(task: {
     const explicitMode = text(input.projectMode).toUpperCase();
     const projectMode = input.referenceDirectFullVideo === true || explicitMode === "REFERENCE_DIRECT_FULL_VIDEO"
       ? "REFERENCE_DIRECT_FULL_VIDEO"
-      : input.codexDirectFullVideo === true || explicitMode === "CODEX_DIRECT_FULL_VIDEO"
+      : input.codexDirectFullVideo === true || input.batchCodexDirectFullVideo === true || explicitMode === "CODEX_DIRECT_FULL_VIDEO"
         ? "CODEX_DIRECT_FULL_VIDEO"
         : "STANDARD_SMART_VIDEO";
     return {
@@ -1473,6 +1473,7 @@ export class AiTaskCenterService implements OnModuleInit {
     const codexDirectFullVideo = task.type === "VIDEO"
       && executionMode === "FULL_VIDEO"
       && (input.codexDirectFullVideo === true || localLibraryCodexTask);
+    const batchCodexDirectFullVideo = codexDirectFullVideo && input.batchCodexDirectFullVideo === true;
     const referenceDirectFullVideo = task.type === "VIDEO"
       && executionMode === "FULL_VIDEO"
       && input.referenceDirectFullVideo === true;
@@ -1500,6 +1501,13 @@ export class AiTaskCenterService implements OnModuleInit {
             || text(projectBrief.prompt),
           creativeMode: text(existingDirectInput.creativeMode) || text(input.creativeMode) || "FULL_VIDEO",
         },
+        ...(batchCodexDirectFullVideo ? {
+          batchCodexDirectFullVideo: true,
+          existingContentPlanId: text(input.existingContentPlanId) || text(task.sourceId),
+          batchDirectInput: object(input.batchDirectInput),
+          retryVideoKeys: Array.isArray(input.retryVideoKeys) ? input.retryVideoKeys.map(text).filter(Boolean) : [],
+          requiredOutputs: Array.isArray(input.requiredOutputs) ? input.requiredOutputs.map(text).filter(Boolean) : [],
+        } : {}),
       }
       : referenceDirectFullVideo
         ? {
