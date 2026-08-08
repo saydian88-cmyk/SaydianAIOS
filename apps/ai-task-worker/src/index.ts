@@ -2066,8 +2066,10 @@ async function recoverDirectOutputResult(
 ) {
   if (!isCodexDirectFullVideoTask(taskPackageValue)) return undefined;
   const preflightPlan = await stat(join(workspace, "production-plan.json")).catch(() => undefined);
-  const preflightLog = await readFile(join(workspace, "logs", "production-plan-validator.log"), "utf8").catch(() => "");
-  if (!preflightPlan?.isFile() || !preflightLog.includes("PRODUCTION_PLAN_OK")) return undefined;
+  // The plan itself is durable evidence. Its validator log is derived data and
+  // can be rewritten by a later failed attempt, so it must not force a valid
+  // batch of rendered outputs back into Codex just because that log was lost.
+  if (!preflightPlan?.isFile()) return undefined;
   const outputsRoot = join(workspace, "outputs");
   const savedResult = await readJson<JsonRecord>(join(workspace, "result.json"));
   const savedOutputs = Array.isArray(savedResult?.outputFiles) ? savedResult.outputFiles.map(record) : [];
