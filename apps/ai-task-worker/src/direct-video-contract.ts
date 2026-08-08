@@ -61,13 +61,17 @@ export function isCodexDirectFullVideoTask(taskPackage: JsonRecord) {
   const task = record(taskPackage.task);
   const execution = record(taskPackage.execution);
   const input = record(task.input);
+  const taskRoute = record(input.taskRoute);
   const localLibraryCodexTask = String(input.executionClass || "").toUpperCase() === "CODEX_SKILL"
     && String(input.skillName || "").toLowerCase() === "video-editing-from-media-library";
+  const directRoute = ["CODEX_DIRECT_FULL_VIDEO", "REFERENCE_DIRECT_FULL_VIDEO"]
+    .includes(String(taskRoute.projectMode || "").toUpperCase());
   return String(task.type || "") === "VIDEO"
     && String(execution.mode || "").toUpperCase() === "FULL_VIDEO"
     && (input.codexDirectFullVideo === true
       || input.referenceDirectFullVideo === true
       || input.batchCodexDirectFullVideo === true
+      || directRoute
       || localLibraryCodexTask);
 }
 
