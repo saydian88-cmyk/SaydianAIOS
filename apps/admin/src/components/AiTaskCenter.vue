@@ -1,8 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { api, post } from "../api";
-import { filteredOverviewTasks } from "../ai-task-list";
 
 type Row = Record<string, any>;
 const emit = defineEmits<{ navigate: [key: string] }>();
@@ -30,6 +29,9 @@ const activeTab = ref("overview");
 const loading = ref(false);
 const overview = ref<Row>({});
 const tasks = ref<Row[]>([]);
+const taskPage = ref(1);
+const taskPageSize = 10;
+const taskTotal = ref(0);
 const policies = ref<Row[]>([]);
 const runners = ref<Row[]>([]);
 const employees = ref<Row[]>([]);
@@ -102,13 +104,7 @@ const wecom = reactive<Row>({
 });
 
 const visibleTasks = computed(() => {
-  const selected = filteredOverviewTasks(tasks.value, filters);
-  if (activeTab.value === "pending") return selected.filter((task) => pendingStatuses.includes(task.status));
-  if (activeTab.value === "running") return selected.filter((task) => runningStatuses.includes(task.status));
-  if (activeTab.value === "review") return selected.filter((task) => task.status === "PENDING_REVIEW");
-  if (activeTab.value === "completed") return selected.filter((task) => task.status === "COMPLETED");
-  if (activeTab.value === "failed") return selected.filter((task) => ["FAILED", "CANCELLED"].includes(task.status));
-  return selected;
+  return tasks.value;
 });
 
 const typeCountRows = computed(() => {
@@ -234,7 +230,7 @@ async function load() {
   try {
     const [summary, taskRows, policyRows, runnerRows, ledger, wecomStatus, productRows] = await Promise.allSettled([
       api<Row>("/api/v1/ai-tasks/overview"),
-      api<Row[]>("/api/v1/ai-tasks"),
+      api<{ items: Row[]; total: number; page: number }>(`/api/v1/ai-tasks?${taskQuery().toString()}`),
       api<Row[]>("/api/v1/ai-tasks/policies"),
       api<Row[]>("/api/v1/ai-tasks/runners"),
       api<Row>("/api/v1/ledger"),
@@ -242,7 +238,11 @@ async function load() {
       api<Row[]>("/api/v1/brand-data/products"),
     ]);
     if (summary.status === "fulfilled") overview.value = summary.value;
-    if (taskRows.status === "fulfilled") tasks.value = taskRows.value;
+    if (taskRows.status === "fulfilled") {
+      tasks.value = taskRows.value.items || [];
+      taskTotal.value = Number(taskRows.value.total) || 0;
+      taskPage.value = Number(taskRows.value.page) || 1;
+    }
     if (policyRows.status === "fulfilled") policies.value = policyRows.value.map((row) => ({ ...row }));
     if (runnerRows.status === "fulfilled") runners.value = runnerRows.value;
     if (ledger.status === "fulfilled") employees.value = ledger.value.employees || [];
@@ -260,6 +260,37 @@ async function load() {
     loading.value = false;
   }
 }
+
+function taskStatuses() {
+  if (activeTab.value === "pending") return pendingStatuses;
+  if (activeTab.value === "running") return runningStatuses;
+  if (activeTab.value === "review") return ["PENDING_REVIEW"];
+  if (activeTab.value === "completed") return ["COMPLETED"];
+  if (activeTab.value === "failed") return ["FAILED", "CANCELLED"];
+  return [];
+}
+
+function taskQuery() {
+  const parameters = new URLSearchParams({ paginated: "1", page: String(taskPage.value), pageSize: String(taskPageSize) });
+  if (filters.type) parameters.set("type", filters.type);
+  if (filters.platform) parameters.set("platform", filters.platform);
+  if (filters.keyword) parameters.set("keyword", filters.keyword);
+  const statuses = taskStatuses();
+  if (statuses.length) parameters.set("statuses", statuses.join(","));
+  return parameters;
+}
+
+async function resetTaskPage() {
+  taskPage.value = 1;
+  await load();
+}
+
+async function changeTaskPage(page: number) {
+  taskPage.value = page;
+  await load();
+}
+
+watch(activeTab, () => { void resetTaskPage(); });
 
 async function createTask() {
   try {
@@ -559,16 +590,16 @@ onMounted(load);
 
     <template v-if="!['policies', 'runners', 'cost'].includes(activeTab)">
       <div class="filters">
-        <el-select v-model="filters.type" clearable placeholder="全部任务类型">
+        <el-select v-model="filters.type" clearable placeholder="全部任务类型" @change="resetTaskPage">
           <el-option v-for="[value, label] in taskTypes" :key="value" :value="value" :label="label" />
         </el-select>
-        <el-select v-model="filters.platform" clearable placeholder="全部平台">
+        <el-select v-model="filters.platform" clearable placeholder="全部平台" @change="resetTaskPage">
           <el-option label="抖音" value="DOUYIN" />
           <el-option label="TikTok" value="TIKTOK" />
           <el-option label="全平台/经营分析" value="ALL" />
         </el-select>
-        <el-input v-model="filters.keyword" clearable placeholder="任务编号或标题" />
-        <el-button @click="load">刷新</el-button>
+        <el-input v-model="filters.keyword" clearable placeholder="任务编号或标题" @change="resetTaskPage" @keyup.enter="resetTaskPage" />
+        <el-button @click="resetTaskPage">刷新</el-button>
       </div>
 
       <el-table :data="visibleTasks" stripe>
@@ -595,6 +626,9 @@ onMounted(load);
           </template>
         </el-table-column>
       </el-table>
+      <div v-if="taskTotal > taskPageSize" class="task-list-pagination">
+        <el-pagination small background layout="total, prev, pager, next" :current-page="taskPage" :page-size="taskPageSize" :total="taskTotal" @current-change="changeTaskPage" />
+      </div>
     </template>
 
     <div v-else-if="activeTab === 'policies'" class="settings-grid">

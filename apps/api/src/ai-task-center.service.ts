@@ -179,6 +179,12 @@ export function isRecoverableDirectVideoInput(input: unknown) {
     && (taskInput.codexDirectFullVideo === true || taskInput.referenceDirectFullVideo === true || taskInput.batchCodexDirectFullVideo === true);
 }
 
+export function taskListPage(query: Record<string, string | undefined>) {
+  const page = Math.max(1, Math.floor(Number(query.page) || 1));
+  const pageSize = Math.min(100, Math.max(1, Math.floor(Number(query.pageSize) || 10)));
+  return { page, pageSize, skip: (page - 1) * pageSize };
+}
+
 /**
  * Resolve only business routes that are unambiguous from structured task data.
  * Titles and instructions are deliberately excluded: they are display/creative
@@ -632,9 +638,10 @@ export class AiTaskCenterService implements OnModuleInit {
   async tasks(query: Record<string, string | undefined>) {
     const type = enumValue(query.type, taskTypes, "" as AiTaskType);
     const status = text(query.status).toUpperCase() as AiTaskStatus;
+    const statuses = text(query.statuses).toUpperCase().split(",").filter(Boolean) as AiTaskStatus[];
     const where: Prisma.AiTaskWhereInput = {
       ...(taskTypes.includes(type) ? { type } : {}),
-      ...(status ? { status } : {}),
+      ...(statuses.length ? { status: { in: statuses } } : status ? { status } : {}),
       ...(query.platform ? { platform: query.platform.toUpperCase() } : {}),
       ...(query.productId ? { productId: query.productId } : {}),
       ...(query.ownerEmployeeId ? { ownerEmployeeId: query.ownerEmployeeId } : {}),
@@ -647,13 +654,27 @@ export class AiTaskCenterService implements OnModuleInit {
         ],
       } : {}),
     };
-    const tasks = await this.prisma.aiTask.findMany({
+    if (query.paginated !== "1") {
+      const tasks = await this.prisma.aiTask.findMany({
+        where,
+        include: this.includeTask(),
+        orderBy: [{ priority: "asc" }, { createdAt: "desc" }],
+        take: 500,
+      });
+      return tasks.map(normalizeTaskOutputSizes);
+    }
+    const { page, pageSize, skip } = taskListPage(query);
+    const [total, tasks] = await Promise.all([
+      this.prisma.aiTask.count({ where }),
+      this.prisma.aiTask.findMany({
       where,
       include: this.includeTask(),
       orderBy: [{ priority: "asc" }, { createdAt: "desc" }],
-      take: 500,
-    });
-    return tasks.map(normalizeTaskOutputSizes);
+        skip,
+        take: pageSize,
+      }),
+    ]);
+    return { items: tasks.map(normalizeTaskOutputSizes), total, page, pageSize };
   }
 
   private async terminalCleanupCandidates(cutoff: Date, workerNodeId: string) {

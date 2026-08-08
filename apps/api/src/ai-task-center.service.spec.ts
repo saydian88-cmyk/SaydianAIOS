@@ -14,6 +14,7 @@ import {
   resolveDirectVideoProjectId,
   shouldReviewUploadedBatchWithoutResultManifest,
   shouldSendUploadedFailureToReview,
+  taskListPage,
   videoScriptOutputMetadata,
 } from "./ai-task-center.service";
 
@@ -88,6 +89,11 @@ describe("AiTaskCenterService", () => {
       sourceType: "VIDEO_FACTORY_PROJECT",
       input: { executionMode: "FULL_VIDEO", batchCodexDirectFullVideo: true },
     })).toMatchObject({ projectMode: "CODEX_DIRECT_FULL_VIDEO", requiredSkill: "video-editing-from-media-library" });
+  });
+
+  it("normalizes requested task-list pagination to a bounded page window", () => {
+    expect(taskListPage({ page: "3", pageSize: "10" })).toEqual({ page: 3, pageSize: 10, skip: 20 });
+    expect(taskListPage({ page: "0", pageSize: "1000" })).toEqual({ page: 1, pageSize: 100, skip: 0 });
   });
 
   it("plans manifest READY items only when a matching uploaded master exists", () => {
