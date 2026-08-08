@@ -514,7 +514,7 @@ describe("AiTaskCenterService", () => {
     expect(update.mock.calls[0]?.[0].data).not.toHaveProperty("retryCount");
   });
 
-  it("allows a final batch output-registration recovery after three stale attempts", async () => {
+  it("allows a final batch output-registration recovery after four stale attempts", async () => {
     const task = {
       id: "ai-batch-direct-final-recovery",
       taskNo: "AIT-BATCH-DIRECT-FINAL-RECOVERY",
@@ -523,7 +523,7 @@ describe("AiTaskCenterService", () => {
       input: {
         executionMode: "FULL_VIDEO",
         batchCodexDirectFullVideo: true,
-        outputRegistrationRecoveryAttempts: 3,
+        outputRegistrationRecoveryAttempts: 4,
         outputRegistrationRecoveryAttemptedAt: "2026-08-08T10:00:00.000Z",
       },
       retryCount: 3,
@@ -549,7 +549,7 @@ describe("AiTaskCenterService", () => {
     expect(update).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
         status: "RETRY",
-        input: expect.objectContaining({ outputRegistrationRecoveryAttempts: 4 }),
+        input: expect.objectContaining({ outputRegistrationRecoveryAttempts: 5 }),
       }),
     }));
     expect(update.mock.calls[0]?.[0].data).not.toHaveProperty("retryCount");

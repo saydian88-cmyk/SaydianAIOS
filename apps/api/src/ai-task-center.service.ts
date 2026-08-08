@@ -1046,7 +1046,7 @@ export class AiTaskCenterService implements OnModuleInit {
       Number(taskInput.outputRegistrationRecoveryAttempts || 0),
       text(taskInput.outputRegistrationRecoveryAttemptedAt) ? 1 : 0,
     );
-    const isDirectOutputRecovery = isDirectOutputTask && priorRecoveryAttempts < 4;
+    const isDirectOutputRecovery = isDirectOutputTask && priorRecoveryAttempts < 5;
     const priorImageRoutingRecoveryAttempts = Math.max(
       0,
       Number(taskInput.imageProjectRoutingRecoveryAttempts || 0),
