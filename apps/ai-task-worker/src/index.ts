@@ -2448,19 +2448,30 @@ async function execute(claimed: JsonRecord) {
     const snapshots = Array.isArray(packaged.snapshots) ? packaged.snapshots.map(record) : [];
     const snapshotPayload = record(snapshots[0]?.payload);
     const requirements = record(snapshotPayload.requirements);
+    const recoveredBatchResultCount = Array.isArray(directRecoveryResult?.batchResults)
+      ? directRecoveryResult.batchResults.length
+      : 0;
+    const batchDirectTask = Boolean(record(packagedTask.input).batchCodexDirectFullVideo)
+      || recoveredBatchResultCount > 1;
     const schema = outputSchema(
       String(packagedTask.type || ""),
       String(execution.mode || ""),
       Number(requirements.exactCount || 10),
       isCodexDirectFullVideoTask(packaged),
       isImagePostProjectTask(packaged),
-      Boolean(record(packagedTask.input).batchCodexDirectFullVideo),
-      expectedBatchVideoKeys(record(packagedTask.input)).length,
+      batchDirectTask,
+      batchDirectTask
+        ? Math.max(recoveredBatchResultCount, expectedBatchVideoKeys(record(packagedTask.input)).length)
+        : 1,
     );
     const startedAt = new Date();
     let result: JsonRecord | undefined;
     let schemaAttempts = 1;
-    if (resumeWithValidatedResult) {
+    if (resumeWithValidatedResult && directRecoveryResult) {
+      result = directRecoveryResult;
+      await writeJsonAtomic(join(workspace, "result.json"), result);
+      await appendExecutionLog(workspace, "RESUME_OUTPUT_RECOVERED", { stage: taskState.stage });
+    } else if (resumeWithValidatedResult) {
       const savedResult = await readJson<JsonRecord>(join(workspace, "result.json"));
       if (savedResult) {
         try {
