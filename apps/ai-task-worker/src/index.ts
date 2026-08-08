@@ -2253,7 +2253,9 @@ async function execute(claimed: JsonRecord) {
   const initialTaskInput = record(task.input);
   const directOutputTask = String(task.type || "") === "VIDEO"
     && String(initialTaskInput.executionMode || "").toUpperCase() === "FULL_VIDEO"
-    && (initialTaskInput.codexDirectFullVideo === true || initialTaskInput.referenceDirectFullVideo === true);
+    && (initialTaskInput.codexDirectFullVideo === true
+      || initialTaskInput.referenceDirectFullVideo === true
+      || initialTaskInput.batchCodexDirectFullVideo === true);
   const timeoutSeconds = Math.max(60, Number((claimed.policy as JsonRecord)?.timeoutSeconds || 1200));
   const workspace = join(workRoot, taskNo.replace(/[^a-zA-Z0-9_-]/g, "-"));
   await ensureTaskWorkspace(workspace);

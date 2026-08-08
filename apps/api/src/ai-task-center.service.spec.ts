@@ -475,6 +475,45 @@ describe("AiTaskCenterService", () => {
     }));
   });
 
+  it("allows an exhausted batch Codex task to retry only its existing output registration", async () => {
+    const task = {
+      id: "ai-batch-direct-recovery",
+      taskNo: "AIT-BATCH-DIRECT-RECOVERY",
+      status: "FAILED",
+      type: "VIDEO",
+      sourceType: "VIDEO_FACTORY_PROJECT",
+      sourceId: "video-project-1",
+      input: { executionMode: "FULL_VIDEO", batchCodexDirectFullVideo: true },
+      retryCount: 3,
+      maxRetries: 3,
+      failureReason: "batchResults 缺少视频键：1-1, 1-2",
+    };
+    const update = vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({ ...task, ...data }));
+    const service = new AiTaskCenterService(
+      {
+        aiTask: { findUnique: vi.fn().mockResolvedValue(task), update },
+        aiTaskOutput: { findFirst: vi.fn().mockResolvedValue(null) },
+        opsTask: { findUnique: vi.fn().mockResolvedValue(null) },
+        auditLog: { create: vi.fn().mockResolvedValue({}) },
+      } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await service.retry(task.id, "employee-1");
+
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        status: "RETRY",
+        input: expect.objectContaining({ outputRegistrationRecoveryAttempts: 1 }),
+      }),
+    }));
+    expect(update.mock.calls[0]?.[0].data).not.toHaveProperty("retryCount");
+  });
+
   it("allows a final bounded image-project routing recovery after two stale-worker attempts", async () => {
     const task = {
       id: "ai-image-final-recovery",

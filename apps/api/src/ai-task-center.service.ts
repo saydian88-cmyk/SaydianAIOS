@@ -1034,7 +1034,9 @@ export class AiTaskCenterService implements OnModuleInit {
     const isUploadedOutputRecovery = retryingReviewWarning && shouldSendUploadedFailureToReview(uploadedOutputCount);
     const isDirectOutputTask = task.type === "VIDEO"
       && text(taskInput.executionMode).toUpperCase() === "FULL_VIDEO"
-      && (taskInput.codexDirectFullVideo === true || taskInput.referenceDirectFullVideo === true);
+      && (taskInput.codexDirectFullVideo === true
+        || taskInput.referenceDirectFullVideo === true
+        || taskInput.batchCodexDirectFullVideo === true);
     // The first recovery retry may have been consumed by an older worker that
     // wrote an invalid result-contract envelope. Allow one final registration-
     // only retry, never a fresh render and never unlimited retries.
