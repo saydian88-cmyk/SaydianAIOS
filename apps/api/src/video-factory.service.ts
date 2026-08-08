@@ -67,7 +67,7 @@ type ProjectCreateInput = {
   batchTaskRequirement?: string;
   libraryEntryId?: string;
   libraryReuseMode?: "CONFIG_REUSE" | "REFERENCE_DIRECT";
-  targetLanguage?: "ZH" | "EN";
+  targetLanguage?: "ZH" | "EN" | "OTHER";
   referenceAssetId?: string;
 };
 

@@ -67,7 +67,19 @@ const videoLibraryDetailCoverUrl = ref("");
 const videoLibraryHistoryExpanded = ref(false);
 const videoLibraryCreateVisible = ref(false);
 const videoLibraryCreating = ref(false);
-const videoLibraryCreateForm = reactive({ mode: "CONFIG_REUSE", productModel: "", additionalPrompt: "", targetLanguage: "ZH" });
+const videoLibraryCreateForm = reactive({
+  mode: "CONFIG_REUSE",
+  productModel: "",
+  replaceProduct: false,
+  replaceHook: false,
+  hook: "",
+  replaceFeature: false,
+  feature: "",
+  targetLanguage: "ZH",
+  customLanguage: "",
+  taskRequirement: "",
+});
+const videoLibraryOriginalRequirement = ref("");
 const tasks = ref<Row[]>([]);
 const taskScope = ref("MINE");
 const taskStatus = ref("");
@@ -1852,20 +1864,101 @@ async function openVideoLibraryEntry(entry: Row) {
   }
 }
 
-function openVideoLibraryCreate() {
+function videoLibrarySourceProject(entry?: Row): Row {
+  const snapshot = entry?.snapshot;
+  return snapshot?.project && typeof snapshot.project === "object" ? snapshot.project as Row : {};
+}
+
+function videoLibraryLanguageInstruction() {
+  if (videoLibraryCreateForm.targetLanguage === "EN") return "字幕、口播和贴纸文案等都用英文，这条视频面向英文社交平台。";
+  if (videoLibraryCreateForm.targetLanguage === "OTHER") {
+    const language = videoLibraryCreateForm.customLanguage.trim();
+    return language
+      ? `字幕、口播和贴纸文案等都用${language}，这条视频面向${language}社交平台。`
+      : "请填写字幕、口播和贴纸文案所用的语言。";
+  }
+  return "字幕、口播和贴纸文案等都用中文，这条视频面向中文社交平台。";
+}
+
+function videoLibraryOriginalTaskRequirement(entry?: Row) {
+  const source = videoLibrarySourceProject(entry);
+  const snapshot = entry?.snapshot || {};
+  const original = String(snapshot.taskRequirement || source.taskRequirement || source.objective || snapshot.prompt || source.additionalPrompt || "").trim();
+  if (original) return original;
+  const product = String(source.productModel || entry?.productModel || "该产品");
+  return [
+    `为${product}制作一条${platformLabel(String(source.platform || entry?.platform || "DOUYIN"))}竖屏短视频。`,
+    source.hook ? `开场钩子：${source.hook}。` : "",
+    source.objective ? `核心要求：${source.objective}。` : "",
+  ].filter(Boolean).join("\n");
+}
+
+function replaceVideoLibraryText(requirement: string, original: string, replacement: string, fallback: string) {
+  if (original && requirement.includes(original)) return requirement.split(original).join(replacement);
+  return `${requirement}${requirement ? "\n" : ""}${fallback}`;
+}
+
+function syncVideoLibraryTaskRequirement() {
+  const entry = videoLibraryDetail.value;
+  if (!entry) return;
+  const source = videoLibrarySourceProject(entry);
+  const sourceProduct = String(source.productModel || entry.productModel || "").trim();
+  const languageInstruction = videoLibraryLanguageInstruction();
+  if (videoLibraryCreateForm.mode === "REFERENCE_DIRECT") {
+    const changes: string[] = [];
+    if (videoLibraryCreateForm.replaceProduct && videoLibraryCreateForm.productModel) {
+      const product = videoLibraryCreateForm.productModel;
+      changes.push(`产品替换：改为${product}。请寻找与原视频镜头、场景和节奏相近的${product}真实素材用于替换。`);
+    }
+    if (videoLibraryCreateForm.replaceHook && videoLibraryCreateForm.hook.trim()) changes.push(`开场钩子改为：${videoLibraryCreateForm.hook.trim()}。`);
+    if (videoLibraryCreateForm.replaceFeature && videoLibraryCreateForm.feature.trim()) changes.push(`核心卖点改为：${videoLibraryCreateForm.feature.trim()}。`);
+    if (videoLibraryCreateForm.targetLanguage !== "ZH") changes.push(languageInstruction);
+    videoLibraryCreateForm.taskRequirement = ["参考视频直出：直接在我给你的参考视频基础上修改。", ...changes, "其它保持不变。"].join("\n");
+    return;
+  }
+  let requirement = videoLibraryOriginalRequirement.value;
+  if (videoLibraryCreateForm.replaceProduct && videoLibraryCreateForm.productModel) {
+    requirement = replaceVideoLibraryText(requirement, sourceProduct, videoLibraryCreateForm.productModel, `产品型号改为：${videoLibraryCreateForm.productModel}。`);
+  }
+  if (videoLibraryCreateForm.replaceHook && videoLibraryCreateForm.hook.trim()) {
+    requirement = replaceVideoLibraryText(requirement, String(source.hook || "").trim(), videoLibraryCreateForm.hook.trim(), `开场钩子改为：${videoLibraryCreateForm.hook.trim()}。`);
+  }
+  if (videoLibraryCreateForm.replaceFeature && videoLibraryCreateForm.feature.trim()) requirement = `${requirement}${requirement ? "\n" : ""}核心卖点改为：${videoLibraryCreateForm.feature.trim()}。`;
+  videoLibraryCreateForm.taskRequirement = [
+    "复用项目配置：以该审核通过的成品视频作为镜头节奏与画面结构参考，不直接复用其中的产品素材。",
+    requirement,
+    languageInstruction,
+  ].filter(Boolean).join("\n\n");
+}
+
+async function openVideoLibraryCreate() {
   const entry = videoLibraryDetail.value;
   if (!entry) return;
   videoLibraryCreateForm.mode = "CONFIG_REUSE";
-  videoLibraryCreateForm.productModel = entry.productModel || entry.contentPlan?.productModel || "";
-  videoLibraryCreateForm.additionalPrompt = "";
+  videoLibraryCreateForm.productModel = String(videoLibrarySourceProject(entry).productModel || entry.productModel || entry.contentPlan?.productModel || "");
+  videoLibraryCreateForm.replaceProduct = false;
+  videoLibraryCreateForm.replaceHook = false;
+  videoLibraryCreateForm.hook = "";
+  videoLibraryCreateForm.replaceFeature = false;
+  videoLibraryCreateForm.feature = "";
   videoLibraryCreateForm.targetLanguage = "ZH";
+  videoLibraryCreateForm.customLanguage = "";
+  videoLibraryOriginalRequirement.value = videoLibraryOriginalTaskRequirement(entry);
+  syncVideoLibraryTaskRequirement();
+  try {
+    await ensureContentTaskOptions();
+  } catch (error) {
+    ElMessage.warning(error instanceof Error ? error.message : "系统产品型号加载失败");
+  }
   videoLibraryCreateVisible.value = true;
 }
 
 async function createVideoLibraryProject() {
   const entry = videoLibraryDetail.value;
   if (!entry?.id) return;
-  if (!videoLibraryCreateForm.productModel) return ElMessage.warning("请选择产品型号");
+  if (videoLibraryCreateForm.replaceProduct && !videoLibraryCreateForm.productModel) return ElMessage.warning("请选择替换后的产品型号");
+  if (videoLibraryCreateForm.targetLanguage === "OTHER" && !videoLibraryCreateForm.customLanguage.trim()) return ElMessage.warning("请填写内容语言");
+  if (!videoLibraryCreateForm.taskRequirement.trim()) return ElMessage.warning("请确认最终 AI 任务要求");
   videoLibraryCreating.value = true;
   try {
     await post(`/api/v1/workbench/video-library/${entry.id}/create-project`, { ...videoLibraryCreateForm });
@@ -7782,14 +7875,23 @@ onBeforeUnmount(() => {
     <template #footer><div class="video-library-detail-actions"><el-button @click="videoLibraryDetailVisible = false">关闭</el-button><el-button :disabled="!videoLibraryDetailCoverUrl" @click="openDownload(videoLibraryDetailCoverUrl, `${videoLibraryTitle(videoLibraryDetail || {})}-封面.jpg`)">下载封面</el-button><el-button :disabled="!videoLibraryPreviewUrl" @click="openDownload(videoLibraryPreviewUrl, `${videoLibraryTitle(videoLibraryDetail || {})}.mp4`)">下载成片</el-button><el-button v-if="canGenerateVideoScript" type="primary" @click="openVideoLibraryCreate">基于此成品生成类似视频</el-button></div></template>
   </el-dialog>
 
-  <el-dialog v-model="videoLibraryCreateVisible" title="从成品生成类似视频" width="min(650px, 94vw)" destroy-on-close>
-    <el-alert title="新项目会加入你的任务中心；项目详情可随时快速查看本成品作为参考。" type="info" :closable="false" />
-    <el-form label-position="top" style="margin-top:16px">
-      <el-form-item label="生成模式"><el-radio-group v-model="videoLibraryCreateForm.mode"><el-radio-button value="CONFIG_REUSE">复用项目配置</el-radio-button><el-radio-button value="REFERENCE_DIRECT">参考视频直出</el-radio-button></el-radio-group></el-form-item>
-      <el-form-item label="替换产品" required><el-select v-model="videoLibraryCreateForm.productModel" filterable><el-option v-for="product in productOptions" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" /></el-select></el-form-item>
-      <el-form-item label="目标语言"><el-radio-group v-model="videoLibraryCreateForm.targetLanguage"><el-radio-button value="ZH">中文</el-radio-button><el-radio-button value="EN">英文</el-radio-button></el-radio-group></el-form-item>
-      <el-form-item label="补充提示词"><el-input v-model="videoLibraryCreateForm.additionalPrompt" type="textarea" :rows="4" placeholder="说明本次希望调整的卖点、场景、节奏或风格" /></el-form-item>
-    </el-form>
+  <el-dialog v-model="videoLibraryCreateVisible" title="从成品生成类似视频" width="min(760px, 94vw)" class="video-library-create-dialog" destroy-on-close>
+    <div class="video-library-create-intro"><strong>{{ videoLibraryTitle(videoLibraryDetail || {}) }}</strong>默认沿用该成品原项目的 AI 任务要求。只勾选需要改写的内容，系统会同步更新最终任务要求。</div>
+    <div class="video-library-create-body">
+      <span class="video-library-create-label">生成模式</span>
+      <el-radio-group v-model="videoLibraryCreateForm.mode" class="video-library-create-mode" @change="syncVideoLibraryTaskRequirement"><el-radio-button value="CONFIG_REUSE">复用项目配置</el-radio-button><el-radio-button value="REFERENCE_DIRECT">参考视频直出</el-radio-button></el-radio-group>
+      <span class="video-library-create-label">可选改写项</span>
+      <div class="video-library-rewrite-list">
+        <div class="video-library-rewrite-item"><el-checkbox v-model="videoLibraryCreateForm.replaceProduct" @change="syncVideoLibraryTaskRequirement">替换产品</el-checkbox><el-select v-model="videoLibraryCreateForm.productModel" :disabled="!videoLibraryCreateForm.replaceProduct" filterable placeholder="搜索或选择产品型号" @change="syncVideoLibraryTaskRequirement"><el-option v-for="product in productOptions" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" /></el-select></div>
+        <div class="video-library-rewrite-item"><el-checkbox v-model="videoLibraryCreateForm.replaceHook" @change="syncVideoLibraryTaskRequirement">替换钩子</el-checkbox><el-input v-model="videoLibraryCreateForm.hook" :disabled="!videoLibraryCreateForm.replaceHook" placeholder="例如：爸妈总说不用买，其实最担心的是这个" @input="syncVideoLibraryTaskRequirement" /></div>
+        <div class="video-library-rewrite-item"><el-checkbox v-model="videoLibraryCreateForm.replaceFeature" @change="syncVideoLibraryTaskRequirement">调整核心卖点</el-checkbox><el-input v-model="videoLibraryCreateForm.feature" :disabled="!videoLibraryCreateForm.replaceFeature" placeholder="例如：夜间睡眠监测、蓝牙通话" @input="syncVideoLibraryTaskRequirement" /></div>
+      </div>
+      <span class="video-library-create-label">内容语言</span>
+      <div class="video-library-language-row"><el-radio-group v-model="videoLibraryCreateForm.targetLanguage" @change="syncVideoLibraryTaskRequirement"><el-radio-button value="ZH">中文</el-radio-button><el-radio-button value="EN">英文</el-radio-button><el-radio-button value="OTHER">其他</el-radio-button></el-radio-group><el-input v-if="videoLibraryCreateForm.targetLanguage === 'OTHER'" v-model="videoLibraryCreateForm.customLanguage" placeholder="请输入语言，例如：日文" @input="syncVideoLibraryTaskRequirement" /></div>
+      <span class="video-library-create-label">最终 AI 任务要求</span>
+      <el-input v-model="videoLibraryCreateForm.taskRequirement" class="video-library-task-requirement" type="textarea" :rows="8" />
+      <div class="video-library-task-note">这里的内容会直接作为新项目的 AI 任务要求提交。你也可以继续直接编辑。</div>
+    </div>
     <template #footer><el-button @click="videoLibraryCreateVisible = false">取消</el-button><el-button type="primary" :loading="videoLibraryCreating" @click="createVideoLibraryProject">创建项目</el-button></template>
   </el-dialog>
 </template>

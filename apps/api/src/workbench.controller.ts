@@ -2930,28 +2930,35 @@ export class WorkbenchController {
     const snapshot = object(entry.snapshot);
     const source = object(snapshot.project);
     const mode = body.mode === "REFERENCE_DIRECT" ? "REFERENCE_DIRECT" : "CONFIG_REUSE";
-    const language = body.targetLanguage === "EN" ? "EN" : "ZH";
-    const productModel = String(body.productModel || source.productModel || entry.productModel || "").trim();
-    const extraPrompt = String(body.additionalPrompt || "").trim();
-    const originalPrompt = String(source.additionalPrompt || snapshot.prompt || "").trim();
-    const languagePrompt = language === "EN" ? "输出语言：英文。" : "输出语言：中文。";
-    const additionalPrompt = [originalPrompt, extraPrompt, languagePrompt].filter(Boolean).join("\n");
+    const language = body.targetLanguage === "OTHER" ? "OTHER" : body.targetLanguage === "EN" ? "EN" : "ZH";
+    const replaceProduct = body.replaceProduct === true;
+    const productModel = String((replaceProduct ? body.productModel : undefined) || source.productModel || entry.productModel || "").trim();
+    if (replaceProduct && !String(body.productModel || "").trim()) throw new BadRequestException("请选择替换后的产品型号");
+    const originalPrompt = String(source.taskRequirement || source.objective || snapshot.taskRequirement || snapshot.prompt || source.additionalPrompt || "").trim();
+    const languagePrompt = language === "EN"
+      ? "字幕、口播和贴纸文案等都用英文，这条视频面向英文社交平台。"
+      : language === "OTHER"
+        ? `字幕、口播和贴纸文案等都用${String(body.customLanguage || "").trim()}，这条视频面向${String(body.customLanguage || "").trim()}社交平台。`
+        : "字幕、口播和贴纸文案等都用中文，这条视频面向中文社交平台。";
+    if (language === "OTHER" && !String(body.customLanguage || "").trim()) throw new BadRequestException("请填写内容语言");
+    const taskRequirement = String(body.taskRequirement || "").trim();
+    const additionalPrompt = taskRequirement || [originalPrompt, languagePrompt].filter(Boolean).join("\n");
     const project = await this.videoFactory.createProject({
       projectMode: mode === "REFERENCE_DIRECT" ? "REFERENCE_DIRECT_FULL_VIDEO" : "STANDARD",
       referenceVideoUrl: mode === "REFERENCE_DIRECT" ? `asset:${entry.outputAssetId}` : undefined,
       referenceDirectTaskRequirement: mode === "REFERENCE_DIRECT"
-        ? `以成品库参考视频为结构和节奏参考。${additionalPrompt}`
+        ? additionalPrompt
         : undefined,
       platform: String(source.platform || entry.platform || "DOUYIN"),
       voiceoverMode: String(source.voiceoverMode || "AUTO"),
       productModel,
       topic: String(body.topic || source.topic || entry.title),
       audience: String(source.audience || "目标用户"),
-      objective: `${String(source.objective || "参考成品重新创作")}\n来源成品：${entry.title}`,
+      objective: `${String(body.replaceFeature && String(body.feature || "").trim() || source.objective || "参考成品重新创作")}\n来源成品：${entry.title}`,
       videoType: String(source.videoType || "场景种草型"),
       keywords: String(source.keywords || source.topic || entry.title),
       reference: mode === "CONFIG_REUSE" ? String(source.reference || "") : undefined,
-      hook: String(source.hook || ""),
+      hook: String(body.replaceHook ? body.hook : source.hook || ""),
       scene: String(source.scene || ""),
       painPoint: String(source.painPoint || ""),
       additionalPrompt,
@@ -2970,7 +2977,7 @@ export class WorkbenchController {
       topic: finalProject.topic ? String(finalProject.topic) : null, productionStage: finalProject.productionStage ? String(finalProject.productionStage) : null,
     });
     await this.prisma.auditLog.create({
-      data: { actor: employee.name, action: "VIDEO_LIBRARY_PROJECT_CREATE", entityType: "ContentLibraryEntry", entityId: entry.id, after: { projectId: finalProject.id, mode, targetLanguage: language, productModel } },
+      data: { actor: employee.name, action: "VIDEO_LIBRARY_PROJECT_CREATE", entityType: "ContentLibraryEntry", entityId: entry.id, after: { projectId: finalProject.id, mode, targetLanguage: language, productModel, replaceProduct, replaceHook: body.replaceHook === true, replaceFeature: body.replaceFeature === true } },
     });
     return { ...finalProject, linkedTask: task, mode };
   }

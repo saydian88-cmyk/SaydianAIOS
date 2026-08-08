@@ -748,6 +748,18 @@ main { grid-column: 2; width: min(1240px, calc(100% - 48px)); margin: 24px auto;
 .video-library-history-row { display: grid; grid-template-columns: 90px 1fr; gap: 10px; padding: 9px 0; border-bottom: 1px solid #eef0ef; color: #2f5b8f; font-weight: 600; }
 .video-library-history-toggle { justify-self: start; padding-left: 0; }
 .video-library-detail-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; }
+.video-library-create-intro { padding: 12px 14px; border-radius: 10px; color: #62707a; background: #f6f8f7; }
+.video-library-create-intro strong { display: block; margin-bottom: 3px; color: #26333c; }
+.video-library-create-body { padding-top: 4px; }
+.video-library-create-label { display: block; margin: 16px 0 8px; color: #44515b; font-weight: 600; }
+.video-library-create-mode { margin-bottom: 2px; }
+.video-library-rewrite-list { display: grid; gap: 10px; }
+.video-library-rewrite-item { display: grid; grid-template-columns: 154px minmax(0, 1fr); align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid #e8ece9; border-radius: 10px; background: #fff; }
+.video-library-rewrite-item .el-checkbox { color: #37454f; font-weight: 600; }
+.video-library-language-row { display: flex; align-items: center; gap: 10px; }
+.video-library-language-row > .el-input { width: min(320px, 100%); }
+.video-library-task-requirement .el-textarea__inner { min-height: 156px !important; line-height: 1.6; }
+.video-library-task-note { margin-top: 12px; padding: 11px 13px; border: 1px solid #cfe2fb; border-radius: 9px; color: #41688f; background: #f4f8ff; font-size: 13px; }
 
 .output-library-cover {
   position: relative;
@@ -865,6 +877,9 @@ main { grid-column: 2; width: min(1240px, calc(100% - 48px)); margin: 24px auto;
   .video-library-toolbar { grid-template-columns: 1fr; }
   .video-library-toolbar .video-library-sort-label { justify-self: start; }
   .video-library-pagination { flex-wrap: wrap; }
+  .video-library-rewrite-item { grid-template-columns: 1fr; gap: 8px; }
+  .video-library-language-row { align-items: stretch; flex-direction: column; }
+  .video-library-language-row > .el-input { width: 100%; }
 
   .output-library-nav,
   .output-library-toolbar {
