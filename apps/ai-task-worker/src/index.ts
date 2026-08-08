@@ -2064,7 +2064,22 @@ async function recoverDirectOutputResult(
   taskPackageValue: JsonRecord,
   execution: JsonRecord,
 ) {
-  if (!isCodexDirectFullVideoTask(taskPackageValue)) return undefined;
+  // task-package.json is deliberately compact and may retain only the route.
+  // The full task, including batchCodexDirectFullVideo and batchDirectInput,
+  // is persisted separately when the runner claims it. Merge it back before
+  // deciding whether existing direct outputs can be recovered.
+  const packageTask = record(taskPackageValue.task);
+  const persistedTask = await readJson<JsonRecord>(join(workspace, "task.json"));
+  const recoveryTask: JsonRecord = {
+    ...packageTask,
+    ...record(persistedTask),
+    input: {
+      ...record(packageTask.input),
+      ...record(persistedTask?.input),
+    },
+  };
+  const recoveryPackage: JsonRecord = { ...taskPackageValue, task: recoveryTask };
+  if (!isCodexDirectFullVideoTask(recoveryPackage)) return undefined;
   const preflightPlan = await stat(join(workspace, "production-plan.json")).catch(() => undefined);
   // The plan itself is durable evidence. Its validator log is derived data and
   // can be rewritten by a later failed attempt, so it must not force a valid
@@ -2073,7 +2088,7 @@ async function recoverDirectOutputResult(
   const outputsRoot = join(workspace, "outputs");
   const savedResult = await readJson<JsonRecord>(join(workspace, "result.json"));
   const savedOutputs = Array.isArray(savedResult?.outputFiles) ? savedResult.outputFiles.map(record) : [];
-  const task = record(taskPackageValue.task);
+  const task = recoveryTask;
   const taskInput = record(task.input);
   const referenceDirect = taskInput.referenceDirectFullVideo === true;
   const batchRequests = taskInput.batchCodexDirectFullVideo === true
