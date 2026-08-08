@@ -2088,12 +2088,43 @@ async function recoverDirectOutputResult(
   const outputsRoot = join(workspace, "outputs");
   const savedResult = await readJson<JsonRecord>(join(workspace, "result.json"));
   const savedOutputs = Array.isArray(savedResult?.outputFiles) ? savedResult.outputFiles.map(record) : [];
+  const savedBatchResults = Array.isArray(savedResult?.batchResults) ? savedResult.batchResults.map(record) : [];
   const task = recoveryTask;
   const taskInput = record(task.input);
   const referenceDirect = taskInput.referenceDirectFullVideo === true;
   const batchRequests = taskInput.batchCodexDirectFullVideo === true
     ? batchVideoRequests(taskInput)
     : [];
+  // A previous route-only retry may have already replaced task.json. The saved
+  // batch mapping still gives the authoritative master/cover pairs, so recover
+  // all of them instead of resuming only its first VIDEO_MASTER.
+  if (savedBatchResults.length > 1 && savedBatchResults.every((item) => (
+    String(item.status || "").toUpperCase() === "READY"
+    && String(item.outputFile || "").trim()
+    && String(item.coverFile || "").trim()
+  ))) {
+    const outputFiles: JsonRecord[] = [];
+    for (const item of savedBatchResults) {
+      const videoKey = String(item.videoKey || "").trim();
+      const title = String(item.title || `批量 Codex 成片 ${videoKey}`);
+      outputFiles.push({
+        path: String(item.outputFile || "").trim(),
+        kind: "VIDEO_MASTER",
+        title,
+        metadata: { description: "恢复已生成的批量成片，不重新渲染。", source: "CODEX_BATCH_DIRECT_OUTPUT_RECOVERY", videoKey },
+      }, {
+        path: String(item.coverFile || "").trim(),
+        kind: "COVER_IMAGE",
+        title: `${title} 封面`,
+        metadata: { description: "恢复成片对应封面，不重新生成。", source: "CODEX_BATCH_DIRECT_OUTPUT_RECOVERY", videoKey },
+      });
+    }
+    return validateOutputArtifacts({
+      ...savedResult,
+      outputFiles,
+      execution: { ...record(savedResult?.execution), ...execution, resumed: true, finishedAt: new Date().toISOString() },
+    }, workspace);
+  }
   // A stale earlier result may contain only the first batch master. Rebuild the
   // complete batch below instead of treating that partial result as recoverable.
   const savedMaster = savedOutputs.find((item) => String(item.kind || "").toUpperCase() === "VIDEO_MASTER");
