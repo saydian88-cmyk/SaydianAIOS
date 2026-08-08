@@ -75,6 +75,8 @@ const videoLibraryCreateForm = reactive({
   hook: "",
   replaceFeature: false,
   feature: "",
+  replaceOther: false,
+  otherChange: "",
   targetLanguage: "ZH",
   customLanguage: "",
   taskRequirement: "",
@@ -1880,29 +1882,16 @@ function videoLibraryLanguageInstruction() {
   return "字幕、口播和贴纸文案等都用中文，这条视频面向中文社交平台。";
 }
 
-function videoLibraryOriginalTaskRequirement(entry?: Row) {
+function videoLibrarySourceTaskSummary(entry?: Row) {
   const source = videoLibrarySourceProject(entry);
   const snapshot = entry?.snapshot || {};
-  const original = String(snapshot.taskRequirement || source.taskRequirement || source.objective || snapshot.prompt || source.additionalPrompt || "").trim();
-  if (original) return original;
-  const product = String(source.productModel || entry?.productModel || "该产品");
-  return [
-    `为${product}制作一条${platformLabel(String(source.platform || entry?.platform || "DOUYIN"))}竖屏短视频。`,
-    source.hook ? `开场钩子：${source.hook}。` : "",
-    source.objective ? `核心要求：${source.objective}。` : "",
-  ].filter(Boolean).join("\n");
-}
-
-function replaceVideoLibraryText(requirement: string, original: string, replacement: string, fallback: string) {
-  if (original && requirement.includes(original)) return requirement.split(original).join(replacement);
-  return `${requirement}${requirement ? "\n" : ""}${fallback}`;
+  const summary = String(snapshot.taskSummary || source.taskSummary || source.objective || "").trim();
+  return /^内容测试[。.!！]?$/.test(summary) ? "" : summary;
 }
 
 function syncVideoLibraryTaskRequirement() {
   const entry = videoLibraryDetail.value;
   if (!entry) return;
-  const source = videoLibrarySourceProject(entry);
-  const sourceProduct = String(source.productModel || entry.productModel || "").trim();
   const languageInstruction = videoLibraryLanguageInstruction();
   if (videoLibraryCreateForm.mode === "REFERENCE_DIRECT") {
     const changes: string[] = [];
@@ -1912,23 +1901,21 @@ function syncVideoLibraryTaskRequirement() {
     }
     if (videoLibraryCreateForm.replaceHook && videoLibraryCreateForm.hook.trim()) changes.push(`开场钩子改为：${videoLibraryCreateForm.hook.trim()}。`);
     if (videoLibraryCreateForm.replaceFeature && videoLibraryCreateForm.feature.trim()) changes.push(`核心卖点改为：${videoLibraryCreateForm.feature.trim()}。`);
-    if (videoLibraryCreateForm.targetLanguage !== "ZH") changes.push(languageInstruction);
+    if (videoLibraryCreateForm.replaceOther && videoLibraryCreateForm.otherChange.trim()) changes.push(`其它修改：${videoLibraryCreateForm.otherChange.trim()}。`);
+    changes.push(languageInstruction);
     videoLibraryCreateForm.taskRequirement = ["参考视频直出：直接在我给你的参考视频基础上修改。", ...changes, "其它保持不变。"].join("\n");
     return;
   }
-  let requirement = videoLibraryOriginalRequirement.value;
-  if (videoLibraryCreateForm.replaceProduct && videoLibraryCreateForm.productModel) {
-    requirement = replaceVideoLibraryText(requirement, sourceProduct, videoLibraryCreateForm.productModel, `产品型号改为：${videoLibraryCreateForm.productModel}。`);
-  }
-  if (videoLibraryCreateForm.replaceHook && videoLibraryCreateForm.hook.trim()) {
-    requirement = replaceVideoLibraryText(requirement, String(source.hook || "").trim(), videoLibraryCreateForm.hook.trim(), `开场钩子改为：${videoLibraryCreateForm.hook.trim()}。`);
-  }
-  if (videoLibraryCreateForm.replaceFeature && videoLibraryCreateForm.feature.trim()) requirement = `${requirement}${requirement ? "\n" : ""}核心卖点改为：${videoLibraryCreateForm.feature.trim()}。`;
+  const changes: string[] = [];
+  if (videoLibraryCreateForm.replaceProduct && videoLibraryCreateForm.productModel) changes.push(`产品型号改为：${videoLibraryCreateForm.productModel}。`);
+  if (videoLibraryCreateForm.replaceHook && videoLibraryCreateForm.hook.trim()) changes.push(`开场钩子改为：${videoLibraryCreateForm.hook.trim()}。`);
+  if (videoLibraryCreateForm.replaceFeature && videoLibraryCreateForm.feature.trim()) changes.push(`核心卖点改为：${videoLibraryCreateForm.feature.trim()}。`);
   videoLibraryCreateForm.taskRequirement = [
     "复用项目配置：以该审核通过的成品视频作为镜头节奏与画面结构参考，不直接复用其中的产品素材。",
-    requirement,
+    videoLibraryOriginalRequirement.value,
+    ...changes,
     languageInstruction,
-  ].filter(Boolean).join("\n\n");
+  ].filter(Boolean).join("\n");
 }
 
 async function openVideoLibraryCreate() {
@@ -1941,9 +1928,11 @@ async function openVideoLibraryCreate() {
   videoLibraryCreateForm.hook = "";
   videoLibraryCreateForm.replaceFeature = false;
   videoLibraryCreateForm.feature = "";
+  videoLibraryCreateForm.replaceOther = false;
+  videoLibraryCreateForm.otherChange = "";
   videoLibraryCreateForm.targetLanguage = "ZH";
   videoLibraryCreateForm.customLanguage = "";
-  videoLibraryOriginalRequirement.value = videoLibraryOriginalTaskRequirement(entry);
+  videoLibraryOriginalRequirement.value = videoLibrarySourceTaskSummary(entry);
   syncVideoLibraryTaskRequirement();
   try {
     await ensureContentTaskOptions();
@@ -7885,6 +7874,7 @@ onBeforeUnmount(() => {
         <div class="video-library-rewrite-item"><el-checkbox v-model="videoLibraryCreateForm.replaceProduct" @change="syncVideoLibraryTaskRequirement">替换产品</el-checkbox><el-select v-model="videoLibraryCreateForm.productModel" :disabled="!videoLibraryCreateForm.replaceProduct" filterable placeholder="搜索或选择产品型号" @change="syncVideoLibraryTaskRequirement"><el-option v-for="product in productOptions" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" /></el-select></div>
         <div class="video-library-rewrite-item"><el-checkbox v-model="videoLibraryCreateForm.replaceHook" @change="syncVideoLibraryTaskRequirement">替换钩子</el-checkbox><el-input v-model="videoLibraryCreateForm.hook" :disabled="!videoLibraryCreateForm.replaceHook" placeholder="例如：爸妈总说不用买，其实最担心的是这个" @input="syncVideoLibraryTaskRequirement" /></div>
         <div class="video-library-rewrite-item"><el-checkbox v-model="videoLibraryCreateForm.replaceFeature" @change="syncVideoLibraryTaskRequirement">调整核心卖点</el-checkbox><el-input v-model="videoLibraryCreateForm.feature" :disabled="!videoLibraryCreateForm.replaceFeature" placeholder="例如：夜间睡眠监测、蓝牙通话" @input="syncVideoLibraryTaskRequirement" /></div>
+        <div v-if="videoLibraryCreateForm.mode === 'REFERENCE_DIRECT'" class="video-library-rewrite-item"><el-checkbox v-model="videoLibraryCreateForm.replaceOther" @change="syncVideoLibraryTaskRequirement">其它修改</el-checkbox><el-input v-model="videoLibraryCreateForm.otherChange" :disabled="!videoLibraryCreateForm.replaceOther" placeholder="请输入其它需要修改的内容" @input="syncVideoLibraryTaskRequirement" /></div>
       </div>
       <span class="video-library-create-label">内容语言</span>
       <div class="video-library-language-row"><el-radio-group v-model="videoLibraryCreateForm.targetLanguage" @change="syncVideoLibraryTaskRequirement"><el-radio-button value="ZH">中文</el-radio-button><el-radio-button value="EN">英文</el-radio-button><el-radio-button value="OTHER">其他</el-radio-button></el-radio-group><el-input v-if="videoLibraryCreateForm.targetLanguage === 'OTHER'" v-model="videoLibraryCreateForm.customLanguage" placeholder="请输入语言，例如：日文" @input="syncVideoLibraryTaskRequirement" /></div>
