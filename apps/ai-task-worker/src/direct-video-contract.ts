@@ -4,6 +4,32 @@ function record(value: unknown): JsonRecord {
   return value && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : {};
 }
 
+export function batchDirectOutputFilesSchema() {
+  return {
+    type: "array",
+    items: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        path: { type: "string" },
+        kind: { type: "string" },
+        title: { type: "string" },
+        metadata: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            description: { type: "string" },
+            source: { type: "string" },
+            videoKey: { type: "string" },
+          },
+          required: ["description", "source", "videoKey"],
+        },
+      },
+      required: ["path", "kind", "title", "metadata"],
+    },
+  };
+}
+
 export function expectedBatchVideoKeys(input: JsonRecord) {
   const retryKeys = Array.isArray(input.retryVideoKeys)
     ? input.retryVideoKeys.map(String).filter(Boolean)

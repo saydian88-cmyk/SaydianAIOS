@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertCodexDirectMasterOutput } from "./direct-video-contract";
+import { assertCodexDirectMasterOutput, batchDirectOutputFilesSchema } from "./direct-video-contract";
 
 const batchTask = {
   task: {
@@ -15,6 +15,10 @@ const batchTask = {
 };
 
 describe("batch Codex direct-video result contract", () => {
+  it("declares videoKey in the batch output metadata schema", () => {
+    expect(batchDirectOutputFilesSchema().items.properties.metadata.properties.videoKey).toEqual({ type: "string" });
+  });
+
   it("accepts several masters and preserves a partial batch result", () => {
     expect(() => assertCodexDirectMasterOutput({
       summary: "2 completed, 2 failed",

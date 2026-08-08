@@ -41,7 +41,7 @@ import {
   type RepairCategory,
 } from "./execution-repair";
 import { appendQualityWarning, classifyQualityGate, type QualityWarning } from "./quality-gates";
-import { assertCodexDirectMasterOutput, expectedBatchVideoKeys, isCodexDirectFullVideoTask } from "./direct-video-contract";
+import { assertCodexDirectMasterOutput, batchDirectOutputFilesSchema, expectedBatchVideoKeys, isCodexDirectFullVideoTask } from "./direct-video-contract";
 
 function record(value: unknown): JsonRecord {
   return value && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : {};
@@ -284,6 +284,7 @@ function outputSchema(
         additionalProperties: false,
         properties: {
           ...baseProperties,
+          ...(batchCodexDirectFullVideo ? { outputFiles: batchDirectOutputFilesSchema() } : {}),
           delivery: {
             type: "object",
             additionalProperties: false,
@@ -1006,7 +1007,7 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
       "先依据当前型号真实可用 VIDEO 素材调整内部脚本和镜头方案。非核心句缺少直接画面时，自动改写为现有真实素材能够证明的表达，并重新运行素材覆盖、事实和合规检查；不得跨型号替代、不得使用包装资源充当主画面，也不得伪造功能或素材。只有核心功能确实没有真实画面、素材盘完全不可用或必要运行环境无法恢复时，才返回明确硬阻塞。校验、包装、转场、字幕、配音和工程问题必须内部返工，不能直接标记任务失败。",
       "从脚本、镜头、素材选择到剪辑成片都在本地完成；中间产物必须真实落盘并通过校验，但不回传为员工审核节点，员工只审核最终成片。",
       batchDirect
-        ? "每个 READY videoKey 都必须输出一个真实存在的 1080x1920 MP4 和一张 JPG/PNG 封面，并分别在 outputFiles 登记为 VIDEO_MASTER、COVER_IMAGE；封面的 metadata.videoKey 必须等于该 videoKey，batchResults.coverFile 必须与封面输出路径完全一致。FAILED videoKey 必须保留在 batchResults 并说明阻塞原因，禁止伪造完成。"
+        ? "每个 READY videoKey 都必须输出一个真实存在的 1080x1920 MP4 和一张 JPG/PNG 封面，并分别在 outputFiles 登记为 VIDEO_MASTER、COVER_IMAGE；每个 batch outputFiles 项的 metadata.videoKey 必须等于所属视频键，batchResults.coverFile 必须与封面输出路径完全一致。FAILED videoKey 必须保留在 batchResults 并说明阻塞原因，禁止伪造完成。"
         : "成功时只输出一个真实存在的 1080x1920 MP4，并在 outputFiles 中登记为 VIDEO_MASTER。失败时返回 FAILED 与明确的阻塞原因，禁止伪造完成。",
       "输出必须符合任务 output schema，outputFiles 只能指向当前任务工作区内真实存在的文件。",
     ].join("\n\n");
