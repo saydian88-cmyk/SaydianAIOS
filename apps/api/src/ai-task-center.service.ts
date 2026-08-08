@@ -1037,15 +1037,15 @@ export class AiTaskCenterService implements OnModuleInit {
       && (taskInput.codexDirectFullVideo === true
         || taskInput.referenceDirectFullVideo === true
         || taskInput.batchCodexDirectFullVideo === true);
-    // The first recovery retry may have been consumed by an older worker that
-    // wrote an invalid result-contract envelope. Allow one final registration-
-    // only retry, never a fresh render and never unlimited retries.
+    // Recovery retries can be consumed by an older worker, and then by a
+    // repaired worker that uncovers the next registration-only contract gap.
+    // Allow one final bounded registration-only retry, never a fresh render.
     const priorRecoveryAttempts = Math.max(
       0,
       Number(taskInput.outputRegistrationRecoveryAttempts || 0),
       text(taskInput.outputRegistrationRecoveryAttemptedAt) ? 1 : 0,
     );
-    const isDirectOutputRecovery = isDirectOutputTask && priorRecoveryAttempts < 2;
+    const isDirectOutputRecovery = isDirectOutputTask && priorRecoveryAttempts < 3;
     const priorImageRoutingRecoveryAttempts = Math.max(
       0,
       Number(taskInput.imageProjectRoutingRecoveryAttempts || 0),
