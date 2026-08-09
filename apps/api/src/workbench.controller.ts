@@ -2775,7 +2775,7 @@ export class WorkbenchController {
       return { ...revisionSubmission.project, revisionTask: revisionSubmission.task };
     }
     const renders = await this.prisma.videoRenderJob.findMany({
-      where: { contentPlanId: id, status: "SUCCEEDED", outputAsset: { reviewStatus: "PENDING" } },
+      where: { contentPlanId: id, status: "SUCCEEDED", outputAsset: { reviewStatus: { in: ["PENDING", "APPROVED"] } } },
       select: { outputAssetId: true },
     });
     for (const render of renders) {

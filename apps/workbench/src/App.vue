@@ -5374,6 +5374,7 @@ onBeforeUnmount(() => {
                       <div class="batch-publish-rows">
                         <div v-for="video in batchVideos(taskVideoProjectDetail)" :key="`publish-${video.videoKey}`" class="batch-publish-row">
                           <b>{{ video.displayName }}</b>
+                          <el-button size="small" plain @click="previewBatchVideo(video)">预览成片</el-button>
                           <el-select v-model="batchPublishRecord(String(video.videoKey)).platform">
                             <el-option label="抖音" value="DOUYIN" />
                             <el-option label="快手" value="KUAISHOU" />
