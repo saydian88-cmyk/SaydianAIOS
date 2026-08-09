@@ -65,7 +65,7 @@ if ! docker compose --env-file "$production_env" --env-file "$images" -f "$compo
   docker compose --env-file "$production_env" --env-file "$images" -f "$compose" ps -a >&2 || true
   docker compose --env-file "$production_env" --env-file "$images" -f "$compose" logs --tail 120 ops-api >&2 || true
 fi
-docker compose --env-file "$production_env" --env-file "$images" -f "$compose" restart gateway
+docker compose --env-file "$production_env" --env-file "$images" -f "$compose" up -d --force-recreate ops-admin ops-workbench gateway
 
 healthy=0
 for _ in $(seq 1 60); do
@@ -76,9 +76,12 @@ for _ in $(seq 1 60); do
 done
 
 if [[ "$healthy" != "1" ]]; then
+  echo "workbench response during failed health check:" >&2
+  curl -ksS -H 'Host: stest.saydian.cn' https://127.0.0.1/saidian-work/ | head -n 20 >&2 || true
+  docker compose --env-file "$production_env" --env-file "$images" -f "$compose" ps -a >&2 || true
   if [[ -n "$previous_api" && -n "$previous_admin" && -n "$previous_workbench" ]]; then
     printf 'OPS_API_IMAGE=%s\nOPS_ADMIN_IMAGE=%s\nOPS_WORKBENCH_IMAGE=%s\n' "$previous_api" "$previous_admin" "$previous_workbench" > "$images"
-    docker compose --env-file "$production_env" --env-file "$images" -f "$compose" up -d
+    docker compose --env-file "$production_env" --env-file "$images" -f "$compose" up -d --force-recreate ops-admin ops-workbench gateway
   fi
   echo "health check failed; previous images restored" >&2
   exit 1
@@ -96,6 +99,10 @@ done
 if [[ "$worker_healthy" != "1" ]]; then
   docker compose --env-file "$production_env" --env-file "$images" -f "$compose" ps -a >&2 || true
   docker compose --env-file "$production_env" --env-file "$images" -f "$compose" logs --tail 120 video-worker >&2 || true
+  if [[ -n "$previous_api" && -n "$previous_admin" && -n "$previous_workbench" ]]; then
+    printf 'OPS_API_IMAGE=%s\nOPS_ADMIN_IMAGE=%s\nOPS_WORKBENCH_IMAGE=%s\n' "$previous_api" "$previous_admin" "$previous_workbench" > "$images"
+    docker compose --env-file "$production_env" --env-file "$images" -f "$compose" up -d --force-recreate ops-api ops-admin ops-workbench video-worker gateway
+  fi
   echo "video worker health check failed" >&2
   exit 1
 fi
