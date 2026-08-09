@@ -37,6 +37,7 @@ const claimableStatuses: AiTaskStatus[] = ["PENDING", "RETRY"];
 const reviewableStatuses: AiTaskStatus[] = ["PENDING_REVIEW", "RETURNED"];
 const smartVideoPrimaryNodeCode = text(process.env.AI_TASK_SMART_VIDEO_PRIMARY_NODE_CODE)
   || "windows-codex-01";
+const legacySmartVideoPrimaryNodeCode = "windows-codex-video-01";
 const platformKinds: IntegrationKind[] = [
   "DOUYIN", "TIKTOK", "WECHAT_OFFICIAL", "XIAOHONGSHU", "WECOM", "WECHAT_CHANNELS",
   "AMAZON", "SHOPIFY", "TMALL", "JD", "PINDUODUO",
@@ -1541,7 +1542,9 @@ export class AiTaskCenterService implements OnModuleInit {
     for (const candidate of tasks) {
       if (!runnerCanClaimTask(candidate, body.supportedExecutionModes, body.supportedRouteKeys)) continue;
       const targetNodeCode = aiTaskTargetNodeCode(candidate);
-      if (targetNodeCode && targetNodeCode !== node.nodeCode.toLowerCase()) continue;
+      const isLegacyPrimaryAlias = targetNodeCode === legacySmartVideoPrimaryNodeCode
+        && node.nodeCode.toLowerCase() === smartVideoPrimaryNodeCode;
+      if (targetNodeCode && targetNodeCode !== node.nodeCode.toLowerCase() && !isLegacyPrimaryAlias) continue;
       const staleReason = await this.videoProjectTaskStaleReason(candidate);
       if (staleReason) {
         await this.prisma.aiTask.update({
