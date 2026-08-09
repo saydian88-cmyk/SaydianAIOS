@@ -296,6 +296,18 @@ function outputSchema(
             },
             required: ["productModel", "taskMode", "finalReviewOnly"],
           },
+          referenceEvidence: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              referenceDurationSeconds: { type: "number", exclusiveMinimum: 0 },
+              audioMode: { type: "string", enum: ["REFERENCE_ORIGINAL", "DOUBAO"] },
+              voiceProvider: { type: "string" },
+              audioEndSeconds: { type: "number", exclusiveMinimum: 0 },
+              endingAudited: { type: "boolean" },
+            },
+            required: ["referenceDurationSeconds", "audioMode", "voiceProvider", "audioEndSeconds", "endingAudited"],
+          },
           ...(batchCodexDirectFullVideo ? {
             batchResults: {
               type: "array",
@@ -1029,6 +1041,7 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
       `Then read and execute the full local editing Skill: ${detectedSkill.downstreamSkillPath || "G:\\codex\\xcodeplace\\CodexHome\\skills\\video-editing-from-media-library\\SKILL.md"}. Never use the share edition on this machine.`,
       "The dispatcher only routes this job. The full editing Skill must independently inspect the reference, learn/search the complete local library, select footage, edit, package, validate and render.",
       "REFERENCE_AUDIO_AUTHORIZATION: Submission of the reference URL is the employee's confirmation that its complete original audio may be reused for this task. Download and preserve the original audio, including BGM, ambience and sound effects. Do not request a licence file, do not return an unknown-rights warning, do not replace it with local BGM, and do not re-voice it unless the employee prompt explicitly requests that change.",
+      "REFERENCE_ANALYSIS_AND_AUDIO_GATE: Before editing, download the complete reference and inspect its full duration, audio track, spoken sections, beat map and ending. The reference must materially control the rebuilt video's structure, pacing and audio; it is not a decorative link. Windows/SAPI/default system TTS is forbidden. Keep the usable original reference audio. Only when the employee explicitly requires new spoken text, or the reference has no usable speech while new speech is necessary, synthesize with the configured Doubao voice; if Doubao is unavailable, stop with the technical cause instead of substituting a Windows voice.",
       "Do not copy the reference video's pictures, people, brands or footage. Rebuild the visuals with exact-product real footage selected from the local media library while following the reference audio, beat map, section structure, pacing, transitions and packaging rhythm.",
       "Do not stop for employee approval of an internal script, shot plan, footage selection, production plan or packaging. Create and validate all mandatory Skill artifacts internally, repair correctable issues, render, and return only the final VIDEO_MASTER for employee review.",
       "The empty assets and snapshots arrays are intentional. Never request system materialBindings and never treat them as a whitelist.",
@@ -1045,7 +1058,7 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
         ...(isRevision ? { revision } : {}),
       }, null, 2),
       "If the reference URL or its audio cannot be accessed, return the exact technical cause without fabricating completion. Otherwise continue through final render.",
-      "Return exactly one real 1080x1920 MP4 in outputFiles with kind=VIDEO_MASTER and delivery={taskMode:REFERENCE_DIRECT_FULL_VIDEO, finalReviewOnly:true}.",
+      "Before return, compare the final MP4 duration with the real audio timeline and listen to the ending: no spoken word, music beat or sentence may be cut off; retain at least 0.25 seconds after the audio ends. Return referenceEvidence with the actual full reference duration, audioMode=REFERENCE_ORIGINAL or DOUBAO, actual voiceProvider, audioEndSeconds and endingAudited=true. Return exactly one real 1080x1920 MP4 in outputFiles with kind=VIDEO_MASTER and delivery={taskMode:REFERENCE_DIRECT_FULL_VIDEO, finalReviewOnly:true}.",
       "Every output file must exist inside the current task workspace and the result must match the output schema.",
     ].join("\n\n");
   }
@@ -1933,6 +1946,9 @@ async function validateOutputArtifacts(result: JsonRecord, workspace: string, ta
   const dedicatedDouyinMaster = String(task.type || "") === "VIDEO"
     && String(record(task.input).factoryModule || "").toUpperCase() === "DOUYIN_VIRAL"
     && String(execution.mode || "").toUpperCase() === "FULL_VIDEO";
+  const referenceDirectMaster = String(task.type || "") === "VIDEO"
+    && String(execution.mode || "").toUpperCase() === "FULL_VIDEO"
+    && record(task.input).referenceDirectFullVideo === true;
   if (dedicatedDouyinMaster && (files.length !== 1 || String(files[0]?.kind || "") !== "VIDEO_MASTER")) {
     throw new Error("抖音爆款完整视频必须只返回一个真实VIDEO_MASTER");
   }
@@ -1947,7 +1963,7 @@ async function validateOutputArtifacts(result: JsonRecord, workspace: string, ta
     if (!info.isFile() || info.size === 0) throw new Error(`输出文件为空：${requested}`);
     const digest = sha256(await readFile(path));
     const metadata = record(item.metadata);
-    if (dedicatedDouyinMaster && String(item.kind || "") === "VIDEO_MASTER") {
+    if ((dedicatedDouyinMaster || referenceDirectMaster) && String(item.kind || "") === "VIDEO_MASTER") {
       const { stdout } = await execFileAsync(ffprobeExecutable, [
         "-v", "error",
         "-select_streams", "v:0",
@@ -1967,6 +1983,13 @@ async function validateOutputArtifacts(result: JsonRecord, workspace: string, ta
       };
       if (!actual.width || !actual.height || actual.durationSeconds <= 1 || !actual.codec || !actual.frameRate) {
         throw new Error("抖音爆款成片媒体信息无效");
+      }
+      if (referenceDirectMaster) {
+        const evidence = record(result.referenceEvidence);
+        const audioEndSeconds = Number(evidence.audioEndSeconds || 0);
+        if (audioEndSeconds <= 0 || actual.durationSeconds < audioEndSeconds + 0.25) {
+          throw new Error("参考直出成片短于完整音频，疑似截断结尾");
+        }
       }
       const usage = Array.isArray(metadata.materialUsage) ? metadata.materialUsage.map(record) : [];
       if (!usage.length) throw new Error("抖音爆款成片缺少逐镜头素材使用记录");

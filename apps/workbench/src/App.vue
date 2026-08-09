@@ -68,7 +68,7 @@ const videoLibraryHistoryExpanded = ref(false);
 const videoLibraryCreateVisible = ref(false);
 const videoLibraryCreating = ref(false);
 const videoLibraryCreateForm = reactive({
-  mode: "CONFIG_REUSE",
+  mode: "REFERENCE_DIRECT",
   productModel: "",
   replaceProduct: false,
   replaceHook: false,
@@ -1921,7 +1921,7 @@ function syncVideoLibraryTaskRequirement() {
 async function openVideoLibraryCreate() {
   const entry = videoLibraryDetail.value;
   if (!entry) return;
-  videoLibraryCreateForm.mode = "CONFIG_REUSE";
+  videoLibraryCreateForm.mode = "REFERENCE_DIRECT";
   videoLibraryCreateForm.productModel = String(videoLibrarySourceProject(entry).productModel || entry.productModel || entry.contentPlan?.productModel || "");
   videoLibraryCreateForm.replaceProduct = false;
   videoLibraryCreateForm.replaceHook = false;
@@ -7867,14 +7867,13 @@ onBeforeUnmount(() => {
   <el-dialog v-model="videoLibraryCreateVisible" title="从成品生成类似视频" width="min(760px, 94vw)" class="video-library-create-dialog" destroy-on-close>
     <div class="video-library-create-intro"><strong>{{ videoLibraryTitle(videoLibraryDetail || {}) }}</strong>默认沿用该成品原项目的 AI 任务要求。只勾选需要改写的内容，系统会同步更新最终任务要求。</div>
     <div class="video-library-create-body">
-      <span class="video-library-create-label">生成模式</span>
-      <el-radio-group v-model="videoLibraryCreateForm.mode" class="video-library-create-mode" @change="syncVideoLibraryTaskRequirement"><el-radio-button value="CONFIG_REUSE">复用项目配置</el-radio-button><el-radio-button value="REFERENCE_DIRECT">参考视频直出</el-radio-button></el-radio-group>
+      <div class="video-library-create-intro">系统会以该成片作为完整参考，直接生成新成片；不再进入脚本审核流程。</div>
       <span class="video-library-create-label">可选改写项</span>
       <div class="video-library-rewrite-list">
         <div class="video-library-rewrite-item"><el-checkbox v-model="videoLibraryCreateForm.replaceProduct" @change="syncVideoLibraryTaskRequirement">替换产品</el-checkbox><el-select v-model="videoLibraryCreateForm.productModel" :disabled="!videoLibraryCreateForm.replaceProduct" filterable placeholder="搜索或选择产品型号" @change="syncVideoLibraryTaskRequirement"><el-option v-for="product in productOptions" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" /></el-select></div>
         <div class="video-library-rewrite-item"><el-checkbox v-model="videoLibraryCreateForm.replaceHook" @change="syncVideoLibraryTaskRequirement">替换钩子</el-checkbox><el-input v-model="videoLibraryCreateForm.hook" :disabled="!videoLibraryCreateForm.replaceHook" placeholder="例如：爸妈总说不用买，其实最担心的是这个" @input="syncVideoLibraryTaskRequirement" /></div>
         <div class="video-library-rewrite-item"><el-checkbox v-model="videoLibraryCreateForm.replaceFeature" @change="syncVideoLibraryTaskRequirement">调整核心卖点</el-checkbox><el-input v-model="videoLibraryCreateForm.feature" :disabled="!videoLibraryCreateForm.replaceFeature" placeholder="例如：夜间睡眠监测、蓝牙通话" @input="syncVideoLibraryTaskRequirement" /></div>
-        <div v-if="videoLibraryCreateForm.mode === 'REFERENCE_DIRECT'" class="video-library-rewrite-item"><el-checkbox v-model="videoLibraryCreateForm.replaceOther" @change="syncVideoLibraryTaskRequirement">其它修改</el-checkbox><el-input v-model="videoLibraryCreateForm.otherChange" :disabled="!videoLibraryCreateForm.replaceOther" placeholder="请输入其它需要修改的内容" @input="syncVideoLibraryTaskRequirement" /></div>
+        <div class="video-library-rewrite-item"><el-checkbox v-model="videoLibraryCreateForm.replaceOther" @change="syncVideoLibraryTaskRequirement">其它修改</el-checkbox><el-input v-model="videoLibraryCreateForm.otherChange" :disabled="!videoLibraryCreateForm.replaceOther" placeholder="请输入其它需要修改的内容" @input="syncVideoLibraryTaskRequirement" /></div>
       </div>
       <span class="video-library-create-label">内容语言</span>
       <div class="video-library-language-row"><el-radio-group v-model="videoLibraryCreateForm.targetLanguage" @change="syncVideoLibraryTaskRequirement"><el-radio-button value="ZH">中文</el-radio-button><el-radio-button value="EN">英文</el-radio-button><el-radio-button value="OTHER">其他</el-radio-button></el-radio-group><el-input v-if="videoLibraryCreateForm.targetLanguage === 'OTHER'" v-model="videoLibraryCreateForm.customLanguage" placeholder="请输入语言，例如：日文" @input="syncVideoLibraryTaskRequirement" /></div>

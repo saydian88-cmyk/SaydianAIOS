@@ -2054,6 +2054,7 @@ export class WorkbenchController {
     const revision = factory.directVideoRevision && typeof factory.directVideoRevision === "object"
       ? factory.directVideoRevision as Record<string, unknown>
       : {};
+    const finalTaskRequirement = String(brief.referenceDirectTaskRequirement || brief.additionalPrompt || "").trim();
     if (!referenceVideoUrl || (referenceAsset?.objectKey && !await this.ossStorage.objectExists(referenceAsset.objectKey))) throw new ForbiddenException("参考视频已失效，请重新选择成品");
     const task = await this.aiTasks.createTask({
       type: "VIDEO",
@@ -2080,7 +2081,8 @@ export class WorkbenchController {
         referenceDirectInput: {
           productModel: project.productModel,
           referenceVideoUrl,
-          prompt: String(brief.additionalPrompt || "").trim(),
+          ...(referenceAssetId ? { referenceAssetId } : {}),
+          prompt: finalTaskRequirement,
           ...(Object.keys(revision).length ? { revision } : {}),
         },
         workflowGuard: { projectId: project.id, workflowVersion: project.workflowVersion, stage: "FULL_VIDEO", allowedProjectStages: ["PROJECT_BRIEF", "EDITING"] },
@@ -2929,7 +2931,8 @@ export class WorkbenchController {
     }
     const snapshot = object(entry.snapshot);
     const source = object(snapshot.project);
-    const mode = body.mode === "REFERENCE_DIRECT" ? "REFERENCE_DIRECT" : "CONFIG_REUSE";
+    // 成品库创建项目统一以当前成片作为完整参考直出，不再走会回到脚本审核的“复用配置”分支。
+    const mode = "REFERENCE_DIRECT";
     const language = body.targetLanguage === "OTHER" ? "OTHER" : body.targetLanguage === "EN" ? "EN" : "ZH";
     const replaceProduct = body.replaceProduct === true;
     const productModel = String((replaceProduct ? body.productModel : undefined) || source.productModel || entry.productModel || "").trim();
@@ -2957,7 +2960,6 @@ export class WorkbenchController {
       objective: `${String(body.replaceFeature && String(body.feature || "").trim() || source.objective || "参考成品重新创作")}\n来源成品：${entry.title}`,
       videoType: String(source.videoType || "场景种草型"),
       keywords: String(source.keywords || source.topic || entry.title),
-      reference: mode === "CONFIG_REUSE" ? String(source.reference || "") : undefined,
       hook: String(body.replaceHook ? body.hook : source.hook || ""),
       scene: String(source.scene || ""),
       painPoint: String(source.painPoint || ""),
@@ -2966,11 +2968,9 @@ export class WorkbenchController {
       libraryEntryId: entry.id,
       libraryReuseMode: mode,
       targetLanguage: language,
-      referenceAssetId: mode === "REFERENCE_DIRECT" ? entry.outputAssetId : undefined,
+      referenceAssetId: entry.outputAssetId,
     }, employee.name) as Record<string, any>;
-    const submitted = mode === "REFERENCE_DIRECT"
-      ? await this.submitReferenceDirectFullVideoTask(authorization, String(project.id))
-      : await this.submitVideoScriptTask(authorization, String(project.id));
+    const submitted = await this.submitReferenceDirectFullVideoTask(authorization, String(project.id));
     const finalProject = submitted.project as Record<string, any>;
     const task = await this.workbench.ensureVideoProjectTask({ employeeId: employee.employeeId, name: employee.name }, {
       id: String(finalProject.id), productionNo: finalProject.productionNo ? String(finalProject.productionNo) : null,

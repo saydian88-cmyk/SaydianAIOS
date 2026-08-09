@@ -69,3 +69,34 @@ describe("batch Codex direct-video result contract", () => {
     }, batchTask)).toThrow("COVER_IMAGE");
   });
 });
+
+describe("reference direct-video result contract", () => {
+  const referenceTask = {
+    task: { type: "VIDEO", input: { referenceDirectFullVideo: true } },
+    execution: { mode: "FULL_VIDEO" },
+  };
+  const output = (referenceEvidence: Record<string, unknown>) => ({
+    outputFiles: [{ kind: "VIDEO_MASTER", path: "out/master.mp4", metadata: { durationSeconds: 18 } }],
+    referenceEvidence,
+  });
+
+  it("requires evidence that the reference and its complete ending were used", () => {
+    expect(() => assertCodexDirectMasterOutput(output({
+      referenceDurationSeconds: 16,
+      audioMode: "REFERENCE_ORIGINAL",
+      voiceProvider: "REFERENCE_ORIGINAL",
+      audioEndSeconds: 17.5,
+      endingAudited: true,
+    }), referenceTask)).not.toThrow();
+  });
+
+  it("rejects Windows default speech and truncated audio", () => {
+    expect(() => assertCodexDirectMasterOutput(output({
+      referenceDurationSeconds: 16,
+      audioMode: "DOUBAO",
+      voiceProvider: "Windows SAPI",
+      audioEndSeconds: 17.9,
+      endingAudited: false,
+    }), referenceTask)).toThrow("Windows TTS");
+  });
+});

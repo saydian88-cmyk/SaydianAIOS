@@ -1576,6 +1576,26 @@ export class AiTaskCenterService implements OnModuleInit {
     const existingDirectInput = object(input.codexDirectInput);
     const existingReferenceInput = object(input.referenceDirectInput);
     const projectBrief = object(input.projectBrief);
+    const referenceAssetId = text(existingReferenceInput.referenceAssetId) || text(input.referenceAssetId);
+    let refreshedReferenceVideoUrl = text(existingReferenceInput.referenceVideoUrl)
+      || text(input.referenceVideoUrl)
+      || text(projectBrief.reference);
+    if (referenceDirectFullVideo && referenceAssetId) {
+      const referenceAsset = await this.prisma.asset.findFirst({
+        where: {
+          id: referenceAssetId,
+          reviewStatus: "APPROVED",
+          availabilityStatus: "ACTIVE",
+          deletedAt: null,
+          objectKey: { not: null },
+        },
+        select: { objectKey: true },
+      });
+      if (!referenceAsset?.objectKey || !await this.oss.objectExists(referenceAsset.objectKey)) {
+        throw new BadRequestException("参考成品已失效，请重新选择成品");
+      }
+      refreshedReferenceVideoUrl = this.oss.signedDownloadUrl(referenceAsset.objectKey, 21_600);
+    }
     const imagePostProject = task.type === "IMAGE"
       && ["IMAGE_POST", "BATCH_IMAGE_POST"].includes(executionMode)
       && (text(task.sourceType).toUpperCase() === "IMAGE_PROJECT"
@@ -1612,10 +1632,11 @@ export class AiTaskCenterService implements OnModuleInit {
           referenceDirectFullVideo: true,
           referenceDirectInput: {
             productModel: text(existingReferenceInput.productModel) || text(task.productModel),
-            referenceVideoUrl: text(existingReferenceInput.referenceVideoUrl)
-              || text(input.referenceVideoUrl)
-              || text(projectBrief.reference),
-            prompt: text(existingReferenceInput.prompt) || text(projectBrief.additionalPrompt),
+            referenceVideoUrl: refreshedReferenceVideoUrl,
+            ...(referenceAssetId ? { referenceAssetId } : {}),
+            prompt: text(existingReferenceInput.prompt)
+              || text(projectBrief.referenceDirectTaskRequirement)
+              || text(projectBrief.additionalPrompt),
             ...(Object.keys(object(existingReferenceInput.revision)).length
               ? { revision: object(existingReferenceInput.revision) }
               : {}),

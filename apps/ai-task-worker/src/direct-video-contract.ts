@@ -123,5 +123,20 @@ export function assertCodexDirectMasterOutput(result: JsonRecord, taskPackage: J
     throw new Error("Codex 直出任务未返回唯一的最终成片（VIDEO_MASTER），任务不能标记成功");
   }
   const masterPath = String(masters[0]?.path || "").toLowerCase();
+  if (input.referenceDirectFullVideo === true) {
+    const evidence = record(result.referenceEvidence);
+    const audioMode = String(evidence.audioMode || "").toUpperCase();
+    const voiceProvider = String(evidence.voiceProvider || "").toUpperCase();
+    const audioEndSeconds = Number(evidence.audioEndSeconds || 0);
+    const finalDurationSeconds = Number(record(masters[0]?.metadata).durationSeconds || 0);
+    if (Number(evidence.referenceDurationSeconds || 0) <= 0) throw new Error("Reference direct output is missing reference analysis evidence");
+    if (!["REFERENCE_ORIGINAL", "DOUBAO"].includes(audioMode) || voiceProvider.includes("WINDOWS") || voiceProvider.includes("SAPI")) {
+      throw new Error("Reference direct output must retain reference audio or use configured Doubao voice, never Windows TTS");
+    }
+    if (audioMode === "DOUBAO" && !voiceProvider.includes("DOUBAO")) throw new Error("Reference direct output must name its actual Doubao voice");
+    if (audioEndSeconds <= 0 || finalDurationSeconds < audioEndSeconds + 0.25 || evidence.endingAudited !== true) {
+      throw new Error("Reference direct output has not proven that its ending audio is complete");
+    }
+  }
   if (!masterPath.endsWith(".mp4")) throw new Error("Codex 直出任务返回的最终成片不是 MP4，任务不能标记成功");
 }

@@ -960,7 +960,11 @@ describe("AiTaskCenterService", () => {
       skillName: "video-editing-from-media-library",
       referenceVideoUrl: "https://example.com/reference.mp4",
       referenceDirectInput: { productModel: "W9" },
-      projectBrief: { reference: "https://example.com/reference.mp4", additionalPrompt: "保留原声节奏" },
+      projectBrief: {
+        reference: "https://example.com/reference.mp4",
+        additionalPrompt: "保留原声节奏",
+        referenceDirectTaskRequirement: "替换开场钩子，其余按参考完整重建",
+      },
       materialBindings: [{ lineId: "L1", assetId: "asset-1" }],
     };
     task.instructions = "legacy reference prompt";
@@ -974,7 +978,7 @@ describe("AiTaskCenterService", () => {
       referenceDirectInput: {
         productModel: "W9",
         referenceVideoUrl: "https://example.com/reference.mp4",
-        prompt: "保留原声节奏",
+        prompt: "替换开场钩子，其余按参考完整重建",
       },
     });
     expect(referenceDirectResult.assets).toEqual([]);
