@@ -2596,11 +2596,13 @@ async function execute(claimed: JsonRecord) {
     // itself and its rendered master have not. Direct-output retries are safe to
     // resume from the local output stages, provided their saved result/artifact
     // still validates below.
-    const resumeDirectOutputUpload = isCodexDirectFullVideoTask(packaged)
-      && (Boolean(directRecoveryResult) || (
-        Boolean(previousState)
-        && ["LOCAL_RENDER", "QUALITY_CHECK", "UPLOADING", "FINALIZING", "COMPLETE"].includes(String(previousState?.stage || ""))
-      ));
+    const directOutputRecovery = isCodexDirectFullVideoTask(packaged);
+    // A direct-output task may only skip the creative stage when its actual
+    // local deliverables have been reconstructed and validated. A checkpoint
+    // alone is not evidence: a failed first render can leave it at
+    // LOCAL_RENDER without a video, which previously caused an endless
+    // evidence-repair loop instead of a fresh attempt.
+    const resumeDirectOutputUpload = directOutputRecovery && Boolean(directRecoveryResult);
     const taskState: WorkspaceState = (resumeEligible || resumeDirectOutputUpload) && previousState
       ? {
         ...previousState,
@@ -2613,7 +2615,8 @@ async function execute(claimed: JsonRecord) {
     // its upload; rerunning Codex in that case would create a duplicate video.
     const repairState = await loadExecutionRepairState(workspace);
     const resumeWithValidatedResult = shouldResumeValidatedResult(Boolean(directRecoveryResult) || (
-      (resumeEligible || resumeDirectOutputUpload)
+      !directOutputRecovery
+      && resumeEligible
       && ["LOCAL_RENDER", "QUALITY_CHECK", "UPLOADING", "FINALIZING", "COMPLETE"].includes(String(taskState.stage || ""))
     ), repairState.lastCategory);
     const resumeMode = recoveryMode(repairState.lastCategory);
