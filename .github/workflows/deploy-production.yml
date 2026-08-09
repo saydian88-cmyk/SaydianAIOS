@@ -105,6 +105,15 @@ jobs:
           OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
           OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
         run: |
+          exec > >(tee /tmp/saydian-deploy-upload.log) 2>&1
+          deployment_diagnostics() {
+            status=$?
+            if [[ "$status" -ne 0 && -f /tmp/saydian-deploy-upload.log ]]; then
+              details="$(tail -n 20 /tmp/saydian-deploy-upload.log | tr '\n' ' ' | sed -E 's#https?://[^[:space:]]+#<url>#g' | cut -c1-1800)"
+              echo "::error title=Deployment upload diagnostics::$details"
+            fi
+          }
+          trap deployment_diagnostics EXIT
           docker pull "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-admin:${{ github.sha }}"
           if [[ "$ADMIN_ONLY" == "true" ]]; then
             admin_container="$(docker create "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-admin:${{ github.sha }}")"
