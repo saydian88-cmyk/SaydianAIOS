@@ -110,19 +110,33 @@ export function shouldReviewUploadedBatchWithoutResultManifest(uploadedOutputCou
  * whose technical metadata was missing.  The replacement is authoritative;
  * never let the older, invalid record block the whole batch again.
  */
-export function isUsableBatchVideoOutput(output: Record<string, unknown>) {
+export function isUsableBatchVideoOutput(output: Record<string, unknown>, deliveredMetadata: Record<string, unknown> = {}) {
   const asset = object(output.asset);
   const version = Array.isArray(asset.versions) ? object(asset.versions[0]) : {};
   const metadata = {
     ...object(output.metadata),
     ...object(version.technicalMetadata),
-    width: asset.width || object(version.technicalMetadata).width || object(output.metadata).width,
-    height: asset.height || object(version.technicalMetadata).height || object(output.metadata).height,
-    durationSeconds: asset.durationSeconds || object(version.technicalMetadata).durationSeconds || object(output.metadata).durationSeconds,
-    codec: version.codec || object(version.technicalMetadata).codec || object(output.metadata).codec,
-    frameRate: object(version.technicalMetadata).frameRate || object(output.metadata).frameRate,
+    ...deliveredMetadata,
+    width: asset.width || deliveredMetadata.width || object(version.technicalMetadata).width || object(output.metadata).width,
+    height: asset.height || deliveredMetadata.height || object(version.technicalMetadata).height || object(output.metadata).height,
+    durationSeconds: asset.durationSeconds || deliveredMetadata.durationSeconds || object(version.technicalMetadata).durationSeconds || object(output.metadata).durationSeconds,
+    codec: version.codec || deliveredMetadata.codec || object(version.technicalMetadata).codec || object(output.metadata).codec,
+    frameRate: deliveredMetadata.frameRate || object(version.technicalMetadata).frameRate || object(output.metadata).frameRate,
   };
   return validateVideoMasterMetadata(metadata).valid;
+}
+
+function batchDeliveredMetadata(output: Record<string, unknown>, resultFiles: JsonRecord[]) {
+  const metadata = object(output.metadata);
+  const videoKey = text(metadata.videoKey);
+  const outputPath = text(metadata.workspaceOutputPath || metadata.outputFile || metadata.path).replace(/\\/g, "/");
+  const matched = resultFiles.find((item) => {
+    const itemMetadata = object(item.metadata);
+    const itemPath = text(item.path).replace(/\\/g, "/");
+    return (videoKey && text(itemMetadata.videoKey) === videoKey)
+      || (outputPath && itemPath && outputPath === itemPath);
+  });
+  return object(matched?.metadata);
 }
 
 export type BatchCodexPlannedResult = {
@@ -3100,7 +3114,7 @@ export class AiTaskCenterService implements OnModuleInit {
         const uploaded = await this.prisma.aiTaskOutput.findMany({
           where: { aiTaskId: task.id, assetId: { not: null }, mimeType: { startsWith: "video/" } },
           include: { asset: { select: {
-            storageUrl: true, width: true, height: true, durationSeconds: true,
+            id: true, storageUrl: true, width: true, height: true, durationSeconds: true,
             versions: { orderBy: { version: "desc" }, take: 1, select: { codec: true, technicalMetadata: true } },
           } }, }, orderBy: { createdAt: "desc" },
         });
@@ -3109,9 +3123,47 @@ export class AiTaskCenterService implements OnModuleInit {
           include: { asset: { select: { storageUrl: true } } },
           orderBy: { createdAt: "asc" },
         });
-        // Keep only technically complete outputs.  Older uploads stay in the
+        const deliveredFiles = Array.isArray(result.outputFiles)
+          ? result.outputFiles.map(object).filter((item) => text(item.kind).toUpperCase() === "VIDEO_MASTER")
+          : [];
+        // A resumed worker has already probed the same MP4 locally. Persist
+        // that probe onto a legacy asset before registration, so the API uses
+        // the real existing file instead of rejecting it for old missing fields.
+        const refreshedUploaded = await Promise.all(uploaded.map(async (item) => {
+          const deliveredMetadata = batchDeliveredMetadata(item as Record<string, unknown>, deliveredFiles);
+          if (!Object.keys(deliveredMetadata).length || isUsableBatchVideoOutput(item as Record<string, unknown>)) return item;
+          const mergedMetadata = { ...object(item.metadata), ...deliveredMetadata };
+          if (!isUsableBatchVideoOutput(item as Record<string, unknown>, deliveredMetadata)) return item;
+          const technical = validateVideoMasterMetadata(mergedMetadata).metadata;
+          const assetId = text(object(item.asset).id);
+          if (!assetId) return item;
+          await this.prisma.$transaction([
+            this.prisma.asset.update({ where: { id: assetId }, data: {
+              width: technical.width,
+              height: technical.height,
+              durationSeconds: technical.durationSeconds,
+            } }),
+            this.prisma.assetVersion.updateMany({ where: { assetId }, data: {
+              codec: technical.codec,
+              technicalMetadata: json(mergedMetadata),
+            } }),
+            this.prisma.aiTaskOutput.update({ where: { id: item.id }, data: { metadata: json(mergedMetadata) } }),
+          ]);
+          return {
+            ...item,
+            metadata: mergedMetadata,
+            asset: {
+              ...object(item.asset),
+              width: technical.width,
+              height: technical.height,
+              durationSeconds: technical.durationSeconds,
+              versions: [{ codec: technical.codec, technicalMetadata: mergedMetadata }],
+            },
+          };
+        }));
+        // Keep only technically complete outputs. Older uploads stay in the
         // audit trail, but must not be reselected during a no-rerender retry.
-        const usableUploaded = uploaded.filter((item) => isUsableBatchVideoOutput(item as Record<string, unknown>));
+        const usableUploaded = refreshedUploaded.filter((item) => isUsableBatchVideoOutput(item as Record<string, unknown>));
         const results = Array.isArray(result.batchResults) ? result.batchResults.map(object) : [];
         const ready = results.filter((item) => text(item.status).toUpperCase() === "READY");
         const legacyUploadedOnly = shouldReviewUploadedBatchWithoutResultManifest(usableUploaded.length, ready.length);

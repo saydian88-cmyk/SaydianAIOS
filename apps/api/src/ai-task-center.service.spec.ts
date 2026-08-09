@@ -178,6 +178,11 @@ describe("AiTaskCenterService", () => {
     expect(isUsableBatchVideoOutput({
       metadata: {}, asset: { versions: [] },
     })).toBe(false);
+    expect(isUsableBatchVideoOutput({
+      metadata: {}, asset: { versions: [] },
+    }, {
+      width: 1080, height: 1920, durationSeconds: 15.4, codec: "h264", frameRate: "30/1",
+    })).toBe(true);
   });
 
   it("sends a task with uploaded outputs to employee review instead of terminal failure", () => {
