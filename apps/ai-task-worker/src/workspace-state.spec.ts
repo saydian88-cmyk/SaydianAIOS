@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   canResume,
+  directVideoUploadLedgerKey,
   ensureTaskWorkspace,
   freshWorkspaceState,
   loadWorkspaceState,
@@ -31,5 +32,12 @@ describe("task workspace resume and upload idempotency", () => {
     const first = uploadLedgerKey("outputs\\result.png", "abc", "IMAGE_OUTPUT");
     const second = uploadLedgerKey("outputs/result.png", "abc", "IMAGE_OUTPUT");
     expect(first).toBe(second);
+  });
+
+  it("refreshes direct-video masters once when technical metadata is introduced", () => {
+    const original = uploadLedgerKey("outputs\\result.mp4", "abc", "VIDEO_MASTER");
+    const refreshed = directVideoUploadLedgerKey("outputs/result.mp4", "abc", "VIDEO_MASTER");
+    expect(refreshed).toContain(original);
+    expect(refreshed).not.toBe(original);
   });
 });

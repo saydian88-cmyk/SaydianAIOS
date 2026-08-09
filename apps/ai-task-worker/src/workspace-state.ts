@@ -63,6 +63,10 @@ export function uploadLedgerKey(path: string, sha256: string, kind: string) {
   return `${kind}:${sha256}:${path.replaceAll("\\", "/")}`;
 }
 
+export function directVideoUploadLedgerKey(path: string, sha256: string, kind: string) {
+  return `${uploadLedgerKey(path, sha256, kind)}:TECHNICAL_METADATA_V1`;
+}
+
 export async function appendExecutionLog(workspace: string, event: string, data: JsonRecord = {}) {
   await appendFile(
     join(workspace, "logs", "execution.ndjson"),

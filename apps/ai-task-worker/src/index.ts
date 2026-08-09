@@ -24,6 +24,7 @@ import {
   ensureTaskWorkspace,
   freshWorkspaceState,
   loadWorkspaceState,
+  directVideoUploadLedgerKey,
   readJson,
   saveWorkspaceState,
   uploadLedgerKey,
@@ -2911,11 +2912,17 @@ async function execute(claimed: JsonRecord) {
     for (const raw of files) {
       const item = record(raw);
       const metadata = record(item.metadata);
-      const ledgerKey = uploadLedgerKey(
-        String(item.path || ""),
-        String(metadata.sha256 || ""),
-        String(item.kind || "FILE_OUTPUT"),
-      );
+      const ledgerKey = directOutputTask && String(item.kind || "").toUpperCase() === "VIDEO_MASTER"
+        ? directVideoUploadLedgerKey(
+          String(item.path || ""),
+          String(metadata.sha256 || ""),
+          String(item.kind || "FILE_OUTPUT"),
+        )
+        : uploadLedgerKey(
+          String(item.path || ""),
+          String(metadata.sha256 || ""),
+          String(item.kind || "FILE_OUTPUT"),
+        );
       if (taskState.uploads[ledgerKey]) {
         await appendExecutionLog(workspace, "UPLOAD_SKIPPED_IDEMPOTENT", {
           path: item.path,
