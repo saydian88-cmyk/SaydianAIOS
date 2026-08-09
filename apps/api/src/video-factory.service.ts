@@ -30,6 +30,8 @@ type ProjectCreateInput = {
   projectMode?: "STANDARD" | "REFERENCE_DIRECT_FULL_VIDEO" | "CODEX_DIRECT_FULL_VIDEO" | "BATCH_CODEX_DIRECT_FULL_VIDEO";
   referenceVideoUrl?: string;
   referenceDirectTaskRequirement?: string;
+  referenceAudioStrategy?: "REFERENCE_ORIGINAL" | "DOUBAO_REVOICE";
+  referenceVisualStrategy?: "REBUILD_PRODUCT_VISUALS" | "REUSE_REFERENCE_VISUALS";
   platform?: string;
   voiceoverMode?: string;
   accountType?: string;
@@ -1803,6 +1805,10 @@ export class VideoFactoryService {
       ...(referenceDirect && String(input.referenceDirectTaskRequirement || "").trim()
         ? { referenceDirectTaskRequirement: String(input.referenceDirectTaskRequirement).trim() }
         : {}),
+      ...(referenceDirect ? {
+        referenceAudioStrategy: input.referenceAudioStrategy === "DOUBAO_REVOICE" ? "DOUBAO_REVOICE" : "REFERENCE_ORIGINAL",
+        referenceVisualStrategy: input.referenceVisualStrategy === "REUSE_REFERENCE_VISUALS" ? "REUSE_REFERENCE_VISUALS" : "REBUILD_PRODUCT_VISUALS",
+      } : {}),
       ...(codexDirect ? { codexDirectFullVideo: true, directOutputOnly: true } : {}),
       ...(batchDirect ? {
         batchDirectFullVideo: true,

@@ -305,6 +305,7 @@ const videoFactoryForm = reactive({
   painPoint: "",
   referenceVideoUrl: "",
   referenceDirectTaskRequirement: "",
+  referenceAudioStrategy: "REFERENCE_ORIGINAL",
   scriptEngines: ["SYSTEM_AI"] as string[],
   keywordIds: [] as string[],
   externalVideoIds: [] as string[],
@@ -1872,14 +1873,14 @@ function videoLibrarySourceProject(entry?: Row): Row {
 }
 
 function videoLibraryLanguageInstruction() {
-  if (videoLibraryCreateForm.targetLanguage === "EN") return "字幕、口播和贴纸文案等都用英文，这条视频面向英文社交平台。";
+  if (videoLibraryCreateForm.targetLanguage === "EN") return "新生成的字幕和贴纸文案等都用英文，这条视频面向英文社交平台；未要求重配的原声保持不变。";
   if (videoLibraryCreateForm.targetLanguage === "OTHER") {
     const language = videoLibraryCreateForm.customLanguage.trim();
     return language
-      ? `字幕、口播和贴纸文案等都用${language}，这条视频面向${language}社交平台。`
-      : "请填写字幕、口播和贴纸文案所用的语言。";
+      ? `新生成的字幕和贴纸文案等都用${language}，这条视频面向${language}社交平台；未要求重配的原声保持不变。`
+      : "请填写新生成字幕和贴纸文案所用的语言。";
   }
-  return "字幕、口播和贴纸文案等都用中文，这条视频面向中文社交平台。";
+  return "新生成的字幕和贴纸文案等都用中文，这条视频面向中文社交平台；未要求重配的原声保持不变。";
 }
 
 function videoLibrarySourceTaskSummary(entry?: Row) {
@@ -1897,13 +1898,13 @@ function syncVideoLibraryTaskRequirement() {
     const changes: string[] = [];
     if (videoLibraryCreateForm.replaceProduct && videoLibraryCreateForm.productModel) {
       const product = videoLibraryCreateForm.productModel;
-      changes.push(`产品替换：改为${product}。请寻找与原视频镜头、场景和节奏相近的${product}真实素材用于替换。`);
+      changes.push(`产品替换：改为${product}。仅替换涉及原产品的画面，并使用${product}的真实素材；其它未要求修改的参考画面保持复用。`);
     }
     if (videoLibraryCreateForm.replaceHook && videoLibraryCreateForm.hook.trim()) changes.push(`开场钩子改为：${videoLibraryCreateForm.hook.trim()}。`);
     if (videoLibraryCreateForm.replaceFeature && videoLibraryCreateForm.feature.trim()) changes.push(`核心卖点改为：${videoLibraryCreateForm.feature.trim()}。`);
     if (videoLibraryCreateForm.replaceOther && videoLibraryCreateForm.otherChange.trim()) changes.push(`其它修改：${videoLibraryCreateForm.otherChange.trim()}。`);
     changes.push(languageInstruction);
-    videoLibraryCreateForm.taskRequirement = ["参考视频直出：直接在我给你的参考视频基础上修改。", ...changes, "其它保持不变。"].join("\n");
+    videoLibraryCreateForm.taskRequirement = ["成品库参考直出：直接复用参考视频的画面和完整可用原声，只按下列要求修改；未列出的画面、结构、节奏和原声保持不变。", ...changes].join("\n");
     return;
   }
   const changes: string[] = [];
@@ -2266,7 +2267,10 @@ function markImageRequirementEdited() {
 function buildReferenceDirectTaskRequirement() {
   const model = videoFactoryForm.productModel.trim() || "所选产品";
   const referenceUrl = videoFactoryForm.referenceVideoUrl.trim() || "待填写的参考视频链接";
-  return `用视频剪辑--基于素材库 skill，参考视频：${referenceUrl}。请直接完成参考视频分析、脚本结构、素材匹配、剪辑和最终成片，无需返回中间脚本、素材匹配或剪辑过程；参考该视频的镜头结构、画面节奏和氛围，并直接复用可访问原声中的 BGM、环境声、音效节拍。画面必须使用${model}的真实素材重建，不得混用其他产品素材。只回传最终成片供员工审核。`;
+  const audioInstruction = videoFactoryForm.referenceAudioStrategy === "DOUBAO_REVOICE"
+    ? "重配口播：仅使用已配置的豆包语音，绝不使用 Windows 或系统默认配音；保留参考视频可用的 BGM、环境声和音效节拍。"
+    : "保留参考原声：沿用参考视频完整可用音轨，不做配音。";
+  return `参考视频：${referenceUrl}。参考其镜头结构、画面节奏和氛围，使用${model}的真实素材重建画面，不得混用其他产品素材。${audioInstruction}只回传最终成片供员工审核。`;
 }
 
 function syncReferenceDirectTaskRequirement() {
@@ -3198,6 +3202,7 @@ async function openNewVideoProjectDialog() {
   videoProjectMode.value = "STANDARD";
   videoFactoryForm.referenceVideoUrl = "";
   videoFactoryForm.referenceDirectTaskRequirement = "";
+  videoFactoryForm.referenceAudioStrategy = "REFERENCE_ORIGINAL";
   referenceDirectRequirementEdited.value = false;
   lastAutoReferenceDirectRequirement.value = "";
   syncReferenceDirectTaskRequirement();
@@ -7238,10 +7243,17 @@ onBeforeUnmount(() => {
             <el-input v-model="videoFactoryForm.referenceVideoUrl" placeholder="粘贴可访问的参考视频链接" @input="syncReferenceDirectTaskRequirement" />
           </el-form-item>
         </div>
+        <el-form-item label="音频策略" required>
+          <el-radio-group v-model="videoFactoryForm.referenceAudioStrategy" @change="syncReferenceDirectTaskRequirement">
+            <el-radio-button value="REFERENCE_ORIGINAL">保留参考原声</el-radio-button>
+            <el-radio-button value="DOUBAO_REVOICE">重配口播（豆包）</el-radio-button>
+          </el-radio-group>
+          <div class="form-tip">保留原声会沿用完整可用音轨；重配口播只使用已配置的豆包语音，绝不使用 Windows 默认配音。</div>
+        </el-form-item>
       </section>
 
       <section v-if="videoProjectMode === 'REFERENCE_DIRECT_FULL_VIDEO'" class="prototype-form-section">
-        <header><strong>提交给剪辑 Skill 的任务要求</strong><span>仅提交这段内容，可直接修改</span></header>
+        <header><strong>提交给剪辑 Skill 的创意要求</strong><span>系统会自动附加参考视频、音频策略和交付规则，可直接修改此处内容</span></header>
         <el-input
           v-model="videoFactoryForm.referenceDirectTaskRequirement"
           type="textarea"

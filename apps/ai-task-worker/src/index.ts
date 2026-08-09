@@ -1035,14 +1035,20 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
     const directInput = record(taskInput.referenceDirectInput);
     const revision = record(directInput.revision || taskInput.revision);
     const isRevision = Boolean(String(revision.reviewNote || "").trim());
+    const reuseReferenceVisuals = String(directInput.referenceVisualStrategy || "") === "REUSE_REFERENCE_VISUALS";
+    const revoiceWithDoubao = String(directInput.referenceAudioStrategy || "") === "DOUBAO_REVOICE";
     return [
       "REFERENCE_DIRECT_MODE_CONTRACT: This is a reference-video direct-render job using the complete local video-editing-from-media-library Skill.",
       `Read and execute the dispatcher Skill first: ${detectedSkill.skillPath}`,
       `Then read and execute the full local editing Skill: ${detectedSkill.downstreamSkillPath || "G:\\codex\\xcodeplace\\CodexHome\\skills\\video-editing-from-media-library\\SKILL.md"}. Never use the share edition on this machine.`,
       "The dispatcher only routes this job. The full editing Skill must independently inspect the reference, learn/search the complete local library, select footage, edit, package, validate and render.",
-      "REFERENCE_AUDIO_AUTHORIZATION: Submission of the reference URL is the employee's confirmation that its complete original audio may be reused for this task. Download and preserve the original audio, including BGM, ambience and sound effects. Do not request a licence file, do not return an unknown-rights warning, do not replace it with local BGM, and do not re-voice it unless the employee prompt explicitly requests that change.",
-      "REFERENCE_ANALYSIS_AND_AUDIO_GATE: Before editing, download the complete reference and inspect its full duration, audio track, spoken sections, beat map and ending. The reference must materially control the rebuilt video's structure, pacing and audio; it is not a decorative link. Windows/SAPI/default system TTS is forbidden. Keep the usable original reference audio. Only when the employee explicitly requires new spoken text, or the reference has no usable speech while new speech is necessary, synthesize with the configured Doubao voice; if Doubao is unavailable, stop with the technical cause instead of substituting a Windows voice.",
-      "Do not copy the reference video's pictures, people, brands or footage. Rebuild the visuals with exact-product real footage selected from the local media library while following the reference audio, beat map, section structure, pacing, transitions and packaging rhythm.",
+      revoiceWithDoubao
+        ? "REFERENCE_AUDIO_POLICY: Revoice spoken content only with the configured Doubao voice. Windows/SAPI/default system TTS is forbidden. Preserve usable reference BGM, ambience, sound effects and beat map; if Doubao is unavailable, stop with the technical cause instead of substituting a Windows voice."
+        : "REFERENCE_AUDIO_POLICY: Preserve the complete usable original reference audio, including spoken content, BGM, ambience and sound effects. Do not re-voice it.",
+      "REFERENCE_ANALYSIS_GATE: Before editing, download the complete reference and inspect its full duration, audio track, spoken sections, beat map and ending. The reference must materially control the finished video; it is not a decorative link.",
+      reuseReferenceVisuals
+        ? "REFERENCE_VISUAL_POLICY: This content-library job is authorized to directly reuse the reference video's pictures and footage. Keep every unmodified visual, structure and pacing element; only change the employee-requested parts. If replacing the product, replace only affected product shots with real footage of the requested product."
+        : "REFERENCE_VISUAL_POLICY: Do not copy the reference video's pictures, people, brands or footage. Rebuild the visuals with exact-product real footage selected from the local media library while following the reference audio, beat map, section structure, pacing, transitions and packaging rhythm.",
       "Do not stop for employee approval of an internal script, shot plan, footage selection, production plan or packaging. Create and validate all mandatory Skill artifacts internally, repair correctable issues, render, and return only the final VIDEO_MASTER for employee review.",
       "The empty assets and snapshots arrays are intentional. Never request system materialBindings and never treat them as a whitelist.",
       "Create and validate the full evidence set required by the editing Skill, including production-plan, hard-requirements, shot-plan, composition, packaging, audio, transition and HyperFrames render evidence. A plain FFmpeg concat is not an acceptable finished video.",
@@ -1055,6 +1061,8 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
         productModel: String(directInput.productModel || task.productModel || ""),
         referenceVideoUrl: String(directInput.referenceVideoUrl || ""),
         employeePrompt: String(directInput.prompt || ""),
+        referenceAudioStrategy: revoiceWithDoubao ? "DOUBAO_REVOICE" : "REFERENCE_ORIGINAL",
+        referenceVisualStrategy: reuseReferenceVisuals ? "REUSE_REFERENCE_VISUALS" : "REBUILD_PRODUCT_VISUALS",
         ...(isRevision ? { revision } : {}),
       }, null, 2),
       "If the reference URL or its audio cannot be accessed, return the exact technical cause without fabricating completion. Otherwise continue through final render.",

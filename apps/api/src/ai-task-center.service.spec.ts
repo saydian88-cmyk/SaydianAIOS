@@ -979,6 +979,8 @@ describe("AiTaskCenterService", () => {
         productModel: "W9",
         referenceVideoUrl: "https://example.com/reference.mp4",
         prompt: "替换开场钩子，其余按参考完整重建",
+        referenceAudioStrategy: "REFERENCE_ORIGINAL",
+        referenceVisualStrategy: "REBUILD_PRODUCT_VISUALS",
       },
     });
     expect(referenceDirectResult.assets).toEqual([]);

@@ -1637,6 +1637,8 @@ export class AiTaskCenterService implements OnModuleInit {
             prompt: text(existingReferenceInput.prompt)
               || text(projectBrief.referenceDirectTaskRequirement)
               || text(projectBrief.additionalPrompt),
+            referenceAudioStrategy: text(existingReferenceInput.referenceAudioStrategy) === "DOUBAO_REVOICE" ? "DOUBAO_REVOICE" : "REFERENCE_ORIGINAL",
+            referenceVisualStrategy: text(existingReferenceInput.referenceVisualStrategy) === "REUSE_REFERENCE_VISUALS" ? "REUSE_REFERENCE_VISUALS" : "REBUILD_PRODUCT_VISUALS",
             ...(Object.keys(object(existingReferenceInput.revision)).length
               ? { revision: object(existingReferenceInput.revision) }
               : {}),

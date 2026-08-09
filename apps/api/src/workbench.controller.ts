@@ -207,14 +207,20 @@ function compileReferenceDirectFullVideoPrompt(project: Record<string, any>, bri
   const employeeRequirement = String(brief.referenceDirectTaskRequirement || "").trim();
   if (employeeRequirement) return employeeRequirement;
   const referenceVideoUrl = String(brief.reference || "").trim();
+  const revoiceWithDoubao = brief.referenceAudioStrategy === "DOUBAO_REVOICE";
+  const reuseReferenceVisuals = brief.referenceVisualStrategy === "REUSE_REFERENCE_VISUALS";
   return [
     "【任务类型】参考视频直出（完整视频）",
     `项目编号：${project.productionNo || project.id}`,
     `产品型号：${project.productModel || "未提供"}`,
     `参考视频链接：${referenceVideoUrl}`,
     "请直接完成：参考分析 → 脚本 → 素材匹配 → 剪辑 → 9:16 成片。不要提交脚本审核，员工只审核最终成片。",
-    "提交参考视频链接即代表员工确认该视频完整原声可用于本次制作。必须直接提取并复用其中的 BGM、环境声、音效、口播和节拍；不得要求授权文件，不得因授权字段缺失暂停或失败，不得擅自换成本地 BGM 或重新配音。员工提示明确要求改变声音时除外。",
-    "画面沿用参考原声的段落、重音、节奏、镜头结构和氛围，但必须由完整版剪辑 Skill 从本机素材库自主选择当前型号真实 VIDEO 素材重建；不得复制参考视频原画面、人物或品牌素材。包装资源只能作包装，不能作为主画面。",
+    revoiceWithDoubao
+      ? "口播必须使用已配置豆包语音重配，禁止 Windows 或系统默认配音；保留参考视频可用的 BGM、环境声、音效和节拍。"
+      : "完整保留参考视频可用原声，包括口播、BGM、环境声、音效和节拍，不得重配。",
+    reuseReferenceVisuals
+      ? "允许直接复用参考视频画面；未明确要求修改的画面、结构和节奏保持不变。替换产品时，只替换涉及原产品的画面，并使用指定产品真实素材。"
+      : "画面沿用参考原声的段落、重音、节奏、镜头结构和氛围，但必须由完整版剪辑 Skill 从本机素材库自主选择当前型号真实 VIDEO 素材重建；不得复制参考视频原画面、人物或品牌素材。包装资源只能作包装，不能作为主画面。",
     "若参考链接、音频或关键素材无法访问，返回 WAITING_INPUT 及具体原因，禁止伪造完成。",
     "输出 1080×1920、30fps 主成片，并回传成片路径、使用素材绑定、参考访问结果和审核说明。",
   ].join("\n");
@@ -1730,6 +1736,8 @@ export class WorkbenchController {
           : "STANDARD",
       referenceVideoUrl: body.referenceVideoUrl ? String(body.referenceVideoUrl) : undefined,
       referenceDirectTaskRequirement: body.referenceDirectTaskRequirement ? String(body.referenceDirectTaskRequirement) : undefined,
+      referenceAudioStrategy: body.referenceAudioStrategy === "DOUBAO_REVOICE" ? "DOUBAO_REVOICE" : "REFERENCE_ORIGINAL",
+      referenceVisualStrategy: body.referenceVisualStrategy === "REUSE_REFERENCE_VISUALS" ? "REUSE_REFERENCE_VISUALS" : "REBUILD_PRODUCT_VISUALS",
       platform: body.platform && body.platform !== "AUTO" ? String(body.platform) : undefined,
       voiceoverMode: body.voiceoverMode && body.voiceoverMode !== "AUTO" ? String(body.voiceoverMode) : undefined,
       accountType: body.accountType && body.accountType !== "AUTO" ? String(body.accountType) : undefined,
@@ -2055,6 +2063,8 @@ export class WorkbenchController {
       ? factory.directVideoRevision as Record<string, unknown>
       : {};
     const finalTaskRequirement = String(brief.referenceDirectTaskRequirement || brief.additionalPrompt || "").trim();
+    const referenceAudioStrategy = brief.referenceAudioStrategy === "DOUBAO_REVOICE" ? "DOUBAO_REVOICE" : "REFERENCE_ORIGINAL";
+    const referenceVisualStrategy = brief.referenceVisualStrategy === "REUSE_REFERENCE_VISUALS" ? "REUSE_REFERENCE_VISUALS" : "REBUILD_PRODUCT_VISUALS";
     if (!referenceVideoUrl || (referenceAsset?.objectKey && !await this.ossStorage.objectExists(referenceAsset.objectKey))) throw new ForbiddenException("参考视频已失效，请重新选择成品");
     const task = await this.aiTasks.createTask({
       type: "VIDEO",
@@ -2083,6 +2093,8 @@ export class WorkbenchController {
           referenceVideoUrl,
           ...(referenceAssetId ? { referenceAssetId } : {}),
           prompt: finalTaskRequirement,
+          referenceAudioStrategy,
+          referenceVisualStrategy,
           ...(Object.keys(revision).length ? { revision } : {}),
         },
         workflowGuard: { projectId: project.id, workflowVersion: project.workflowVersion, stage: "FULL_VIDEO", allowedProjectStages: ["PROJECT_BRIEF", "EDITING"] },
@@ -2952,6 +2964,8 @@ export class WorkbenchController {
       referenceDirectTaskRequirement: mode === "REFERENCE_DIRECT"
         ? additionalPrompt
         : undefined,
+      referenceAudioStrategy: "REFERENCE_ORIGINAL",
+      referenceVisualStrategy: "REUSE_REFERENCE_VISUALS",
       platform: String(source.platform || entry.platform || "DOUYIN"),
       voiceoverMode: String(source.voiceoverMode || "AUTO"),
       productModel,
