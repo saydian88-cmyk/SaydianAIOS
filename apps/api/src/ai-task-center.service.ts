@@ -2692,13 +2692,16 @@ export class AiTaskCenterService implements OnModuleInit {
     if (!Object.keys(result).length || !resolveDirectVideoProjectId(task)) return this.task(id);
 
     const domain = await this.finalizeDomain(task as Awaited<ReturnType<AiTaskCenterService["ensureRunnerTask"]>>, result, "system-direct-video-reconcile");
-    const status = domain.status;
+    const retryRegistration = domain.status === "WAITING_INPUT";
+    const status = retryRegistration ? "RETRY" as AiTaskStatus : domain.status;
     await this.prisma.aiTask.update({
       where: { id },
       data: {
         status,
-        progress: status === "WAITING_INPUT" ? Math.min(Math.max(task.progress || 60, 60), 90) : 100,
-        progressMessage: domain.message,
+        // The local MP4 already exists. Requeue only the metadata/upload and
+        // project-registration steps for a newer runner, never a fresh edit.
+        progress: retryRegistration ? 0 : status === "WAITING_INPUT" ? Math.min(Math.max(task.progress || 60, 60), 90) : 100,
+        progressMessage: retryRegistration ? "正在续跑已生成成片的元数据与项目登记，不会重新剪辑" : domain.message,
         finishedAt: ["PENDING_REVIEW", "COMPLETED"].includes(status) ? new Date() : null,
       },
     });
