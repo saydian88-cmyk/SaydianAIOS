@@ -152,6 +152,51 @@ export type BatchCodexPlannedResult = {
   coverFile: string;
 };
 
+export function batchDirectResultKeys(batchDirect: unknown) {
+  const batch = object(batchDirect);
+  const products = Array.isArray(batch.products)
+    ? batch.products.map(object)
+    : [];
+  return products.flatMap((product, productIndex) => Array.from(
+    { length: Math.max(0, Math.round(number(product.count) || 0)) },
+    (_, itemIndex) => `${productIndex + 1}-${itemIndex + 1}`,
+  ));
+}
+
+export function mergeBatchCodexProjectResults(
+  expectedKeys: string[],
+  previousResults: Array<Record<string, unknown>>,
+  planned: BatchCodexPlannedResult[],
+) {
+  const previous = new Map(previousResults.map((item) => [text(item.videoKey), item]));
+  const current = new Map(planned.map((item) => [item.videoKey, item]));
+  return expectedKeys.map((videoKey) => {
+    const plan = current.get(videoKey);
+    const prior = previous.get(videoKey) || {};
+    if (plan?.ready) return {
+      videoKey,
+      status: "READY",
+      title: plan.title,
+      tags: plan.tags,
+      coverFile: plan.coverFile,
+      coverAssetId: plan.coverAssetId,
+      coverUrl: plan.coverUrl,
+      failureReason: "",
+    };
+    if (text(prior.status).toUpperCase() === "READY") return prior;
+    return {
+      videoKey,
+      status: "GENERATING",
+      title: plan?.title || text(prior.title),
+      tags: plan?.tags?.length ? plan.tags : strings(prior.tags),
+      coverFile: plan?.coverFile || text(prior.coverFile),
+      coverAssetId: text(prior.coverAssetId),
+      coverUrl: text(prior.coverUrl),
+      failureReason: plan?.failureReason || text(prior.failureReason),
+    };
+  });
+}
+
 /**
  * Decide which manifest results can be reviewed against actually uploaded
  * masters. A manifest READY entry without a matching uploaded video is planned
@@ -1563,8 +1608,12 @@ export class AiTaskCenterService implements OnModuleInit {
           lastError: null,
         },
       });
-      const contentPlanId = text(object(candidate.input).existingContentPlanId);
-      if (contentPlanId) await this.videoFactory.syncProjectTaskState(contentPlanId, "CLAIMED");
+      const candidateInput = object(candidate.input);
+      const contentPlanId = text(candidateInput.existingContentPlanId);
+      const batchContinuation = candidateInput.batchCodexDirectFullVideo === true
+        && Array.isArray(candidateInput.retryVideoKeys)
+        && candidateInput.retryVideoKeys.length > 0;
+      if (contentPlanId && !batchContinuation) await this.videoFactory.syncProjectTaskState(contentPlanId, "CLAIMED");
       await this.syncSourceOpsTask(candidate, "CLAIMED", "Codex已领取任务，正在处理");
       return {
         task: await this.task(candidate.id),
@@ -2550,6 +2599,8 @@ export class AiTaskCenterService implements OnModuleInit {
     const status = domain.status;
     const progress = status === "RUNNING"
       ? 65
+      : status === "RETRY"
+        ? Math.min(Math.max(task.progress || 65, 65), 90)
       : status === "WAITING_INPUT"
         ? Math.min(Math.max(task.progress || 60, 60), 90)
         : 100;
@@ -3201,7 +3252,6 @@ export class AiTaskCenterService implements OnModuleInit {
         const ready = results.filter((item) => text(item.status).toUpperCase() === "READY");
         const legacyUploadedOnly = shouldReviewUploadedBatchWithoutResultManifest(usableUploaded.length, ready.length);
         const planned = planBatchCodexResults(results, usableUploaded, coverOutputs);
-        const failedCount = planned.filter((item) => !item.ready).length;
         let registered = 0;
         for (const plan of planned) {
           if (!plan.ready || !plan.outputId || !plan.assetId) continue;
@@ -3224,22 +3274,35 @@ export class AiTaskCenterService implements OnModuleInit {
           registered += 1;
         }
         const signals = Array.isArray(project.sourceSignals) ? project.sourceSignals.map(object) : [];
+        const factory = signals.find((signal) => signal.type === "VIDEO_FACTORY") || {};
+        const batchDirect = object(object(factory).brief).batchDirect;
+        const batch = object(batchDirect);
+        const previousResults = Array.isArray(batch.results)
+          ? batch.results.map(object)
+          : [];
+        const expectedKeys = batchDirectResultKeys(batchDirect);
+        const projectResults = mergeBatchCodexProjectResults(expectedKeys, previousResults, planned);
+        const pendingKeys = projectResults
+          .filter((item) => text(item.status).toUpperCase() !== "READY")
+          .map((item) => text(item.videoKey))
+          .filter(Boolean);
         const nextSignals = signals.map((signal) => signal.type === "VIDEO_FACTORY" ? {
-          ...signal, brief: { ...object(signal.brief), batchDirect: { ...object(object(signal.brief).batchDirect), results: planned.map((plan) => ({
-            videoKey: plan.videoKey, status: plan.ready ? "READY" : "FAILED",
-            title: plan.title, tags: plan.tags, coverFile: plan.coverFile,
-            coverAssetId: plan.coverAssetId, coverUrl: plan.coverUrl,
-            failureReason: plan.failureReason,
-          })) } },
+          ...signal, brief: { ...object(signal.brief), batchDirect: { ...object(object(signal.brief).batchDirect), results: projectResults } },
         } : signal);
+        const hasReturnedMaster = projectResults.some((item) => text(item.status).toUpperCase() === "READY");
         await this.prisma.contentPlan.update({ where: { id: project.id }, data: {
-          sourceSignals: json(nextSignals), productionStage: registered ? "VIDEO_REVIEW" : "EDITING",
-          masterVideoStatus: registered ? "READY_FOR_REVIEW" : project.masterVideoStatus,
+          sourceSignals: json(nextSignals), productionStage: hasReturnedMaster ? "VIDEO_REVIEW" : "EDITING",
+          masterVideoStatus: hasReturnedMaster ? "READY_FOR_REVIEW" : project.masterVideoStatus,
         } });
-        if (!registered) return { status: "WAITING_INPUT" as AiTaskStatus, message: "批量视频未回传可审核成片" };
-        return { status: "PENDING_REVIEW" as AiTaskStatus, message: legacyUploadedOnly
-          ? `批量视频已回传 ${registered} 条，但缺少其余结果清单；已保留现有成品，等待审核`
-          : failedCount ? `批量视频部分完成：已回传 ${registered} 条，${failedCount} 条失败可单独重试` : `批量视频已回传 ${registered} 条，等待审核` };
+        if (pendingKeys.length) {
+          await this.prisma.aiTask.update({ where: { id: task.id }, data: {
+            input: json({ ...taskInput, retryVideoKeys: pendingKeys }),
+            failureReason: null,
+          } });
+          return { status: "RETRY" as AiTaskStatus, message: `批量任务已回传 ${projectResults.length - pendingKeys.length}/${projectResults.length} 条成品，剩余 ${pendingKeys.length} 条正在继续生成` };
+        }
+        if (!registered && !legacyUploadedOnly) return { status: "WAITING_INPUT" as AiTaskStatus, message: "批量视频尚未回传可审核成品" };
+        return { status: "PENDING_REVIEW" as AiTaskStatus, message: `批量视频已完整回传 ${projectResults.length} 条，等待审核` };
       }
       const existingContentPlanId = resolveDirectVideoProjectId(task);
       const directFullVideo = executionMode === "FULL_VIDEO"

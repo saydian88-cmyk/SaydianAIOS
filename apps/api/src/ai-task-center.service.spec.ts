@@ -7,10 +7,12 @@ import {
   aiTaskExecutionMode,
   aiTaskRoute,
   aiTaskTargetNodeCode,
+  batchDirectResultKeys,
   runnerCanClaimTask,
   runnerTaskTypeCapabilities,
   isRecoverableDirectVideoInput,
   isUsableBatchVideoOutput,
+  mergeBatchCodexProjectResults,
   planBatchCodexResults,
   restoreBatchDirectInput,
   resolveDirectVideoProjectId,
@@ -168,6 +170,20 @@ describe("AiTaskCenterService", () => {
       assetId: "",
       failureReason: expect.stringContaining("未匹配到已上传成品"),
     });
+  });
+
+  it("keeps returned batch masters ready while missing keys continue generating", () => {
+    const keys = batchDirectResultKeys({ products: [{ model: "W8Ultra", count: 2 }] });
+    const merged = mergeBatchCodexProjectResults(
+      keys,
+      [{ videoKey: "1-1", status: "READY", title: "已回传", tags: ["a"] }],
+      [{ videoKey: "1-2", ready: false, failureReason: "本轮执行中断", outputId: "", assetId: "", coverAssetId: "", coverUrl: "", title: "", tags: [], coverFile: "" }],
+    );
+
+    expect(merged).toMatchObject([
+      { videoKey: "1-1", status: "READY", title: "已回传" },
+      { videoKey: "1-2", status: "GENERATING", failureReason: "本轮执行中断" },
+    ]);
   });
 
   it("uses a newer recovered batch master only when its technical metadata is complete", () => {

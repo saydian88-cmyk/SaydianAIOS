@@ -1264,9 +1264,11 @@ function batchVideos(project?: Row) {
       const job = batchVideoJobFor(project, videoKey, videos.length);
       const manifestStatus = String(result?.status || "").toUpperCase();
       const hasReviewableMaster = Boolean(job?.outputAsset);
-      const resultStatus = manifestStatus === "FAILED"
-        ? "FAILED"
-        : hasReviewableMaster ? "READY" : "FAILED";
+      const resultStatus = hasReviewableMaster || manifestStatus === "READY"
+        ? "READY"
+        : manifestStatus === "FAILED"
+          ? "FAILED"
+          : "GENERATING";
       videos.push({
         videoKey,
         product: model,
@@ -5394,10 +5396,13 @@ onBeforeUnmount(() => {
                         <article v-for="(video, index) in batchVideos(taskVideoProjectDetail)" :key="`review-${video.videoKey}`" class="batch-video-card">
                           <div class="v-head">
                             <b>{{ video.displayName }}</b>
-                            <el-tag size="small" :type="video.resultStatus === 'FAILED' ? 'danger' : 'success'">{{ video.resultStatus === 'FAILED' ? '未回传' : '成片待审核' }}</el-tag>
+                            <el-tag size="small" :type="video.resultStatus === 'FAILED' ? 'danger' : video.resultStatus === 'GENERATING' ? 'warning' : 'success'">{{ video.resultStatus === 'FAILED' ? '未回传' : video.resultStatus === 'GENERATING' ? '继续生成中' : '成片待审核' }}</el-tag>
                           </div>
                           <template v-if="video.resultStatus === 'FAILED'">
                             <div class="batch-video-thumb"><span>{{ video.failureReason || '该条视频未回传' }}</span></div>
+                          </template>
+                          <template v-else-if="video.resultStatus === 'GENERATING'">
+                            <div class="batch-video-thumb"><span>已回传的成品可先审核；这一条正在继续生成</span></div>
                           </template>
                           <template v-else>
                           <div class="batch-video-thumb"><span class="play">▶</span><span style="margin-left:8px;font-size:12px">00:{{ String(18 + index * 3).padStart(2, '0') }}</span></div>
@@ -5416,17 +5421,17 @@ onBeforeUnmount(() => {
                           </template>
                           </template>
                           <div class="preview-actions" style="margin-top:10px">
-                            <el-button v-if="video.resultStatus !== 'FAILED'" size="small" @click="previewBatchVideo(video)">预览成片</el-button>
-                            <el-button v-if="video.resultStatus !== 'FAILED'" size="small" @click="downloadBatchVideo(video)">下载成片</el-button>
+                            <el-button v-if="video.resultStatus === 'READY'" size="small" @click="previewBatchVideo(video)">预览成片</el-button>
+                            <el-button v-if="video.resultStatus === 'READY'" size="small" @click="downloadBatchVideo(video)">下载成片</el-button>
                             <el-button v-if="video.resultStatus === 'FAILED'" size="small" type="primary" @click="retryBatchVideo(video)">仅重试这一条</el-button>
-                            <el-button v-else size="small" type="danger" plain @click="rejectBatchVideo(video)">退回</el-button>
+                            <el-button v-else-if="video.resultStatus === 'READY'" size="small" type="danger" plain @click="rejectBatchVideo(video)">退回</el-button>
                           </div>
                         </article>
                       </div>
                       <div class="preview-actions" style="margin-top:14px">
                         <el-button @click="refreshTaskVideoProject">刷新当前项目</el-button>
-                        <el-button type="danger" plain @click="rejectBatchVideo()">整批退回</el-button>
-                        <el-button type="success" @click="approveBatchVideo">整批审核通过</el-button>
+                        <el-button v-if="batchVideos(taskVideoProjectDetail).every((video) => video.resultStatus === 'READY')" type="danger" plain @click="rejectBatchVideo()">整批退回</el-button>
+                        <el-button v-if="batchVideos(taskVideoProjectDetail).every((video) => video.resultStatus === 'READY')" type="success" @click="approveBatchVideo">整批审核通过</el-button>
                       </div>
                     </template>
                   </section>

@@ -2415,6 +2415,12 @@ async function recoverDirectOutputResult(
   const savedBatchResults = Array.isArray(savedResult?.batchResults) ? savedResult.batchResults.map(record) : [];
   const task = recoveryTask;
   const taskInput = record(task.input);
+  // A batch continuation carries only the keys that were not returned by the
+  // first all-at-once creation. Existing masters in this workspace are valid,
+  // but must not make the worker skip those missing keys.
+  if (taskInput.batchCodexDirectFullVideo === true
+    && Array.isArray(taskInput.retryVideoKeys)
+    && taskInput.retryVideoKeys.length) return undefined;
   const referenceDirect = taskInput.referenceDirectFullVideo === true;
   const batchRequests = taskInput.batchCodexDirectFullVideo === true
     ? batchVideoRequests(taskInput)
