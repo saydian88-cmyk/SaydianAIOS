@@ -41,7 +41,7 @@ import {
   type RepairCategory,
 } from "./execution-repair";
 import { appendQualityWarning, classifyQualityGate, type QualityWarning } from "./quality-gates";
-import { assertCodexDirectMasterOutput, batchDirectOutputFilesSchema, batchVideoRequests, expectedBatchVideoKeys, isCodexDirectFullVideoTask, pendingBatchVideoKeys } from "./direct-video-contract";
+import { assertCodexDirectMasterOutput, batchDirectOutputFilesSchema, batchVideoRequests, expectedBatchVideoKeys, isCodexDirectFullVideoTask } from "./direct-video-contract";
 
 function record(value: unknown): JsonRecord {
   return value && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : {};
@@ -67,6 +67,7 @@ const systemMaterialIndexPath = join(systemMaterialRoot, "material-index.json");
 const systemMaterialStatePath = join(systemMaterialRoot, "sync-state.json");
 const localMediaLibraryRoot = resolve(String(process.env.AI_TASK_LOCAL_MEDIA_LIBRARY || "F:\\赛电品牌素材库"));
 const localSystemMaterialMapPath = join(localMediaLibraryRoot, ".saidian-system-index", "system-asset-map.json");
+const verifiedEditingVideosByProductPath = join(localMediaLibraryRoot, ".saidian-system-index", "verified-editing-videos-by-product.json");
 const bundledGsapPath = require.resolve("gsap/dist/gsap.min.js");
 const executionRepairSkillPath = resolve(String(
   process.env.AI_TASK_EXECUTION_REPAIR_SKILL_PATH
@@ -86,6 +87,38 @@ function activeKindCount(activeTasks: Map<string, { kind: "VIDEO" | "IMAGE"; pro
     if (entry.kind === kind) count += 1;
   }
   return count;
+}
+
+async function prepareBatchDirectVideoManifest(workspace: string, taskPackageValue: JsonRecord) {
+  const task = record(taskPackageValue.task);
+  const input = record(task.input);
+  if (input.batchCodexDirectFullVideo !== true) return;
+  const batchInput = record(input.batchDirectInput);
+  const models = Array.from(new Set((Array.isArray(batchInput.products) ? batchInput.products.map(record) : [])
+    .map((item) => String(item.model || "").trim())
+    .filter(Boolean)));
+  if (!models.length) return;
+  const source = await readJson<JsonRecord>(verifiedEditingVideosByProductPath);
+  const products = record(source?.products);
+  const scopedProducts: Record<string, JsonRecord[]> = {};
+  for (const model of models) {
+    const entries = Array.isArray(products[model]) ? products[model].map(record) : [];
+    scopedProducts[model] = entries.map((item) => ({
+      systemAssetId: String(item.systemAssetId || ""),
+      assetNo: String(item.assetNo || ""),
+      displayName: String(item.displayName || ""),
+      localPath: String(item.localPath || ""),
+      relativePath: String(item.relativePath || ""),
+      sha256: String(item.sha256 || ""),
+      productModel: String(item.productModel || model),
+    })).filter((item) => item.localPath && item.sha256);
+    if (!scopedProducts[model].length) throw new Error(`Batch direct-video manifest has no verified VIDEO entries for ${model}`);
+  }
+  await writeJsonAtomic(join(workspace, "batch-verified-video-manifest.json"), {
+    generatedAt: new Date().toISOString(),
+    sourceManifest: verifiedEditingVideosByProductPath,
+    products: scopedProducts,
+  });
 }
 
 async function prepareHyperFramesRuntime(workspace: string) {
@@ -1117,11 +1150,13 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
       "MANDATORY_SKILL_PATH: G:\\codex\\xcodeplace\\CodexHome\\skills\\video-editing-from-media-library\\SKILL.md. Read and execute this exact full local Skill. The dispatcher only routes the task and the share edition is forbidden for this local direct render.",
       "EXECUTION_SELECTOR: The dispatcher-selected full Skill path above is the sole execution selector. A legacy local media-library runtime-config.json may contain the text video-editing-from-media-library-share; it is library metadata only, not a selected Skill, not a conflict, and never a reason to stop this full local direct-render task. Do not modify that source-library configuration.",
       "ROUTE_VALIDATION_INPUT: The dispatcher has already validated and selected this route. task.json is the raw task object, not a task-package envelope; never run validate-task-route.mjs against task.json. If a downstream check needs the envelope, use route-validation-package.json in the workspace. A raw-task envelope mismatch is not a creation blocker.",
-      "Read the active local-library configuration and the verified-editing-videos-by-product manifest. Do not download, request, or return any system task assets.",
-      "MANIFEST_PARSER_COMPATIBILITY: Parse verified-editing-videos-by-product.json with Node JSON.parse or the configured Python JSON parser, never PowerShell ConvertFrom-Json. Its valid Windows asset paths can be misread by that PowerShell parser as unsupported escape sequences. A PowerShell parse error alone is not a local-library blocker; continue with the exact-product VIDEO entries obtained from the compatible parser.",
+      batchDirect
+        ? "BATCH_SCOPED_MANIFEST: Read batch-verified-video-manifest.json in the task workspace. It already contains every verified VIDEO entry for the requested product models. Do not read or print the full library-wide verified-editing-videos-by-product.json manifest; that large unrelated catalog wastes the batch production window."
+        : "Read the active local-library configuration and the verified-editing-videos-by-product manifest. Do not download, request, or return any system task assets.",
+      "MANIFEST_PARSER_COMPATIBILITY: When a full manifest is genuinely needed, parse it with Node JSON.parse or the configured Python JSON parser, never PowerShell ConvertFrom-Json. Its valid Windows asset paths can be misread by that PowerShell parser as unsupported escape sequences.",
       "The full editing Skill must independently learn, search and select VIDEO footage from the complete local library. The dispatcher must not preselect footage, create a candidate whitelist, or require system materialBindings. Use exact-product verified local VIDEO entries and never use another product model, unverified media, images, audio, packaging, cover, sticker, transition or template resources as primary footage.",
       batchDirect
-        ? `BATCH_PARTIAL_RESULT_CONTRACT: Execute every requested videoKey independently${retryVideoKeys.length ? `; only execute retryVideoKeys=${retryVideoKeys.join(",")}; do not recreate other videos` : ""}. Return batchResults with READY or FAILED for every requested key. Every READY item must name its matching real VIDEO_MASTER outputFile, COVER_IMAGE coverFile, title and tags; the COVER_IMAGE must be included in outputFiles with metadata.videoKey equal to that item. FAILED must include failureReason. Never discard READY items because other keys failed.`
+        ? `BATCH_SINGLE_EXECUTION_CONTRACT: In this one Skill invocation, produce the full requested batch${retryVideoKeys.length ? `; only execute retryVideoKeys=${retryVideoKeys.join(",")}` : ""}. Do not stop after one video or label remaining requested keys as failed because of an execution-window boundary. If this workspace already has a READY item, preserve it and produce every missing item in this same invocation. Return batchResults with READY or FAILED for every requested key. Every READY item must name its matching real VIDEO_MASTER outputFile, COVER_IMAGE coverFile, title and tags; the COVER_IMAGE must be included in outputFiles with metadata.videoKey equal to that item. FAILED is only for an actual unrecoverable production blocker, never elapsed working time.`
         : "DIRECT_CONTINUOUS_EXECUTION: Do not stop for user approval of the script, shot plan, material selection, production plan, packaging, or any other intermediate artifact. Create and validate those artifacts internally, repair any correctable issue, continue directly through rendering, and return only the final VIDEO_MASTER for user review.",
       "If the local library is not initialized or not ready, fail explicitly with the missing local configuration or index. Do not return a system-task WAITING_INPUT result.",
       "The employee UI only receives the final review node, but internal script, shot plan, material coverage, composition, packaging, audio and delivery QA steps remain mandatory.",
@@ -2550,71 +2585,6 @@ async function uploadFile(taskId: string, workspace: string, item: JsonRecord) {
   return response.text();
 }
 
-function packageForBatchContinuation(taskPackageValue: JsonRecord, retryVideoKeys: string[]) {
-  const task = record(taskPackageValue.task);
-  return {
-    ...taskPackageValue,
-    task: {
-      ...task,
-      input: {
-        ...record(task.input),
-        retryVideoKeys,
-      },
-    },
-  };
-}
-
-function mergeBatchDirectResult(previous: JsonRecord, next: JsonRecord) {
-  const outputFiles = new Map<string, JsonRecord>();
-  for (const item of [...(Array.isArray(previous.outputFiles) ? previous.outputFiles : []), ...(Array.isArray(next.outputFiles) ? next.outputFiles : [])]) {
-    const file = record(item);
-    outputFiles.set(`${String(file.kind || "")}:${String(file.path || "")}`, file);
-  }
-  const batchResults = new Map<string, JsonRecord>();
-  for (const item of [...(Array.isArray(previous.batchResults) ? previous.batchResults : []), ...(Array.isArray(next.batchResults) ? next.batchResults : [])]) {
-    const batchResult = record(item);
-    batchResults.set(String(batchResult.videoKey || ""), batchResult);
-  }
-  return {
-    ...previous,
-    ...next,
-    outputFiles: [...outputFiles.values()],
-    batchResults: [...batchResults.values()],
-  };
-}
-
-async function recoverReadyBatchResult(workspace: string, input: JsonRecord) {
-  const savedResult = await readJson<JsonRecord>(join(workspace, "result.json"));
-  if (!savedResult) return undefined;
-  const expectedKeys = new Set(expectedBatchVideoKeys(input));
-  const savedFiles = Array.isArray(savedResult.outputFiles) ? savedResult.outputFiles.map(record) : [];
-  const savedBatchResults = Array.isArray(savedResult.batchResults) ? savedResult.batchResults.map(record) : [];
-  const outputFiles: JsonRecord[] = [];
-  const batchResults: JsonRecord[] = [];
-  const coversRequired = record(input.batchDirectInput).generateCoverTitle !== false;
-  for (const item of savedBatchResults) {
-    const videoKey = String(item.videoKey || "").trim();
-    if (!expectedKeys.has(videoKey) || String(item.status || "").toUpperCase() !== "READY") continue;
-    const outputFile = String(item.outputFile || "").trim();
-    const coverFile = String(item.coverFile || "").trim();
-    const master = savedFiles.find((file) => String(file.path || "") === outputFile && String(file.kind || "").toUpperCase() === "VIDEO_MASTER");
-    const cover = savedFiles.find((file) => String(file.path || "") === coverFile && String(file.kind || "").toUpperCase() === "COVER_IMAGE");
-    const paths = [outputFile, ...(coversRequired ? [coverFile] : [])];
-    if (!master || (coversRequired && !cover) || paths.some((path) => !path || relative(workspace, resolve(workspace, path)).startsWith(".."))) continue;
-    const filesExist = await Promise.all(paths.map(async (path) => (await stat(resolve(workspace, path)).catch(() => undefined))?.isFile()));
-    if (filesExist.some((exists) => !exists)) continue;
-    batchResults.push(item);
-    outputFiles.push(master);
-    if (cover) outputFiles.push(cover);
-  }
-  if (!batchResults.length) return undefined;
-  return {
-    ...savedResult,
-    outputFiles,
-    batchResults,
-  };
-}
-
 async function execute(claimed: JsonRecord) {
   const task = claimed.task as JsonRecord;
   const taskId = String(task.id || "");
@@ -2673,6 +2643,7 @@ async function execute(claimed: JsonRecord) {
       },
     };
     await writeJsonAtomic(join(workspace, "task.json"), record(packaged.task));
+    await prepareBatchDirectVideoManifest(workspace, packaged);
     const fingerprint = packageFingerprint(packaged);
     const previousState = await loadWorkspaceState(workspace);
     const resumeEligible = canResume(previousState, fingerprint, detectedSkill.digest);
@@ -2829,102 +2800,7 @@ async function execute(claimed: JsonRecord) {
       }
     }
 
-    if (!result && batchDirectTask && expectedBatchVideoKeys(record(packagedTask.input)).length > 1) {
-      const originalInput = record(packagedTask.input);
-      schemaAttempts = 0;
-      const recoveredReady = await recoverReadyBatchResult(workspace, originalInput);
-      const pendingKeys = pendingBatchVideoKeys(
-        originalInput,
-        Array.isArray(recoveredReady?.batchResults) ? recoveredReady.batchResults : [],
-      );
-      let combined: JsonRecord = recoveredReady || {
-        summary: "Batch Codex direct-video continuation",
-        outputFiles: [],
-        batchResults: [],
-        delivery: {
-          productModel: String(packagedTask.productModel || ""),
-          taskMode: "CODEX_DIRECT_FULL_VIDEO",
-          finalReviewOnly: true,
-        },
-      };
-      if (recoveredReady) {
-        await appendExecutionLog(workspace, "BATCH_READY_OUTPUTS_RETAINED", {
-          videoKeys: Array.isArray(recoveredReady.batchResults)
-            ? recoveredReady.batchResults.map(record).map((item) => item.videoKey)
-            : [],
-        });
-      }
-      for (const videoKey of pendingKeys) {
-        const continuationPackage = packageForBatchContinuation(packaged, [videoKey]);
-        const continuationSchema = outputSchema(
-          String(packagedTask.type || ""),
-          String(execution.mode || ""),
-          Number(requirements.exactCount || 10),
-          true,
-          false,
-          true,
-          1,
-          detectedSkill.key === "saydian-douyin-viral-video-generator",
-        );
-        let internalCorrection = [
-          `BATCH_CONTINUATION: Create only videoKey=${videoKey}.`,
-          "Keep every existing READY output untouched; this is a continuation, never a full batch rerun.",
-          "A time-window boundary is not a production failure. Finish this one key and return its real master and cover.",
-        ].join("\n");
-        await report("CODEX", 25, `正在续跑批量成片 ${videoKey}，已完成的成品不会重做`);
-        const generated = await runWithSchemaRetry(
-          async (schemaAttempt) => {
-            await appendExecutionLog(workspace, "CODEX_BATCH_CONTINUATION_ATTEMPT", { videoKey, schemaAttempt });
-            return runCodex(continuationPackage, detectedSkill, workspace, timeoutSeconds, schemaAttempt, internalCorrection);
-          },
-          (candidate) => {
-            try {
-              validateResult(candidate, continuationSchema);
-            } catch (error) {
-              internalCorrection = error instanceof Error ? error.message : String(error);
-              throw error;
-            }
-            return candidate;
-          },
-          3,
-        );
-        schemaAttempts += generated.attempts;
-        let continuationResult = await renderLocalVideo(generated.result, continuationPackage, workspace);
-        continuationResult = await validateOutputArtifacts(continuationResult, workspace, continuationPackage);
-        assertCodexDirectMasterOutput(continuationResult, continuationPackage);
-        validateResult(continuationResult, continuationSchema, true);
-        combined = mergeBatchDirectResult(combined, continuationResult);
-        await writeJsonAtomic(join(workspace, "result.json"), combined);
-        await appendExecutionLog(workspace, "BATCH_CONTINUATION_READY", { videoKey });
-      }
-      const remainingKeys = pendingBatchVideoKeys(
-        originalInput,
-        Array.isArray(combined.batchResults) ? combined.batchResults : [],
-      );
-      if (remainingKeys.length) throw new Error(`Batch continuation did not return required video keys: ${remainingKeys.join(", ")}`);
-      const finishedAt = new Date();
-      combined.execution = {
-        skill: detectedSkill.name,
-        skillVersion: detectedSkill.version,
-        skillDigest: detectedSkill.digest,
-        ...(detectedSkill.skillPath ? { skillPath: detectedSkill.skillPath } : {}),
-        strategy: detectedSkill.strategy,
-        executionMode: detectedSkill.executionMode,
-        routeReason: detectedSkill.reason,
-        fallbackOrder: detectedSkill.fallbackOrder,
-        downstreamSkill: detectedSkill.downstreamSkillName,
-        downstreamSkillPath: detectedSkill.downstreamSkillPath,
-        startedAt: startedAt.toISOString(),
-        finishedAt: finishedAt.toISOString(),
-        durationMs: Math.max(0, finishedAt.getTime() - startedAt.getTime()),
-        resumed: Boolean(recoveredReady),
-        schemaAttempts,
-      };
-      result = await validateOutputArtifacts(combined, workspace, packaged);
-      assertCodexDirectMasterOutput(result, packaged);
-      validateResult(result, schema, true);
-      await writeJsonAtomic(join(workspace, "result.json"), result);
-    } else if (!result) {
+    if (!result) {
       await report("CODEX", 25, directOutputTask
         ? `正在由 ${detectedSkill.downstreamSkillName || "video-editing-from-media-library"} 自主创作并制作成片`
         : `正在由 ${detectedSkill.downstreamSkillName || detectedSkill.name} 执行当前任务阶段`, {
