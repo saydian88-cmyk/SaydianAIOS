@@ -2221,6 +2221,7 @@ async function validateMandatoryVideoEvidence(
 ) : Promise<QualityWarning[]> {
   const task = record(taskPackageValue.task);
   const execution = record(taskPackageValue.execution);
+  const taskInput = record(task.input);
   if (String(task.type || "") !== "VIDEO" || !["FULL_VIDEO", "SIMILAR_VIDEO", "NO_VOICE_VIDEO"].includes(String(execution.mode || ""))) return [];
   let qualityWarnings: QualityWarning[] = [];
   const warn = async (validator: string, summary: string) => {
@@ -2330,6 +2331,13 @@ async function validateMandatoryVideoEvidence(
   const shotPlan = record(await readJson<JsonRecord>(join(workspace, "shot-plan.json")));
   const videos = Array.isArray(shotPlan.videos) ? shotPlan.videos.map(record) : [];
   const shots = videos.flatMap((video) => Array.isArray(video.shots) ? video.shots.map(record) : []);
+  if (taskInput.batchCodexDirectFullVideo === true) {
+    const productionPlan = record(await readJson<JsonRecord>(join(workspace, "production-plan.json")));
+    const plannedShots = Array.isArray(productionPlan.shots) ? productionPlan.shots : [];
+    if (plannedShots.length !== shots.length) {
+      throw new Error(`Batch direct shot-plan mismatch: planned ${plannedShots.length}, actual ${shots.length}`);
+    }
+  }
   const productModel = String(task.productModel || directInput.productModel || "").trim();
   if (/^W8Ultra$/iu.test(productModel)) {
     const conflicts = shots.filter((shot) => /(?:W8U|W8Ultra)[-_ ]?R(?:\b|[-_ ])/iu.test(String(shot.source || "")));
@@ -2338,15 +2346,21 @@ async function validateMandatoryVideoEvidence(
 
   const transitions = record(await readJson<JsonRecord>(join(workspace, "transition-qc.json")));
   const cuts = Array.isArray(transitions.cuts) ? transitions.cuts.map(record) : [];
-  if (cuts.length !== Math.max(0, shots.length - videos.length)) {
-    await warn("transition-qc.json", "转场复核记录未逐一覆盖全部剪辑点");
+  for (const video of videos) {
+    const videoKey = String(video.video_id || video.videoKey || video.id || "").trim();
+    const videoShots = Array.isArray(video.shots) ? video.shots.map(record) : [];
+    const videoCuts = cuts.filter((cut) => String(cut.videoKey || cut.video_id || cut.videoId || "").trim() === videoKey);
+    const expectedCuts = Math.max(0, videoShots.length - 1);
+    if (!videoKey || videoCuts.length !== expectedCuts) {
+      throw new Error(`Transition evidence mismatch for ${videoKey || "unnamed video"}: expected ${expectedCuts}, got ${videoCuts.length}`);
+    }
   }
   const invalidCuts = cuts.filter((cut) => Number(cut.beforeSeconds || 0) < 0.6
     || Number(cut.afterSeconds || 0) < 0.6
     || cut.passed !== true
     || !String(cut.observation || "").trim()
     || !String(cut.transition || "").trim());
-  if (invalidCuts.length) await warn("transition-qc.json", "部分转场缺少完整复核记录或可优化观察");
+  if (invalidCuts.length) throw new Error("Transition evidence is incomplete or failed rendered-cut review");
 
   if (cuts.length >= 3 && new Set(cuts.map((cut) => String(cut.transition || "").trim().toLowerCase())).size === 1) {
     await warn("transition-qc.json", "多个剪辑点使用同一转场，建议在下次版本优化节奏");
