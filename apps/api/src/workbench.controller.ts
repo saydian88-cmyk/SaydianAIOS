@@ -2010,7 +2010,9 @@ export class WorkbenchController {
       .find((candidate: Record<string, unknown>) => String(candidate.id || "") === directTaskId);
     // Let the employee's own project refresh repair a historical registration
     // gap immediately instead of waiting behind unrelated scheduler work.
-    if (directTask?.status === "WAITING_INPUT") {
+    const batchPackagingIncomplete = Array.isArray(object(currentFactory?.brief).batchDirect?.results)
+      && object(currentFactory?.brief).batchDirect.results.some((item: Record<string, unknown>) => Array.isArray(item.tags) && item.tags.length < 5);
+    if (directTask?.status === "WAITING_INPUT" || (directTask?.status === "PENDING_REVIEW" && batchPackagingIncomplete)) {
       await this.aiTasks.reconcileDirectVideoTask(directTaskId);
       project = await this.videoFactory.project(id) as Record<string, any>;
     }
