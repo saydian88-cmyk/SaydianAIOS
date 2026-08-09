@@ -237,7 +237,7 @@ describe("AiTaskCenterService", () => {
     expect(aiTaskTargetNodeCode({
       sourceType: "VIDEO_FACTORY_PROJECT",
       input: { executionMode: "SCRIPT_ONLY" },
-    })).toBe("windows-codex-video-01");
+    })).toBe("windows-codex-01");
   });
 
   it("honors an explicit target node without routing unrelated content tasks", () => {
@@ -733,7 +733,7 @@ describe("AiTaskCenterService", () => {
 
     expect(create.mock.calls[0][0].data.input).toMatchObject({
       executionMode: "SCRIPT_ONLY",
-      preferredNodeCode: "windows-codex-video-01",
+      preferredNodeCode: "windows-codex-01",
       taskRoute: {
         version: 1,
         domain: "VIDEO_PROJECT",

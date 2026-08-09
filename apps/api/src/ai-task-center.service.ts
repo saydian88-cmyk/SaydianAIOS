@@ -36,7 +36,7 @@ const taskTypes: AiTaskType[] = [
 const claimableStatuses: AiTaskStatus[] = ["PENDING", "RETRY"];
 const reviewableStatuses: AiTaskStatus[] = ["PENDING_REVIEW", "RETURNED"];
 const smartVideoPrimaryNodeCode = text(process.env.AI_TASK_SMART_VIDEO_PRIMARY_NODE_CODE)
-  || "windows-codex-video-01";
+  || "windows-codex-01";
 const platformKinds: IntegrationKind[] = [
   "DOUYIN", "TIKTOK", "WECHAT_OFFICIAL", "XIAOHONGSHU", "WECOM", "WECHAT_CHANNELS",
   "AMAZON", "SHOPIFY", "TMALL", "JD", "PINDUODUO",
