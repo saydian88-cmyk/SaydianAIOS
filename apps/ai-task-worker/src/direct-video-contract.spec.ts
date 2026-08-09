@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertCodexDirectMasterOutput, batchDirectOutputFilesSchema, batchVideoRequests } from "./direct-video-contract";
+import { assertCodexDirectMasterOutput, batchDirectOutputFilesSchema, batchVideoRequests, pendingBatchVideoKeys } from "./direct-video-contract";
 
 const batchTask = {
   task: {
@@ -26,6 +26,13 @@ describe("batch Codex direct-video result contract", () => {
       { videoKey: "2-1", productModel: "W8Ultra", ordinal: 1 },
       { videoKey: "2-2", productModel: "W8Ultra", ordinal: 2 },
     ]);
+  });
+
+  it("continues only the keys without a durable READY result", () => {
+    expect(pendingBatchVideoKeys(batchTask.task.input, [
+      { videoKey: "1-1", status: "READY" },
+      { videoKey: "1-2", status: "FAILED" },
+    ])).toEqual(["1-2", "2-1", "2-2"]);
   });
 
   it("accepts several masters and preserves a partial batch result", () => {

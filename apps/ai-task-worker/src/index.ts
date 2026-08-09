@@ -41,7 +41,7 @@ import {
   type RepairCategory,
 } from "./execution-repair";
 import { appendQualityWarning, classifyQualityGate, type QualityWarning } from "./quality-gates";
-import { assertCodexDirectMasterOutput, batchDirectOutputFilesSchema, batchVideoRequests, expectedBatchVideoKeys, isCodexDirectFullVideoTask } from "./direct-video-contract";
+import { assertCodexDirectMasterOutput, batchDirectOutputFilesSchema, batchVideoRequests, expectedBatchVideoKeys, isCodexDirectFullVideoTask, pendingBatchVideoKeys } from "./direct-video-contract";
 
 function record(value: unknown): JsonRecord {
   return value && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : {};
@@ -2545,6 +2545,71 @@ async function uploadFile(taskId: string, workspace: string, item: JsonRecord) {
   return response.text();
 }
 
+function packageForBatchContinuation(taskPackageValue: JsonRecord, retryVideoKeys: string[]) {
+  const task = record(taskPackageValue.task);
+  return {
+    ...taskPackageValue,
+    task: {
+      ...task,
+      input: {
+        ...record(task.input),
+        retryVideoKeys,
+      },
+    },
+  };
+}
+
+function mergeBatchDirectResult(previous: JsonRecord, next: JsonRecord) {
+  const outputFiles = new Map<string, JsonRecord>();
+  for (const item of [...(Array.isArray(previous.outputFiles) ? previous.outputFiles : []), ...(Array.isArray(next.outputFiles) ? next.outputFiles : [])]) {
+    const file = record(item);
+    outputFiles.set(`${String(file.kind || "")}:${String(file.path || "")}`, file);
+  }
+  const batchResults = new Map<string, JsonRecord>();
+  for (const item of [...(Array.isArray(previous.batchResults) ? previous.batchResults : []), ...(Array.isArray(next.batchResults) ? next.batchResults : [])]) {
+    const batchResult = record(item);
+    batchResults.set(String(batchResult.videoKey || ""), batchResult);
+  }
+  return {
+    ...previous,
+    ...next,
+    outputFiles: [...outputFiles.values()],
+    batchResults: [...batchResults.values()],
+  };
+}
+
+async function recoverReadyBatchResult(workspace: string, input: JsonRecord) {
+  const savedResult = await readJson<JsonRecord>(join(workspace, "result.json"));
+  if (!savedResult) return undefined;
+  const expectedKeys = new Set(expectedBatchVideoKeys(input));
+  const savedFiles = Array.isArray(savedResult.outputFiles) ? savedResult.outputFiles.map(record) : [];
+  const savedBatchResults = Array.isArray(savedResult.batchResults) ? savedResult.batchResults.map(record) : [];
+  const outputFiles: JsonRecord[] = [];
+  const batchResults: JsonRecord[] = [];
+  const coversRequired = record(input.batchDirectInput).generateCoverTitle !== false;
+  for (const item of savedBatchResults) {
+    const videoKey = String(item.videoKey || "").trim();
+    if (!expectedKeys.has(videoKey) || String(item.status || "").toUpperCase() !== "READY") continue;
+    const outputFile = String(item.outputFile || "").trim();
+    const coverFile = String(item.coverFile || "").trim();
+    const master = savedFiles.find((file) => String(file.path || "") === outputFile && String(file.kind || "").toUpperCase() === "VIDEO_MASTER");
+    const cover = savedFiles.find((file) => String(file.path || "") === coverFile && String(file.kind || "").toUpperCase() === "COVER_IMAGE");
+    const paths = [outputFile, ...(coversRequired ? [coverFile] : [])];
+    if (!master || (coversRequired && !cover) || paths.some((path) => !path || relative(workspace, resolve(workspace, path)).startsWith(".."))) continue;
+    const filesExist = await Promise.all(paths.map(async (path) => (await stat(resolve(workspace, path)).catch(() => undefined))?.isFile()));
+    if (filesExist.some((exists) => !exists)) continue;
+    batchResults.push(item);
+    outputFiles.push(master);
+    if (cover) outputFiles.push(cover);
+  }
+  if (!batchResults.length) return undefined;
+  return {
+    ...savedResult,
+    outputFiles,
+    batchResults,
+  };
+}
+
 async function execute(claimed: JsonRecord) {
   const task = claimed.task as JsonRecord;
   const taskId = String(task.id || "");
@@ -2759,7 +2824,102 @@ async function execute(claimed: JsonRecord) {
       }
     }
 
-    if (!result) {
+    if (!result && batchDirectTask && expectedBatchVideoKeys(record(packagedTask.input)).length > 1) {
+      const originalInput = record(packagedTask.input);
+      schemaAttempts = 0;
+      const recoveredReady = await recoverReadyBatchResult(workspace, originalInput);
+      const pendingKeys = pendingBatchVideoKeys(
+        originalInput,
+        Array.isArray(recoveredReady?.batchResults) ? recoveredReady.batchResults : [],
+      );
+      let combined: JsonRecord = recoveredReady || {
+        summary: "Batch Codex direct-video continuation",
+        outputFiles: [],
+        batchResults: [],
+        delivery: {
+          productModel: String(packagedTask.productModel || ""),
+          taskMode: "CODEX_DIRECT_FULL_VIDEO",
+          finalReviewOnly: true,
+        },
+      };
+      if (recoveredReady) {
+        await appendExecutionLog(workspace, "BATCH_READY_OUTPUTS_RETAINED", {
+          videoKeys: Array.isArray(recoveredReady.batchResults)
+            ? recoveredReady.batchResults.map(record).map((item) => item.videoKey)
+            : [],
+        });
+      }
+      for (const videoKey of pendingKeys) {
+        const continuationPackage = packageForBatchContinuation(packaged, [videoKey]);
+        const continuationSchema = outputSchema(
+          String(packagedTask.type || ""),
+          String(execution.mode || ""),
+          Number(requirements.exactCount || 10),
+          true,
+          false,
+          true,
+          1,
+          detectedSkill.key === "saydian-douyin-viral-video-generator",
+        );
+        let internalCorrection = [
+          `BATCH_CONTINUATION: Create only videoKey=${videoKey}.`,
+          "Keep every existing READY output untouched; this is a continuation, never a full batch rerun.",
+          "A time-window boundary is not a production failure. Finish this one key and return its real master and cover.",
+        ].join("\n");
+        await report("CODEX", 25, `正在续跑批量成片 ${videoKey}，已完成的成品不会重做`);
+        const generated = await runWithSchemaRetry(
+          async (schemaAttempt) => {
+            await appendExecutionLog(workspace, "CODEX_BATCH_CONTINUATION_ATTEMPT", { videoKey, schemaAttempt });
+            return runCodex(continuationPackage, detectedSkill, workspace, timeoutSeconds, schemaAttempt, internalCorrection);
+          },
+          (candidate) => {
+            try {
+              validateResult(candidate, continuationSchema);
+            } catch (error) {
+              internalCorrection = error instanceof Error ? error.message : String(error);
+              throw error;
+            }
+            return candidate;
+          },
+          3,
+        );
+        schemaAttempts += generated.attempts;
+        let continuationResult = await renderLocalVideo(generated.result, continuationPackage, workspace);
+        continuationResult = await validateOutputArtifacts(continuationResult, workspace, continuationPackage);
+        assertCodexDirectMasterOutput(continuationResult, continuationPackage);
+        validateResult(continuationResult, continuationSchema, true);
+        combined = mergeBatchDirectResult(combined, continuationResult);
+        await writeJsonAtomic(join(workspace, "result.json"), combined);
+        await appendExecutionLog(workspace, "BATCH_CONTINUATION_READY", { videoKey });
+      }
+      const remainingKeys = pendingBatchVideoKeys(
+        originalInput,
+        Array.isArray(combined.batchResults) ? combined.batchResults : [],
+      );
+      if (remainingKeys.length) throw new Error(`Batch continuation did not return required video keys: ${remainingKeys.join(", ")}`);
+      const finishedAt = new Date();
+      combined.execution = {
+        skill: detectedSkill.name,
+        skillVersion: detectedSkill.version,
+        skillDigest: detectedSkill.digest,
+        ...(detectedSkill.skillPath ? { skillPath: detectedSkill.skillPath } : {}),
+        strategy: detectedSkill.strategy,
+        executionMode: detectedSkill.executionMode,
+        routeReason: detectedSkill.reason,
+        fallbackOrder: detectedSkill.fallbackOrder,
+        downstreamSkill: detectedSkill.downstreamSkillName,
+        downstreamSkillPath: detectedSkill.downstreamSkillPath,
+        startedAt: startedAt.toISOString(),
+        finishedAt: finishedAt.toISOString(),
+        durationMs: Math.max(0, finishedAt.getTime() - startedAt.getTime()),
+        resumed: Boolean(recoveredReady),
+        schemaAttempts,
+      };
+      result = await validateOutputArtifacts(combined, workspace, packaged);
+      assertCodexDirectMasterOutput(result, packaged);
+      validateResult(result, schema, true);
+      await writeJsonAtomic(join(workspace, "result.json"), result);
+    } else if (!result) {
       await report("CODEX", 25, directOutputTask
         ? `正在由 ${detectedSkill.downstreamSkillName || "video-editing-from-media-library"} 自主创作并制作成片`
         : `正在由 ${detectedSkill.downstreamSkillName || detectedSkill.name} 执行当前任务阶段`, {

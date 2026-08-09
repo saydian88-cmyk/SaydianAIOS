@@ -57,6 +57,22 @@ export function expectedBatchVideoKeys(input: JsonRecord) {
   return batchVideoRequests(input).map((item) => item.videoKey);
 }
 
+/**
+ * A retried batch must retain each durable READY deliverable and create only
+ * the missing keys. This keeps an execution-window timeout from turning a
+ * partly completed batch into a full rerender.
+ */
+export function pendingBatchVideoKeys(input: JsonRecord, batchResults: unknown[]) {
+  const readyKeys = new Set(
+    batchResults
+      .map(record)
+      .filter((item) => String(item.status || "").toUpperCase() === "READY")
+      .map((item) => String(item.videoKey || "").trim())
+      .filter(Boolean),
+  );
+  return expectedBatchVideoKeys(input).filter((videoKey) => !readyKeys.has(videoKey));
+}
+
 export function isCodexDirectFullVideoTask(taskPackage: JsonRecord) {
   const task = record(taskPackage.task);
   const execution = record(taskPackage.execution);
