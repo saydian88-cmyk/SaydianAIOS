@@ -1877,14 +1877,14 @@ function videoLibrarySourceProject(entry?: Row): Row {
 }
 
 function videoLibraryLanguageInstruction() {
-  if (videoLibraryCreateForm.targetLanguage === "EN") return "新生成的字幕和贴纸文案等都用英文，这条视频面向英文社交平台；未要求重配的原声保持不变。";
+  if (videoLibraryCreateForm.targetLanguage === "EN") return "字幕、口播和贴纸文案等都用英文，这条视频面向英文社交平台；必须使用英文重新配音，不得保留冲突的原口播。";
   if (videoLibraryCreateForm.targetLanguage === "OTHER") {
     const language = videoLibraryCreateForm.customLanguage.trim();
     return language
-      ? `新生成的字幕和贴纸文案等都用${language}，这条视频面向${language}社交平台；未要求重配的原声保持不变。`
+      ? `字幕、口播和贴纸文案等都用${language}，这条视频面向${language}社交平台；必须使用${language}重新配音，不得保留冲突的原口播。`
       : "请填写新生成字幕和贴纸文案所用的语言。";
   }
-  return "新生成的字幕和贴纸文案等都用中文，这条视频面向中文社交平台；未要求重配的原声保持不变。";
+  return "字幕、口播和贴纸文案等都用中文，这条视频面向中文社交平台；如改写产品、钩子、卖点或其它内容，必须重配对应口播，不得保留冲突的原口播。";
 }
 
 function videoLibrarySourceTaskSummary(entry?: Row) {
@@ -1908,7 +1908,7 @@ function syncVideoLibraryTaskRequirement() {
     if (videoLibraryCreateForm.replaceFeature && videoLibraryCreateForm.feature.trim()) changes.push(`核心卖点改为：${videoLibraryCreateForm.feature.trim()}。`);
     if (videoLibraryCreateForm.replaceOther && videoLibraryCreateForm.otherChange.trim()) changes.push(`其它修改：${videoLibraryCreateForm.otherChange.trim()}。`);
     changes.push(languageInstruction);
-    videoLibraryCreateForm.taskRequirement = ["成品库参考直出：直接复用参考视频的画面和完整可用原声，只按下列要求修改；未列出的画面、结构、节奏和原声保持不变。", ...changes].join("\n");
+    videoLibraryCreateForm.taskRequirement = ["参考视频直出：直接在我给你的参考视频基础上修改。只保留未要求改写的画面、结构和节奏；所有与本次改写冲突的产品画面、口播、字幕和贴纸文案必须同步替换。", ...changes, "其它保持不变。"].join("\n");
     return;
   }
   const changes: string[] = [];

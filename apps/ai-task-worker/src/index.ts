@@ -1096,6 +1096,7 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
   if (isReferenceDirectFullVideo) {
     const directInput = record(taskInput.referenceDirectInput);
     const revision = record(directInput.revision || taskInput.revision);
+    const changeSet = record(directInput.changeSet);
     const isRevision = Boolean(String(revision.reviewNote || "").trim());
     const reuseReferenceVisuals = String(directInput.referenceVisualStrategy || "") === "REUSE_REFERENCE_VISUALS";
     const revoiceWithDoubao = String(directInput.referenceAudioStrategy || "") === "DOUBAO_REVOICE";
@@ -1113,6 +1114,9 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
       reuseReferenceVisuals
         ? "REFERENCE_VISUAL_POLICY: This content-library job is authorized to directly reuse the reference video's pictures and footage. Keep every unmodified visual, structure and pacing element; only change the employee-requested parts. If replacing the product, replace only affected product shots with real footage of the requested product."
         : "REFERENCE_VISUAL_POLICY: Do not copy the reference video's pictures, people, brands or footage. Rebuild the visuals with exact-product real footage selected from the local media library while following the reference audio, beat map, section structure, pacing, transitions and packaging rhythm.",
+      Object.keys(changeSet).length
+        ? `REFERENCE_CHANGE_SET: ${JSON.stringify(changeSet)}. Treat every enabled change as mandatory. Before delivery, verify each changed product, hook, selling point, other change and language against the final video; do not leave old spoken copy, subtitles, stickers or product shots that contradict an enabled change.`
+        : "REFERENCE_CHANGE_SET: No requested rewrite. Preserve the reference content exactly unless a technical repair is required.",
       "Do not stop for employee approval of an internal script, shot plan, footage selection, production plan or packaging. Create and validate all mandatory Skill artifacts internally, repair correctable issues, render, and return only the final VIDEO_MASTER for employee review.",
       "The empty assets and snapshots arrays are intentional. Never request system materialBindings and never treat them as a whitelist.",
       "Create and validate the full evidence set required by the editing Skill, including production-plan, hard-requirements, shot-plan, composition, packaging, audio, transition and HyperFrames render evidence. A plain FFmpeg concat is not an acceptable finished video.",

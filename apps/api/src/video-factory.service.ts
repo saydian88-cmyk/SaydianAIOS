@@ -32,6 +32,7 @@ type ProjectCreateInput = {
   referenceDirectTaskRequirement?: string;
   referenceAudioStrategy?: "REFERENCE_ORIGINAL" | "DOUBAO_REVOICE";
   referenceVisualStrategy?: "REBUILD_PRODUCT_VISUALS" | "REUSE_REFERENCE_VISUALS";
+  referenceDirectChangeSet?: Record<string, unknown>;
   platform?: string;
   voiceoverMode?: string;
   accountType?: string;
@@ -1810,6 +1811,7 @@ export class VideoFactoryService {
       ...(referenceDirect ? {
         referenceAudioStrategy: input.referenceAudioStrategy === "DOUBAO_REVOICE" ? "DOUBAO_REVOICE" : "REFERENCE_ORIGINAL",
         referenceVisualStrategy: input.referenceVisualStrategy === "REUSE_REFERENCE_VISUALS" ? "REUSE_REFERENCE_VISUALS" : "REBUILD_PRODUCT_VISUALS",
+        ...(input.referenceDirectChangeSet ? { referenceDirectChangeSet: input.referenceDirectChangeSet } : {}),
       } : {}),
       ...(codexDirect ? { codexDirectFullVideo: true, directOutputOnly: true } : {}),
       ...(batchDirect ? {

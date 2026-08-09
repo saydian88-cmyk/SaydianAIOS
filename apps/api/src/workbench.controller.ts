@@ -2149,6 +2149,7 @@ export class WorkbenchController {
           prompt: finalTaskRequirement,
           referenceAudioStrategy,
           referenceVisualStrategy,
+          ...(Object.keys(object(brief.referenceDirectChangeSet)).length ? { changeSet: object(brief.referenceDirectChangeSet) } : {}),
           ...(Object.keys(revision).length ? { revision } : {}),
         },
         workflowGuard: { projectId: project.id, workflowVersion: project.workflowVersion, stage: "FULL_VIDEO", allowedProjectStages: ["PROJECT_BRIEF", "EDITING"] },
@@ -3001,8 +3002,7 @@ export class WorkbenchController {
     }
     const snapshot = object(entry.snapshot);
     const source = object(snapshot.project);
-    // 成品库创建项目统一以当前成片作为完整参考直出，不再走会回到脚本审核的“复用配置”分支。
-    const mode = "REFERENCE_DIRECT";
+    const mode = body.mode === "REUSE_CONFIG" ? "CONFIG_REUSE" : "REFERENCE_DIRECT";
     const language = body.targetLanguage === "OTHER" ? "OTHER" : body.targetLanguage === "EN" ? "EN" : "ZH";
     const replaceProduct = body.replaceProduct === true;
     const productModel = String((replaceProduct ? body.productModel : undefined) || source.productModel || entry.productModel || "").trim();
@@ -3016,20 +3016,37 @@ export class WorkbenchController {
     if (language === "OTHER" && !String(body.customLanguage || "").trim()) throw new BadRequestException("请填写内容语言");
     const taskRequirement = String(body.taskRequirement || "").trim();
     const additionalPrompt = taskRequirement || [originalPrompt, languagePrompt].filter(Boolean).join("\n");
+    const replaceHook = body.replaceHook === true && Boolean(String(body.hook || "").trim());
+    const replaceFeature = body.replaceFeature === true && Boolean(String(body.feature || "").trim());
+    const replaceOther = body.replaceOther === true && Boolean(String(body.otherChange || "").trim());
+    const changeSet = {
+      replaceProduct,
+      productModel: replaceProduct ? productModel : undefined,
+      replaceHook,
+      hook: replaceHook ? String(body.hook).trim() : undefined,
+      replaceFeature,
+      feature: replaceFeature ? String(body.feature).trim() : undefined,
+      replaceOther,
+      otherChange: replaceOther ? String(body.otherChange).trim() : undefined,
+      targetLanguage: language,
+      customLanguage: language === "OTHER" ? String(body.customLanguage || "").trim() : undefined,
+    };
+    const revoiceRequired = replaceProduct || replaceHook || replaceFeature || replaceOther || language !== "ZH";
     const project = await this.videoFactory.createProject({
       projectMode: mode === "REFERENCE_DIRECT" ? "REFERENCE_DIRECT_FULL_VIDEO" : "STANDARD",
       referenceVideoUrl: mode === "REFERENCE_DIRECT" ? `asset:${entry.outputAssetId}` : undefined,
       referenceDirectTaskRequirement: mode === "REFERENCE_DIRECT"
         ? additionalPrompt
         : undefined,
-      referenceAudioStrategy: "REFERENCE_ORIGINAL",
+      referenceAudioStrategy: revoiceRequired ? "DOUBAO_REVOICE" : "REFERENCE_ORIGINAL",
       referenceVisualStrategy: "REUSE_REFERENCE_VISUALS",
+      referenceDirectChangeSet: mode === "REFERENCE_DIRECT" ? changeSet : undefined,
       platform: String(source.platform || entry.platform || "DOUYIN"),
       voiceoverMode: String(source.voiceoverMode || "AUTO"),
       productModel,
       topic: String(body.topic || source.topic || entry.title),
       audience: String(source.audience || "目标用户"),
-      objective: `${String(body.replaceFeature && String(body.feature || "").trim() || source.objective || "参考成品重新创作")}\n来源成品：${entry.title}`,
+      objective: `${String(replaceFeature ? String(body.feature || "").trim() : source.objective || "参考成品重新创作")}\n来源成品：${entry.title}`,
       videoType: String(source.videoType || "场景种草型"),
       keywords: String(source.keywords || source.topic || entry.title),
       hook: String(body.replaceHook ? body.hook : source.hook || ""),
@@ -3042,14 +3059,16 @@ export class WorkbenchController {
       targetLanguage: language,
       referenceAssetId: entry.outputAssetId,
     }, employee.name) as Record<string, any>;
-    const submitted = await this.submitReferenceDirectFullVideoTask(authorization, String(project.id));
+    const submitted = mode === "REFERENCE_DIRECT"
+      ? await this.submitReferenceDirectFullVideoTask(authorization, String(project.id))
+      : await this.submitVideoScriptTask(authorization, String(project.id));
     const finalProject = submitted.project as Record<string, any>;
     const task = await this.workbench.ensureVideoProjectTask({ employeeId: employee.employeeId, name: employee.name }, {
       id: String(finalProject.id), productionNo: finalProject.productionNo ? String(finalProject.productionNo) : null,
       topic: finalProject.topic ? String(finalProject.topic) : null, productionStage: finalProject.productionStage ? String(finalProject.productionStage) : null,
     });
     await this.prisma.auditLog.create({
-      data: { actor: employee.name, action: "VIDEO_LIBRARY_PROJECT_CREATE", entityType: "ContentLibraryEntry", entityId: entry.id, after: { projectId: finalProject.id, mode, targetLanguage: language, productModel, replaceProduct, replaceHook: body.replaceHook === true, replaceFeature: body.replaceFeature === true } },
+      data: { actor: employee.name, action: "VIDEO_LIBRARY_PROJECT_CREATE", entityType: "ContentLibraryEntry", entityId: entry.id, after: { projectId: finalProject.id, mode, targetLanguage: language, productModel, replaceProduct, replaceHook, replaceFeature, replaceOther, revoiceRequired } },
     });
     return { ...finalProject, linkedTask: task, mode };
   }
