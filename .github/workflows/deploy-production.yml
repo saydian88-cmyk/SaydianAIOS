@@ -134,7 +134,7 @@ jobs:
               "ghcr.io/${{ github.repository_owner }}/saydianaios/ops-workbench:${{ github.sha }}" \
               nginx:1.27-alpine \
               | gzip -1 > /tmp/saydian-ops-images.tar.gz
-            sha256sum /tmp/saydian-ops-images.tar.gz > /tmp/saydian-ops-images.tar.gz.sha256
+            (cd /tmp && sha256sum saydian-ops-images.tar.gz > saydian-ops-images.tar.gz.sha256)
             oss_transfer_ready=true
             if ! curl -fsSL --retry 5 --retry-all-errors -o /tmp/ossutil.zip \
               https://gosspublic.alicdn.com/ossutil/v2/2.3.0/ossutil-2.3.0-linux-amd64.zip \
