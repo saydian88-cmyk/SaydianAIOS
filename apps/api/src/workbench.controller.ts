@@ -2783,6 +2783,10 @@ export class WorkbenchController {
         await this.videoFactory.reviewOutput(render.outputAssetId, true, employee.name, "批量成片审核通过");
       }
     }
+    const unresolved = await this.prisma.videoRenderJob.count({
+      where: { contentPlanId: id, status: "SUCCEEDED", outputAsset: { reviewStatus: { not: "APPROVED" } } },
+    });
+    if (unresolved) throw new BadRequestException(`仍有 ${unresolved} 条成片未通过审核，不能进入发布与回传`);
     const coverAiTaskId = String(factory.coverAiTaskId || "").trim();
     if (coverAiTaskId) {
       await this.prisma.aiTask.updateMany({
