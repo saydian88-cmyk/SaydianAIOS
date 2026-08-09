@@ -1891,7 +1891,7 @@ function videoLibraryLanguageInstruction() {
 function videoLibrarySourceTaskSummary(entry?: Row) {
   const source = videoLibrarySourceProject(entry);
   const snapshot = entry?.snapshot || {};
-  const summary = String(snapshot.taskSummary || source.taskSummary || source.objective || "").trim();
+  const summary = String(snapshot.taskRequirement || snapshot.taskSummary || source.taskRequirement || source.taskSummary || source.objective || "").trim();
   return /^内容测试[。.!！]?$/.test(summary) ? "" : summary;
 }
 
@@ -1927,7 +1927,7 @@ function syncVideoLibraryTaskRequirement() {
 async function openVideoLibraryCreate() {
   const entry = videoLibraryDetail.value;
   if (!entry) return;
-  videoLibraryCreateForm.mode = "REFERENCE_DIRECT";
+  videoLibraryCreateForm.mode = "REUSE_CONFIG";
   videoLibraryCreateForm.productModel = String(videoLibrarySourceProject(entry).productModel || entry.productModel || entry.contentPlan?.productModel || "");
   videoLibraryCreateForm.replaceProduct = false;
   videoLibraryCreateForm.replaceHook = false;
