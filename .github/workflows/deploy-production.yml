@@ -140,21 +140,29 @@ jobs:
               fi
             }
             trap cleanup_oss EXIT
-            "$ossutil_bin" cp /tmp/saydian-ops-images.tar.gz "$object_uri" \
-              --endpoint https://oss-cn-shenzhen.aliyuncs.com --region cn-shenzhen --force
-            uploaded_to_oss=true
-            download_url="$("$ossutil_bin" presign "$object_uri" \
-              --endpoint https://oss-cn-shenzhen.aliyuncs.com --region cn-shenzhen --expires-duration 6h \
-              | grep -Eo 'https?://[^[:space:]]+' | head -n 1)"
-            test -n "$download_url"
-            echo "::add-mask::$download_url"
-            printf '%s' "$download_url" > /tmp/saydian-ops-images.url
-            scp -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -P "${{ secrets.TENCENT_PORT || '22' }}" \
-              /tmp/saydian-ops-images.url /tmp/saydian-ops-images.tar.gz.sha256 \
-              deploy/docker-compose.prod.yml deploy/gateway-nginx.conf deploy/deploy-ops.sh deploy/set-production-env.py \
-              "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}:/tmp/"
+            if "$ossutil_bin" cp /tmp/saydian-ops-images.tar.gz "$object_uri" \
+              --endpoint https://oss-cn-shenzhen.aliyuncs.com --region cn-shenzhen --force; then
+              uploaded_to_oss=true
+              download_url="$("$ossutil_bin" presign "$object_uri" \
+                --endpoint https://oss-cn-shenzhen.aliyuncs.com --region cn-shenzhen --expires-duration 6h \
+                | grep -Eo 'https?://[^[:space:]]+' | head -n 1)"
+              test -n "$download_url"
+              echo "::add-mask::$download_url"
+              printf '%s' "$download_url" > /tmp/saydian-ops-images.url
+              scp -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -P "${{ secrets.TENCENT_PORT || '22' }}" \
+                /tmp/saydian-ops-images.url /tmp/saydian-ops-images.tar.gz.sha256 \
+                deploy/docker-compose.prod.yml deploy/gateway-nginx.conf deploy/deploy-ops.sh deploy/set-production-env.py \
+                "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}:/tmp/"
+            else
+              echo "OSS image transfer failed; falling back to direct SSH transfer" >&2
+              printf '%s' 'local-file' > /tmp/saydian-ops-images.url
+              scp -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -P "${{ secrets.TENCENT_PORT || '22' }}" \
+                /tmp/saydian-ops-images.tar.gz /tmp/saydian-ops-images.url /tmp/saydian-ops-images.tar.gz.sha256 \
+                deploy/docker-compose.prod.yml deploy/gateway-nginx.conf deploy/deploy-ops.sh deploy/set-production-env.py \
+                "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}:/tmp/"
+            fi
             ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}" \
-              "sudo bash -lc 'set -euo pipefail; download_url=\$(cat /tmp/saydian-ops-images.url); rm -f /tmp/saydian-ops-images.url /tmp/saydian-ops-images.tar.gz; docker container prune -f >/dev/null; curl -fL --retry 8 --retry-all-errors --retry-delay 5 --connect-timeout 30 --continue-at - \"\$download_url\" -o /tmp/saydian-ops-images.tar.gz; cd /tmp; sha256sum -c saydian-ops-images.tar.gz.sha256; install -m 644 /tmp/docker-compose.prod.yml /opt/saydian/config/docker-compose.prod.yml; install -m 644 /tmp/gateway-nginx.conf /opt/saydian/config/gateway-nginx.conf; install -m 755 /tmp/deploy-ops.sh /opt/saydian/bin/deploy-ops.sh; install -m 700 /tmp/set-production-env.py /opt/saydian/bin/set-production-env.py; gzip -dc /tmp/saydian-ops-images.tar.gz | docker load; rm -f /tmp/saydian-ops-images.tar.gz /tmp/saydian-ops-images.tar.gz.sha256'"
+              "sudo bash -lc 'set -euo pipefail; download_url=\$(cat /tmp/saydian-ops-images.url); rm -f /tmp/saydian-ops-images.url; docker container prune -f >/dev/null; if [[ \"\$download_url\" != \"local-file\" ]]; then rm -f /tmp/saydian-ops-images.tar.gz; curl -fL --retry 8 --retry-all-errors --retry-delay 5 --connect-timeout 30 --continue-at - \"\$download_url\" -o /tmp/saydian-ops-images.tar.gz; fi; cd /tmp; sha256sum -c saydian-ops-images.tar.gz.sha256; install -m 644 /tmp/docker-compose.prod.yml /opt/saydian/config/docker-compose.prod.yml; install -m 644 /tmp/gateway-nginx.conf /opt/saydian/config/gateway-nginx.conf; install -m 755 /tmp/deploy-ops.sh /opt/saydian/bin/deploy-ops.sh; install -m 700 /tmp/set-production-env.py /opt/saydian/bin/set-production-env.py; gzip -dc /tmp/saydian-ops-images.tar.gz | docker load; rm -f /tmp/saydian-ops-images.tar.gz /tmp/saydian-ops-images.tar.gz.sha256'"
           fi
       - name: Deploy and verify
         shell: bash
