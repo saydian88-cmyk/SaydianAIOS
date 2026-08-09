@@ -2634,7 +2634,7 @@ function codexDirectTaskTitle(project?: Row) {
 }
 
 function codexDirectHasReviewableMaster(project?: Row) {
-  if (!isCodexDirectVideoProject(project || {})) return false;
+  if (!isCodexOnlyVideoProject(project || {})) return false;
   return Array.isArray(project?.videoRenderJobs)
     && project!.videoRenderJobs.some((job: Row) => (
       job?.status === "SUCCEEDED"
