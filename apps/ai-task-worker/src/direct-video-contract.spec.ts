@@ -39,9 +39,9 @@ describe("batch Codex direct-video result contract", () => {
         { kind: "COVER_IMAGE", path: "out/2-1.jpg", metadata: { videoKey: "2-1" } },
       ],
       batchResults: [
-        { videoKey: "1-1", status: "READY", outputFile: "out/1-1.mp4", coverFile: "out/1-1.jpg", failureReason: "" },
+        { videoKey: "1-1", status: "READY", outputFile: "out/1-1.mp4", coverFile: "out/1-1.jpg", title: "W8Ultra 腕上操作展示", tags: ["赛电W8Ultra", "腕上操作", "智能手表", "气囊表带", "产品展示"], failureReason: "" },
         { videoKey: "1-2", status: "FAILED", outputFile: "", coverFile: "", failureReason: "render failed" },
-        { videoKey: "2-1", status: "READY", outputFile: "out/2-1.mp4", coverFile: "out/2-1.jpg", failureReason: "" },
+        { videoKey: "2-1", status: "READY", outputFile: "out/2-1.mp4", coverFile: "out/2-1.jpg", title: "W8Ultra-R 轻薄机身展示", tags: ["赛电W8Ultra-R", "轻薄机身", "智能手表", "腕上展示", "产品展示"], failureReason: "" },
         { videoKey: "2-2", status: "FAILED", outputFile: "", coverFile: "", failureReason: "render failed" },
       ],
     }, batchTask)).not.toThrow();
@@ -62,12 +62,28 @@ describe("batch Codex direct-video result contract", () => {
       summary: "one completed",
       outputFiles: [{ kind: "VIDEO_MASTER", path: "out/1-1.mp4" }],
       batchResults: [
-        { videoKey: "1-1", status: "READY", outputFile: "out/1-1.mp4", coverFile: "out/1-1.jpg", failureReason: "" },
+        { videoKey: "1-1", status: "READY", outputFile: "out/1-1.mp4", coverFile: "out/1-1.jpg", title: "W8Ultra 腕上操作展示", tags: ["赛电W8Ultra", "腕上操作", "智能手表", "气囊表带", "产品展示"], failureReason: "" },
         { videoKey: "1-2", status: "FAILED", outputFile: "", coverFile: "", failureReason: "render failed" },
         { videoKey: "2-1", status: "FAILED", outputFile: "", coverFile: "", failureReason: "render failed" },
         { videoKey: "2-2", status: "FAILED", outputFile: "", coverFile: "", failureReason: "render failed" },
       ],
     }, batchTask)).toThrow("COVER_IMAGE");
+  });
+
+  it("rejects a READY result with missing title or fewer than five tags", () => {
+    expect(() => assertCodexDirectMasterOutput({
+      summary: "one completed",
+      outputFiles: [
+        { kind: "VIDEO_MASTER", path: "out/1-1.mp4" },
+        { kind: "COVER_IMAGE", path: "out/1-1.jpg", metadata: { videoKey: "1-1" } },
+      ],
+      batchResults: [
+        { videoKey: "1-1", status: "READY", outputFile: "out/1-1.mp4", coverFile: "out/1-1.jpg", title: "", tags: ["a", "b", "c"], failureReason: "" },
+        { videoKey: "1-2", status: "FAILED", outputFile: "", coverFile: "", failureReason: "render failed" },
+        { videoKey: "2-1", status: "FAILED", outputFile: "", coverFile: "", failureReason: "render failed" },
+        { videoKey: "2-2", status: "FAILED", outputFile: "", coverFile: "", failureReason: "render failed" },
+      ],
+    }, batchTask)).toThrow("标题");
   });
 });
 

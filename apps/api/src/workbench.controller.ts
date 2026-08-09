@@ -527,6 +527,49 @@ export class WorkbenchController {
     return this.workbench.outputs(query);
   }
 
+  private async projectWithSignedBatchCoverUrls(project: Record<string, any>) {
+    const signals = Array.isArray(project.sourceSignals) ? project.sourceSignals.map(object) : [];
+    const coverAssetIds = [...new Set(signals.flatMap((signal) => {
+      if (String(signal.type || "") !== "VIDEO_FACTORY") return [];
+      const results = Array.isArray(object(signal.brief).batchDirect?.results)
+        ? object(signal.brief).batchDirect.results.map(object)
+        : [];
+      return results.map((result: Record<string, any>) => String(result.coverAssetId || "").trim()).filter(Boolean);
+    }))];
+    if (!coverAssetIds.length) return project;
+    const assets = await this.prisma.asset.findMany({
+      where: { id: { in: coverAssetIds } },
+      select: { id: true, objectKey: true },
+    });
+    const urlByAssetId = new Map(assets.map((asset) => [
+      asset.id,
+      asset.objectKey ? this.ossStorage.signedDownloadUrl(asset.objectKey, 1_800) : "",
+    ]));
+    return {
+      ...project,
+      sourceSignals: signals.map((signal) => {
+        if (String(signal.type || "") !== "VIDEO_FACTORY") return signal;
+        const brief = object(signal.brief);
+        const batchDirect = object(brief.batchDirect);
+        if (!Array.isArray(batchDirect.results)) return signal;
+        return {
+          ...signal,
+          brief: {
+            ...brief,
+            batchDirect: {
+              ...batchDirect,
+              results: batchDirect.results.map((raw: unknown) => {
+                const result = object(raw);
+                const coverUrl = urlByAssetId.get(String(result.coverAssetId || "").trim());
+                return coverUrl ? { ...result, coverUrl } : result;
+              }),
+            },
+          },
+        };
+      }),
+    };
+  }
+
   @Get("video-library")
   videoLibrary(
     @Headers("authorization") authorization: string | undefined,
@@ -1978,7 +2021,7 @@ export class WorkbenchController {
       await this.aiTasks.reconcileCoverTitleTask(coverTaskId);
       project = await this.videoFactory.project(id) as Record<string, any>;
     }
-    return project;
+    return this.projectWithSignedBatchCoverUrls(project);
   }
 
   @Post("data-center/video-projects/:id/script-review")

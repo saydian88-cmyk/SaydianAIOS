@@ -109,6 +109,12 @@ export function assertCodexDirectMasterOutput(result: JsonRecord, taskPackage: J
         throw new Error(`batchResults ${key} 失败时必须填写 failureReason`);
       }
       if (status === "READY") {
+        if (coversRequired) {
+          const title = String(item.title || "").trim();
+          const tags = [...new Set((Array.isArray(item.tags) ? item.tags : []).map(String).map((tag) => tag.trim()).filter(Boolean))];
+          if (!title) throw new Error(`batchResults ${key} 缺少真实标题`);
+          if (tags.length < 5) throw new Error(`batchResults ${key} 标签不足 5 个`);
+        }
         const outputFile = String(item.outputFile || "").trim();
         if (!outputFile || !masters.some((master) => String(master.path || "").trim() === outputFile)) {
           throw new Error(`batchResults ${key} 未匹配真实 VIDEO_MASTER`);

@@ -1514,14 +1514,7 @@ function batchVideoCoverMeta(video: Row, index: number) {
   if (resultTitle || resultTags.length) {
     return { title: resultTitle || "标题未回传", coverText: resultTitle || "封面未回传", tags: resultTags };
   }
-  const model = String(video.productShort || "赛电");
-  const pools = [
-    { title: "上班来电话不用先摸手机", coverText: "抬腕操作 清晰直观", tags: [`#赛电${model}`, "#智能手表", "#健康关爱", "#血压监测", "#送爸妈"] },
-    { title: "血压变化看得见，爸妈更安心", coverText: "给父母的关心看得见", tags: [`#赛电${model}`, "#智能穿戴", "#父母礼物", "#日常守护", "#健康生活"] },
-    { title: "健康状态随时掌握", coverText: "一天一测 心里有数", tags: [`#赛电${model}`, "#智能手表", "#血压测量", "#远程关爱", "#实用好物"] },
-    { title: "给爸妈的安心，从抬腕开始", coverText: "健康提醒 贴心守护", tags: [`#赛电${model}`, "#智能手表", "#老人健康", "#随时守护", "#真实测评"] },
-  ];
-  return pools[index % pools.length];
+  return { title: "标题未回传", coverText: "封面未回传", tags: [] };
 }
 
 function compactNumber(value?: number | string) {
@@ -5417,7 +5410,7 @@ onBeforeUnmount(() => {
                               <div>
                                 <div class="batch-cover-title">{{ batchVideoCoverMeta(video, index).title }}</div>
                                 <div class="batch-tags"><el-tag v-for="tag in batchVideoCoverMeta(video, index).tags" :key="tag" size="small" type="info">{{ tag }}</el-tag></div>
-                                <div class="batch-tags-note">标签至少 5 个（示例）</div>
+                                <div class="batch-tags-note">标签 {{ batchVideoCoverMeta(video, index).tags.length }}/5{{ batchVideoCoverMeta(video, index).tags.length < 5 ? "，需补全" : "" }}</div>
                               </div>
                             </div>
                           </template>
