@@ -42,7 +42,7 @@ import {
   type RepairCategory,
 } from "./execution-repair";
 import { appendQualityWarning, classifyQualityGate, type QualityWarning } from "./quality-gates";
-import { assertCodexDirectMasterOutput, batchDirectOutputFilesSchema, batchVideoRequests, completeBatchPackagingMetadata, expectedBatchVideoKeys, isCodexDirectFullVideoTask } from "./direct-video-contract";
+import { assertCodexDirectMasterOutput, batchDirectOutputFilesSchema, batchVideoRequests, expectedBatchVideoKeys, isCodexDirectFullVideoTask } from "./direct-video-contract";
 
 function record(value: unknown): JsonRecord {
   return value && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : {};
@@ -382,8 +382,8 @@ function outputSchema(
                   status: { type: "string", enum: ["READY", "FAILED"] },
                   outputFile: { type: "string" },
                   coverFile: { type: "string" },
-                  title: { type: "string" },
-                  tags: { type: "array", items: { type: "string" } },
+                  title: { type: "string", minLength: 1 },
+                  tags: { type: "array", minItems: 5, items: { type: "string", minLength: 1 } },
                   failureReason: { type: "string" },
                 },
                 required: ["videoKey", "status", "outputFile", "coverFile", "title", "tags", "failureReason"],
@@ -2021,10 +2021,7 @@ async function ensureBatchPackaging(result: JsonRecord, workspace: string, taskP
   const input = record(task.input);
   if (input.batchCodexDirectFullVideo !== true || record(input.batchDirectInput).generateCoverTitle === false) return;
   const files = Array.isArray(result.outputFiles) ? result.outputFiles.map(record) : [];
-  const batchResults = completeBatchPackagingMetadata(
-    Array.isArray(result.batchResults) ? result.batchResults.map(record) : [],
-    input,
-  );
+  const batchResults = Array.isArray(result.batchResults) ? result.batchResults.map(record) : [];
   for (const item of batchResults) {
     if (String(item.status || "").toUpperCase() !== "READY") continue;
     const videoKey = String(item.videoKey || "").trim();

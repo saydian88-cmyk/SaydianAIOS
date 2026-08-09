@@ -208,25 +208,6 @@ export function planBatchCodexResults(
   });
 }
 
-function completeBatchPackagingMetadata(result: JsonRecord, inputValue: unknown) {
-  const input = object(inputValue);
-  if (input.batchCodexDirectFullVideo !== true || object(input.batchDirectInput).generateCoverTitle === false) return result;
-  const productValues = object(input.batchDirectInput).products;
-  const products = Array.isArray(productValues) ? productValues.map(object) : [];
-  const modelFor = (videoKey: string) => String(object(products[Math.max(0, Number(videoKey.split("-")[0]) - 1)]).model || "").trim();
-  const batchResults = Array.isArray(result.batchResults) ? result.batchResults.map(object) : [];
-  result.batchResults = batchResults.map((item) => {
-    if (text(item.status).toUpperCase() !== "READY") return item;
-    const model = modelFor(text(item.videoKey));
-    return {
-      ...item,
-      title: text(item.title) || `${model || "赛电产品"} 成片`,
-      tags: [...new Set([...strings(item.tags), ...(model ? [model] : []), "赛电", "智能穿戴", "产品展示", "短视频", "成片审核"])],
-    };
-  });
-  return result;
-}
-
 export function isRecoverableDirectVideoInput(input: unknown) {
   const taskInput = object(input);
   return text(taskInput.executionMode).toUpperCase() === "FULL_VIDEO"
@@ -2564,7 +2545,7 @@ export class AiTaskCenterService implements OnModuleInit {
       where: { aiTaskId: id, workerNodeId: node.id, status: "RUNNING" },
       orderBy: { attemptNo: "desc" },
     });
-    const result = completeBatchPackagingMetadata(object(body.result), task.input);
+    const result = object(body.result);
     const domain = await this.finalizeDomain(task, result, `Codex:${node.nodeCode}`);
     const status = domain.status;
     const progress = status === "RUNNING"
@@ -2707,7 +2688,7 @@ export class AiTaskCenterService implements OnModuleInit {
   async reconcileDirectVideoTask(id: string) {
     const task = await this.prisma.aiTask.findUnique({ where: { id } });
     if (!task || !["WAITING_INPUT", "PENDING_REVIEW"].includes(task.status) || !isRecoverableDirectVideoInput(task.input)) return this.task(id);
-    const result = completeBatchPackagingMetadata(object(task.output), task.input);
+    const result = object(task.output);
     if (!Object.keys(result).length || !resolveDirectVideoProjectId(task)) return this.task(id);
 
     const domain = await this.finalizeDomain(task as Awaited<ReturnType<AiTaskCenterService["ensureRunnerTask"]>>, result, "system-direct-video-reconcile");
