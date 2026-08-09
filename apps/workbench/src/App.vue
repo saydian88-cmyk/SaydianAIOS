@@ -1891,7 +1891,8 @@ function videoLibraryLanguageInstruction() {
 function videoLibrarySourceTaskSummary(entry?: Row) {
   const source = videoLibrarySourceProject(entry);
   const snapshot = entry?.snapshot || {};
-  const summary = String(snapshot.taskRequirement || snapshot.taskSummary || source.taskRequirement || source.taskSummary || source.objective || "").trim();
+  const summary = videoLibraryTaskRequirement(entry)
+    || String(snapshot.taskRequirement || snapshot.taskSummary || source.taskRequirement || source.taskSummary || source.objective || "").trim();
   return /^内容测试[。.!！]?$/.test(summary) ? "" : summary;
 }
 
