@@ -7887,7 +7887,12 @@ onBeforeUnmount(() => {
   <el-dialog v-model="videoLibraryCreateVisible" title="从成品生成类似视频" width="min(760px, 94vw)" class="video-library-create-dialog" destroy-on-close>
     <div class="video-library-create-intro"><strong>{{ videoLibraryTitle(videoLibraryDetail || {}) }}</strong>默认沿用该成品原项目的 AI 任务要求。只勾选需要改写的内容，系统会同步更新最终任务要求。</div>
     <div class="video-library-create-body">
-      <div class="video-library-create-intro">系统会以该成片作为完整参考，直接生成新成片；不再进入脚本审核流程。</div>
+      <span class="video-library-create-label">生成模式</span>
+      <el-radio-group v-model="videoLibraryCreateForm.mode" class="video-library-mode-switch" @change="syncVideoLibraryTaskRequirement">
+        <el-radio-button value="REUSE_CONFIG">复用项目配置</el-radio-button>
+        <el-radio-button value="REFERENCE_DIRECT">参考视频直出</el-radio-button>
+      </el-radio-group>
+      <div class="video-library-create-intro">{{ videoLibraryCreateForm.mode === 'REUSE_CONFIG' ? '以该审核通过成品视频作为镜头节奏与画面结构参考，不直接复用其中的产品素材。' : '直接在我给你的参考视频基础上修改；未要求改写的内容保持不变。' }}</div>
       <span class="video-library-create-label">可选改写项</span>
       <div class="video-library-rewrite-list">
         <div class="video-library-rewrite-item"><el-checkbox v-model="videoLibraryCreateForm.replaceProduct" @change="syncVideoLibraryTaskRequirement">替换产品</el-checkbox><el-select v-model="videoLibraryCreateForm.productModel" :disabled="!videoLibraryCreateForm.replaceProduct" filterable placeholder="搜索或选择产品型号" @change="syncVideoLibraryTaskRequirement"><el-option v-for="product in productOptions" :key="product.id" :label="`${product.modelCode} · ${product.name}`" :value="product.modelCode" /></el-select></div>
