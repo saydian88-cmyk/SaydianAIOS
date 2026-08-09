@@ -2680,6 +2680,35 @@ export class AiTaskCenterService implements OnModuleInit {
     return this.task(id);
   }
 
+  /**
+   * Replays a stored direct-video result when an earlier registration step
+   * left the employee project in progress. This only writes back existing
+   * uploaded masters; it never invokes a renderer or creates a new attempt.
+   */
+  async reconcileDirectVideoTask(id: string) {
+    const task = await this.prisma.aiTask.findUnique({ where: { id } });
+    if (!task || task.status !== "WAITING_INPUT" || !isRecoverableDirectVideoInput(task.input)) return this.task(id);
+    const result = object(task.output);
+    if (!Object.keys(result).length || !resolveDirectVideoProjectId(task)) return this.task(id);
+
+    const domain = await this.finalizeDomain(task as Awaited<ReturnType<AiTaskCenterService["ensureRunnerTask"]>>, result, "system-direct-video-reconcile");
+    const status = domain.status;
+    await this.prisma.aiTask.update({
+      where: { id },
+      data: {
+        status,
+        progress: status === "WAITING_INPUT" ? Math.min(Math.max(task.progress || 60, 60), 90) : 100,
+        progressMessage: domain.message,
+        finishedAt: ["PENDING_REVIEW", "COMPLETED"].includes(status) ? new Date() : null,
+      },
+    });
+    const linkedOpsTaskId = await this.syncSourceOpsTask(task, status, domain.message);
+    if (status === "PENDING_REVIEW" && task.reviewerEmployeeId) {
+      await this.notify(id, task.reviewerEmployeeId, "AI_TASK_REVIEW", "AI结果等待审核", task.title, linkedOpsTaskId);
+    }
+    return this.task(id);
+  }
+
   async runnerFail(token: string, id: string, body: JsonRecord) {
     const node = await this.runner(token, text(body.nodeCode));
     const task = await this.ensureRunnerTask(node.nodeCode, id);

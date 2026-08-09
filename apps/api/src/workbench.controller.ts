@@ -1962,6 +1962,15 @@ export class WorkbenchController {
     const currentFactory = Array.isArray(project.sourceSignals)
       ? project.sourceSignals.find((signal: Record<string, unknown>) => signal?.type === "VIDEO_FACTORY") as Record<string, unknown> | undefined
       : undefined;
+    const directTaskId = String(currentFactory?.videoAiTaskId || currentFactory?.aiTaskId || "");
+    const directTask = (Array.isArray(project.activeAiTasks) ? project.activeAiTasks : [])
+      .find((candidate: Record<string, unknown>) => String(candidate.id || "") === directTaskId);
+    // Let the employee's own project refresh repair a historical registration
+    // gap immediately instead of waiting behind unrelated scheduler work.
+    if (directTask?.status === "WAITING_INPUT") {
+      await this.aiTasks.reconcileDirectVideoTask(directTaskId);
+      project = await this.videoFactory.project(id) as Record<string, any>;
+    }
     const coverTaskId = String(currentFactory?.coverAiTaskId || "");
     const coverTask = (Array.isArray(project.activeAiTasks) ? project.activeAiTasks : [])
       .find((candidate: Record<string, unknown>) => String(candidate.id || "") === coverTaskId);
