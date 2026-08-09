@@ -147,7 +147,7 @@ jobs:
             object_uri="oss://saidian-brand-assets-prod-sz/system-deploy/saydian-ai-os/${{ github.sha }}/saydian-ops-images.tar.gz"
             remote_stage="/opt/saydian/staging/deploy-images"
             ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}" \
-              "sudo bash -lc 'set -e; docker container prune -f >/dev/null; docker image prune -af --filter \"until=24h\" >/dev/null; mkdir -p $remote_stage; rm -f $remote_stage/*; chown ${{ secrets.TENCENT_USER }} $remote_stage'"
+              "sudo bash -lc 'set -e; docker container prune -f >/dev/null; docker system prune -af >/dev/null; mkdir -p $remote_stage; rm -f $remote_stage/*; chown ${{ secrets.TENCENT_USER }} $remote_stage; df -h /opt/saydian'"
             if [[ "$oss_transfer_ready" == "true" && -n "$ossutil_bin" ]] && "$ossutil_bin" cp /tmp/saydian-ops-images.tar.gz "$object_uri" \
               --endpoint https://oss-cn-shenzhen.aliyuncs.com --region cn-shenzhen --force; then
               download_url="$("$ossutil_bin" presign "$object_uri" \
