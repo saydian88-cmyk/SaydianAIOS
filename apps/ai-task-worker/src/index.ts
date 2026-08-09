@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { execFile, spawn } from "node:child_process";
 import type { Dirent } from "node:fs";
-import { copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { directHyperframesLintInstruction, directSingleMasterFinalExemptions, hasHyperframesRenderEvidence, imagePostGroupsInstruction, imagePostMaterialSelectionInstruction, safeName, sha256, verifySha256 } from "./worker-utils";
@@ -97,7 +97,35 @@ async function prepareHyperFramesRuntime(workspace: string) {
   const runtimePath = join(runtimeDir, "gsap-3.14.2.min.js");
   await mkdir(runtimeDir, { recursive: true });
   await copyFile(bundledGsapPath, runtimePath);
+  await prepareHyperFramesCli(workspace);
   return runtimePath;
+}
+
+async function prepareHyperFramesCli(workspace: string) {
+  const localCli = join(workspace, "node_modules", ".bin", "hyperframes.cmd");
+  if ((await stat(localCli).catch(() => undefined))?.isFile()) return localCli;
+
+  const nodeModules = join(workspace, "node_modules");
+  if (await stat(nodeModules).catch(() => undefined)) {
+    throw new Error(`Offline HyperFrames CLI is missing from existing task node_modules: ${nodeModules}`);
+  }
+
+  const cacheRoot = join(String(process.env.LOCALAPPDATA || ""), "npm-cache", "_npx");
+  const entries = await readdir(cacheRoot, { withFileTypes: true }).catch(() => [] as Dirent[]);
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const cachedModules = join(cacheRoot, entry.name, "node_modules");
+    const cachedCli = join(cachedModules, ".bin", "hyperframes.cmd");
+    const cachedPackage = join(cachedModules, "hyperframes", "package.json");
+    const [cli, pkg] = await Promise.all([
+      stat(cachedCli).catch(() => undefined),
+      stat(cachedPackage).catch(() => undefined),
+    ]);
+    if (!cli?.isFile() || !pkg?.isFile()) continue;
+    await symlink(cachedModules, nodeModules, "junction");
+    return localCli;
+  }
+  throw new Error("Offline HyperFrames CLI cache is unavailable on this runner");
 }
 
 interface ExecutionRepairState {
