@@ -1041,6 +1041,7 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
       "REFERENCE_DIRECT_MODE_CONTRACT: This is a reference-video direct-render job using the complete local video-editing-from-media-library Skill.",
       `Read and execute the dispatcher Skill first: ${detectedSkill.skillPath}`,
       `Then read and execute the full local editing Skill: ${detectedSkill.downstreamSkillPath || "G:\\codex\\xcodeplace\\CodexHome\\skills\\video-editing-from-media-library\\SKILL.md"}. Never use the share edition on this machine.`,
+      "EXECUTION_SELECTOR: The dispatcher-selected full Skill path above is the sole execution selector. A legacy local media-library runtime-config.json may contain the text video-editing-from-media-library-share; it is library metadata only, not a selected Skill, not a conflict, and never a reason to stop this full local direct-render task. Do not modify that source-library configuration.",
       "The dispatcher only routes this job. The full editing Skill must independently inspect the reference, learn/search the complete local library, select footage, edit, package, validate and render.",
       revoiceWithDoubao
         ? "REFERENCE_AUDIO_POLICY: Revoice spoken content only with the configured Doubao voice. Windows/SAPI/default system TTS is forbidden. Preserve usable reference BGM, ambience, sound effects and beat map; if Doubao is unavailable, stop with the technical cause instead of substituting a Windows voice."
@@ -1085,6 +1086,7 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
       "The empty assets, snapshots, and materialBindings arrays are intentional. They do not make this a system AI task and must never cause a system-material whitelist request.",
       "Use saidian-ai-task-dispatcher and then the full local video-editing-from-media-library Skill. Never use the share edition as a quality shortcut.",
       "MANDATORY_SKILL_PATH: G:\\codex\\xcodeplace\\CodexHome\\skills\\video-editing-from-media-library\\SKILL.md. Read and execute this exact full local Skill. The dispatcher only routes the task and the share edition is forbidden for this local direct render.",
+      "EXECUTION_SELECTOR: The dispatcher-selected full Skill path above is the sole execution selector. A legacy local media-library runtime-config.json may contain the text video-editing-from-media-library-share; it is library metadata only, not a selected Skill, not a conflict, and never a reason to stop this full local direct-render task. Do not modify that source-library configuration.",
       "Read the active local-library configuration and the verified-editing-videos-by-product manifest. Do not download, request, or return any system task assets.",
       "The full editing Skill must independently learn, search and select VIDEO footage from the complete local library. The dispatcher must not preselect footage, create a candidate whitelist, or require system materialBindings. Use exact-product verified local VIDEO entries and never use another product model, unverified media, images, audio, packaging, cover, sticker, transition or template resources as primary footage.",
       batchDirect
@@ -2603,6 +2605,10 @@ async function execute(claimed: JsonRecord) {
     // LOCAL_RENDER without a video, which previously caused an endless
     // evidence-repair loop instead of a fresh attempt.
     const resumeDirectOutputUpload = directOutputRecovery && Boolean(directRecoveryResult);
+    // For a direct-output task, a stale workspace state or prior repair note is
+    // never enough to resume. Only a reconstructed, validated deliverable can
+    // take the recovery path; otherwise the next Codex run is a fresh creation.
+    const freshDirectCreation = directOutputRecovery && !resumeDirectOutputUpload;
     const taskState: WorkspaceState = (resumeEligible || resumeDirectOutputUpload) && previousState
       ? {
         ...previousState,
@@ -2632,7 +2638,7 @@ async function execute(claimed: JsonRecord) {
       projectMode: detectedSkill.projectMode || "",
       routeStage: detectedSkill.stage || detectedSkill.executionMode,
       routeReason: detectedSkill.reason,
-      resumed: resumeEligible || resumeDirectOutputUpload,
+      resumed: directOutputRecovery ? resumeDirectOutputUpload : resumeEligible,
     });
     await report("SKILL_DETECTED", 15, detectedSkill.downstreamSkillName
       ? `调度完成，已转交 ${detectedSkill.downstreamSkillName}`
@@ -2729,7 +2735,7 @@ async function execute(claimed: JsonRecord) {
         skillVersion: detectedSkill.version,
         assetCount: Array.isArray(packaged.assets) ? packaged.assets.length : 0,
       });
-      let internalCorrection = repairState.lastReason
+      let internalCorrection = !freshDirectCreation && repairState.lastReason
         ? [
           `Execution recovery is active under ${executionRepairSkillPath}.`,
           `The previous internal run was not submitted. Repair category: ${repairState.lastCategory || "UNKNOWN"}.`,
