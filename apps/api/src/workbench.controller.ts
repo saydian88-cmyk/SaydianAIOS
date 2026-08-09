@@ -3006,7 +3006,7 @@ export class WorkbenchController {
     }
     const entry = await this.prisma.contentLibraryEntry.findFirst({
       where: { id, category: "VIDEO", visibilityStatus: "ACTIVE", outputAsset: { is: { reviewStatus: "APPROVED", availabilityStatus: "ACTIVE", deletedAt: null, objectKey: { not: null } } } },
-      include: { outputAsset: true },
+      include: { outputAsset: true, contentPlan: { select: { sourceSignals: true } } },
     });
     if (!entry?.outputAsset.objectKey || !await this.ossStorage.objectExists(entry.outputAsset.objectKey)) {
       if (entry) await this.prisma.contentLibraryEntry.update({ where: { id: entry.id }, data: { visibilityStatus: "HIDDEN", hiddenAt: new Date(), hiddenBy: "SYSTEM_STORAGE_CHECK" } });
@@ -3014,12 +3014,25 @@ export class WorkbenchController {
     }
     const snapshot = object(entry.snapshot);
     const source = object(snapshot.project);
+    const sourceFactory = Array.isArray(entry.contentPlan?.sourceSignals)
+      ? entry.contentPlan.sourceSignals.find((item: Record<string, unknown>) => item?.type === "VIDEO_FACTORY") || {}
+      : {};
+    const sourceBrief = object(sourceFactory.brief);
+    const sourceBatch = object(sourceBrief.batchDirect);
     const mode = body.mode === "REUSE_CONFIG" ? "CONFIG_REUSE" : "REFERENCE_DIRECT";
     const language = body.targetLanguage === "OTHER" ? "OTHER" : body.targetLanguage === "EN" ? "EN" : "ZH";
     const replaceProduct = body.replaceProduct === true;
     const productModel = String((replaceProduct ? body.productModel : undefined) || source.productModel || entry.productModel || "").trim();
     if (replaceProduct && !String(body.productModel || "").trim()) throw new BadRequestException("请选择替换后的产品型号");
-    const originalPrompt = String(source.taskRequirement || source.objective || snapshot.taskRequirement || snapshot.prompt || source.additionalPrompt || "").trim();
+    const originalPrompt = [
+      sourceBatch.taskRequirement,
+      snapshot.taskRequirement,
+      sourceBrief.additionalPrompt,
+      snapshot.prompt,
+      source.additionalPrompt,
+      source.taskRequirement,
+      source.objective,
+    ].map((value) => String(value || "").trim()).find(Boolean) || "";
     const languagePrompt = language === "EN"
       ? "字幕、口播和贴纸文案等都用英文，这条视频面向英文社交平台。"
       : language === "OTHER"
@@ -3067,6 +3080,7 @@ export class WorkbenchController {
       scene: String(source.scene || ""),
       painPoint: String(source.painPoint || ""),
       additionalPrompt,
+      scriptEngines: mode === "CONFIG_REUSE" ? ["REMOTE_CODEX"] : undefined,
       deferScriptGeneration: true,
       libraryEntryId: entry.id,
       libraryReuseMode: mode,

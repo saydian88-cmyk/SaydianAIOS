@@ -543,6 +543,7 @@ export class VideoFactoryService {
     const outputTags = strings(batchResult.tags);
     const reusableTaskRequirement = batchProducts.length
       ? [
+        String(batch.taskRequirement || "").trim(),
         String(batch.additionalPrompt || brief.additionalPrompt || "").trim(),
         `审核成品标题：${outputTitle}`,
         outputTags.length ? `审核标签：${outputTags.join("、")}` : "",
