@@ -1919,7 +1919,7 @@ function syncVideoLibraryTaskRequirement() {
   if (videoLibraryCreateForm.replaceFeature && videoLibraryCreateForm.feature.trim()) changes.push(`核心卖点改为：${videoLibraryCreateForm.feature.trim()}。`);
   videoLibraryCreateForm.taskRequirement = [
     "复用项目配置：以该审核通过的成品视频作为镜头节奏与画面结构参考，不直接复用其中的产品素材。",
-    videoLibraryOriginalRequirement.value,
+    videoLibraryTaskRequirement(entry),
     ...changes,
     languageInstruction,
   ].filter(Boolean).join("\n");
