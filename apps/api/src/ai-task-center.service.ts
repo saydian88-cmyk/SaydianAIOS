@@ -105,6 +105,26 @@ export function shouldReviewUploadedBatchWithoutResultManifest(uploadedOutputCou
   return uploadedOutputCount > 0 && readyResultCount === 0;
 }
 
+/**
+ * A registration-only recovery can upload a replacement for an earlier MP4
+ * whose technical metadata was missing.  The replacement is authoritative;
+ * never let the older, invalid record block the whole batch again.
+ */
+export function isUsableBatchVideoOutput(output: Record<string, unknown>) {
+  const asset = object(output.asset);
+  const version = Array.isArray(asset.versions) ? object(asset.versions[0]) : {};
+  const metadata = {
+    ...object(output.metadata),
+    ...object(version.technicalMetadata),
+    width: asset.width || object(version.technicalMetadata).width || object(output.metadata).width,
+    height: asset.height || object(version.technicalMetadata).height || object(output.metadata).height,
+    durationSeconds: asset.durationSeconds || object(version.technicalMetadata).durationSeconds || object(output.metadata).durationSeconds,
+    codec: version.codec || object(version.technicalMetadata).codec || object(output.metadata).codec,
+    frameRate: object(version.technicalMetadata).frameRate || object(output.metadata).frameRate,
+  };
+  return validateVideoMasterMetadata(metadata).valid;
+}
+
 export type BatchCodexPlannedResult = {
   videoKey: string;
   ready: boolean;
@@ -3079,22 +3099,28 @@ export class AiTaskCenterService implements OnModuleInit {
         if (!project) return { status: "WAITING_INPUT" as AiTaskStatus, message: "关联批量视频项目不存在" };
         const uploaded = await this.prisma.aiTaskOutput.findMany({
           where: { aiTaskId: task.id, assetId: { not: null }, mimeType: { startsWith: "video/" } },
-          include: { asset: { select: { storageUrl: true } }, }, orderBy: { createdAt: "asc" },
+          include: { asset: { select: {
+            storageUrl: true, width: true, height: true, durationSeconds: true,
+            versions: { orderBy: { version: "desc" }, take: 1, select: { codec: true, technicalMetadata: true } },
+          } }, }, orderBy: { createdAt: "desc" },
         });
         const coverOutputs = await this.prisma.aiTaskOutput.findMany({
           where: { aiTaskId: task.id, assetId: { not: null }, mimeType: { startsWith: "image/" } },
           include: { asset: { select: { storageUrl: true } } },
           orderBy: { createdAt: "asc" },
         });
+        // Keep only technically complete outputs.  Older uploads stay in the
+        // audit trail, but must not be reselected during a no-rerender retry.
+        const usableUploaded = uploaded.filter((item) => isUsableBatchVideoOutput(item as Record<string, unknown>));
         const results = Array.isArray(result.batchResults) ? result.batchResults.map(object) : [];
         const ready = results.filter((item) => text(item.status).toUpperCase() === "READY");
-        const legacyUploadedOnly = shouldReviewUploadedBatchWithoutResultManifest(uploaded.length, ready.length);
-        const planned = planBatchCodexResults(results, uploaded, coverOutputs);
+        const legacyUploadedOnly = shouldReviewUploadedBatchWithoutResultManifest(usableUploaded.length, ready.length);
+        const planned = planBatchCodexResults(results, usableUploaded, coverOutputs);
         const failedCount = planned.filter((item) => !item.ready).length;
         let registered = 0;
         for (const plan of planned) {
           if (!plan.ready || !plan.outputId || !plan.assetId) continue;
-          const output = uploaded.find((candidate) => String(candidate.id || "") === plan.outputId);
+          const output = usableUploaded.find((candidate) => String(candidate.id || "") === plan.outputId);
           await this.videoFactory.registerLocalMaster(project.id, plan.assetId, task.id, actor, plan.videoKey);
           await this.prisma.aiTaskOutput.update({ where: { id: plan.outputId }, data: {
             kind: "VIDEO_MASTER", contentPlanId: project.id, reviewStatus: "PENDING",
@@ -3103,7 +3129,7 @@ export class AiTaskCenterService implements OnModuleInit {
           registered += 1;
         }
         const usedOutputIds = new Set(planned.filter((item) => item.outputId).map((item) => item.outputId));
-        for (const output of uploaded) {
+        for (const output of usableUploaded) {
           if (usedOutputIds.has(String(output.id || "")) || !output.assetId) continue;
           await this.videoFactory.registerLocalMaster(project.id, String(output.assetId), task.id, actor);
           await this.prisma.aiTaskOutput.update({ where: { id: output.id }, data: {

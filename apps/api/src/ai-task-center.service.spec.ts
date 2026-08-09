@@ -10,6 +10,7 @@ import {
   runnerCanClaimTask,
   runnerTaskTypeCapabilities,
   isRecoverableDirectVideoInput,
+  isUsableBatchVideoOutput,
   planBatchCodexResults,
   restoreBatchDirectInput,
   resolveDirectVideoProjectId,
@@ -167,6 +168,16 @@ describe("AiTaskCenterService", () => {
       assetId: "",
       failureReason: expect.stringContaining("未匹配到已上传成品"),
     });
+  });
+
+  it("uses a newer recovered batch master only when its technical metadata is complete", () => {
+    expect(isUsableBatchVideoOutput({
+      metadata: { width: 1080, height: 1920, durationSeconds: 15.4, codec: "h264", frameRate: "30/1" },
+      asset: { width: 1080, height: 1920, durationSeconds: 15.4, versions: [{ codec: "h264", technicalMetadata: { frameRate: "30/1" } }] },
+    })).toBe(true);
+    expect(isUsableBatchVideoOutput({
+      metadata: {}, asset: { versions: [] },
+    })).toBe(false);
   });
 
   it("sends a task with uploaded outputs to employee review instead of terminal failure", () => {
