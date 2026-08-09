@@ -1656,13 +1656,18 @@ export class AiTaskCenterService implements OnModuleInit {
     const executionMode = text(input.executionMode).toUpperCase() || (task.type === "VIDEO" ? "FULL_VIDEO" : "DEFAULT");
     const localLibraryCodexTask = text(input.executionClass).toUpperCase() === "CODEX_SKILL"
       && text(input.skillName).toLowerCase() === "video-editing-from-media-library";
-    const codexDirectFullVideo = task.type === "VIDEO"
-      && executionMode === "FULL_VIDEO"
-      && (input.codexDirectFullVideo === true || localLibraryCodexTask);
-    const batchCodexDirectFullVideo = codexDirectFullVideo && input.batchCodexDirectFullVideo === true;
     const referenceDirectFullVideo = task.type === "VIDEO"
       && executionMode === "FULL_VIDEO"
       && input.referenceDirectFullVideo === true;
+    // Reference direct tasks also execute through the full local editing Skill.
+    // Resolve their explicit mode before the generic local-Skill fallback so the
+    // reference asset, audio/visual strategies, and requested changes survive
+    // runner-package normalization.
+    const codexDirectFullVideo = task.type === "VIDEO"
+      && executionMode === "FULL_VIDEO"
+      && !referenceDirectFullVideo
+      && (input.codexDirectFullVideo === true || input.batchCodexDirectFullVideo === true || localLibraryCodexTask);
+    const batchCodexDirectFullVideo = codexDirectFullVideo && input.batchCodexDirectFullVideo === true;
     const localDirectFullVideo = codexDirectFullVideo || referenceDirectFullVideo;
     const existingDirectInput = object(input.codexDirectInput);
     const existingReferenceInput = object(input.referenceDirectInput);

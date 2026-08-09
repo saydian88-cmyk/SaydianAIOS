@@ -1026,9 +1026,16 @@ describe("AiTaskCenterService", () => {
     task.input = {
       executionMode: "FULL_VIDEO",
       referenceDirectFullVideo: true,
+      executionClass: "CODEX_SKILL",
       skillName: "video-editing-from-media-library",
       referenceVideoUrl: "https://example.com/reference.mp4",
-      referenceDirectInput: { productModel: "W9" },
+      referenceDirectInput: {
+        productModel: "W9",
+        changeSet: {
+          replaceHook: { enabled: true, value: "先展示气囊充气" },
+          language: { code: "ZH", label: "中文" },
+        },
+      },
       projectBrief: {
         reference: "https://example.com/reference.mp4",
         additionalPrompt: "保留原声节奏",
@@ -1050,6 +1057,10 @@ describe("AiTaskCenterService", () => {
         prompt: "替换开场钩子，其余按参考完整重建",
         referenceAudioStrategy: "REFERENCE_ORIGINAL",
         referenceVisualStrategy: "REBUILD_PRODUCT_VISUALS",
+        changeSet: {
+          replaceHook: { enabled: true, value: "先展示气囊充气" },
+          language: { code: "ZH", label: "中文" },
+        },
       },
     });
     expect(referenceDirectResult.assets).toEqual([]);

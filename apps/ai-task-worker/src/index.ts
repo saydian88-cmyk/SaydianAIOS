@@ -333,6 +333,7 @@ function outputSchema(
   executionMode = "",
   requestedCardCount = 10,
   codexDirectFullVideo = false,
+  referenceDirectFullVideo = false,
   imagePostProject = false,
   batchCodexDirectFullVideo = false,
   batchExpectedResultCount = 1,
@@ -358,18 +359,35 @@ function outputSchema(
             },
             required: ["productModel", "taskMode", "finalReviewOnly"],
           },
-          referenceEvidence: {
+          ...(referenceDirectFullVideo ? { referenceEvidence: {
             type: "object",
             additionalProperties: false,
             properties: {
               referenceDurationSeconds: { type: "number", exclusiveMinimum: 0 },
               audioMode: { type: "string", enum: ["REFERENCE_ORIGINAL", "DOUBAO"] },
               voiceProvider: { type: "string" },
+              visualMode: { type: "string", enum: ["REUSE_REFERENCE_VISUALS", "REBUILD_PRODUCT_VISUALS"] },
               audioEndSeconds: { type: "number", exclusiveMinimum: 0 },
               endingAudited: { type: "boolean" },
+              unchangedContentPreserved: { type: "boolean" },
+              changeChecks: {
+                type: "array",
+                items: {
+                  type: "object",
+                  additionalProperties: false,
+                  properties: {
+                    key: { type: "string", enum: ["replaceProduct", "replaceHook", "replaceFeature", "replaceOther", "language"] },
+                    requestedValue: { type: "string" },
+                    passed: { type: "boolean" },
+                    oldConflictRemoved: { type: "boolean" },
+                    evidence: { type: "string" },
+                  },
+                  required: ["key", "requestedValue", "passed", "oldConflictRemoved", "evidence"],
+                },
+              },
             },
-            required: ["referenceDurationSeconds", "audioMode", "voiceProvider", "audioEndSeconds", "endingAudited"],
-          },
+            required: ["referenceDurationSeconds", "audioMode", "voiceProvider", "visualMode", "audioEndSeconds", "endingAudited", "unchangedContentPreserved", "changeChecks"],
+          } } : {}),
           ...(batchCodexDirectFullVideo ? {
             batchResults: {
               type: "array",
@@ -1134,7 +1152,7 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
         ...(isRevision ? { revision } : {}),
       }, null, 2),
       "If the reference URL or its audio cannot be accessed, return the exact technical cause without fabricating completion. Otherwise continue through final render.",
-      "Before return, compare the final MP4 duration with the real audio timeline and listen to the ending: no spoken word, music beat or sentence may be cut off; retain at least 0.25 seconds after the audio ends. Return referenceEvidence with the actual full reference duration, audioMode=REFERENCE_ORIGINAL or DOUBAO, actual voiceProvider, audioEndSeconds and endingAudited=true. Return exactly one real 1080x1920 MP4 in outputFiles with kind=VIDEO_MASTER and delivery={taskMode:REFERENCE_DIRECT_FULL_VIDEO, finalReviewOnly:true}.",
+      "Before return, compare the final MP4 duration with the real audio timeline and listen to the ending: no spoken word, music beat or sentence may be cut off; retain at least 0.25 seconds after the audio ends. Return referenceEvidence with the actual full reference duration, the audioMode and visualMode that exactly match the requested strategies, actual voiceProvider, audioEndSeconds, endingAudited=true, unchangedContentPreserved=true, and one timestamped changeChecks item for every enabled REFERENCE_CHANGE_SET field (including language). Every change check must prove passed=true and oldConflictRemoved=true. Return exactly one real 1080x1920 MP4 in outputFiles with kind=VIDEO_MASTER and delivery={taskMode:REFERENCE_DIRECT_FULL_VIDEO, finalReviewOnly:true}.",
       "Every output file must exist inside the current task workspace and the result must match the output schema.",
     ].join("\n\n");
   }
@@ -1868,6 +1886,7 @@ async function runCodex(
     String(execution.mode || ""),
     Number(requirements.exactCount || 10),
     isCodexDirectFullVideoTask(taskPackage),
+    Boolean(taskInput.referenceDirectFullVideo),
     isImagePostProjectTask(taskPackage),
     Boolean(taskInput.batchCodexDirectFullVideo),
     expectedBatchVideoKeys(taskInput).length,
@@ -2800,6 +2819,7 @@ async function execute(claimed: JsonRecord) {
       String(execution.mode || ""),
       Number(requirements.exactCount || 10),
       isCodexDirectFullVideoTask(packaged),
+      Boolean(record(packagedTask.input).referenceDirectFullVideo),
       isImagePostProjectTask(packaged),
       batchDirectTask,
       batchDirectTask

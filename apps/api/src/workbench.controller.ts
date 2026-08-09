@@ -3020,16 +3020,16 @@ export class WorkbenchController {
     const replaceFeature = body.replaceFeature === true && Boolean(String(body.feature || "").trim());
     const replaceOther = body.replaceOther === true && Boolean(String(body.otherChange || "").trim());
     const changeSet = {
-      replaceProduct,
-      productModel: replaceProduct ? productModel : undefined,
-      replaceHook,
-      hook: replaceHook ? String(body.hook).trim() : undefined,
-      replaceFeature,
-      feature: replaceFeature ? String(body.feature).trim() : undefined,
-      replaceOther,
-      otherChange: replaceOther ? String(body.otherChange).trim() : undefined,
-      targetLanguage: language,
-      customLanguage: language === "OTHER" ? String(body.customLanguage || "").trim() : undefined,
+      replaceProduct: { enabled: replaceProduct, value: replaceProduct ? productModel : "" },
+      replaceHook: { enabled: replaceHook, value: replaceHook ? String(body.hook).trim() : "" },
+      replaceFeature: { enabled: replaceFeature, value: replaceFeature ? String(body.feature).trim() : "" },
+      replaceOther: { enabled: replaceOther, value: replaceOther ? String(body.otherChange).trim() : "" },
+      language: {
+        code: language,
+        label: language === "OTHER"
+          ? String(body.customLanguage || "").trim()
+          : language === "EN" ? "英文" : "中文",
+      },
     };
     const revoiceRequired = replaceProduct || replaceHook || replaceFeature || replaceOther || language !== "ZH";
     const project = await this.videoFactory.createProject({

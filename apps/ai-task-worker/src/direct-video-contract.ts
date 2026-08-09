@@ -155,18 +155,55 @@ export function assertCodexDirectMasterOutput(result: JsonRecord, taskPackage: J
   }
   const masterPath = String(masters[0]?.path || "").toLowerCase();
   if (input.referenceDirectFullVideo === true) {
+    const directInput = record(input.referenceDirectInput);
     const evidence = record(result.referenceEvidence);
     const audioMode = String(evidence.audioMode || "").toUpperCase();
     const voiceProvider = String(evidence.voiceProvider || "").toUpperCase();
+    const visualMode = String(evidence.visualMode || "").toUpperCase();
     const audioEndSeconds = Number(evidence.audioEndSeconds || 0);
     const finalDurationSeconds = Number(record(masters[0]?.metadata).durationSeconds || 0);
+    const expectedAudioMode = String(directInput.referenceAudioStrategy || "").toUpperCase() === "DOUBAO_REVOICE"
+      ? "DOUBAO"
+      : "REFERENCE_ORIGINAL";
+    const expectedVisualMode = String(directInput.referenceVisualStrategy || "").toUpperCase() === "REUSE_REFERENCE_VISUALS"
+      ? "REUSE_REFERENCE_VISUALS"
+      : "REBUILD_PRODUCT_VISUALS";
     if (Number(evidence.referenceDurationSeconds || 0) <= 0) throw new Error("Reference direct output is missing reference analysis evidence");
     if (!["REFERENCE_ORIGINAL", "DOUBAO"].includes(audioMode) || voiceProvider.includes("WINDOWS") || voiceProvider.includes("SAPI")) {
       throw new Error("Reference direct output must retain reference audio or use configured Doubao voice, never Windows TTS");
     }
+    if (audioMode !== expectedAudioMode) throw new Error(`Reference direct output used ${audioMode || "unknown audio"} instead of ${expectedAudioMode}`);
     if (audioMode === "DOUBAO" && !voiceProvider.includes("DOUBAO")) throw new Error("Reference direct output must name its actual Doubao voice");
+    if (visualMode !== expectedVisualMode) throw new Error(`Reference direct output used ${visualMode || "unknown visuals"} instead of ${expectedVisualMode}`);
     if (audioEndSeconds <= 0 || finalDurationSeconds < audioEndSeconds + 0.25 || evidence.endingAudited !== true) {
       throw new Error("Reference direct output has not proven that its ending audio is complete");
+    }
+    const changeSet = record(directInput.changeSet);
+    const legacyChangeFlags: Record<string, string> = {
+      replaceProduct: "productModel",
+      replaceHook: "hook",
+      replaceFeature: "feature",
+      replaceOther: "otherChange",
+    };
+    const requestedChanges = Object.entries(legacyChangeFlags)
+      .filter(([key, legacyValueKey]) => record(changeSet[key]).enabled === true
+        || (changeSet[key] === true && Boolean(String(changeSet[legacyValueKey] || "").trim())))
+      .map(([key]) => key);
+    if (Object.keys(record(changeSet.language)).length
+      || Boolean(String(changeSet.targetLanguage || "").trim())) requestedChanges.push("language");
+    const changeChecks = Array.isArray(evidence.changeChecks) ? evidence.changeChecks.map(record) : [];
+    for (const key of requestedChanges) {
+      const check = changeChecks.find((item) => String(item.key || "") === key);
+      if (!check
+        || !String(check.requestedValue || "").trim()
+        || check.passed !== true
+        || check.oldConflictRemoved !== true
+        || !String(check.evidence || "").trim()) {
+        throw new Error(`Reference direct output has not proven requested change: ${key}`);
+      }
+    }
+    if (evidence.unchangedContentPreserved !== true) {
+      throw new Error("Reference direct output has not proven that unrequested content stayed unchanged");
     }
   }
   if (!masterPath.endsWith(".mp4")) throw new Error("Codex 直出任务返回的最终成片不是 MP4，任务不能标记成功");

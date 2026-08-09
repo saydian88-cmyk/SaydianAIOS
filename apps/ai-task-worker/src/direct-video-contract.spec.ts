@@ -82,19 +82,37 @@ describe("batch Codex direct-video result contract", () => {
 
 describe("reference direct-video result contract", () => {
   const referenceTask = {
-    task: { type: "VIDEO", input: { referenceDirectFullVideo: true } },
+    task: { type: "VIDEO", input: {
+      referenceDirectFullVideo: true,
+      referenceDirectInput: {
+        referenceAudioStrategy: "DOUBAO_REVOICE",
+        referenceVisualStrategy: "REUSE_REFERENCE_VISUALS",
+        changeSet: {
+          replaceHook: { enabled: true, value: "先展示气囊充气" },
+          language: { code: "ZH", label: "中文" },
+        },
+      },
+    } },
     execution: { mode: "FULL_VIDEO" },
   };
   const output = (referenceEvidence: Record<string, unknown>) => ({
     outputFiles: [{ kind: "VIDEO_MASTER", path: "out/master.mp4", metadata: { durationSeconds: 18 } }],
-    referenceEvidence,
+    referenceEvidence: {
+      visualMode: "REUSE_REFERENCE_VISUALS",
+      unchangedContentPreserved: true,
+      changeChecks: [
+        { key: "replaceHook", requestedValue: "先展示气囊充气", passed: true, oldConflictRemoved: true, evidence: "00:00-00:03 已替换" },
+        { key: "language", requestedValue: "中文", passed: true, oldConflictRemoved: true, evidence: "全片口播字幕贴纸复核" },
+      ],
+      ...referenceEvidence,
+    },
   });
 
   it("requires evidence that the reference and its complete ending were used", () => {
     expect(() => assertCodexDirectMasterOutput(output({
       referenceDurationSeconds: 16,
-      audioMode: "REFERENCE_ORIGINAL",
-      voiceProvider: "REFERENCE_ORIGINAL",
+      audioMode: "DOUBAO",
+      voiceProvider: "DOUBAO-zh-female",
       audioEndSeconds: 17.5,
       endingAudited: true,
     }), referenceTask)).not.toThrow();
@@ -108,5 +126,46 @@ describe("reference direct-video result contract", () => {
       audioEndSeconds: 17.9,
       endingAudited: false,
     }), referenceTask)).toThrow("Windows TTS");
+  });
+
+  it("rejects the wrong requested strategy and missing rewrite evidence", () => {
+    expect(() => assertCodexDirectMasterOutput(output({
+      referenceDurationSeconds: 16,
+      audioMode: "REFERENCE_ORIGINAL",
+      voiceProvider: "REFERENCE_ORIGINAL",
+      audioEndSeconds: 17.5,
+      endingAudited: true,
+    }), referenceTask)).toThrow("instead of DOUBAO");
+
+    expect(() => assertCodexDirectMasterOutput(output({
+      referenceDurationSeconds: 16,
+      audioMode: "DOUBAO",
+      voiceProvider: "DOUBAO-zh-female",
+      audioEndSeconds: 17.5,
+      endingAudited: true,
+      changeChecks: [],
+    }), referenceTask)).toThrow("replaceHook");
+  });
+
+  it("keeps old queued flat change sets enforceable", () => {
+    const legacyTask = {
+      task: { type: "VIDEO", input: {
+        referenceDirectFullVideo: true,
+        referenceDirectInput: {
+          referenceAudioStrategy: "DOUBAO_REVOICE",
+          referenceVisualStrategy: "REUSE_REFERENCE_VISUALS",
+          changeSet: { replaceHook: true, hook: "先展示气囊充气", targetLanguage: "ZH" },
+        },
+      } },
+      execution: { mode: "FULL_VIDEO" },
+    };
+    expect(() => assertCodexDirectMasterOutput(output({
+      referenceDurationSeconds: 16,
+      audioMode: "DOUBAO",
+      voiceProvider: "DOUBAO-zh-female",
+      audioEndSeconds: 17.5,
+      endingAudited: true,
+      changeChecks: [],
+    }), legacyTask)).toThrow("replaceHook");
   });
 });
