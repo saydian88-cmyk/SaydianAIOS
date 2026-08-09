@@ -514,6 +514,43 @@ describe("AiTaskCenterService", () => {
     expect(update.mock.calls[0]?.[0].data).not.toHaveProperty("retryCount");
   });
 
+  it("allows a partly delivered batch in review to continue its missing video keys", async () => {
+    const task = {
+      id: "ai-batch-direct-partial-review",
+      taskNo: "AIT-BATCH-DIRECT-PARTIAL-REVIEW",
+      status: "PENDING_REVIEW",
+      type: "VIDEO",
+      input: { executionMode: "FULL_VIDEO", batchCodexDirectFullVideo: true },
+      retryCount: 3,
+      maxRetries: 3,
+      failureReason: null,
+    };
+    const update = vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({ ...task, ...data }));
+    const service = new AiTaskCenterService(
+      {
+        aiTask: { findUnique: vi.fn().mockResolvedValue(task), update },
+        aiTaskOutput: { findFirst: vi.fn().mockResolvedValue(null) },
+        opsTask: { findUnique: vi.fn().mockResolvedValue(null) },
+        auditLog: { create: vi.fn().mockResolvedValue({}) },
+      } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await service.retry(task.id, "employee-1");
+
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        status: "RETRY",
+        input: expect.objectContaining({ outputRegistrationRecoveryAttempts: 1 }),
+      }),
+    }));
+    expect(update.mock.calls[0]?.[0].data).not.toHaveProperty("retryCount");
+  });
+
   it("allows a final batch output-registration recovery after four stale attempts", async () => {
     const task = {
       id: "ai-batch-direct-final-recovery",

@@ -1041,9 +1041,17 @@ export class AiTaskCenterService implements OnModuleInit {
 
   async retry(id: string, actor: string) {
     const task = await this.ensureTask(id);
-    const retryingReviewWarning = task.status === "PENDING_REVIEW" && Boolean(text(task.failureReason));
-    if (!["FAILED", "RETURNED", "RETRY"].includes(task.status) && !retryingReviewWarning) throw new BadRequestException("任务当前不能重试");
     const taskInput = object(task.input);
+    const retryingReviewWarning = task.status === "PENDING_REVIEW" && Boolean(text(task.failureReason));
+    // A batch can be reviewable as soon as one finished video is returned. If
+    // other videoKeys were not produced, let the generic task-center retry
+    // continue those keys instead of trapping the parent task in review.
+    const retryingPartialBatchReview = task.status === "PENDING_REVIEW"
+      && task.type === "VIDEO"
+      && taskInput.batchCodexDirectFullVideo === true;
+    if (!["FAILED", "RETURNED", "RETRY"].includes(task.status) && !retryingReviewWarning && !retryingPartialBatchReview) {
+      throw new BadRequestException("任务当前不能重试");
+    }
     const uploadedOutputCount = retryingReviewWarning
       ? await this.prisma.aiTaskOutput.count({ where: { aiTaskId: id } })
       : 0;
