@@ -3056,7 +3056,9 @@ export class WorkbenchController {
       platform: String(source.platform || entry.platform || "DOUYIN"),
       voiceoverMode: String(source.voiceoverMode || "AUTO"),
       productModel,
-      topic: String(body.topic || source.topic || entry.title),
+      // A library entry's audited title is the reusable finished-video title.
+      // Do not carry over a source batch/direct project's implementation title.
+      topic: String(body.topic || entry.title || source.topic),
       audience: String(source.audience || "目标用户"),
       objective: `${String(replaceFeature ? String(body.feature || "").trim() : source.objective || "参考成品重新创作")}\n来源成品：${entry.title}`,
       videoType: String(source.videoType || "场景种草型"),

@@ -1136,6 +1136,7 @@ function videoProjectTaskHint(task: Row) {
 }
 
 function videoProjectModeLabel(task: Row) {
+  if (String(task.projection?.project?.libraryReuseMode || "") === "CONFIG_REUSE") return "复用项目配置";
   const mode = String(task.projection?.project?.projectMode || "");
   if (mode === "REFERENCE_DIRECT_FULL_VIDEO") return "参考直出";
   if (mode === "CODEX_DIRECT_FULL_VIDEO") return "Codex 直出";

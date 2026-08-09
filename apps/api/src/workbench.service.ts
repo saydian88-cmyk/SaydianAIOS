@@ -2146,6 +2146,7 @@ export class WorkbenchService {
       productionNo: project.productionNo,
       productModel: project.productModel || null,
       projectMode: value(factory.projectMode) || "SINGLE_SCRIPT_SYSTEM_FIRST",
+      libraryReuseMode: value(factory.libraryReuseMode) || null,
       topic: project.topic || null,
       platform: Array.isArray(project.targetPlatforms) ? project.targetPlatforms[0] || null : null,
       videoType: value(brief.videoType) || null,
