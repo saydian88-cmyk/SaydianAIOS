@@ -1990,6 +1990,9 @@ async function validateOutputArtifacts(result: JsonRecord, workspace: string, ta
   const referenceDirectMaster = String(task.type || "") === "VIDEO"
     && String(execution.mode || "").toUpperCase() === "FULL_VIDEO"
     && record(task.input).referenceDirectFullVideo === true;
+  const codexDirectMaster = String(task.type || "") === "VIDEO"
+    && String(execution.mode || "").toUpperCase() === "FULL_VIDEO"
+    && isCodexDirectFullVideoTask(taskPackageValue || {});
   if (dedicatedDouyinMaster && (files.length !== 1 || String(files[0]?.kind || "") !== "VIDEO_MASTER")) {
     throw new Error("抖音爆款完整视频必须只返回一个真实VIDEO_MASTER");
   }
@@ -2004,7 +2007,7 @@ async function validateOutputArtifacts(result: JsonRecord, workspace: string, ta
     if (!info.isFile() || info.size === 0) throw new Error(`输出文件为空：${requested}`);
     const digest = sha256(await readFile(path));
     const metadata = record(item.metadata);
-    if ((dedicatedDouyinMaster || referenceDirectMaster) && String(item.kind || "") === "VIDEO_MASTER") {
+    if ((dedicatedDouyinMaster || codexDirectMaster) && String(item.kind || "") === "VIDEO_MASTER") {
       const { stdout } = await execFileAsync(ffprobeExecutable, [
         "-v", "error",
         "-select_streams", "v:0",
@@ -2032,32 +2035,34 @@ async function validateOutputArtifacts(result: JsonRecord, workspace: string, ta
           throw new Error("参考直出成片短于完整音频，疑似截断结尾");
         }
       }
-      const usage = Array.isArray(metadata.materialUsage) ? metadata.materialUsage.map(record) : [];
-      if (!usage.length) throw new Error("抖音爆款成片缺少逐镜头素材使用记录");
-      for (const [index, row] of usage.entries()) {
-        const assetId = String(row.assetId || "");
-        const assetHash = String(row.sha256 || "");
-        if (!assetId || !assetHash || allowedAssets.get(assetId) !== assetHash) {
-          throw new Error(`第${index + 1}个镜头素材不在任务白名单或哈希不一致`);
+      if (dedicatedDouyinMaster) {
+        const usage = Array.isArray(metadata.materialUsage) ? metadata.materialUsage.map(record) : [];
+        if (!usage.length) throw new Error("抖音爆款成片缺少逐镜头素材使用记录");
+        for (const [index, row] of usage.entries()) {
+          const assetId = String(row.assetId || "");
+          const assetHash = String(row.sha256 || "");
+          if (!assetId || !assetHash || allowedAssets.get(assetId) !== assetHash) {
+            throw new Error(`第${index + 1}个镜头素材不在任务白名单或哈希不一致`);
+          }
+          if (!String(row.lineId || "") || !String(row.scriptLine || "")) throw new Error(`第${index + 1}个镜头缺少稳定脚本行关联`);
+          if (Number(row.timelineEnd) <= Number(row.timelineStart) || Number(row.sourceOut) <= Number(row.sourceIn)) {
+            throw new Error(`第${index + 1}个镜头使用区间无效`);
+          }
         }
-        if (!String(row.lineId || "") || !String(row.scriptLine || "")) throw new Error(`第${index + 1}个镜头缺少稳定脚本行关联`);
-        if (Number(row.timelineEnd) <= Number(row.timelineStart) || Number(row.sourceOut) <= Number(row.sourceIn)) {
-          throw new Error(`第${index + 1}个镜头使用区间无效`);
+        const checks = Array.isArray(metadata.qualityChecks) ? metadata.qualityChecks.map(record) : [];
+        for (const required of ["OUTPUT_VALIDITY", "MATERIAL_TRACE", "CONTENT_ALIGNMENT"]) {
+          const check = checks.find((row) => String(row.checkType || "").toUpperCase() === required);
+          if (!check || String(check.status || "").toUpperCase() === "FAILED") throw new Error(`抖音爆款成片缺少或未通过${required}`);
         }
-      }
-      const checks = Array.isArray(metadata.qualityChecks) ? metadata.qualityChecks.map(record) : [];
-      for (const required of ["OUTPUT_VALIDITY", "MATERIAL_TRACE", "CONTENT_ALIGNMENT"]) {
-        const check = checks.find((row) => String(row.checkType || "").toUpperCase() === required);
-        if (!check || String(check.status || "").toUpperCase() === "FAILED") throw new Error(`抖音爆款成片缺少或未通过${required}`);
-      }
-      const alignment = record(metadata.contentAlignment);
-      const modules = new Set((Array.isArray(alignment.checkedFrames) ? alignment.checkedFrames.map(record) : [])
-        .map((row) => String(row.moduleType || "").toUpperCase()));
-      if (["HOOK", "BODY", "CTA"].some((moduleType) => !modules.has(moduleType))) {
-        throw new Error("内容一致性检查未覆盖Hook、中段和CTA");
-      }
-      if (String(alignment.status || "").toUpperCase() === "FAILED" || (Array.isArray(alignment.hardBlockers) && alignment.hardBlockers.length)) {
-        throw new Error("成片内容与选题、脚本或产品事实不一致");
+        const alignment = record(metadata.contentAlignment);
+        const modules = new Set((Array.isArray(alignment.checkedFrames) ? alignment.checkedFrames.map(record) : [])
+          .map((row) => String(row.moduleType || "").toUpperCase()));
+        if (["HOOK", "BODY", "CTA"].some((moduleType) => !modules.has(moduleType))) {
+          throw new Error("内容一致性检查未覆盖Hook、中段和CTA");
+        }
+        if (String(alignment.status || "").toUpperCase() === "FAILED" || (Array.isArray(alignment.hardBlockers) && alignment.hardBlockers.length)) {
+          throw new Error("成片内容与选题、脚本或产品事实不一致");
+        }
       }
       Object.assign(metadata, actual);
     }

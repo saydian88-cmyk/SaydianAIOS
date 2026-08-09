@@ -17,6 +17,7 @@ const batchTask = {
 describe("batch Codex direct-video result contract", () => {
   it("declares videoKey in the batch output metadata schema", () => {
     expect(batchDirectOutputFilesSchema().items.properties.metadata.properties.videoKey).toEqual({ type: "string" });
+    expect(batchDirectOutputFilesSchema().items.properties.metadata.properties.durationSeconds).toEqual({ type: "number" });
   });
 
   it("keeps the required key together with its product and ordinal", () => {
