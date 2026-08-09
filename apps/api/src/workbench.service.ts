@@ -317,7 +317,7 @@ export class WorkbenchService {
       this.prisma.contentLibraryEntry.findMany({
       where,
       include: {
-        outputAsset: { select: { id: true, displayName: true, fileName: true, durationSeconds: true, width: true, height: true, objectKey: true, sourceSnapshot: true, reviewStatus: true, availabilityStatus: true, deletedAt: true } },
+        outputAsset: { select: { id: true, displayName: true, fileName: true, durationSeconds: true, width: true, height: true, objectKey: true, sourceSnapshot: true, reviewStatus: true, availabilityStatus: true, deletedAt: true, aiTaskOutputs: { select: { kind: true, metadata: true } } } },
         contentPlan: { select: {
           id: true, productionNo: true, topic: true,
           variants: { select: {
@@ -351,7 +351,7 @@ export class WorkbenchService {
     const item = await this.prisma.contentLibraryEntry.findFirst({
       where: { id, category: "VIDEO", visibilityStatus: "ACTIVE", outputAsset: { is: { reviewStatus: "APPROVED", availabilityStatus: "ACTIVE", deletedAt: null, objectKey: { not: null } } } },
       include: {
-        outputAsset: { select: { id: true, displayName: true, fileName: true, durationSeconds: true, width: true, height: true, objectKey: true, sourceSnapshot: true, reviewStatus: true, availabilityStatus: true, deletedAt: true } },
+        outputAsset: { select: { id: true, displayName: true, fileName: true, durationSeconds: true, width: true, height: true, objectKey: true, sourceSnapshot: true, reviewStatus: true, availabilityStatus: true, deletedAt: true, aiTaskOutputs: { select: { kind: true, metadata: true } } } },
         contentPlan: { select: {
           id: true, productionNo: true, topic: true, productModel: true, audience: true, objective: true, hook: true,
           variants: { select: {

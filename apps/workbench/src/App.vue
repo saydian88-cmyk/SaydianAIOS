@@ -1783,14 +1783,18 @@ async function authenticatedMediaUrl(url: string) {
 }
 
 function videoLibraryTitle(entry: Row) {
-  return String(entry.contentPlan?.variants?.find((item: Row) => item.platform === entry.platform && item.packagingStatus === "APPROVED")?.title || entry.title || "未命名成品");
+  const output = (entry.outputAsset?.aiTaskOutputs || []).find((item: Row) => item.kind === "VIDEO_MASTER") || {};
+  const metadata = output.metadata && typeof output.metadata === "object" ? output.metadata : {};
+  return String(metadata.title || entry.contentPlan?.variants?.find((item: Row) => item.platform === entry.platform && item.packagingStatus === "APPROVED")?.title || entry.title || "未命名成品");
 }
 
 function videoLibraryTags(entry: Row) {
+  const output = (entry.outputAsset?.aiTaskOutputs || []).find((item: Row) => item.kind === "VIDEO_MASTER") || {};
+  const outputMetadata = output.metadata && typeof output.metadata === "object" ? output.metadata : {};
   const variant = entry.contentPlan?.variants?.find((item: Row) => item.platform === entry.platform && item.packagingStatus === "APPROVED") || {};
   const metadata = variant.metadata && typeof variant.metadata === "object" ? variant.metadata : {};
   const coverSpec = variant.coverSpec && typeof variant.coverSpec === "object" ? variant.coverSpec : {};
-  const tags = Array.isArray(metadata.tags) ? metadata.tags : Array.isArray(coverSpec.hashtags) ? coverSpec.hashtags : [];
+  const tags = Array.isArray(outputMetadata.tags) ? outputMetadata.tags : Array.isArray(metadata.tags) ? metadata.tags : Array.isArray(coverSpec.hashtags) ? coverSpec.hashtags : [];
   return tags.map((tag: unknown) => String(tag || "").replace(/^#/, "").trim()).filter(Boolean).slice(0, 3);
 }
 
