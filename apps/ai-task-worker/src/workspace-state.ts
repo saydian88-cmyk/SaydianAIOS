@@ -64,7 +64,7 @@ export function uploadLedgerKey(path: string, sha256: string, kind: string) {
 }
 
 export function directVideoUploadLedgerKey(path: string, sha256: string, kind: string) {
-  return `${uploadLedgerKey(path, sha256, kind)}:TECHNICAL_METADATA_V2`;
+  return `${uploadLedgerKey(path, sha256, kind)}:TECHNICAL_METADATA_V3`;
 }
 
 export async function appendExecutionLog(workspace: string, event: string, data: JsonRecord = {}) {

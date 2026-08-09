@@ -2398,7 +2398,7 @@ async function recoverDirectOutputResult(
       ...savedResult,
       outputFiles,
       execution: { ...record(savedResult?.execution), ...execution, resumed: true, finishedAt: new Date().toISOString() },
-    }, workspace, recoveryTask);
+    }, workspace, recoveryPackage);
   }
   // A stale earlier result may contain only the first batch master. Rebuild the
   // complete batch below instead of treating that partial result as recoverable.
@@ -2421,7 +2421,7 @@ async function recoverDirectOutputResult(
           finishedAt: new Date().toISOString(),
         },
       };
-      return validateOutputArtifacts(recovered, workspace, recoveryTask);
+      return validateOutputArtifacts(recovered, workspace, recoveryPackage);
     }
   }
   let names: string[];
@@ -2515,7 +2515,7 @@ async function recoverDirectOutputResult(
         finishedAt: new Date().toISOString(),
       },
     };
-    return validateOutputArtifacts(batchResult, workspace, recoveryTask);
+    return validateOutputArtifacts(batchResult, workspace, recoveryPackage);
   }
   const master = masters.find((item) => /video[_-]?master/iu.test(item.name))
     || [...masters].sort((left, right) => right.size - left.size)[0];
@@ -2554,7 +2554,7 @@ async function recoverDirectOutputResult(
       schemaAttempts: Math.max(1, Number(execution.schemaAttempts || 1)),
     },
   };
-  return validateOutputArtifacts(result, workspace, recoveryTask);
+  return validateOutputArtifacts(result, workspace, recoveryPackage);
 }
 
 async function uploadFile(taskId: string, workspace: string, item: JsonRecord) {
