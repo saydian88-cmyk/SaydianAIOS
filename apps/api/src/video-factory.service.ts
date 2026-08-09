@@ -1058,12 +1058,16 @@ export class VideoFactoryService {
       include: { asset: true },
     });
     for (const relation of relations) {
-      await this.registerLocalMaster(
-        relation.contentPlanId,
-        relation.assetId,
-        `backfill:${relation.contentPlanId}`,
-        actor,
-      );
+      try {
+        await this.registerLocalMaster(
+          relation.contentPlanId,
+          relation.assetId,
+          `backfill:${relation.contentPlanId}`,
+          actor,
+        );
+      } catch (error) {
+        if (!(error instanceof BadRequestException)) throw error;
+      }
     }
     return relations.length;
   }

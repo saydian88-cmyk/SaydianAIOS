@@ -585,6 +585,19 @@ describe("VideoFactoryService model routing", () => {
     });
   });
 
+  it("skips invalid historical masters during startup backfill", async () => {
+    prisma.contentAsset.findMany.mockResolvedValue([
+      { contentPlanId: "plan-invalid", assetId: "asset-invalid", asset: { kind: "VIDEO" } },
+      { contentPlanId: "plan-valid", assetId: "asset-valid", asset: { kind: "VIDEO" } },
+    ]);
+    vi.spyOn(service, "registerLocalMaster")
+      .mockRejectedValueOnce(new BadRequestException("legacy master is missing validation metadata"))
+      .mockResolvedValueOnce({ id: "render-valid" } as never);
+
+    await expect(service.backfillLocalMasterRenderJobs()).resolves.toBe(2);
+    expect(service.registerLocalMaster).toHaveBeenCalledTimes(2);
+  });
+
   it("records the script candidate selected by the employee during approval", async () => {
     prisma.contentPlan.findUnique.mockResolvedValue({
       id: "project-dual-engine",
