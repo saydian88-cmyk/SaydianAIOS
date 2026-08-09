@@ -3014,9 +3014,10 @@ export class WorkbenchController {
     }
     const snapshot = object(entry.snapshot);
     const source = object(snapshot.project);
-    const sourceFactory = Array.isArray(entry.contentPlan?.sourceSignals)
-      ? entry.contentPlan.sourceSignals.find((item: Record<string, unknown>) => item?.type === "VIDEO_FACTORY") || {}
-      : {};
+    const sourceFactories = Array.isArray(entry.contentPlan?.sourceSignals)
+      ? entry.contentPlan.sourceSignals.map((item) => object(item))
+      : [];
+    const sourceFactory = sourceFactories.find((item) => item.type === "VIDEO_FACTORY") || {};
     const sourceBrief = object(sourceFactory.brief);
     const sourceBatch = object(sourceBrief.batchDirect);
     const mode = body.mode === "REUSE_CONFIG" ? "CONFIG_REUSE" : "REFERENCE_DIRECT";
