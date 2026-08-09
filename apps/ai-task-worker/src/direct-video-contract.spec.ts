@@ -80,6 +80,17 @@ describe("batch Codex direct-video result contract", () => {
   });
 });
 
+describe("single Codex direct-video result contract", () => {
+  it("accepts one MP4 master without reference-only evidence", () => {
+    expect(() => assertCodexDirectMasterOutput({
+      outputFiles: [{ kind: "VIDEO_MASTER", path: "out/master.mp4" }],
+    }, {
+      task: { type: "VIDEO", input: { codexDirectFullVideo: true } },
+      execution: { mode: "FULL_VIDEO" },
+    })).not.toThrow();
+  });
+});
+
 describe("reference direct-video result contract", () => {
   const referenceTask = {
     task: { type: "VIDEO", input: {

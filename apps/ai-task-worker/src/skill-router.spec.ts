@@ -166,6 +166,28 @@ describe("skill task router", () => {
     });
   });
 
+  it.each([
+    ["reference direct", { referenceDirectFullVideo: true }, "REFERENCE_DIRECT_FULL_VIDEO"],
+    ["batch Codex direct", { batchCodexDirectFullVideo: true }, "CODEX_DIRECT_FULL_VIDEO"],
+  ])("routes %s without losing its structured mode", (_label, flags, projectMode) => {
+    expect(routeTask({
+      task: {
+        type: "VIDEO",
+        sourceType: "VIDEO_FACTORY_PROJECT",
+        input: { executionMode: "FULL_VIDEO", ...flags },
+      },
+      execution: {
+        mode: "FULL_VIDEO",
+        strategy: "CODEX_FIRST",
+        requiredSkill: "saidian-ai-task-dispatcher",
+      },
+    }, { ...process.env, CODEX_HOME: routeOnlyCodexHome })).toMatchObject({
+      key: "saidian-ai-task-dispatcher",
+      downstreamSkillName: "video-editing-from-media-library",
+      projectMode,
+    });
+  });
+
   it("accepts legacy task packages that name the share video Skill directly", () => {
     expect(routeTask({
       task: { type: "VIDEO", sourceType: "VIDEO_FACTORY_PROJECT", input: { executionMode: "SCRIPT_ONLY" } },

@@ -5434,7 +5434,6 @@ onBeforeUnmount(() => {
                             <el-button v-if="video.resultStatus === 'READY'" size="small" @click="previewBatchVideo(video)">预览成片</el-button>
                             <el-button v-if="video.resultStatus === 'READY'" size="small" @click="downloadBatchVideo(video)">下载成片</el-button>
                             <el-button v-if="video.resultStatus === 'FAILED'" size="small" type="primary" @click="retryBatchVideo(video)">仅重试这一条</el-button>
-                            <el-button v-else-if="video.resultStatus === 'READY'" size="small" type="danger" plain @click="rejectBatchVideo(video)">退回</el-button>
                           </div>
                         </article>
                       </div>

@@ -2712,16 +2712,22 @@ export class WorkbenchController {
     const directProjectMode = String(factory?.projectMode || "");
     const codexDirectFullVideo = directProjectMode === "CODEX_DIRECT_FULL_VIDEO";
     const referenceDirectFullVideo = directProjectMode === "REFERENCE_DIRECT_FULL_VIDEO";
+    const videoAiTaskId = String(factory?.videoAiTaskId || "").trim();
     // A final-video return must also return the AI task that produced it.  Without
     // this, the asset was marked RETURNED while the task remained PENDING_REVIEW,
     // leaving the employee project stuck at 100% / "waiting for review".
     if (action === "RETURN") {
-      const videoAiTaskId = String(factory?.videoAiTaskId || "").trim();
       if (videoAiTaskId) {
         await this.aiTasks.review(videoAiTaskId, { action: "RETURN", note }, employee.name);
       }
     }
-    const reviewed = await this.videoFactory.reviewOutput(outputAssetId, action === "APPROVE", employee.name, note);
+    let reviewed: unknown;
+    if (action === "APPROVE" && videoAiTaskId) {
+      await this.aiTasks.review(videoAiTaskId, { action: "APPROVE", note }, employee.name);
+      reviewed = await this.videoFactory.project(id);
+    } else {
+      reviewed = await this.videoFactory.reviewOutput(outputAssetId, action === "APPROVE", employee.name, note);
+    }
     if (action === "RETURN" && codexDirectFullVideo) {
       await this.videoFactory.prepareCodexDirectVideoRevision(id, employee.name);
       const revisionSubmission = await this.submitCodexDirectFullVideoTask(authorization, id);
@@ -2758,30 +2764,36 @@ export class WorkbenchController {
     }
     const brief = factory.brief && typeof factory.brief === "object" ? factory.brief as Record<string, unknown> : {};
     const batch = batchBriefValue(brief);
+    const videoAiTaskId = String(factory.videoAiTaskId || "").trim();
     if (action === "RETURN") {
-      const videoAiTaskId = String(factory.videoAiTaskId || "").trim();
       if (videoAiTaskId) {
         await this.aiTasks.review(videoAiTaskId, { action: "RETURN", note }, employee.name);
       }
-      const pendingRender = await this.prisma.videoRenderJob.findFirst({
+      const pendingRenders = await this.prisma.videoRenderJob.findMany({
         where: { contentPlanId: id, status: "SUCCEEDED", outputAsset: { reviewStatus: "PENDING" } },
         orderBy: { createdAt: "asc" },
         select: { outputAssetId: true },
       });
-      if (pendingRender?.outputAssetId) {
-        await this.videoFactory.reviewOutput(pendingRender.outputAssetId, false, employee.name, note);
+      for (const pendingRender of pendingRenders) {
+        if (pendingRender.outputAssetId) {
+          await this.videoFactory.reviewOutput(pendingRender.outputAssetId, false, employee.name, note);
+        }
       }
       await this.videoFactory.prepareCodexDirectVideoRevision(id, employee.name);
       const revisionSubmission = await this.submitBatchCodexDirectFullVideoTask(authorization, id);
       return { ...revisionSubmission.project, revisionTask: revisionSubmission.task };
     }
-    const renders = await this.prisma.videoRenderJob.findMany({
-      where: { contentPlanId: id, status: "SUCCEEDED", outputAsset: { reviewStatus: { in: ["PENDING", "APPROVED"] } } },
-      select: { outputAssetId: true },
-    });
-    for (const render of renders) {
-      if (render.outputAssetId) {
-        await this.videoFactory.reviewOutput(render.outputAssetId, true, employee.name, "批量成片审核通过");
+    if (videoAiTaskId) {
+      await this.aiTasks.review(videoAiTaskId, { action: "APPROVE", note: "批量成片审核通过" }, employee.name);
+    } else {
+      const renders = await this.prisma.videoRenderJob.findMany({
+        where: { contentPlanId: id, status: "SUCCEEDED", outputAsset: { reviewStatus: { in: ["PENDING", "APPROVED"] } } },
+        select: { outputAssetId: true },
+      });
+      for (const render of renders) {
+        if (render.outputAssetId) {
+          await this.videoFactory.reviewOutput(render.outputAssetId, true, employee.name, "批量成片审核通过");
+        }
       }
     }
     const unresolved = await this.prisma.videoRenderJob.count({

@@ -176,7 +176,7 @@ export function routeTask(taskPackage: JsonRecord, env: NodeJS.ProcessEnv = proc
   const isDouyinViralModule = String(taskInput.factoryModule || "").trim().toUpperCase() === "DOUYIN_VIRAL";
   const isCodexDirectFullVideo = type === "VIDEO"
     && executionMode === "FULL_VIDEO"
-    && taskInput.codexDirectFullVideo === true;
+    && (taskInput.codexDirectFullVideo === true || taskInput.batchCodexDirectFullVideo === true);
   const isReferenceDirectFullVideo = type === "VIDEO"
     && executionMode === "FULL_VIDEO"
     && taskInput.referenceDirectFullVideo === true;
