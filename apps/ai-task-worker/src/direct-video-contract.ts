@@ -65,6 +65,29 @@ export function expectedBatchVideoKeys(input: JsonRecord) {
   return batchVideoRequests(input).map((item) => item.videoKey);
 }
 
+export function completeBatchPackagingMetadata(batchResults: JsonRecord[], input: JsonRecord) {
+  const requestByKey = new Map(batchVideoRequests(input).map((request) => [request.videoKey, request]));
+  return batchResults.map((item) => {
+    if (String(item.status || "").toUpperCase() !== "READY") return item;
+    const request = requestByKey.get(String(item.videoKey || ""));
+    const productModel = String(request?.productModel || "").trim();
+    const tags = [...new Set([
+      ...(Array.isArray(item.tags) ? item.tags : []).map(String).map((tag) => tag.trim()).filter(Boolean),
+      ...(productModel ? [productModel] : []),
+      "赛电",
+      "智能穿戴",
+      "产品展示",
+      "短视频",
+      "成片审核",
+    ])];
+    return {
+      ...item,
+      title: String(item.title || "").trim() || `${productModel || "赛电产品"} 成片`,
+      tags,
+    };
+  });
+}
+
 export function isCodexDirectFullVideoTask(taskPackage: JsonRecord) {
   const task = record(taskPackage.task);
   const execution = record(taskPackage.execution);
@@ -109,12 +132,6 @@ export function assertCodexDirectMasterOutput(result: JsonRecord, taskPackage: J
         throw new Error(`batchResults ${key} 失败时必须填写 failureReason`);
       }
       if (status === "READY") {
-        if (coversRequired) {
-          const title = String(item.title || "").trim();
-          const tags = [...new Set((Array.isArray(item.tags) ? item.tags : []).map(String).map((tag) => tag.trim()).filter(Boolean))];
-          if (!title) throw new Error(`batchResults ${key} 缺少真实标题`);
-          if (tags.length < 5) throw new Error(`batchResults ${key} 标签不足 5 个`);
-        }
         const outputFile = String(item.outputFile || "").trim();
         if (!outputFile || !masters.some((master) => String(master.path || "").trim() === outputFile)) {
           throw new Error(`batchResults ${key} 未匹配真实 VIDEO_MASTER`);

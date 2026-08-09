@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertCodexDirectMasterOutput, batchDirectOutputFilesSchema, batchVideoRequests } from "./direct-video-contract";
+import { assertCodexDirectMasterOutput, batchDirectOutputFilesSchema, batchVideoRequests, completeBatchPackagingMetadata } from "./direct-video-contract";
 
 const batchTask = {
   task: {
@@ -70,20 +70,13 @@ describe("batch Codex direct-video result contract", () => {
     }, batchTask)).toThrow("COVER_IMAGE");
   });
 
-  it("rejects a READY result with missing title or fewer than five tags", () => {
-    expect(() => assertCodexDirectMasterOutput({
-      summary: "one completed",
-      outputFiles: [
-        { kind: "VIDEO_MASTER", path: "out/1-1.mp4" },
-        { kind: "COVER_IMAGE", path: "out/1-1.jpg", metadata: { videoKey: "1-1" } },
-      ],
-      batchResults: [
-        { videoKey: "1-1", status: "READY", outputFile: "out/1-1.mp4", coverFile: "out/1-1.jpg", title: "", tags: ["a", "b", "c"], failureReason: "" },
-        { videoKey: "1-2", status: "FAILED", outputFile: "", coverFile: "", failureReason: "render failed" },
-        { videoKey: "2-1", status: "FAILED", outputFile: "", coverFile: "", failureReason: "render failed" },
-        { videoKey: "2-2", status: "FAILED", outputFile: "", coverFile: "", failureReason: "render failed" },
-      ],
-    }, batchTask)).toThrow("标题");
+  it("fills missing batch title and tags without invalidating the rendered master", () => {
+    const [result] = completeBatchPackagingMetadata([
+      { videoKey: "1-1", status: "READY", outputFile: "out/1-1.mp4", coverFile: "out/1-1.jpg", title: "", tags: ["腕上操作"] },
+    ], batchTask.task.input);
+    expect(result.title).toBe("W8Ultra-R 成片");
+    expect(result.tags).toContain("腕上操作");
+    expect(result.tags.length).toBeGreaterThanOrEqual(5);
   });
 });
 

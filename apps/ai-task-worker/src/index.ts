@@ -42,7 +42,7 @@ import {
   type RepairCategory,
 } from "./execution-repair";
 import { appendQualityWarning, classifyQualityGate, type QualityWarning } from "./quality-gates";
-import { assertCodexDirectMasterOutput, batchDirectOutputFilesSchema, batchVideoRequests, expectedBatchVideoKeys, isCodexDirectFullVideoTask } from "./direct-video-contract";
+import { assertCodexDirectMasterOutput, batchDirectOutputFilesSchema, batchVideoRequests, completeBatchPackagingMetadata, expectedBatchVideoKeys, isCodexDirectFullVideoTask } from "./direct-video-contract";
 
 function record(value: unknown): JsonRecord {
   return value && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : {};
@@ -1157,7 +1157,7 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
       "MANIFEST_PARSER_COMPATIBILITY: When a full manifest is genuinely needed, parse it with Node JSON.parse or the configured Python JSON parser, never PowerShell ConvertFrom-Json. Its valid Windows asset paths can be misread by that PowerShell parser as unsupported escape sequences.",
       "The full editing Skill must independently learn, search and select VIDEO footage from the complete local library. The dispatcher must not preselect footage, create a candidate whitelist, or require system materialBindings. Use exact-product verified local VIDEO entries and never use another product model, unverified media, images, audio, packaging, cover, sticker, transition or template resources as primary footage.",
       batchDirect
-        ? `BATCH_SINGLE_EXECUTION_CONTRACT: In this one Skill invocation, produce the full requested batch${retryVideoKeys.length ? `; only execute retryVideoKeys=${retryVideoKeys.join(",")}` : ""}. Do not stop after one video or label remaining requested keys as failed because of an execution-window boundary. If this workspace already has a READY item, preserve it and produce every missing item in this same invocation. Return batchResults with READY or FAILED for every requested key. Every READY item must name its matching real VIDEO_MASTER outputFile, COVER_IMAGE coverFile, title and at least five distinct, non-placeholder tags; the COVER_IMAGE must be included in outputFiles with metadata.videoKey equal to that item. FAILED is only for an actual unrecoverable production blocker, never elapsed working time.`
+        ? `BATCH_SINGLE_EXECUTION_CONTRACT: In this one Skill invocation, produce the full requested batch${retryVideoKeys.length ? `; only execute retryVideoKeys=${retryVideoKeys.join(",")}` : ""}. Do not stop after one video or label remaining requested keys as failed because of an execution-window boundary. If this workspace already has a READY item, preserve it and produce every missing item in this same invocation. Return batchResults with READY or FAILED for every requested key. Every READY item must name its matching real VIDEO_MASTER outputFile, COVER_IMAGE coverFile, title and at least five distinct, non-placeholder tags; the COVER_IMAGE must be included in outputFiles with metadata.videoKey equal to that item. If packaging metadata is incomplete after the MP4 succeeds, repair only the missing cover/title/tags internally and return the same master; never fail or rerender solely for packaging metadata.`
         : "DIRECT_CONTINUOUS_EXECUTION: Do not stop for user approval of the script, shot plan, material selection, production plan, packaging, or any other intermediate artifact. Create and validate those artifacts internally, repair any correctable issue, continue directly through rendering, and return only the final VIDEO_MASTER for user review.",
       "If the local library is not initialized or not ready, fail explicitly with the missing local configuration or index. Do not return a system-task WAITING_INPUT result.",
       "The employee UI only receives the final review node, but internal script, shot plan, material coverage, composition, packaging, audio and delivery QA steps remain mandatory.",
@@ -2016,7 +2016,59 @@ function packageFingerprint(taskPackageValue: JsonRecord) {
   })));
 }
 
+async function ensureBatchPackaging(result: JsonRecord, workspace: string, taskPackageValue?: JsonRecord) {
+  const task = record(taskPackageValue?.task);
+  const input = record(task.input);
+  if (input.batchCodexDirectFullVideo !== true || record(input.batchDirectInput).generateCoverTitle === false) return;
+  const files = Array.isArray(result.outputFiles) ? result.outputFiles.map(record) : [];
+  const batchResults = completeBatchPackagingMetadata(
+    Array.isArray(result.batchResults) ? result.batchResults.map(record) : [],
+    input,
+  );
+  for (const item of batchResults) {
+    if (String(item.status || "").toUpperCase() !== "READY") continue;
+    const videoKey = String(item.videoKey || "").trim();
+    const coverFile = String(item.coverFile || "").trim();
+    const hasCover = coverFile && files.some((file) => (
+      String(file.kind || "").toUpperCase() === "COVER_IMAGE"
+      && String(file.path || "").trim() === coverFile
+      && String(record(file.metadata).videoKey || "") === videoKey
+    ));
+    if (hasCover) continue;
+    const masterPath = String(item.outputFile || "").trim();
+    const master = files.find((file) => String(file.kind || "").toUpperCase() === "VIDEO_MASTER"
+      && String(file.path || "").trim() === masterPath);
+    if (!masterPath || !master) throw new Error(`批量成片 ${videoKey} 缺少可用于生成封面的真实 MP4`);
+    const source = resolve(workspace, masterPath);
+    const sourceRelative = relative(workspace, source);
+    if (sourceRelative.startsWith("..") || isAbsolute(sourceRelative)) throw new Error(`批量成片 ${videoKey} 路径越界`);
+    const generatedCover = join("outputs", `${safeName(`cover-${videoKey}`)}.jpg`);
+    const target = resolve(workspace, generatedCover);
+    await execFileAsync(ffmpegExecutable, ["-y", "-ss", "1", "-i", source, "-frames:v", "1", "-q:v", "2", target], {
+      timeout: 60_000,
+      windowsHide: true,
+      maxBuffer: 2 * 1024 * 1024,
+    });
+    const info = await stat(target);
+    if (!info.isFile() || info.size <= 0) throw new Error(`批量成片 ${videoKey} 自动补封面失败`);
+    item.coverFile = generatedCover;
+    files.push({
+      path: generatedCover,
+      kind: "COVER_IMAGE",
+      title: `${String(item.title || "赛电成片")} 封面`,
+      metadata: {
+        description: "由对应已完成成片自动提取的真实封面。",
+        source: "CODEX_BATCH_PACKAGING_RECOVERY",
+        videoKey,
+      },
+    });
+  }
+  result.outputFiles = files;
+  result.batchResults = batchResults;
+}
+
 async function validateOutputArtifacts(result: JsonRecord, workspace: string, taskPackageValue?: JsonRecord) {
+  await ensureBatchPackaging(result, workspace, taskPackageValue);
   const files = Array.isArray(result.outputFiles) ? result.outputFiles.map(record) : [];
   const task = record(taskPackageValue?.task);
   const execution = record(taskPackageValue?.execution);
