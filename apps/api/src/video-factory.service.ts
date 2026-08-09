@@ -1065,9 +1065,7 @@ export class VideoFactoryService {
           `backfill:${relation.contentPlanId}`,
           actor,
         );
-      } catch (error) {
-        if (!(error instanceof BadRequestException) && (error as { status?: unknown })?.status !== 400) throw error;
-      }
+      } catch { /* Historical records must not prevent the service from starting. */ }
     }
     return relations.length;
   }
