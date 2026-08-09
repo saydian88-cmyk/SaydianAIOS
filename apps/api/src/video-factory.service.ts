@@ -490,11 +490,18 @@ export class VideoFactoryService {
     private readonly wecom: WecomNotificationService,
   ) {}
 
-  private librarySnapshot(plan: { topic: string; productModel?: string | null; audience: string; objective: string; hook: string; createdBy: string; targetPlatforms: IntegrationKind[]; sourceSignals: unknown }) {
+  private librarySnapshot(
+    plan: { topic: string; productModel?: string | null; audience: string; objective: string; hook: string; createdBy: string; targetPlatforms: IntegrationKind[]; sourceSignals: unknown },
+    output: { videoKey?: string; title?: string; tags?: string[]; reusableTaskRequirement?: string } = {},
+  ) {
     const factory = sourceSignals(plan).find((item) => item.type === "VIDEO_FACTORY") || {};
     const brief = object(factory.brief);
     return {
       prompt: String(brief.additionalPrompt || plan.objective || ""),
+      taskRequirement: String(output.reusableTaskRequirement || brief.additionalPrompt || plan.objective || ""),
+      taskSummary: String(output.reusableTaskRequirement || ""),
+      videoKey: String(output.videoKey || ""),
+      tags: output.tags || [],
       reference: String(brief.reference || ""),
       project: {
         topic: plan.topic,
@@ -519,10 +526,34 @@ export class VideoFactoryService {
     assetId: string,
     renderJobId: string | undefined,
     actor: string,
+    renderInput: unknown = {},
   ) {
-    const snapshot = this.librarySnapshot(plan);
-    const product = plan.productModel
-      ? await tx.product.findUnique({ where: { modelCode: plan.productModel }, select: { category: true } })
+    const factory = sourceSignals(plan).find((item) => item.type === "VIDEO_FACTORY") || {};
+    const brief = object(factory.brief);
+    const batch = object(brief.batchDirect);
+    const videoKey = String(object(renderInput).videoKey || "").trim();
+    const batchProducts = Array.isArray(batch.products) ? batch.products.map(object) : [];
+    const batchResult = (Array.isArray(batch.results) ? batch.results.map(object) : [])
+      .find((item) => String(item.videoKey || "").trim() === videoKey) || {};
+    const productIndex = Math.max(0, Number(videoKey.split("-")[0]) - 1);
+    const outputProductModel = String(batchProducts[productIndex]?.model || "").split(" · ")[0].trim()
+      || plan.productModel
+      || "";
+    const outputTitle = String(batchResult.title || plan.topic || "").trim() || plan.topic;
+    const outputTags = strings(batchResult.tags);
+    const reusableTaskRequirement = batchProducts.length
+      ? [
+        String(batch.additionalPrompt || brief.additionalPrompt || "").trim(),
+        `审核成品标题：${outputTitle}`,
+        outputTags.length ? `审核标签：${outputTags.join("、")}` : "",
+      ].filter(Boolean).join("\n")
+      : String(brief.additionalPrompt || plan.objective || "").trim();
+    const snapshot = this.librarySnapshot(
+      { ...plan, topic: outputTitle, productModel: outputProductModel },
+      { videoKey, title: outputTitle, tags: outputTags, reusableTaskRequirement },
+    );
+    const product = outputProductModel
+      ? await tx.product.findUnique({ where: { modelCode: outputProductModel }, select: { category: true } })
       : null;
     await tx.contentLibraryEntry.upsert({
       where: { contentPlanId_outputAssetId: { contentPlanId: plan.id, outputAssetId: assetId } },
@@ -530,16 +561,16 @@ export class VideoFactoryService {
         contentPlanId: plan.id,
         outputAssetId: assetId,
         renderJobId,
-        title: plan.topic,
-        productModel: plan.productModel,
+        title: outputTitle,
+        productModel: outputProductModel || null,
         productCategory: product?.category || null,
         platform: String(plan.targetPlatforms[0] || "DOUYIN"),
         createdBy: plan.createdBy,
         snapshot: snapshot as Prisma.InputJsonValue,
       },
       update: {
-        title: plan.topic,
-        productModel: plan.productModel,
+        title: outputTitle,
+        productModel: outputProductModel || null,
         productCategory: product?.category || null,
         platform: String(plan.targetPlatforms[0] || "DOUYIN"),
         createdBy: plan.createdBy,
@@ -5200,7 +5231,7 @@ export class VideoFactoryService {
               packagingRejectedReason: note || "成片已退回修改",
             },
         });
-        if (approved) await this.upsertLibraryEntry(tx, render.contentPlan, assetId, render.id, actor);
+        if (approved) await this.upsertLibraryEntry(tx, render.contentPlan, assetId, render.id, actor, render.input);
         else await tx.contentLibraryEntry.updateMany({
           where: { contentPlanId: render.contentPlanId, outputAssetId: assetId },
           data: { visibilityStatus: "HIDDEN", hiddenAt: new Date(), hiddenBy: actor },
