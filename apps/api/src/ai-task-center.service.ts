@@ -211,7 +211,8 @@ export function planBatchCodexResults(
 function completeBatchPackagingMetadata(result: JsonRecord, inputValue: unknown) {
   const input = object(inputValue);
   if (input.batchCodexDirectFullVideo !== true || object(input.batchDirectInput).generateCoverTitle === false) return result;
-  const products = Array.isArray(object(input.batchDirectInput).products) ? object(input.batchDirectInput).products.map(object) : [];
+  const productValues = object(input.batchDirectInput).products;
+  const products = Array.isArray(productValues) ? productValues.map(object) : [];
   const modelFor = (videoKey: string) => String(object(products[Math.max(0, Number(videoKey.split("-")[0]) - 1)]).model || "").trim();
   const batchResults = Array.isArray(result.batchResults) ? result.batchResults.map(object) : [];
   result.batchResults = batchResults.map((item) => {
