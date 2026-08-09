@@ -1066,7 +1066,7 @@ export class VideoFactoryService {
           actor,
         );
       } catch (error) {
-        if (!(error instanceof BadRequestException)) throw error;
+        if (!(error instanceof BadRequestException) && (error as { status?: unknown })?.status !== 400) throw error;
       }
     }
     return relations.length;
