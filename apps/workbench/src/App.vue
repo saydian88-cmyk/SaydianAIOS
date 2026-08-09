@@ -1798,6 +1798,11 @@ function videoLibraryTags(entry: Row) {
   return tags.map((tag: unknown) => String(tag || "").replace(/^#/, "").trim()).filter(Boolean).slice(0, 3);
 }
 
+function videoLibraryTaskRequirement(entry?: Row) {
+  const output = (entry?.outputAsset?.aiTaskOutputs || []).find((item: Row) => item.kind === "VIDEO_MASTER") || {};
+  return String(output.aiTask?.instructions || entry?.snapshot?.prompt || entry?.snapshot?.project?.additionalPrompt || "未记录 AI 任务要求");
+}
+
 function videoLibraryMetric(entry: Row, field: "latestViews" | "latestLikes" | "latestComments") {
   const value = Number(entry[field]);
   if (!Number.isFinite(value)) return "—";
@@ -7864,7 +7869,7 @@ onBeforeUnmount(() => {
         <h3>{{ videoLibraryTitle(videoLibraryDetail) }}</h3>
         <div v-if="videoLibraryTags(videoLibraryDetail).length" class="video-library-tags"><el-tag v-for="tag in videoLibraryTags(videoLibraryDetail)" :key="tag" size="small"># {{ tag }}</el-tag></div>
         <div class="task-meta"><span>{{ videoLibraryDetail.productModel || '品牌通用' }}</span><span>{{ platformLabel(videoLibraryDetail.platform) }}</span><span>{{ Math.round(Number(videoLibraryDetail.outputAsset?.durationSeconds || 0)) || '—' }}秒</span><span>{{ videoLibraryDetail.createdBy || '系统' }}</span></div>
-        <div class="video-library-detail-prompt"><strong>生成提示词：</strong>{{ videoLibraryDetail.snapshot?.prompt || videoLibraryDetail.snapshot?.project?.additionalPrompt || '未记录额外提示词' }}</div>
+        <div class="video-library-detail-prompt"><strong>原项目 AI 任务要求：</strong>{{ videoLibraryTaskRequirement(videoLibraryDetail) }}</div>
         <div v-if="videoLibraryPublishedVariants(videoLibraryDetail).length" class="video-library-publish"><span>已回传发布链接，最新数据已展示</span><el-button v-for="variant in videoLibraryPublishedVariants(videoLibraryDetail)" :key="variant.id" size="small" @click="openDownload(variant.manualPublishUrl || variant.publishJobs?.find((job: Row) => job.remoteUrl)?.remoteUrl, `${platformLabel(variant.platform)}发布视频`)">快捷查看发布视频</el-button></div>
         <div v-else class="video-library-publish"><span>尚未回传发布链接</span></div>
         <template v-if="videoLibraryDetail.latestMetricAt">
