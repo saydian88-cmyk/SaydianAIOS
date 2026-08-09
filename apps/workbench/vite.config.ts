@@ -3,9 +3,10 @@ import vue from "@vitejs/plugin-vue";
 
 export default defineConfig({
   base: process.env.VITE_BASE_PATH || "/saidian-work/",
-  plugins: [vue()],
-  server: { port: 3212, strictPort: true },
+  // A new asset namespace prevents a previously cached HTML fallback from being
+  // reused as a JavaScript chunk after a deployment.
   build: {
+    assetsDir: "assets-v2",
     outDir: "dist",
     sourcemap: false,
     rollupOptions: {
@@ -18,4 +19,6 @@ export default defineConfig({
       },
     },
   },
+  plugins: [vue()],
+  server: { port: 3212, strictPort: true },
 });

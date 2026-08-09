@@ -36,7 +36,17 @@ docker image inspect "$api_image" >/dev/null 2>&1 || docker pull "$api_image"
 docker image inspect "$admin_image" >/dev/null 2>&1 || docker pull "$admin_image"
 docker image inspect "$workbench_image" >/dev/null 2>&1 || docker pull "$workbench_image"
 docker run --rm "$admin_image" sh -c "grep -Fq '/saidian-admin/assets/' /usr/share/nginx/html/index.html"
-docker run --rm "$workbench_image" sh -c "grep -Fq '/saidian-work/assets/' /usr/share/nginx/html/index.html && ! grep -Fq '/saidian-admin/assets/' /usr/share/nginx/html/index.html"
+docker run --rm "$workbench_image" sh -c '
+  index=/usr/share/nginx/html/index.html
+  grep -Fq "/saidian-work/" "$index" && ! grep -Fq "/saidian-admin/" "$index"
+  assets="$(grep -oE '\''/saidian-work/[^" ]+\.(js|css)'\'' "$index" | sort -u)"
+  test -n "$assets"
+  while IFS= read -r asset; do
+    test -f "/usr/share/nginx/html/${asset#/saidian-work/}"
+  done <<EOF
+$assets
+EOF
+'
 docker compose --env-file "$production_env" --env-file "$images" -f "$compose" up -d postgres
 docker compose --env-file "$production_env" --env-file "$images" -f "$compose" run --rm --user root ops-api \
   sh -c 'mkdir -p data/upload-inbox data/derived data/bootstrap && chown -R 1001:1001 data'
@@ -71,7 +81,7 @@ healthy=0
 for _ in $(seq 1 60); do
   if curl -fsS http://127.0.0.1/health >/dev/null \
     && curl -fsS -H 'Host: stest.saydian.cn' https://127.0.0.1/saidian-admin/ -k >/dev/null \
-    && curl -fsS -H 'Host: stest.saydian.cn' https://127.0.0.1/saidian-work/ -k | grep -Fq '/saidian-work/assets/'; then healthy=1; break; fi
+    && curl -fsS -H 'Host: stest.saydian.cn' https://127.0.0.1/saidian-work/ -k | grep -Fq '/saidian-work/'; then healthy=1; break; fi
   sleep 3
 done
 
