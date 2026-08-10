@@ -1178,6 +1178,7 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
         : "Read the active local-library configuration and the verified-editing-videos-by-product manifest. Do not download, request, or return any system task assets.",
       "MANIFEST_PARSER_COMPATIBILITY: When a full manifest is genuinely needed, parse it with Node JSON.parse or the configured Python JSON parser, never PowerShell ConvertFrom-Json. Its valid Windows asset paths can be misread by that PowerShell parser as unsupported escape sequences.",
       "The full editing Skill must independently learn, search and select VIDEO footage from the complete local library. The dispatcher must not preselect footage, create a candidate whitelist, or require system materialBindings. Use exact-product verified local VIDEO entries and never use another product model, unverified media, images, audio, packaging, cover, sticker, transition or template resources as primary footage.",
+      "MODEL_ALIAS_MATERIAL_RECOVERY: Before declaring an exact-model core-footage gap, search the product's standard model name, material-library directory alias and index alias in both the verified index and the real VIDEO folders, then inspect the candidate clips. W8Ultra-R and W8U-R are the same exact model on this machine. A missing entry in one summarized manifest is not evidence that the footage is absent; do not fail while an alias search finds real matching clips.",
       batchDirect
         ? `BATCH_SINGLE_EXECUTION_CONTRACT: In this one Skill invocation, produce the full requested batch${retryVideoKeys.length ? `; only execute retryVideoKeys=${retryVideoKeys.join(",")}` : ""}. Do not stop after one video or label remaining requested keys as failed because of an execution-window boundary. If this workspace already has a READY item, preserve it and produce every missing item in this same invocation. Return batchResults with READY or FAILED for every requested key. Every READY item must name its matching real VIDEO_MASTER outputFile, COVER_IMAGE coverFile, title and at least five distinct, non-placeholder tags; the COVER_IMAGE must be included in outputFiles with metadata.videoKey equal to that item. If packaging metadata is incomplete after the MP4 succeeds, repair only the missing cover/title/tags internally and return the same master; never fail or rerender solely for packaging metadata.`
         : "DIRECT_CONTINUOUS_EXECUTION: Do not stop for user approval of the script, shot plan, material selection, production plan, packaging, or any other intermediate artifact. Create and validate those artifacts internally, repair any correctable issue, continue directly through rendering, and return only the final VIDEO_MASTER for user review.",
@@ -2697,11 +2698,17 @@ async function execute(claimed: JsonRecord) {
   let currentSkill = "";
   let state: WorkspaceState | undefined;
   let retryInternally = false;
+  let ownershipLost = false;
+  const isOwnershipLoss = (error: unknown) => /任务未由当前执行节点领取|task .*not.*(?:claimed|owned)|not.*(?:claimed|owned).*task/iu.test(
+    error instanceof Error ? error.message : String(error),
+  );
   const heartbeat = setInterval(() => {
     void api(`/api/v1/ai-tasks/runner/tasks/${taskId}/heartbeat`, {
       method: "POST",
       body: JSON.stringify({ nodeCode, currentSkill }),
-    }).catch(() => undefined);
+    }).catch((error) => {
+      if (isOwnershipLoss(error)) ownershipLost = true;
+    });
   }, heartbeatMs);
   const report = async (stage: string, progress: number, message: string, data: JsonRecord = {}) => {
     if (state) {
@@ -3053,6 +3060,13 @@ async function execute(claimed: JsonRecord) {
     await appendExecutionLog(workspace, "TASK_COMPLETE", { skill: currentSkill });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Codex执行失败";
+    if (ownershipLost || isOwnershipLoss(error)) {
+      await appendExecutionLog(workspace, "OWNERSHIP_LOST", {
+        skill: currentSkill || "未探测",
+        error: message,
+      }).catch(() => undefined);
+      return;
+    }
     process.stderr.write(`${new Date().toISOString()} ${taskNo} ${message}\n`);
     const recovery = await attemptExecutionRepair(workspace, message).catch((repairError) => ({
       repaired: false,
