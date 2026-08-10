@@ -162,18 +162,18 @@ export function assertCodexDirectMasterOutput(result: JsonRecord, taskPackage: J
     const visualMode = String(evidence.visualMode || "").toUpperCase();
     const audioEndSeconds = Number(evidence.audioEndSeconds || 0);
     const finalDurationSeconds = Number(record(masters[0]?.metadata).durationSeconds || 0);
-    const expectedAudioMode = String(directInput.referenceAudioStrategy || "").toUpperCase() === "DOUBAO_REVOICE"
-      ? "DOUBAO"
+    const expectedAudioMode = ["QWEN3_LOCAL_REVOICE", "DOUBAO_REVOICE"].includes(String(directInput.referenceAudioStrategy || "").toUpperCase())
+      ? "QWEN3_LOCAL"
       : "REFERENCE_ORIGINAL";
     const expectedVisualMode = String(directInput.referenceVisualStrategy || "").toUpperCase() === "REUSE_REFERENCE_VISUALS"
       ? "REUSE_REFERENCE_VISUALS"
       : "REBUILD_PRODUCT_VISUALS";
     if (Number(evidence.referenceDurationSeconds || 0) <= 0) throw new Error("Reference direct output is missing reference analysis evidence");
-    if (!["REFERENCE_ORIGINAL", "DOUBAO"].includes(audioMode) || voiceProvider.includes("WINDOWS") || voiceProvider.includes("SAPI")) {
-      throw new Error("Reference direct output must retain reference audio or use configured Doubao voice, never Windows TTS");
+    if (!["REFERENCE_ORIGINAL", "QWEN3_LOCAL"].includes(audioMode) || voiceProvider.includes("WINDOWS") || voiceProvider.includes("SAPI") || voiceProvider.includes("DOUBAO")) {
+      throw new Error("Reference direct output must retain reference audio or use configured local Qwen3 voice");
     }
     if (audioMode !== expectedAudioMode) throw new Error(`Reference direct output used ${audioMode || "unknown audio"} instead of ${expectedAudioMode}`);
-    if (audioMode === "DOUBAO" && !voiceProvider.includes("DOUBAO")) throw new Error("Reference direct output must name its actual Doubao voice");
+    if (audioMode === "QWEN3_LOCAL" && !/QWEN3|LOCAL/.test(voiceProvider)) throw new Error("Reference direct output must name its actual local Qwen3 voice");
     if (visualMode !== expectedVisualMode) throw new Error(`Reference direct output used ${visualMode || "unknown visuals"} instead of ${expectedVisualMode}`);
     if (audioEndSeconds <= 0 || finalDurationSeconds < audioEndSeconds + 0.25 || evidence.endingAudited !== true) {
       throw new Error("Reference direct output has not proven that its ending audio is complete");

@@ -364,7 +364,7 @@ function outputSchema(
             additionalProperties: false,
             properties: {
               referenceDurationSeconds: { type: "number", exclusiveMinimum: 0 },
-              audioMode: { type: "string", enum: ["REFERENCE_ORIGINAL", "DOUBAO"] },
+              audioMode: { type: "string", enum: ["REFERENCE_ORIGINAL", "QWEN3_LOCAL"] },
               voiceProvider: { type: "string" },
               visualMode: { type: "string", enum: ["REUSE_REFERENCE_VISUALS", "REBUILD_PRODUCT_VISUALS"] },
               audioEndSeconds: { type: "number", exclusiveMinimum: 0 },
@@ -1117,7 +1117,7 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
     const changeSet = record(directInput.changeSet);
     const isRevision = Boolean(String(revision.reviewNote || "").trim());
     const reuseReferenceVisuals = String(directInput.referenceVisualStrategy || "") === "REUSE_REFERENCE_VISUALS";
-    const revoiceWithDoubao = String(directInput.referenceAudioStrategy || "") === "DOUBAO_REVOICE";
+    const revoiceWithLocalQwen = ["QWEN3_LOCAL_REVOICE", "DOUBAO_REVOICE"].includes(String(directInput.referenceAudioStrategy || ""));
     return [
       "REFERENCE_DIRECT_MODE_CONTRACT: This is a reference-video direct-render job using the complete local video-editing-from-media-library Skill.",
       `Read and execute the dispatcher Skill first: ${detectedSkill.skillPath}`,
@@ -1125,8 +1125,8 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
       "EXECUTION_SELECTOR: The dispatcher-selected full Skill path above is the sole execution selector. A legacy local media-library runtime-config.json may contain the text video-editing-from-media-library-share; it is library metadata only, not a selected Skill, not a conflict, and never a reason to stop this full local direct-render task. Do not modify that source-library configuration.",
       "ROUTE_VALIDATION_INPUT: The dispatcher has already validated and selected this route. task.json is the raw task object, not a task-package envelope; never run validate-task-route.mjs against task.json. If a downstream check needs the envelope, use route-validation-package.json in the workspace. A raw-task envelope mismatch is not a creation blocker.",
       "The dispatcher only routes this job. The full editing Skill must independently inspect the reference, learn/search the complete local library, select footage, edit, package, validate and render.",
-      revoiceWithDoubao
-        ? "REFERENCE_AUDIO_POLICY: Revoice spoken content only with the configured Doubao voice. Windows/SAPI/default system TTS is forbidden. Preserve usable reference BGM, ambience, sound effects and beat map; if Doubao is unavailable, stop with the technical cause instead of substituting a Windows voice."
+      revoiceWithLocalQwen
+        ? "REFERENCE_AUDIO_POLICY: Revoice spoken content only with the configured local Qwen3 TTS voice. Windows/SAPI/default system TTS and Doubao are forbidden. Preserve usable reference BGM, ambience, sound effects and beat map; if local Qwen3 is unavailable, recover its single-worker service before reporting the technical cause."
         : "REFERENCE_AUDIO_POLICY: Preserve the complete usable original reference audio, including spoken content, BGM, ambience and sound effects. Do not re-voice it.",
       "REFERENCE_ANALYSIS_GATE: Before editing, download the complete reference and inspect its full duration, audio track, spoken sections, beat map and ending. The reference must materially control the finished video; it is not a decorative link.",
       reuseReferenceVisuals
@@ -1147,7 +1147,7 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
         productModel: String(directInput.productModel || task.productModel || ""),
         referenceVideoUrl: String(directInput.referenceVideoUrl || ""),
         employeePrompt: String(directInput.prompt || ""),
-        referenceAudioStrategy: revoiceWithDoubao ? "DOUBAO_REVOICE" : "REFERENCE_ORIGINAL",
+        referenceAudioStrategy: revoiceWithLocalQwen ? "QWEN3_LOCAL_REVOICE" : "REFERENCE_ORIGINAL",
         referenceVisualStrategy: reuseReferenceVisuals ? "REUSE_REFERENCE_VISUALS" : "REBUILD_PRODUCT_VISUALS",
         ...(isRevision ? { revision } : {}),
       }, null, 2),

@@ -207,7 +207,7 @@ function compileReferenceDirectFullVideoPrompt(project: Record<string, any>, bri
   const employeeRequirement = String(brief.referenceDirectTaskRequirement || "").trim();
   if (employeeRequirement) return employeeRequirement;
   const referenceVideoUrl = String(brief.reference || "").trim();
-  const revoiceWithDoubao = brief.referenceAudioStrategy === "DOUBAO_REVOICE";
+  const revoiceWithLocalQwen = ["QWEN3_LOCAL_REVOICE", "DOUBAO_REVOICE"].includes(String(brief.referenceAudioStrategy));
   const reuseReferenceVisuals = brief.referenceVisualStrategy === "REUSE_REFERENCE_VISUALS";
   return [
     "【任务类型】参考视频直出（完整视频）",
@@ -215,8 +215,8 @@ function compileReferenceDirectFullVideoPrompt(project: Record<string, any>, bri
     `产品型号：${project.productModel || "未提供"}`,
     `参考视频链接：${referenceVideoUrl}`,
     "请直接完成：参考分析 → 脚本 → 素材匹配 → 剪辑 → 9:16 成片。不要提交脚本审核，员工只审核最终成片。",
-    revoiceWithDoubao
-      ? "口播必须使用已配置豆包语音重配，禁止 Windows 或系统默认配音；保留参考视频可用的 BGM、环境声、音效和节拍。"
+    revoiceWithLocalQwen
+      ? "口播必须使用已配置的本地 Qwen3 语音重配，禁止 Windows 或系统默认配音；保留参考视频可用的 BGM、环境声、音效和节拍。"
       : "完整保留参考视频可用原声，包括口播、BGM、环境声、音效和节拍，不得重配。",
     reuseReferenceVisuals
       ? "允许直接复用参考视频画面；未明确要求修改的画面、结构和节奏保持不变。替换产品时，只替换涉及原产品的画面，并使用指定产品真实素材。"
@@ -1779,7 +1779,9 @@ export class WorkbenchController {
           : "STANDARD",
       referenceVideoUrl: body.referenceVideoUrl ? String(body.referenceVideoUrl) : undefined,
       referenceDirectTaskRequirement: body.referenceDirectTaskRequirement ? String(body.referenceDirectTaskRequirement) : undefined,
-      referenceAudioStrategy: body.referenceAudioStrategy === "DOUBAO_REVOICE" ? "DOUBAO_REVOICE" : "REFERENCE_ORIGINAL",
+      referenceAudioStrategy: ["QWEN3_LOCAL_REVOICE", "DOUBAO_REVOICE"].includes(String(body.referenceAudioStrategy))
+        ? "QWEN3_LOCAL_REVOICE"
+        : "REFERENCE_ORIGINAL",
       referenceVisualStrategy: body.referenceVisualStrategy === "REUSE_REFERENCE_VISUALS" ? "REUSE_REFERENCE_VISUALS" : "REBUILD_PRODUCT_VISUALS",
       platform: body.platform && body.platform !== "AUTO" ? String(body.platform) : undefined,
       voiceoverMode: body.voiceoverMode && body.voiceoverMode !== "AUTO" ? String(body.voiceoverMode) : undefined,
@@ -2117,7 +2119,9 @@ export class WorkbenchController {
       ? factory.directVideoRevision as Record<string, unknown>
       : {};
     const finalTaskRequirement = String(brief.referenceDirectTaskRequirement || brief.additionalPrompt || "").trim();
-    const referenceAudioStrategy = brief.referenceAudioStrategy === "DOUBAO_REVOICE" ? "DOUBAO_REVOICE" : "REFERENCE_ORIGINAL";
+    const referenceAudioStrategy = ["QWEN3_LOCAL_REVOICE", "DOUBAO_REVOICE"].includes(String(brief.referenceAudioStrategy))
+      ? "QWEN3_LOCAL_REVOICE"
+      : "REFERENCE_ORIGINAL";
     const referenceVisualStrategy = brief.referenceVisualStrategy === "REUSE_REFERENCE_VISUALS" ? "REUSE_REFERENCE_VISUALS" : "REBUILD_PRODUCT_VISUALS";
     if (!referenceVideoUrl || (referenceAsset?.objectKey && !await this.ossStorage.objectExists(referenceAsset.objectKey))) throw new ForbiddenException("参考视频已失效，请重新选择成品");
     const task = await this.aiTasks.createTask({
@@ -3064,7 +3068,7 @@ export class WorkbenchController {
       referenceDirectTaskRequirement: mode === "REFERENCE_DIRECT"
         ? additionalPrompt
         : undefined,
-      referenceAudioStrategy: revoiceRequired ? "DOUBAO_REVOICE" : "REFERENCE_ORIGINAL",
+      referenceAudioStrategy: revoiceRequired ? "QWEN3_LOCAL_REVOICE" : "REFERENCE_ORIGINAL",
       referenceVisualStrategy: "REUSE_REFERENCE_VISUALS",
       referenceDirectChangeSet: mode === "REFERENCE_DIRECT" ? changeSet : undefined,
       platform: String(source.platform || entry.platform || "DOUYIN"),

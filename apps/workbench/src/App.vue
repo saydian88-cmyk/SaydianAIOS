@@ -2273,8 +2273,8 @@ function markImageRequirementEdited() {
 function buildReferenceDirectTaskRequirement() {
   const model = videoFactoryForm.productModel.trim() || "所选产品";
   const referenceUrl = videoFactoryForm.referenceVideoUrl.trim() || "待填写的参考视频链接";
-  const audioInstruction = videoFactoryForm.referenceAudioStrategy === "DOUBAO_REVOICE"
-    ? "重配口播：仅使用已配置的豆包语音，绝不使用 Windows 或系统默认配音；保留参考视频可用的 BGM、环境声和音效节拍。"
+  const audioInstruction = ["QWEN3_LOCAL_REVOICE", "DOUBAO_REVOICE"].includes(videoFactoryForm.referenceAudioStrategy)
+    ? "重新配音：按照本次修改后的内容重新生成口播，并保留参考视频可用的 BGM、环境声和音效节拍。"
     : "保留参考原声：沿用参考视频完整可用音轨，不做配音。";
   return `参考视频：${referenceUrl}。参考其镜头结构、画面节奏和氛围，使用${model}的真实素材重建画面，不得混用其他产品素材。${audioInstruction}只回传最终成片供员工审核。`;
 }
@@ -7255,9 +7255,8 @@ onBeforeUnmount(() => {
         <el-form-item label="音频策略" required>
           <el-radio-group v-model="videoFactoryForm.referenceAudioStrategy" @change="syncReferenceDirectTaskRequirement">
             <el-radio-button value="REFERENCE_ORIGINAL">保留参考原声</el-radio-button>
-            <el-radio-button value="DOUBAO_REVOICE">重配口播（豆包）</el-radio-button>
+            <el-radio-button value="QWEN3_LOCAL_REVOICE">重新配音</el-radio-button>
           </el-radio-group>
-          <div class="form-tip">保留原声会沿用完整可用音轨；重配口播只使用已配置的豆包语音，绝不使用 Windows 默认配音。</div>
         </el-form-item>
       </section>
 

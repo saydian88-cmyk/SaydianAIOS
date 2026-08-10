@@ -96,7 +96,7 @@ describe("reference direct-video result contract", () => {
     task: { type: "VIDEO", input: {
       referenceDirectFullVideo: true,
       referenceDirectInput: {
-        referenceAudioStrategy: "DOUBAO_REVOICE",
+        referenceAudioStrategy: "QWEN3_LOCAL_REVOICE",
         referenceVisualStrategy: "REUSE_REFERENCE_VISUALS",
         changeSet: {
           replaceHook: { enabled: true, value: "先展示气囊充气" },
@@ -122,8 +122,8 @@ describe("reference direct-video result contract", () => {
   it("requires evidence that the reference and its complete ending were used", () => {
     expect(() => assertCodexDirectMasterOutput(output({
       referenceDurationSeconds: 16,
-      audioMode: "DOUBAO",
-      voiceProvider: "DOUBAO-zh-female",
+      audioMode: "QWEN3_LOCAL",
+      voiceProvider: "QWEN3-local-zh-female",
       audioEndSeconds: 17.5,
       endingAudited: true,
     }), referenceTask)).not.toThrow();
@@ -132,11 +132,11 @@ describe("reference direct-video result contract", () => {
   it("rejects Windows default speech and truncated audio", () => {
     expect(() => assertCodexDirectMasterOutput(output({
       referenceDurationSeconds: 16,
-      audioMode: "DOUBAO",
+      audioMode: "QWEN3_LOCAL",
       voiceProvider: "Windows SAPI",
       audioEndSeconds: 17.9,
       endingAudited: false,
-    }), referenceTask)).toThrow("Windows TTS");
+    }), referenceTask)).toThrow("local Qwen3 voice");
   });
 
   it("rejects the wrong requested strategy and missing rewrite evidence", () => {
@@ -146,12 +146,12 @@ describe("reference direct-video result contract", () => {
       voiceProvider: "REFERENCE_ORIGINAL",
       audioEndSeconds: 17.5,
       endingAudited: true,
-    }), referenceTask)).toThrow("instead of DOUBAO");
+    }), referenceTask)).toThrow("instead of QWEN3_LOCAL");
 
     expect(() => assertCodexDirectMasterOutput(output({
       referenceDurationSeconds: 16,
-      audioMode: "DOUBAO",
-      voiceProvider: "DOUBAO-zh-female",
+      audioMode: "QWEN3_LOCAL",
+      voiceProvider: "QWEN3-local-zh-female",
       audioEndSeconds: 17.5,
       endingAudited: true,
       changeChecks: [],
@@ -172,8 +172,8 @@ describe("reference direct-video result contract", () => {
     };
     expect(() => assertCodexDirectMasterOutput(output({
       referenceDurationSeconds: 16,
-      audioMode: "DOUBAO",
-      voiceProvider: "DOUBAO-zh-female",
+      audioMode: "QWEN3_LOCAL",
+      voiceProvider: "QWEN3-local-zh-female",
       audioEndSeconds: 17.5,
       endingAudited: true,
       changeChecks: [],

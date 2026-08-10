@@ -30,7 +30,7 @@ type ProjectCreateInput = {
   projectMode?: "STANDARD" | "REFERENCE_DIRECT_FULL_VIDEO" | "CODEX_DIRECT_FULL_VIDEO" | "BATCH_CODEX_DIRECT_FULL_VIDEO";
   referenceVideoUrl?: string;
   referenceDirectTaskRequirement?: string;
-  referenceAudioStrategy?: "REFERENCE_ORIGINAL" | "DOUBAO_REVOICE";
+  referenceAudioStrategy?: "REFERENCE_ORIGINAL" | "QWEN3_LOCAL_REVOICE" | "DOUBAO_REVOICE";
   referenceVisualStrategy?: "REBUILD_PRODUCT_VISUALS" | "REUSE_REFERENCE_VISUALS";
   referenceDirectChangeSet?: Record<string, unknown>;
   platform?: string;
@@ -1841,7 +1841,9 @@ export class VideoFactoryService {
         ? { referenceDirectTaskRequirement: String(input.referenceDirectTaskRequirement).trim() }
         : {}),
       ...(referenceDirect ? {
-        referenceAudioStrategy: input.referenceAudioStrategy === "DOUBAO_REVOICE" ? "DOUBAO_REVOICE" : "REFERENCE_ORIGINAL",
+        referenceAudioStrategy: ["QWEN3_LOCAL_REVOICE", "DOUBAO_REVOICE"].includes(String(input.referenceAudioStrategy))
+          ? "QWEN3_LOCAL_REVOICE"
+          : "REFERENCE_ORIGINAL",
         referenceVisualStrategy: input.referenceVisualStrategy === "REUSE_REFERENCE_VISUALS" ? "REUSE_REFERENCE_VISUALS" : "REBUILD_PRODUCT_VISUALS",
         ...(input.referenceDirectChangeSet ? { referenceDirectChangeSet: input.referenceDirectChangeSet } : {}),
       } : {}),
