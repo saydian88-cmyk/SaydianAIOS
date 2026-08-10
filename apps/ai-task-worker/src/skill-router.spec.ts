@@ -64,6 +64,7 @@ describe("skill task router", () => {
       CODEX_HOME: routeOnlyCodexHome,
       AI_TASK_VIDEO_SKILL_NAME: "video-editing-from-media-library-share",
       AI_TASK_VIDEO_SKILL_PATH: join(routeOnlyCodexHome, "skills", "video-editing-from-media-library-share", "SKILL.md"),
+      AI_TASK_FULL_VIDEO_SKILL_PATH: fullSkillPath,
     })).toMatchObject({
       downstreamSkillName: "video-editing-from-media-library",
       downstreamSkillPath: fullSkillPath,

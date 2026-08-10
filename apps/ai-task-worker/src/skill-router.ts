@@ -85,7 +85,10 @@ export function skillRegistry(env: NodeJS.ProcessEnv = process.env): Record<Excl
 
 function videoSkillPath(env: NodeJS.ProcessEnv) {
   const home = codexHome(env);
-  return resolve(join(home, "skills", "video-editing-from-media-library", "SKILL.md"));
+  return resolve(String(
+    env.AI_TASK_FULL_VIDEO_SKILL_PATH
+    || join(home, "skills", "video-editing-from-media-library", "SKILL.md"),
+  ));
 }
 
 function videoSkillName(env: NodeJS.ProcessEnv) {
