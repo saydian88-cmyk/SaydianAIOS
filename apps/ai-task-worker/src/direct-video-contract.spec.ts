@@ -89,6 +89,16 @@ describe("single Codex direct-video result contract", () => {
       execution: { mode: "FULL_VIDEO" },
     })).not.toThrow();
   });
+
+  it("keeps a precise reference-access blocker instead of masking it as a missing master", () => {
+    expect(() => assertCodexDirectMasterOutput({
+      summary: "无法继续：Fresh cookies are needed to download the reference video.",
+      outputFiles: [],
+    }, {
+      task: { type: "VIDEO", input: { referenceDirectFullVideo: true } },
+      execution: { mode: "FULL_VIDEO" },
+    })).toThrow("Fresh cookies");
+  });
 });
 
 describe("reference direct-video result contract", () => {

@@ -150,7 +150,13 @@ export function assertCodexDirectMasterOutput(result: JsonRecord, taskPackage: J
 
   if (masters.length !== 1) {
     const failure = String(result.summary || "").trim();
-    if (!masters.length && /\bFAILED\b|MATERIAL_GAP_[A-Z_]+/iu.test(failure)) throw new Error(failure);
+    // A downstream Skill may return a precise hard blocker before it can
+    // render anything (for example a reference source requiring fresh
+    // cookies). Preserve that cause instead of converting it into a generic
+    // VIDEO_MASTER contract error, which would be incorrectly retried.
+    if (!masters.length && /\bFAILED\b|MATERIAL_GAP_[A-Z_]+|无法继续|fresh cookies|reference.{0,80}(?:cookie|download|access)/iu.test(failure)) {
+      throw new Error(failure);
+    }
     throw new Error("Codex 直出任务未返回唯一的最终成片（VIDEO_MASTER），任务不能标记成功");
   }
   const masterPath = String(masters[0]?.path || "").toLowerCase();
