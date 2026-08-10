@@ -233,11 +233,11 @@ describe("AiTaskCenterService", () => {
     });
   });
 
-  it("routes legacy smart-video project tasks to the primary video computer", () => {
+  it("routes smart-video project tasks to the full-video execution node", () => {
     expect(aiTaskTargetNodeCode({
       sourceType: "VIDEO_FACTORY_PROJECT",
       input: { executionMode: "SCRIPT_ONLY" },
-    })).toBe("windows-codex-01");
+    })).toBe("windows-codex-video-01");
   });
 
   it("honors an explicit target node without routing unrelated content tasks", () => {
