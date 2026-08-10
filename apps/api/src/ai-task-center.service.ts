@@ -1512,6 +1512,20 @@ export class AiTaskCenterService implements OnModuleInit {
     return { ...updated, tokenHash: undefined, token };
   }
 
+  async removeRunner(id: string, actor: string) {
+    const node = await this.prisma.aiWorkerNode.findUnique({
+      where: { id },
+      select: { id: true, nodeCode: true, displayName: true, currentTaskId: true, status: true },
+    });
+    if (!node) throw new NotFoundException("执行节点不存在");
+    if (node.currentTaskId || node.status === "BUSY") {
+      throw new BadRequestException("执行节点仍有进行中的任务，暂不能删除");
+    }
+    await this.prisma.aiWorkerNode.delete({ where: { id: node.id } });
+    await this.audit(actor, "AI_RUNNER_DELETE", node.id, { nodeCode: node.nodeCode });
+    return { id: node.id, nodeCode: node.nodeCode, displayName: node.displayName, deleted: true };
+  }
+
   async claimRunner(token: string, body: JsonRecord) {
     const node = await this.runner(token, text(body.nodeCode));
     await this.releaseStaleTasks();

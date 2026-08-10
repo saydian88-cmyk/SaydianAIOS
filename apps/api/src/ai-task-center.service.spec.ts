@@ -240,6 +240,23 @@ describe("AiTaskCenterService", () => {
     })).toBe("windows-codex-video-01");
   });
 
+  it("deletes an idle retired execution node", async () => {
+    const remove = vi.fn().mockResolvedValue({});
+    const { service } = serviceWith({
+      aiWorkerNode: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "old-node", nodeCode: "windows-codex-01", displayName: "旧节点", currentTaskId: null, status: "OFFLINE",
+        }),
+        delete: remove,
+      },
+    });
+
+    await expect(service.removeRunner("old-node", "运营负责人")).resolves.toMatchObject({
+      nodeCode: "windows-codex-01", deleted: true,
+    });
+    expect(remove).toHaveBeenCalledWith({ where: { id: "old-node" } });
+  });
+
   it("honors an explicit target node without routing unrelated content tasks", () => {
     expect(aiTaskTargetNodeCode({
       sourceType: "VIDEO_FACTORY_PROJECT",
@@ -733,7 +750,7 @@ describe("AiTaskCenterService", () => {
 
     expect(create.mock.calls[0][0].data.input).toMatchObject({
       executionMode: "SCRIPT_ONLY",
-      preferredNodeCode: "windows-codex-01",
+      preferredNodeCode: "windows-codex-video-01",
       taskRoute: {
         version: 1,
         domain: "VIDEO_PROJECT",

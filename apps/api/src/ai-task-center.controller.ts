@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Headers,
   Param,
@@ -89,6 +90,18 @@ export class AiTaskCenterController {
     @Param("id") id: string,
   ) {
     return this.tasks.rotateRunnerToken(
+      id,
+      this.actor(authorization, "AI_TASK_RUNNER", requestedActor),
+    );
+  }
+
+  @Delete("runners/:id")
+  removeRunner(
+    @Headers("authorization") authorization: string | undefined,
+    @Headers("x-ops-actor") requestedActor: string | undefined,
+    @Param("id") id: string,
+  ) {
+    return this.tasks.removeRunner(
       id,
       this.actor(authorization, "AI_TASK_RUNNER", requestedActor),
     );

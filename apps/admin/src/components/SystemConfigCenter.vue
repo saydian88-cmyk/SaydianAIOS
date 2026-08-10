@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import { Connection, Plus, Refresh, Setting, UploadFilled } from "@element-plus/icons-vue";
 import { api, patch, post } from "../api";
 
@@ -299,6 +299,22 @@ async function createRunner() {
   }
 }
 
+async function removeRunner(row: Row) {
+  try {
+    await ElMessageBox.confirm(`删除执行节点“${row.displayName}”后不可恢复，历史任务记录会保留。`, "删除执行节点", {
+      type: "warning",
+      confirmButtonText: "删除",
+      cancelButtonText: "取消",
+    });
+    await api(`/api/v1/ai-tasks/runners/${row.id}`, { method: "DELETE" });
+    await reload();
+    ElMessage.success("执行节点已删除");
+  } catch (error) {
+    if (error === "cancel" || error === "close") return;
+    ElMessage.error(error instanceof Error ? error.message : "执行节点删除失败");
+  }
+}
+
 async function previewImport(file: File) {
   try {
     const result = await post<Row>("/api/v1/system-config/import/preview", { text: await file.text() });
@@ -452,6 +468,7 @@ defineExpose({ reload });
         <el-table-column label="当前 Skill" min-width="220"><template #default="{ row }">{{ row.currentSkill || "空闲" }}</template></el-table-column>
         <el-table-column label="最后心跳" width="170"><template #default="{ row }">{{ time(row.lastHeartbeatAt) }}</template></el-table-column>
         <el-table-column prop="lastError" label="最近错误" min-width="220" show-overflow-tooltip />
+        <el-table-column label="操作" width="90"><template #default="{ row }"><el-button link type="danger" :disabled="Boolean(row.currentTaskId) || row.status === 'BUSY'" @click="removeRunner(row)">删除</el-button></template></el-table-column>
       </el-table>
     </template>
 
