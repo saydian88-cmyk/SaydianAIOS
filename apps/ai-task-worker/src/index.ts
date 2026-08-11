@@ -1116,10 +1116,8 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
     const revision = record(directInput.revision || taskInput.revision);
     const isRevision = Boolean(String(revision.reviewNote || "").trim());
     return [
-      "REFERENCE_DIRECT_HANDOFF: This runner only transfers the task package to the complete local video-editing-from-media-library Skill.",
-      `Read and execute the dispatcher Skill first: ${detectedSkill.skillPath}`,
-      `Then read and execute the full local editing Skill: ${detectedSkill.downstreamSkillPath || "G:\\codex\\xcodeplace\\CodexHome\\skills\\video-editing-from-media-library\\SKILL.md"}. Never use the share edition on this machine.`,
-      "The editing Skill is the sole executor. It alone decides how to invoke any downstream Skill and follows each downstream Skill's current rules. The runner must not choose or use a browser, download media, extract reference media, analyse the reference, select footage, or prescribe creative and technical steps.",
+      `Execute the selected complete local editing Skill: ${detectedSkill.downstreamSkillPath || "G:\\codex\\xcodeplace\\CodexHome\\skills\\video-editing-from-media-library\\SKILL.md"}.`,
+      "Task handoff (use the reference link and employee requirement below unchanged):",
       JSON.stringify({
         taskId: String(task.id || ""),
         productModel: String(directInput.productModel || task.productModel || ""),
