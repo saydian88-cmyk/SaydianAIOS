@@ -1114,46 +1114,22 @@ function prompt(taskPackage: JsonRecord, detectedSkill: DetectedSkill) {
   if (isReferenceDirectFullVideo) {
     const directInput = record(taskInput.referenceDirectInput);
     const revision = record(directInput.revision || taskInput.revision);
-    const changeSet = record(directInput.changeSet);
     const isRevision = Boolean(String(revision.reviewNote || "").trim());
-    const reuseReferenceVisuals = String(directInput.referenceVisualStrategy || "") === "REUSE_REFERENCE_VISUALS";
-    const revoiceWithLocalQwen = ["QWEN3_LOCAL_REVOICE", "DOUBAO_REVOICE"].includes(String(directInput.referenceAudioStrategy || ""));
     return [
-      "REFERENCE_DIRECT_MODE_CONTRACT: This is a reference-video direct-render job using the complete local video-editing-from-media-library Skill.",
+      "REFERENCE_DIRECT_HANDOFF: This runner only transfers the task package to the complete local video-editing-from-media-library Skill.",
       `Read and execute the dispatcher Skill first: ${detectedSkill.skillPath}`,
       `Then read and execute the full local editing Skill: ${detectedSkill.downstreamSkillPath || "G:\\codex\\xcodeplace\\CodexHome\\skills\\video-editing-from-media-library\\SKILL.md"}. Never use the share edition on this machine.`,
-      "EXECUTION_SELECTOR: The dispatcher-selected full Skill path above is the sole execution selector. A legacy local media-library runtime-config.json may contain the text video-editing-from-media-library-share; it is library metadata only, not a selected Skill, not a conflict, and never a reason to stop this full local direct-render task. Do not modify that source-library configuration.",
-      "ROUTE_VALIDATION_INPUT: The dispatcher has already validated and selected this route. task.json is the raw task object, not a task-package envelope; never run validate-task-route.mjs against task.json. If a downstream check needs the envelope, use route-validation-package.json in the workspace. A raw-task envelope mismatch is not a creation blocker.",
-      "The dispatcher only routes this job. The full editing Skill must independently inspect the reference, learn/search the complete local library, select footage, edit, package, validate and render.",
-      "REFERENCE_LINK_HANDOFF: Pass referenceVideoUrl and the selected audio/visual strategies unchanged to the full editing Skill. The full editing Skill is the only creative executor and is solely responsible for invoking its required reference-video-audio-extraction Skill according to that Skill's current browser and recovery rules. The runner must not choose a browser, download media, or perform extraction itself.",
-      revoiceWithLocalQwen
-        ? "REFERENCE_AUDIO_POLICY: Revoice spoken content only with the configured local Qwen3 TTS voice. Windows/SAPI/default system TTS and Doubao are forbidden. Preserve usable reference BGM, ambience, sound effects and beat map; if local Qwen3 is unavailable, recover its single-worker service before reporting the technical cause."
-        : "REFERENCE_AUDIO_POLICY: Preserve the complete usable original reference audio, including spoken content, BGM, ambience and sound effects. Do not re-voice it.",
-      "REFERENCE_ANALYSIS_GATE: Before editing, download the complete reference and inspect its full duration, audio track, spoken sections, beat map and ending. The reference must materially control the finished video; it is not a decorative link.",
-      reuseReferenceVisuals
-        ? "REFERENCE_VISUAL_POLICY: This content-library job is authorized to directly reuse the reference video's pictures and footage. Keep every unmodified visual, structure and pacing element; only change the employee-requested parts. If replacing the product, replace only affected product shots with real footage of the requested product."
-        : "REFERENCE_VISUAL_POLICY: Do not copy the reference video's pictures, people, brands or footage. Rebuild the visuals with exact-product real footage selected from the local media library while following the reference audio, beat map, section structure, pacing, transitions and packaging rhythm.",
-      Object.keys(changeSet).length
-        ? `REFERENCE_CHANGE_SET: ${JSON.stringify(changeSet)}. Treat every enabled change as mandatory. Before delivery, verify each changed product, hook, selling point, other change and language against the final video; do not leave old spoken copy, subtitles, stickers or product shots that contradict an enabled change.`
-        : "REFERENCE_CHANGE_SET: No requested rewrite. Preserve the reference content exactly unless a technical repair is required.",
-      "Do not stop for employee approval of an internal script, shot plan, footage selection, production plan or packaging. Create and validate all mandatory Skill artifacts internally, repair correctable issues, render, and return only the final VIDEO_MASTER for employee review.",
-      "The empty assets and snapshots arrays are intentional. Never request system materialBindings and never treat them as a whitelist.",
-      "Create and validate the full evidence set required by the editing Skill, including production-plan, hard-requirements, shot-plan, composition, packaging, audio, transition and HyperFrames render evidence. A plain FFmpeg concat is not an acceptable finished video.",
-      "OFFLINE_HYPERFRAMES_RUNTIME: The runner has preinstalled the official GSAP 3.14.2 file at .runtime/hyperframes/gsap-3.14.2.min.js in the task workspace. Copy that exact official file into the HyperFrames project or reference it with the correct project-relative path before validate/render. Do not use npm/CDN, and do not create a shim or substitute runtime.",
-      ...(isRevision ? [
-        "REFERENCE_REVISION_CONTRACT: Reuse the original reference video, its original audio, the previous finished video and the previous editing structure. Apply only the employee's return reason, then render a new version.",
-      ] : []),
+      "The editing Skill is the sole executor. It alone decides how to invoke any downstream Skill and follows each downstream Skill's current rules. The runner must not choose or use a browser, download media, extract reference media, analyse the reference, select footage, or prescribe creative and technical steps.",
       JSON.stringify({
         taskId: String(task.id || ""),
         productModel: String(directInput.productModel || task.productModel || ""),
         referenceVideoUrl: String(directInput.referenceVideoUrl || ""),
         employeePrompt: String(directInput.prompt || ""),
-        referenceAudioStrategy: revoiceWithLocalQwen ? "QWEN3_LOCAL_REVOICE" : "REFERENCE_ORIGINAL",
-        referenceVisualStrategy: reuseReferenceVisuals ? "REUSE_REFERENCE_VISUALS" : "REBUILD_PRODUCT_VISUALS",
+        referenceAudioStrategy: String(directInput.referenceAudioStrategy || ""),
+        referenceVisualStrategy: String(directInput.referenceVisualStrategy || ""),
+        changeSet: record(directInput.changeSet),
         ...(isRevision ? { revision } : {}),
       }, null, 2),
-      "If the reference URL or its audio cannot be accessed, return the exact technical cause without fabricating completion. Otherwise continue through final render.",
-      "Before return, compare the final MP4 duration with the real audio timeline and listen to the ending: no spoken word, music beat or sentence may be cut off; retain at least 0.25 seconds after the audio ends. Return referenceEvidence with the actual full reference duration, the audioMode and visualMode that exactly match the requested strategies, actual voiceProvider, audioEndSeconds, endingAudited=true, unchangedContentPreserved=true, and one timestamped changeChecks item for every enabled REFERENCE_CHANGE_SET field (including language). Every change check must prove passed=true and oldConflictRemoved=true. Return exactly one real 1080x1920 MP4 in outputFiles with kind=VIDEO_MASTER and delivery={taskMode:REFERENCE_DIRECT_FULL_VIDEO, finalReviewOnly:true}.",
       "Every output file must exist inside the current task workspace and the result must match the output schema.",
     ].join("\n\n");
   }
