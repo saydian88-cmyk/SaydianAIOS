@@ -4330,17 +4330,8 @@ async function switchPage(page: string) {
 
 async function openAiVideo() {
   try {
-    const launch = await post<{ url: string; password: string }>("/api/v1/workbench/ai-video/launch");
-    const form = document.createElement("form");
-    form.method = "post";
-    form.action = launch.url;
-    const password = document.createElement("input");
-    password.type = "hidden";
-    password.name = "password";
-    password.value = launch.password;
-    form.append(password);
-    document.body.append(form);
-    form.submit();
+    const launch = await post<{ url: string }>("/api/v1/workbench/ai-video/launch");
+    window.location.assign(launch.url);
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : "AI视频生成入口打开失败");
   }

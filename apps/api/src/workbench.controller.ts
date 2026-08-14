@@ -517,10 +517,10 @@ export class WorkbenchController {
   @Post("ai-video/launch")
   aiVideoLaunch(@Headers("authorization") authorization?: string) {
     this.employee(authorization);
-    if (!opsConfig.aiVideo.url || !opsConfig.aiVideo.password) {
+    if (!opsConfig.aiVideo.url) {
       throw new BadRequestException("AI视频生成入口尚未配置");
     }
-    return opsConfig.aiVideo;
+    return { url: opsConfig.aiVideo.url };
   }
 
   @Get("dashboard")
