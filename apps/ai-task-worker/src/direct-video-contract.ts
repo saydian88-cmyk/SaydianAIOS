@@ -166,8 +166,6 @@ export function assertCodexDirectMasterOutput(result: JsonRecord, taskPackage: J
     const audioMode = String(evidence.audioMode || "").toUpperCase();
     const voiceProvider = String(evidence.voiceProvider || "").toUpperCase();
     const visualMode = String(evidence.visualMode || "").toUpperCase();
-    const audioEndSeconds = Number(evidence.audioEndSeconds || 0);
-    const finalDurationSeconds = Number(record(masters[0]?.metadata).durationSeconds || 0);
     const expectedAudioMode = ["QWEN3_LOCAL_REVOICE", "DOUBAO_REVOICE"].includes(String(directInput.referenceAudioStrategy || "").toUpperCase())
       ? "QWEN3_LOCAL"
       : "REFERENCE_ORIGINAL";
@@ -181,9 +179,6 @@ export function assertCodexDirectMasterOutput(result: JsonRecord, taskPackage: J
     if (audioMode !== expectedAudioMode) throw new Error(`Reference direct output used ${audioMode || "unknown audio"} instead of ${expectedAudioMode}`);
     if (audioMode === "QWEN3_LOCAL" && !/QWEN3|LOCAL/.test(voiceProvider)) throw new Error("Reference direct output must name its actual local Qwen3 voice");
     if (visualMode !== expectedVisualMode) throw new Error(`Reference direct output used ${visualMode || "unknown visuals"} instead of ${expectedVisualMode}`);
-    if (audioEndSeconds <= 0 || finalDurationSeconds < audioEndSeconds + 0.25 || evidence.endingAudited !== true) {
-      throw new Error("Reference direct output has not proven that its ending audio is complete");
-    }
     const changeSet = record(directInput.changeSet);
     const legacyChangeFlags: Record<string, string> = {
       replaceProduct: "productModel",

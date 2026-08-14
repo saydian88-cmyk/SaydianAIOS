@@ -31,6 +31,7 @@ import { SmartKeywordService } from "./smart-keyword.service";
 import { VideoFactoryService } from "./video-factory.service";
 import { ViralTrendService } from "./viral-trend.service";
 import { WorkbenchService } from "./workbench.service";
+import { opsConfig } from "./config";
 
 type UploadFile = {
   originalname: string;
@@ -511,6 +512,15 @@ export class WorkbenchController {
   @Get("me")
   me(@Headers("authorization") authorization?: string) {
     return this.auth.identity(authorization);
+  }
+
+  @Post("ai-video/launch")
+  aiVideoLaunch(@Headers("authorization") authorization?: string) {
+    this.employee(authorization);
+    if (!opsConfig.aiVideo.url || !opsConfig.aiVideo.password) {
+      throw new BadRequestException("AI视频生成入口尚未配置");
+    }
+    return opsConfig.aiVideo;
   }
 
   @Get("dashboard")

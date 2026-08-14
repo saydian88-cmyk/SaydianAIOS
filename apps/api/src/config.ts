@@ -19,6 +19,10 @@ export const opsConfig = {
   publicBaseUrl: process.env.OPS_PUBLIC_BASE_URL || "http://127.0.0.1:3210",
   webBaseUrl: process.env.OPS_WEB_BASE_URL || "http://127.0.0.1:5173/saidian-work/",
   adminWebBaseUrl: process.env.OPS_ADMIN_WEB_BASE_URL || "http://127.0.0.1:5173/saidian-admin/",
+  aiVideo: {
+    url: process.env.AI_VIDEO_URL || "",
+    password: process.env.AI_VIDEO_PASSWORD || "",
+  },
   assetRoots: list(process.env.ASSET_ROOTS || "F:\\xcodeplace\\视频创作\\赛电品牌素材库;F:\\xcodeplace\\.赛电产品图片整理_20260626"),
   wecomDriveRoot: process.env.WECOM_DRIVE_SYNC_ROOT?.trim() || "",
   derivedOutputDir: resolve(

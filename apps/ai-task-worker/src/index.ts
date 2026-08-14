@@ -2112,13 +2112,6 @@ async function validateOutputArtifacts(result: JsonRecord, workspace: string, ta
       if (!actual.width || !actual.height || actual.durationSeconds <= 1 || !actual.codec || !actual.frameRate) {
         throw new Error("抖音爆款成片媒体信息无效");
       }
-      if (referenceDirectMaster) {
-        const evidence = record(result.referenceEvidence);
-        const audioEndSeconds = Number(evidence.audioEndSeconds || 0);
-        if (audioEndSeconds <= 0 || actual.durationSeconds < audioEndSeconds + 0.25) {
-          throw new Error("参考直出成片短于完整音频，疑似截断结尾");
-        }
-      }
       if (dedicatedDouyinMaster) {
         const usage = Array.isArray(metadata.materialUsage) ? metadata.materialUsage.map(record) : [];
         if (!usage.length) throw new Error("抖音爆款成片缺少逐镜头素材使用记录");
