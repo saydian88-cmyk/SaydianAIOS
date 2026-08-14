@@ -215,10 +215,14 @@ jobs:
               "sudo /opt/saydian/bin/set-production-env.py OPS_ADMIN_USERNAME"
             printf '%s' "${{ secrets.OPS_ADMIN_PASSWORD }}" | ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}" \
               "sudo /opt/saydian/bin/set-production-env.py OPS_ADMIN_PASSWORD"
-            printf '%s' "${{ secrets.AI_VIDEO_URL }}" | ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}" \
-              "sudo /opt/saydian/bin/set-production-env.py AI_VIDEO_URL"
-            printf '%s' "${{ secrets.AI_VIDEO_PASSWORD }}" | ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}" \
-              "sudo /opt/saydian/bin/set-production-env.py AI_VIDEO_PASSWORD"
+            if [[ -n "${{ secrets.AI_VIDEO_URL }}" && -n "${{ secrets.AI_VIDEO_PASSWORD }}" ]]; then
+              printf '%s' "${{ secrets.AI_VIDEO_URL }}" | ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}" \
+                "sudo /opt/saydian/bin/set-production-env.py AI_VIDEO_URL"
+              printf '%s' "${{ secrets.AI_VIDEO_PASSWORD }}" | ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}" \
+                "sudo /opt/saydian/bin/set-production-env.py AI_VIDEO_PASSWORD"
+            else
+              echo "AI video secrets are not configured; keeping the existing server configuration"
+            fi
             ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -p "${{ secrets.TENCENT_PORT || '22' }}" "${{ secrets.TENCENT_USER }}@${{ secrets.TENCENT_HOST }}" \
               "sudo GHCR_REPOSITORY='${{ github.repository_owner }}/saydianaios' /opt/saydian/bin/deploy-ops.sh '${{ github.sha }}'"
           fi

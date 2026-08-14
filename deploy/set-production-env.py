@@ -3,7 +3,7 @@ import os
 import sys
 from pathlib import Path
 
-KEYS = {"OPS_ADMIN_USERNAME", "OPS_ADMIN_PASSWORD"}
+KEYS = {"OPS_ADMIN_USERNAME", "OPS_ADMIN_PASSWORD", "AI_VIDEO_URL", "AI_VIDEO_PASSWORD"}
 ENV_FILE = Path("/opt/saydian/env/production.env")
 
 key = sys.argv[1] if len(sys.argv) == 2 else ""
