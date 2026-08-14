@@ -595,10 +595,10 @@ const productOptions = computed<Row[]>(() => {
 const can = (permission: string) => Boolean(user.value?.permissions.includes("*") || user.value?.permissions.includes(permission));
 const canUseDataCenter = computed(() => can("DATA_CENTER_VIEW"));
 const navigation = computed(() => [
-  { key: "aiVideo", label: "AI视频生成", icon: VideoCamera, visible: true },
   { key: "home", label: "今日工作", icon: House, visible: true },
   { key: "tasks", label: "任务中心", icon: DocumentChecked, visible: true },
   { key: "outputs", label: "成品库", icon: Files, visible: true },
+  { key: "aiVideo", label: "AI视频生成", icon: VideoCamera, visible: true },
   { key: "team", label: "团队协作", icon: DocumentChecked, visible: isCollaborator.value },
   { key: "data", label: "数据中心", icon: Files, visible: canUseDataCenter.value },
   { key: "live", label: "直播学习", icon: VideoCamera, visible: isLiveHost.value },
@@ -4329,26 +4329,19 @@ async function switchPage(page: string) {
 }
 
 async function openAiVideo() {
-  const popup = window.open("", "_blank");
-  if (!popup) {
-    ElMessage.warning("浏览器阻止了新窗口，请允许后重试");
-    return;
-  }
   try {
     const launch = await post<{ url: string; password: string }>("/api/v1/workbench/ai-video/launch");
-    const form = popup.document.createElement("form");
+    const form = document.createElement("form");
     form.method = "post";
     form.action = launch.url;
-    const password = popup.document.createElement("input");
+    const password = document.createElement("input");
     password.type = "hidden";
     password.name = "password";
     password.value = launch.password;
     form.append(password);
-    popup.document.body.append(form);
-    popup.opener = null;
+    document.body.append(form);
     form.submit();
   } catch (error) {
-    popup.close();
     ElMessage.error(error instanceof Error ? error.message : "AI视频生成入口打开失败");
   }
 }
